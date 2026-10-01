@@ -1,0 +1,839 @@
+<title>Electrical PM Mastery</title>
+<meta name="description" content="A 365-day plan to reach master-level electrical contracting project management, with daily tasks, spaced-repetition drills, field calculators, and a skills radar.">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@500;600;700&family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans:wght@400;500;600&display=swap">
+<style>
+/* Layout: a panelboard schedule. The year is a 365-circuit panel; every tab is a page of the panel binder. */
+:root {
+  --bg: #eef1f4; --surface: #ffffff; --sunk: #e4e9ee; --ink: #17202a; --muted: #55636f; --line: #cdd5dd;
+  --accent: #a4502a; --accent-ink: #ffffff; --accent-soft: #f3e2d8;
+  --p1: #7a4b2a; --p2: #c9640f; --p3: #a87e00; --p4: #2d68ad; --p5: #2e8549;
+  --good: #2e7d46; --warn: #9a6400; --bad: #b3261e;
+  --display: "Barlow Condensed", "Arial Narrow", "Roboto Condensed", sans-serif;
+  --body: "IBM Plex Sans", "Segoe UI", system-ui, -apple-system, sans-serif;
+  --mono: "IBM Plex Mono", ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+  --r: 6px;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg: #0f1418; --surface: #171e24; --sunk: #1f2830; --ink: #e3e8ed; --muted: #95a3ae; --line: #2c3742;
+    --accent: #e3895a; --accent-ink: #1b0f08; --accent-soft: #3b271c;
+    --p1: #bb8a63; --p2: #f0903f; --p3: #e0b93a; --p4: #6ba3e6; --p5: #5bbb7b;
+    --good: #5bbb7b; --warn: #e0b93a; --bad: #f2776c; color-scheme: dark;
+  }
+}
+:root[data-theme="dark"] {
+  --bg: #0f1418; --surface: #171e24; --sunk: #1f2830; --ink: #e3e8ed; --muted: #95a3ae; --line: #2c3742;
+  --accent: #e3895a; --accent-ink: #1b0f08; --accent-soft: #3b271c;
+  --p1: #bb8a63; --p2: #f0903f; --p3: #e0b93a; --p4: #6ba3e6; --p5: #5bbb7b;
+  --good: #5bbb7b; --warn: #e0b93a; --bad: #f2776c; color-scheme: dark;
+}
+* { box-sizing: border-box; }
+[hidden] { display: none !important; }
+body { background: var(--bg); color: var(--ink); font: 15px/1.55 var(--body); }
+a { color: var(--accent); text-underline-offset: 2px; }
+button, input, select, textarea { font: inherit; color: inherit; }
+:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+h1, h2, h3 { font-family: var(--display); font-weight: 600; line-height: 1.1; margin: 0; text-wrap: balance; letter-spacing: .01em; }
+h2 { font-size: 1.9rem; }
+h3 { font-size: 1.15rem; text-transform: uppercase; letter-spacing: .06em; color: var(--muted); }
+p { margin: 0; }
+.app { max-width: 1180px; margin: 0 auto; padding-inline: 16px; padding-block: 14px 56px; }
+.mono, .num { font-family: var(--mono); font-variant-numeric: tabular-nums; }
+.muted { color: var(--muted); }
+.small { font-size: .85rem; }
+.stack { display: flex; flex-direction: column; gap: 12px; }
+.row { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+
+/* Header */
+.top { display: flex; flex-wrap: wrap; align-items: flex-end; justify-content: space-between; gap: 12px; padding-block: 6px 12px; }
+.brand h1 { font-size: 2rem; text-transform: uppercase; letter-spacing: .03em; font-weight: 700; }
+.brand p { font-family: var(--mono); font-size: .78rem; color: var(--muted); letter-spacing: .06em; text-transform: uppercase; }
+.chips { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
+.chip { display: inline-flex; align-items: center; gap: 6px; padding: 3px 10px; border: 1px solid var(--line); border-radius: 999px; background: var(--surface); font-size: .82rem; white-space: nowrap; }
+.chip b { font-family: var(--mono); font-weight: 500; }
+.chip.good { border-color: var(--good); color: var(--good); }
+.chip.warn { border-color: var(--warn); color: var(--warn); }
+.chip.bad { border-color: var(--bad); color: var(--bad); }
+.dot { width: 9px; height: 9px; border-radius: 2px; display: inline-block; flex: none; }
+.iconbtn { border: 1px solid var(--line); background: var(--surface); border-radius: 999px; padding: 3px 12px; cursor: pointer; font-size: .82rem; }
+.iconbtn:hover { border-color: var(--accent); }
+
+/* Tabs */
+.tabs-wrap { position: sticky; top: env(safe-area-inset-top, 0px); z-index: 5; background: var(--bg); border-bottom: 1px solid var(--line); margin-bottom: 18px; }
+.tabs { display: flex; gap: 2px; overflow-x: auto; scrollbar-width: none; }
+.tabs::-webkit-scrollbar { display: none; }
+.tab { background: none; border: 0; border-bottom: 3px solid transparent; padding: 10px 14px 8px; cursor: pointer; font-family: var(--display); font-size: 1.05rem; font-weight: 600; text-transform: uppercase; letter-spacing: .07em; color: var(--muted); white-space: nowrap; }
+.tab[aria-selected="true"] { color: var(--ink); border-bottom-color: var(--accent); }
+.tab:hover { color: var(--ink); }
+
+/* Generic surfaces */
+.card { background: var(--surface); border: 1px solid var(--line); border-radius: var(--r); padding: 20px; min-width: 0; }
+.btn { border: 1px solid var(--line); background: var(--surface); border-radius: var(--r); padding: 8px 14px; cursor: pointer; font-weight: 500; }
+.btn:hover { border-color: var(--accent); }
+.btn.primary { background: var(--accent); border-color: var(--accent); color: var(--accent-ink); }
+.btn.primary:hover { filter: brightness(1.06); }
+.btn.done { background: var(--good); border-color: var(--good); color: var(--surface); }
+.btn:disabled { opacity: .55; cursor: default; }
+.badge { display: inline-flex; align-items: center; gap: 6px; font-family: var(--mono); font-size: .75rem; letter-spacing: .06em; text-transform: uppercase; padding: 2px 8px; border-radius: 4px; background: var(--sunk); color: var(--ink); white-space: nowrap; }
+.label { font-family: var(--mono); font-size: .74rem; letter-spacing: .08em; text-transform: uppercase; color: var(--muted); }
+.banner { border: 1px dashed var(--accent); background: var(--accent-soft); border-radius: var(--r); padding: 12px 14px; display: flex; flex-wrap: wrap; gap: 10px; align-items: center; justify-content: space-between; margin-bottom: 16px; }
+
+/* Today */
+.today { display: grid; grid-template-columns: minmax(0, 1.7fr) minmax(0, 1fr); gap: 18px; align-items: start; }
+.dayhead { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; justify-content: space-between; margin-bottom: 14px; }
+.task { font-size: 1.16rem; line-height: 1.6; max-width: 65ch; margin-block: 14px 6px; }
+.goal { color: var(--muted); max-width: 65ch; margin-top: 6px; }
+.section { border-top: 1px solid var(--line); margin-top: 18px; padding-top: 14px; display: flex; flex-direction: column; gap: 10px; }
+.res { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 10px; }
+.res li { display: flex; flex-direction: column; gap: 2px; }
+.res .why { color: var(--muted); font-size: .88rem; }
+.qa { border: 1px solid var(--line); border-radius: var(--r); padding: 12px 14px; background: var(--bg); }
+.qa p { max-width: 65ch; }
+.qa .ans { margin-top: 8px; padding-top: 8px; border-top: 1px dashed var(--line); }
+.linkbtn { background: none; border: 0; padding: 0; color: var(--accent); cursor: pointer; text-decoration: underline; text-underline-offset: 2px; font-size: .88rem; margin-top: 6px; }
+textarea, input[type="text"], input[type="number"], input[type="date"], select { width: 100%; border: 1px solid var(--line); background: var(--surface); border-radius: var(--r); padding: 8px 10px; }
+textarea { min-height: 96px; resize: vertical; line-height: 1.5; }
+.actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 18px; align-items: center; }
+.actions .spacer { flex: 1; }
+.week { display: grid; grid-template-columns: repeat(7, minmax(0, 1fr)); gap: 6px; }
+.slot { border: 1px solid var(--line); background: var(--bg); border-radius: 4px; padding: 6px 2px; cursor: pointer; display: flex; flex-direction: column; align-items: center; gap: 2px; min-width: 0; }
+.slot .k { font-family: var(--mono); font-size: .62rem; letter-spacing: .04em; text-transform: uppercase; color: var(--muted); overflow: hidden; text-overflow: ellipsis; max-width: 100%; }
+.slot .n { font-family: var(--mono); font-size: .8rem; }
+.slot.is-done { background: var(--ph); border-color: var(--ph); }
+.slot.is-done .k, .slot.is-done .n { color: var(--surface); }
+.slot.is-sel { outline: 2px solid var(--ink); outline-offset: 1px; }
+.meter { height: 8px; border-radius: 4px; background: var(--sunk); overflow: hidden; }
+.meter > i { display: block; height: 100%; background: var(--ph, var(--accent)); }
+.coach-out { white-space: pre-wrap; background: var(--bg); border: 1px solid var(--line); border-radius: var(--r); padding: 12px; min-height: 3rem; max-height: 420px; overflow-y: auto; font-size: .93rem; }
+
+/* Panel schedule */
+.phase { margin-bottom: 26px; }
+.phase-head { display: flex; flex-wrap: wrap; justify-content: space-between; align-items: baseline; gap: 8px 16px; margin-bottom: 10px; }
+.phase-head h2 { display: flex; align-items: center; gap: 10px; }
+.phase-head .meter { width: 180px; }
+.weeks { display: grid; grid-template-columns: repeat(auto-fill, minmax(min(100%, 330px), 1fr)); gap: 8px; }
+.wk { background: var(--surface); border: 1px solid var(--line); border-radius: var(--r); padding: 10px; display: flex; flex-direction: column; gap: 8px; min-width: 0; }
+.wk-top { display: flex; gap: 8px; align-items: baseline; min-width: 0; }
+.wk-top .mono { color: var(--muted); font-size: .78rem; flex: none; }
+.wk-top span:last-child { font-weight: 500; font-size: .92rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.breakers { display: grid; grid-template-columns: repeat(7, minmax(0, 1fr)); gap: 4px; }
+.brk { height: 30px; border-radius: 3px; border: 1px solid var(--line); background: var(--bg); font-family: var(--mono); font-size: .7rem; color: var(--muted); cursor: pointer; padding: 0; }
+.brk.is-done { background: var(--ph); border-color: var(--ph); color: var(--surface); }
+.brk.is-today { outline: 2px solid var(--ink); outline-offset: 1px; }
+.legend { display: flex; flex-wrap: wrap; gap: 14px; margin-bottom: 18px; font-size: .88rem; }
+
+/* Drill */
+.drill { max-width: 720px; margin: 0 auto; display: flex; flex-direction: column; gap: 16px; }
+.flash { min-height: 220px; display: flex; flex-direction: column; gap: 14px; }
+.flash .q { font-size: 1.2rem; line-height: 1.5; }
+.boxes { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 8px; }
+.box { background: var(--surface); border: 1px solid var(--line); border-radius: var(--r); padding: 8px; text-align: center; }
+.box .num { font-size: 1.3rem; }
+
+/* Toolkit */
+.tool { display: grid; grid-template-columns: 230px minmax(0, 1fr); gap: 18px; align-items: start; }
+.toollist { display: flex; flex-direction: column; gap: 4px; }
+.toollist button { text-align: left; background: none; border: 1px solid transparent; border-radius: var(--r); padding: 8px 10px; cursor: pointer; }
+.toollist button[aria-pressed="true"] { background: var(--surface); border-color: var(--line); font-weight: 600; }
+.form { display: grid; grid-template-columns: repeat(auto-fill, minmax(min(100%, 190px), 1fr)); gap: 12px; }
+.field { display: flex; flex-direction: column; gap: 4px; min-width: 0; }
+.field label { font-size: .84rem; color: var(--muted); }
+.out { display: flex; flex-direction: column; margin-top: 16px; border-top: 1px solid var(--line); }
+.out > div { display: flex; justify-content: space-between; gap: 12px; padding: 9px 0; border-bottom: 1px solid var(--line); }
+.out .v { font-family: var(--mono); font-variant-numeric: tabular-nums; text-align: right; }
+.out .v.good { color: var(--good); } .out .v.warn { color: var(--warn); } .out .v.bad { color: var(--bad); }
+.note { margin-top: 12px; font-size: .88rem; color: var(--muted); max-width: 70ch; }
+.tablewrap { overflow-x: auto; margin-top: 14px; }
+table { border-collapse: collapse; font-size: .88rem; min-width: 100%; }
+th, td { text-align: left; padding: 6px 10px; border-bottom: 1px solid var(--line); white-space: nowrap; }
+td.num, th.num { text-align: right; }
+
+/* Skills */
+.skills { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1.2fr); gap: 18px; align-items: start; }
+.radar { width: 100%; max-width: 460px; height: auto; display: block; margin: 0 auto; }
+.skill { display: flex; flex-direction: column; gap: 6px; padding: 10px 0; border-bottom: 1px solid var(--line); }
+.seg { align-self: flex-start; display: inline-flex; border: 1px solid var(--line); border-radius: var(--r); overflow: hidden; }
+.seg button { border: 0; background: var(--surface); padding: 5px 11px; cursor: pointer; font-family: var(--mono); border-left: 1px solid var(--line); }
+.seg button:first-child { border-left: 0; }
+.seg button[aria-pressed="true"] { background: var(--accent); color: var(--accent-ink); }
+
+/* Path */
+.ladder { display: flex; flex-direction: column; gap: 0; }
+.rung { display: grid; grid-template-columns: 110px minmax(0, 1fr); gap: 16px; padding: 16px 0; border-bottom: 1px solid var(--line); }
+.rung .yrs { font-family: var(--mono); color: var(--muted); font-size: .85rem; }
+.rung dl { display: grid; grid-template-columns: 110px minmax(0, 1fr); gap: 4px 12px; margin: 8px 0 0; font-size: .92rem; }
+.rung dt { color: var(--muted); }
+.rung dd { margin: 0; }
+.levers { display: grid; grid-template-columns: repeat(auto-fill, minmax(min(100%, 260px), 1fr)); gap: 12px; }
+.lever h4 { margin: 0 0 6px; font-family: var(--display); font-size: 1.15rem; font-weight: 600; }
+
+/* Library */
+.filters { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 14px; }
+.filters button { border: 1px solid var(--line); background: var(--surface); border-radius: 999px; padding: 4px 12px; cursor: pointer; font-size: .85rem; }
+.filters button[aria-pressed="true"] { background: var(--ink); color: var(--bg); border-color: var(--ink); }
+.lib { display: grid; grid-template-columns: repeat(auto-fill, minmax(min(100%, 300px), 1fr)); gap: 10px; }
+.lib .card { padding: 14px; display: flex; flex-direction: column; gap: 6px; }
+.mq { margin: 0; padding-left: 0; list-style: none; display: flex; flex-direction: column; gap: 8px; }
+.mq li { display: grid; grid-template-columns: 48px minmax(0, 1fr); gap: 10px; font-size: .93rem; }
+
+/* Settings overlay */
+.overlay { position: fixed; inset: 0; background: rgba(10, 14, 18, .55); z-index: 20; display: flex; align-items: flex-start; justify-content: center; padding: calc(24px + env(safe-area-inset-top, 0px)) 16px 24px; overflow-y: auto; }
+.sheet { background: var(--surface); color: var(--ink); border-radius: 10px; border: 1px solid var(--line); width: 100%; max-width: 560px; padding: 20px; display: flex; flex-direction: column; gap: 16px; }
+.toast { position: fixed; left: 50%; transform: translateX(-50%); bottom: calc(18px + env(safe-area-inset-bottom, 0px)); background: var(--ink); color: var(--bg); padding: 8px 14px; border-radius: 999px; font-size: .88rem; z-index: 30; }
+
+@media (max-width: 860px) {
+  .today, .skills, .tool { grid-template-columns: minmax(0, 1fr); }
+  .toollist { flex-direction: row; overflow-x: auto; }
+  .toollist button { white-space: nowrap; }
+  .rung, .rung dl { grid-template-columns: minmax(0, 1fr); }
+  h2 { font-size: 1.6rem; }
+}
+@media (prefers-reduced-motion: no-preference) {
+  .slot, .brk, .btn, .tab { transition: background-color .15s, border-color .15s, color .15s; }
+}
+</style>
+
+<div class="app">
+  <header class="top">
+    <div class="brand">
+      <h1>Electrical PM Mastery</h1>
+      <p>365-circuit panel &middot; commercial electrical project management</p>
+    </div>
+    <div class="chips" id="status"></div>
+  </header>
+
+  <div class="tabs-wrap">
+    <nav class="tabs" role="tablist" aria-label="Sections" id="tabs"></nav>
+  </div>
+
+  <main>
+    <section data-view="today" id="v-today"></section>
+    <section data-view="panel" id="v-panel" hidden></section>
+    <section data-view="drill" id="v-drill" hidden></section>
+    <section data-view="toolkit" id="v-toolkit" hidden></section>
+    <section data-view="skills" id="v-skills" hidden></section>
+    <section data-view="path" id="v-path" hidden></section>
+    <section data-view="library" id="v-library" hidden></section>
+  </main>
+</div>
+<div class="overlay" id="settings" hidden></div>
+<div class="toast" id="toast" hidden></div>
+
+<script src="plan.js"></script>
+<script>
+(() => {
+  'use strict';
+  const E = window.EPM;
+  const DAYS = E.buildDays();
+  const CARDS = E.buildCards();
+  const PH = Object.fromEntries(E.PHASES.map(p => [p.id, p]));
+  const PHVAR = id => `var(--p${id})`;
+  const $ = s => document.querySelector(s);
+
+  // Tiny DOM builder. Strings become text nodes, never HTML.
+  function h(tag, props, ...kids) {
+    const n = document.createElement(tag);
+    if (props) for (const [k, v] of Object.entries(props)) {
+      if (v == null || v === false) continue;
+      if (k === 'class') n.className = v;
+      else if (k === 'text') n.textContent = v;
+      else if (k.startsWith('on')) n.addEventListener(k.slice(2), v);
+      else n.setAttribute(k, v === true ? '' : v);
+    }
+    for (const c of kids.flat()) if (c != null && c !== false) n.append(c.nodeType ? c : String(c));
+    return n;
+  }
+  const svg = (tag, attrs) => { const n = document.createElementNS('http://www.w3.org/2000/svg', tag); for (const [k, v] of Object.entries(attrs || {})) n.setAttribute(k, v); return n; };
+
+  const pad = n => String(n).padStart(2, '0');
+  const todayISO = () => { const d = new Date(); return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`; };
+  const dow = iso => new Date(iso + 'T00:00:00Z').getUTCDay();
+  const nextMonday = iso => E.addDays(iso, (8 - dow(iso)) % 7);
+  const fmtDate = (iso, opts = { weekday: 'short', month: 'short', day: 'numeric' }) => new Date(iso + 'T00:00:00Z').toLocaleDateString(undefined, { ...opts, timeZone: 'UTC' });
+  const money = v => (v < 0 ? '(' : '') + '$' + Math.abs(v).toLocaleString(undefined, { maximumFractionDigits: 0 }) + (v < 0 ? ')' : '');
+  const num = (v, d = 0) => v == null || !isFinite(v) ? 'n/a' : v.toLocaleString(undefined, { minimumFractionDigits: d, maximumFractionDigits: d });
+  const pctf = (v, d = 1) => v == null || !isFinite(v) ? 'n/a' : (v * 100).toFixed(d) + '%';
+  const ckt = n => 'CKT ' + String(n).padStart(3, '0');
+
+  function toast(msg) {
+    const t = $('#toast'); t.textContent = msg; t.hidden = false;
+    clearTimeout(toast.t); toast.t = setTimeout(() => { t.hidden = true; }, 1800);
+  }
+
+  // ---------------- State and storage ----------------
+  const KEY = 'epm-state-v1';
+  const blank = () => ({ v: 1, start: nextMonday(todayISO()), done: {}, notes: {}, skills: { base: {}, now: {} }, cards: {}, updated: 0 });
+  function normalize(o) {
+    const s = Object.assign(blank(), o && typeof o === 'object' ? o : {});
+    for (const k of ['done', 'notes', 'cards']) if (!s[k] || typeof s[k] !== 'object') s[k] = {};
+    if (!s.skills || typeof s.skills !== 'object') s.skills = {};
+    s.skills.base = s.skills.base || {}; s.skills.now = s.skills.now || {};
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(s.start)) s.start = blank().start;
+    return s;
+  }
+  let S = blank();
+  try { const raw = localStorage.getItem(KEY); if (raw) S = normalize(JSON.parse(raw)); } catch (e) { /* storage blocked: run in memory */ }
+
+  const cloud = { ref: null, writing: false, queued: false, timer: 0, status: 'local' };
+  function saveLocal() { try { localStorage.setItem(KEY, JSON.stringify(S)); } catch (e) { /* ignore */ } }
+  function save() {
+    S.updated = Date.now();
+    saveLocal();
+    if (cloud.ref) { clearTimeout(cloud.timer); cloud.timer = setTimeout(() => { cloud.timer = 0; pushCloud(); }, 1200); }
+  }
+  async function pushCloud() {
+    if (!cloud.ref) return;
+    if (cloud.writing) { cloud.queued = true; return; }
+    cloud.writing = true;
+    try { await cloud.ref.set(JSON.parse(JSON.stringify(S))); setSync('cloud'); }
+    catch (e) { setSync(e && e.code === 'quota_exceeded' ? 'full' : 'error'); if (e && (e.code === 'invalid_argument' || e.code === 'revoked')) cloud.ref = null; }
+    cloud.writing = false;
+    if (cloud.queued) { cloud.queued = false; pushCloud(); }
+  }
+  function setSync(s) { cloud.status = s; renderStatus(); if (!$('#settings').hidden) renderSettings(); }
+
+  async function connectCloud() {
+    const C = window.claude;
+    if (!C || typeof C.use !== 'function') return;
+    try {
+      const [db, user] = await Promise.all([C.use('db'), C.use('user')]);
+      if (!db || !user) return;
+      const id = await user.id();
+      if (!id) return;
+      cloud.ref = db.doc(`data/users/${id}/progress`);
+      const snap = await cloud.ref.get();
+      if (snap.exists) {
+        const remote = normalize(JSON.parse(JSON.stringify(snap.data())));
+        if ((remote.updated || 0) >= (S.updated || 0)) { S = remote; saveLocal(); renderAll(); setSync('cloud'); }
+        else await pushCloud();
+      } else if (S.updated) await pushCloud();
+      else setSync('cloud');
+      cloud.ref.onSnapshot(s => {
+        if (!s.exists || s.metadata.hasPendingWrites || cloud.timer || cloud.writing) return;
+        const remote = s.data();
+        if ((remote.updated || 0) > (S.updated || 0)) { S = normalize(JSON.parse(JSON.stringify(remote))); saveLocal(); renderAll(); }
+      }, () => setSync('local'));
+    } catch (e) { cloud.ref = null; setSync('local'); }
+  }
+
+  // ---------------- UI state ----------------
+  const TABS = [['today', 'Today'], ['panel', 'Panel'], ['drill', 'Drill'], ['toolkit', 'Toolkit'], ['skills', 'Skills'], ['path', 'Path'], ['library', 'Library']];
+  const ui = { tab: 'today', sel: 1, calc: 'labor', drillScope: 'reached', libCat: 'All', revealed: false, confirmReset: false };
+  const calDay = () => todayISO() < S.start ? 1 : E.dayNumber(S.start, todayISO());
+  const doneCount = () => Object.keys(S.done).length;
+  const curWeek = () => DAYS[calDay() - 1].week;
+
+  function go(tab) {
+    ui.tab = tab;
+    TABS.forEach(([id]) => { $('#v-' + id).hidden = id !== tab; });
+    renderTabs();
+    render[tab]();
+    try { history.replaceState(null, '', '#' + tab); } catch (e) { /* ignore */ }
+  }
+  function openDay(n) { ui.sel = Math.min(365, Math.max(1, n)); go('today'); window.scrollTo({ top: 0 }); }
+
+  // ---------------- Header ----------------
+  function renderTabs() {
+    const nav = $('#tabs'); nav.replaceChildren();
+    TABS.forEach(([id, label]) => nav.append(h('button', { class: 'tab', role: 'tab', 'aria-selected': String(ui.tab === id), onclick: () => go(id) }, label)));
+  }
+  function renderStatus() {
+    const box = $('#status'); box.replaceChildren();
+    const pre = todayISO() < S.start;
+    const d = DAYS[calDay() - 1];
+    const ph = PH[d.phase];
+    const done = doneCount();
+    const expected = pre ? 0 : calDay();
+    const diff = done - expected;
+    box.append(...[
+      h('span', { class: 'chip' }, pre ? 'Starts ' + fmtDate(S.start) : h('span', null, 'Day ', h('b', null, String(calDay())), ' of 365')),
+      h('span', { class: 'chip' }, h('i', { class: 'dot', style: `background:${PHVAR(ph.id)}` }), `Phase ${ph.id} · ${ph.name}`),
+      h('span', { class: 'chip' }, h('b', null, String(done)), ' done'),
+      pre ? null : h('span', { class: 'chip ' + (diff >= 0 ? 'good' : diff >= -3 ? 'warn' : 'bad') }, diff > 0 ? `${diff} ahead` : diff === 0 ? 'On pace' : `${-diff} behind`),
+      h('span', { class: 'chip', title: 'Where your progress is saved' }, { cloud: 'Synced', local: 'This browser', error: 'Sync paused', full: 'Storage full' }[cloud.status]),
+      h('button', { class: 'iconbtn', onclick: openSettings }, 'Settings'),
+    ].filter(Boolean));
+  }
+
+  // ---------------- Today ----------------
+  const render = {};
+  render.today = function () {
+    const v = $('#v-today'); v.replaceChildren();
+    const d = DAYS[ui.sel - 1];
+    const ph = PH[d.phase];
+    const wk = E.WEEKS[d.week - 1];
+    const date = E.addDays(S.start, d.n - 1);
+    const isDone = !!S.done[d.n];
+    const kind = E.KINDS.find(k => k.id === d.kind);
+
+    if (todayISO() < S.start) {
+      v.append(h('div', { class: 'banner' },
+        h('span', null, 'Day 1 is scheduled for ', h('b', null, fmtDate(S.start)), '. Preview the plan now, or start today.'),
+        h('button', { class: 'btn primary', onclick: () => { S.start = todayISO(); save(); renderAll(); toast('Day 1 starts today'); } }, 'Start today')));
+    }
+
+    const qa = wk.quiz.map(([q, a], i) => {
+      const ans = h('p', { class: 'ans', hidden: true }, a);
+      const btn = h('button', { class: 'linkbtn', onclick: () => { ans.hidden = !ans.hidden; btn.textContent = ans.hidden ? 'Show answer' : 'Hide answer'; } }, 'Show answer');
+      return h('div', { class: 'qa' }, h('div', { class: 'label' }, `Check ${i + 1}`), h('p', null, q), ans, btn);
+    });
+
+    const notes = h('textarea', { id: 'notes', placeholder: 'What did you learn, see, or decide? Who did you talk to? What will you do differently?' });
+    notes.value = S.notes[d.n] || '';
+    notes.addEventListener('input', () => { if (notes.value.trim()) S.notes[d.n] = notes.value; else delete S.notes[d.n]; save(); });
+
+    const main = h('article', { class: 'card', style: `--ph:${PHVAR(ph.id)}` },
+      h('div', { class: 'dayhead' },
+        h('div', { class: 'row' },
+          h('span', { class: 'badge' }, h('i', { class: 'dot', style: `background:${PHVAR(ph.id)}` }), `PH${ph.id} ${ph.name}`),
+          h('span', { class: 'label' }, `${ckt(d.n)} · Week ${d.week} · ${fmtDate(date)}`)),
+        h('span', { class: 'badge' }, `${d.kindLabel} · ${d.minutes} min`)),
+      h('h2', null, d.theme),
+      h('p', { class: 'goal' }, d.goal),
+      h('p', { class: 'task' }, d.task),
+      kind ? h('p', { class: 'muted small' }, kind.hint) : null,
+      h('div', { class: 'section' }, h('h3', null, d.kind === 'review' ? 'Answer from memory first' : "This week's checks"), ...qa),
+      h('div', { class: 'section' }, h('h3', null, 'Resources'),
+        h('ul', { class: 'res' }, d.res.map(id => {
+          const r = E.RESOURCES[id];
+          return h('li', null,
+            h('span', null, r.url ? h('a', { href: r.url, target: '_blank', rel: 'noopener' }, r.name) : h('b', null, r.name), ' ', h('span', { class: 'badge' }, r.cost)),
+            h('span', { class: 'why' }, r.why));
+        }))),
+      h('div', { class: 'section' }, h('label', { for: 'notes' }, h('h3', null, `Field notes for day ${d.n}`)), notes),
+      h('div', { class: 'actions' },
+        h('button', { class: 'btn ' + (isDone ? 'done' : 'primary'), 'aria-pressed': String(isDone), onclick: () => toggleDone(d.n) }, isDone ? `Day ${d.n} done ✓` : `Mark day ${d.n} done`),
+        h('span', { class: 'spacer' }),
+        h('button', { class: 'btn', onclick: () => openDay(d.n - 1), disabled: d.n === 1, 'aria-label': 'Previous day' }, '‹ Prev'),
+        h('button', { class: 'btn', onclick: () => openDay(calDay()) }, 'Today'),
+        h('button', { class: 'btn', onclick: () => openDay(d.n + 1), disabled: d.n === 365, 'aria-label': 'Next day' }, 'Next ›')),
+    );
+
+    // Week strip
+    const first = (d.week - 1) * 7 + 1;
+    const weekDays = d.n === 365 ? [DAYS[364]] : DAYS.slice(first - 1, first + 6);
+    const strip = h('div', { class: 'week', style: `--ph:${PHVAR(ph.id)}` }, weekDays.map(x => h('button', {
+      class: 'slot' + (S.done[x.n] ? ' is-done' : '') + (x.n === d.n ? ' is-sel' : ''),
+      onclick: () => openDay(x.n), 'aria-label': `Day ${x.n}, ${x.kindLabel}${S.done[x.n] ? ', done' : ''}`,
+    }, h('span', { class: 'n' }, String(x.n)), h('span', { class: 'k' }, (E.KINDS.find(k => k.id === x.kind) || {}).short || x.kindLabel.split(' ')[0]))));
+
+    const phDays = DAYS.filter(x => x.phase === ph.id);
+    const phDone = phDays.filter(x => S.done[x.n]).length;
+    const side = h('aside', { class: 'stack' },
+      h('div', { class: 'card stack' },
+        h('h3', null, `Week ${d.week} circuits`), strip,
+        h('div', { class: 'stack', style: 'gap:6px' },
+          h('div', { class: 'row', style: 'justify-content:space-between' }, h('span', { class: 'small' }, `Phase ${ph.id}: ${ph.name}`), h('span', { class: 'mono small' }, `${phDone}/${phDays.length}`)),
+          h('div', { class: 'meter', style: `--ph:${PHVAR(ph.id)}` }, h('i', { style: `width:${(phDone / phDays.length) * 100}%` })),
+          h('p', { class: 'muted small' }, ph.aim))),
+      coachCard(d));
+
+    v.append(h('div', { class: 'today' }, main, side));
+  };
+
+  function toggleDone(n) {
+    if (S.done[n]) delete S.done[n]; else S.done[n] = todayISO();
+    save(); renderStatus(); render.today();
+    if (S.done[n]) toast(n === 365 ? 'Program complete. Retake your Skills rating.' : `Day ${n} logged`);
+  }
+
+  // ---------------- Coach (asks Claude, when the viewer allows it) ----------------
+  const coach = { sample: null, ctl: null, turns: [], day: 0, out: '', note: '', busy: false, off: false };
+  async function connectCoach() {
+    const C = window.claude;
+    if (!C || typeof C.use !== 'function') return;
+    try { coach.sample = await C.use('sample'); } catch (e) { coach.sample = null; }
+    if (coach.sample && ui.tab === 'today') render.today();
+  }
+  function coachCard(d) {
+    if (!coach.sample || coach.off) return null;
+    if (coach.day !== d.n) { coach.day = d.n; coach.turns = []; coach.out = ''; coach.note = ''; }
+    const out = h('div', { class: 'coach-out', 'aria-live': 'polite' }, coach.out || 'Ask about today\'s task, a code section, a CO you are pricing, or a field situation.');
+    const input = h('textarea', { id: 'coach-q', placeholder: 'Ask the master...', style: 'min-height:64px' });
+    const note = h('p', { class: 'muted small' }, coach.note);
+    const askBtn = h('button', { class: 'btn primary', disabled: coach.busy, onclick: () => { const q = input.value.trim(); if (q) { input.value = ''; ask(q, out, note); } } }, 'Ask');
+    const stop = h('button', { class: 'btn', hidden: !coach.busy, onclick: () => coach.ctl && coach.ctl.abort() }, 'Stop');
+    const quick = [
+      ['Explain it simply', 'Explain today\'s task in plain language, why a 20-year veteran cares about it, and the one mistake new PMs make here.'],
+      ['Quiz me', 'Quiz me with 3 short scenario questions on this week\'s theme. Number them and put the answers at the end under "Answers".'],
+      ['Field example', 'Give me one realistic field example from a commercial electrical job that shows this week\'s theme, with numbers.'],
+    ].map(([label, q]) => h('button', { class: 'btn small', disabled: coach.busy, onclick: () => ask(q, out, note) }, label));
+    return h('div', { class: 'card stack' },
+      h('h3', null, 'Ask the 20-year master'),
+      h('p', { class: 'muted small' }, 'Uses your own Claude account. Treat answers as a coach\'s opinion and verify code sections against your AHJ\'s adopted edition.'),
+      h('div', { class: 'row' }, quick), out, note,
+      h('label', { for: 'coach-q', class: 'label' }, 'Your question'), input,
+      h('div', { class: 'row' }, askBtn, stop));
+  }
+  async function ask(question, out, note) {
+    const d = DAYS[ui.sel - 1];
+    const ph = PH[d.phase];
+    const rules = [
+      'You are a master electrical contractor and electrical project manager with 20+ years in US commercial construction.',
+      'You are coaching a project manager at a large commercial electrical contractor who is back after two years away from PM work.',
+      'Be direct, practical, and specific. Challenge weak assumptions. Use US practice (NEC, NFPA 70E, OSHA 1926 Subpart K).',
+      'When you cite an NEC section, say which edition and remind them to confirm the AHJ\'s adopted edition. Never invent section numbers; say so if unsure.',
+      'Plain text only: no markdown symbols, no em dashes. Use short numbered lines for lists. Keep it under 250 words unless asked for more.',
+      '',
+      `Program context: Day ${d.n} of 365, Week ${d.week} "${d.theme}" (Phase ${ph.id}: ${ph.name}).`,
+      `Week goal: ${d.goal}`,
+      `Today's task (${d.kindLabel}): ${d.task}`,
+    ].join('\n');
+    coach.turns.push({ role: 'user', content: question });
+    while (coach.turns.length > 7 || (coach.turns.length && coach.turns[0].role !== 'user')) coach.turns.shift();
+    coach.ctl = new AbortController();
+    coach.busy = true; coach.note = ''; out.textContent = 'Thinking...'; note.textContent = '';
+    setCoachBusy(true);
+    try {
+      const { text, truncated } = await coach.sample([{ role: 'user', content: rules }, ...coach.turns], {
+        cache: false, signal: coach.ctl.signal, onText: ({ text }) => { out.textContent = text; coach.out = text; },
+      });
+      coach.out = text; out.textContent = text;
+      coach.turns.push({ role: 'assistant', content: text });
+      if (truncated) coach.note = 'The answer was cut short. Ask for less at a time.';
+    } catch (e) {
+      coach.turns.pop();
+      coach.out = (e && e.text) || '';
+      out.textContent = coach.out || 'No answer.';
+      const code = e && e.code;
+      if (['not_granted', 'sampling_disabled', 'not_declared', 'capability_disabled', 'capability_removed'].includes(code)) { coach.off = true; }
+      else if (code === 'rate_limited') coach.note = 'Too many questions too fast, or your usage limit was reached. Try again later.';
+      else if (code === 'session_expired') coach.note = 'Your Claude session expired. Sign in again, then retry.';
+      else if (code === 'refused') { coach.out = ''; out.textContent = ''; coach.note = 'Claude declined that question. Rephrase it.'; }
+      else if (code !== 'cancelled') coach.note = 'The answer was interrupted. Try again.';
+    } finally {
+      coach.busy = false;
+      note.textContent = coach.note;
+      if (coach.off) { if (ui.tab === 'today') render.today(); } else setCoachBusy(false);
+    }
+  }
+  function setCoachBusy(busy) {
+    const card = $('#coach-q') && $('#coach-q').closest('.card');
+    if (!card) return;
+    card.querySelectorAll('button').forEach(b => { if (b.textContent === 'Stop') b.hidden = !busy; else b.disabled = busy; });
+  }
+
+  // ---------------- Panel ----------------
+  render.panel = function () {
+    const v = $('#v-panel'); v.replaceChildren();
+    const today = todayISO() < S.start ? 0 : calDay();
+    v.append(h('div', { class: 'legend' }, E.PHASES.map(p => h('span', { class: 'row', style: 'gap:6px' }, h('i', { class: 'dot', style: `background:${PHVAR(p.id)}` }), `Phase ${p.id} ${p.name} (W${p.weeks[0]} to W${p.weeks[1]})`)),
+      h('span', { class: 'muted' }, 'Filled breaker = done. Outlined = today.')));
+    E.PHASES.forEach(p => {
+      const pdays = DAYS.filter(x => x.phase === p.id);
+      const pdone = pdays.filter(x => S.done[x.n]).length;
+      const weeks = [];
+      for (let w = p.weeks[0]; w <= p.weeks[1]; w++) {
+        const wd = DAYS.filter(x => x.week === w);
+        weeks.push(h('div', { class: 'wk', style: `--ph:${PHVAR(p.id)}` },
+          h('div', { class: 'wk-top' }, h('span', { class: 'mono' }, 'W' + pad(w)), h('span', { title: E.WEEKS[w - 1].theme }, E.WEEKS[w - 1].theme)),
+          h('div', { class: 'breakers' }, wd.map(x => h('button', {
+            class: 'brk' + (S.done[x.n] ? ' is-done' : '') + (x.n === today ? ' is-today' : ''),
+            title: `Day ${x.n}: ${x.kindLabel}`, 'aria-label': `Day ${x.n}, ${x.kindLabel}${S.done[x.n] ? ', done' : ''}`,
+            onclick: () => openDay(x.n),
+          }, String(x.n))))));
+      }
+      v.append(h('section', { class: 'phase' },
+        h('div', { class: 'phase-head' },
+          h('h2', null, h('i', { class: 'dot', style: `background:${PHVAR(p.id)};width:14px;height:14px` }), `Phase ${p.id}: ${p.name}`),
+          h('div', { class: 'row' }, h('span', { class: 'mono small' }, `${pdone}/${pdays.length}`), h('div', { class: 'meter', style: `--ph:${PHVAR(p.id)}` }, h('i', { style: `width:${pdone / pdays.length * 100}%` })))),
+        h('p', { class: 'muted', style: 'margin-bottom:10px;max-width:75ch' }, p.aim),
+        h('div', { class: 'weeks' }, weeks)));
+    });
+  };
+
+  // ---------------- Drill (Leitner boxes) ----------------
+  function drillPool() {
+    const limit = ui.drillScope === 'all' ? 52 : curWeek();
+    return CARDS.filter(c => c.week <= limit);
+  }
+  render.drill = function () {
+    const v = $('#v-drill'); v.replaceChildren();
+    const pool = drillPool();
+    const t = todayISO();
+    const due = pool.filter(c => !S.cards[c.id] || S.cards[c.id].due <= t)
+      .sort((a, b) => ((S.cards[a.id] || {}).due || '9') < ((S.cards[b.id] || {}).due || '9') ? -1 : 1);
+    const counts = [1, 2, 3, 4, 5].map(b => pool.filter(c => S.cards[c.id] && S.cards[c.id].box === b).length);
+    const fresh = pool.filter(c => !S.cards[c.id]).length;
+    const card = due[0];
+
+    const scope = h('div', { class: 'filters', style: 'margin:0' }, [['reached', `Weeks 1 to ${curWeek()}`], ['all', 'All 52 weeks']].map(([id, label]) =>
+      h('button', { 'aria-pressed': String(ui.drillScope === id), onclick: () => { ui.drillScope = id; ui.revealed = false; render.drill(); } }, label)));
+
+    let body;
+    if (!card) {
+      body = h('div', { class: 'card flash' }, h('h2', null, 'Nothing due'), h('p', { class: 'muted' }, pool.length ? 'Every card in this set is scheduled for a later day. Come back tomorrow, or widen the set to all 52 weeks.' : 'No cards yet.'));
+    } else {
+      const st = S.cards[card.id];
+      const grade = ok => { S.cards[card.id] = E.review(st || { box: 1 }, ok, t); ui.revealed = false; save(); render.drill(); };
+      body = h('div', { class: 'card flash' },
+        h('div', { class: 'row', style: 'justify-content:space-between' }, h('span', { class: 'label' }, `Week ${card.week} · ${card.theme}`), h('span', { class: 'badge' }, st ? `Box ${st.box}` : 'New')),
+        h('p', { class: 'q' }, card.q),
+        ui.revealed ? h('p', { class: 'qa' }, card.a) : null,
+        h('div', { class: 'row' }, ui.revealed
+          ? [h('button', { class: 'btn primary', onclick: () => grade(true) }, 'I knew it'), h('button', { class: 'btn', onclick: () => grade(false) }, 'Missed it')]
+          : h('button', { class: 'btn primary', onclick: () => { ui.revealed = true; render.drill(); } }, 'Reveal answer')));
+    }
+    v.append(h('div', { class: 'drill' },
+      h('div', { class: 'row', style: 'justify-content:space-between' }, h('h2', null, `${due.length} due`), scope),
+      body,
+      h('div', { class: 'boxes' }, counts.map((n, i) => h('div', { class: 'box' }, h('div', { class: 'num' }, String(n)), h('div', { class: 'label' }, `Box ${i + 1} · ${[1, 2, 4, 8, 16][i]}d`)))),
+      h('p', { class: 'muted small' }, `${fresh} new cards in this set. A correct answer moves a card up one box and pushes it further out (1, 2, 4, 8, 16 days). A miss sends it back to Box 1. Retrieval beats rereading.`)));
+  };
+
+  // ---------------- Toolkit ----------------
+  const SIZE_OPTS = E.SIZES.map(s => [s, /^\d+$/.test(s) && +s >= 250 ? `${s} kcmil` : `${s} AWG`]);
+  const nextYear = E.addDays(todayISO(), 365);
+  const CALCS = [
+    { id: 'labor', name: 'Labor productivity (PF)', blurb: 'Earned hours, productivity factor, and where the job lands if nothing changes.',
+      fields: [['budgetHrs', 'Budget hours', 1000], ['pct', '% complete (from installed quantities)', 40], ['actualHrs', 'Actual hours to date', 520], ['rate', 'Burdened labor rate ($/hr)', 95]],
+      run(x) { const r = E.calc.labor(x); const tone = r.pf == null ? '' : r.pf >= 1 ? 'good' : r.pf >= 0.95 ? 'warn' : 'bad';
+        return [['Earned hours', num(r.earned)], ['Productivity factor (earned / actual)', num(r.pf, 2), tone], ['Projected hours at completion', num(r.eac)], ['Gain or (fade), hours', r.variance == null ? 'n/a' : num(r.variance), r.variance < 0 ? 'bad' : 'good'], ['Gain or (fade), dollars', r.varianceCost == null ? 'n/a' : money(r.varianceCost), r.varianceCost < 0 ? 'bad' : 'good']]; },
+      note: 'Assumes the remaining work runs at today\'s PF. Take % complete from installed quantities, never from hours spent, or fade stays hidden until closeout.' },
+    { id: 'wip', name: 'WIP and over/under billing', blurb: 'Cost-to-cost percent complete, earned revenue, and billing position.',
+      fields: [['contract', 'Contract value incl. approved COs ($)', 2000000], ['estCost', 'Estimated total cost, current forecast ($)', 1700000], ['costToDate', 'Cost to date ($)', 850000], ['billed', 'Billed to date ($)', 1100000]],
+      run(x) { const r = E.calc.wip(x); return [['% complete (cost to cost)', pctf(r.pct) + (r.overrun ? ' (capped)' : ''), r.overrun ? 'bad' : ''], ['Earned revenue', money(r.earned)], [r.overUnder >= 0 ? 'Overbilled' : 'Underbilled', money(Math.abs(r.overUnder)), r.overUnder >= 0 ? 'good' : 'bad'], ['Forecast gross profit', money(r.gp), r.gp < 0 ? 'bad' : ''], ['Forecast margin', pctf(r.margin), r.margin < 0 ? 'bad' : ''], ['Cost to complete', money(r.costToComplete)], r.loss ? ['Projected loss to book now', money(r.loss), 'bad'] : null, r.overrun ? ['Cost to date exceeds the forecast', 'Update estimated total cost', 'bad'] : null].filter(Boolean); },
+      note: 'Overbilling is cash ahead but it is a liability, not profit. Persistent underbilling usually means unbilled changes or hidden fade. The forecast is only as honest as the estimated total cost.' },
+    { id: 'co', name: 'Change order pricing', blurb: 'Build a CO price the way the contract allows.',
+      fields: [['hours', 'Labor hours (incl. supervision)', 40], ['rate', 'Burdened labor rate ($/hr)', 95], ['material', 'Material ($)', 6500], ['taxPct', 'Sales tax on material (%)', 8.25], ['equipment', 'Equipment / rental ($)', 1200], ['subs', 'Subcontractors ($)', 0], ['markupPct', 'Markup on self-performed work (%)', 15], ['subMarkupPct', 'Markup on subcontracts (%)', 5], ['bondPct', 'Bond premium (%)', 1]],
+      run(x) { const r = E.calc.changeOrder(x); return [['Labor', money(r.labor)], ['Material incl. tax', money(r.mat)], ['Equipment', money(r.equipment)], ['Markup on self-performed', money(r.selfMarkup)], ['Subcontracts + markup', money(r.subs + r.subMarkup)], ['Bond', money(r.bond)], ['Total change order', money(r.total), 'good']]; },
+      note: 'Use the markups and allowable costs your contract states. If impacts (remobilization, out-of-sequence work, extended supervision) cannot be priced yet, say so and reserve rights in writing.' },
+    { id: 'vd', name: 'Voltage drop', blurb: 'K-method screening for feeders and branch circuits.',
+      fields: [['phase', 'System', 3, [[1, 'Single phase'], [3, 'Three phase']]], ['material', 'Conductor', 'cu', [['cu', 'Copper (K 12.9)'], ['al', 'Aluminum (K 21.2)']]], ['size', 'Conductor size', '3/0', SIZE_OPTS], ['amps', 'Load (A)', 160], ['feet', 'One-way length (ft)', 250], ['volts', 'System voltage (V)', 480], ['maxPct', 'Target max drop (%)', 3]],
+      run(x) { const r = E.calc.voltageDrop(x); const forDrop = E.calc.minSizeForDrop(x); const forAmps = E.calc.minSizeForAmps(x);
+        const name = sz => sz ? (SIZE_OPTS.find(o => o[0] === sz) || [0, sz])[1] : 'Over 750 kcmil: parallel sets';
+        const amp = E.AMP75[x.material][x.size] || 0;
+        const need = forDrop && forAmps ? E.SIZES[Math.max(E.SIZES.indexOf(forDrop), E.SIZES.indexOf(forAmps))] : null;
+        return [['Voltage drop', num(r.vd, 2) + ' V'], ['Percent drop', num(r.pct, 2) + '%', r.pct <= x.maxPct ? 'good' : 'bad'], ['Ampacity of selected size (75°C)', amp ? amp + ' A' : 'n/a', amp >= x.amps ? 'good' : 'bad'], ['Smallest size for ampacity', name(forAmps)], ['Smallest size for voltage drop', name(forDrop)], ['Use at least', name(need), need ? 'good' : 'bad']]; },
+      note: 'Screening only. Voltage drop uses the resistive K method (ignores reactance and power factor). Ampacity uses Table 310.16 at 75°C with no adjustment or correction factors, no 125% continuous-load sizing, and no terminal or parallel checks; the engineer of record\'s sizing governs. NEC informational notes suggest about 3% on a feeder or branch circuit and 5% total; your spec may be stricter.' },
+    { id: 'power', name: 'kVA and amps', blurb: 'One-line math: transformer and feeder full-load current.',
+      fields: [['kva', 'kVA', 75], ['volts', 'Voltage (V)', 208], ['phase', 'System', 3, [[1, 'Single phase'], [3, 'Three phase']]]],
+      run(x) { return [['Full-load current', num(E.calc.amps(x), 1) + ' A'], ['Check: kVA from that current', num(E.calc.kva({ amps: E.calc.amps(x), volts: x.volts, phase: x.phase }), 1)]]; },
+      table(x) { const sizes = [15, 30, 45, 75, 112.5, 150, 225, 300, 500, 750, 1000, 1500, 2000, 2500];
+        return h('table', null, h('thead', null, h('tr', null, h('th', null, 'kVA'), h('th', { class: 'num' }, `Amps at ${x.volts} V ${x.phase === 3 ? '3φ' : '1φ'}`))),
+          h('tbody', null, sizes.map(k => h('tr', null, h('td', { class: 'mono' }, String(k)), h('td', { class: 'num mono' }, num(E.calc.amps({ kva: k, volts: x.volts, phase: x.phase }), 0)))))); },
+      note: 'Three phase: I = kVA x 1000 / (1.732 x V). Single phase: I = kVA x 1000 / V. Memorize the 208 V and 480 V columns; they come up in every meeting.' },
+    { id: 'mm', name: 'Measured mile', blurb: 'Quantify lost productivity against your own unimpacted work.',
+      fields: [['baseQty', 'Unimpacted quantity installed (units)', 2000], ['baseHrs', 'Unimpacted hours', 400], ['impQty', 'Impacted quantity installed (units)', 1500], ['impHrs', 'Impacted hours', 450], ['rate', 'Burdened labor rate ($/hr)', 95]],
+      run(x) { const r = E.calc.measuredMile(x); if (r.lost == null) return [['Enter quantities and hours greater than zero', '']]; return [['Unimpacted rate', num(r.baseRate, 2) + ' units/hr'], ['Impacted rate', num(r.impRate, 2) + ' units/hr'], ['Hours it should have taken', num(r.expected)], ['Lost hours', num(r.lost), r.lost > 0 ? 'bad' : 'good'], ['Productivity loss', pctf(r.pctLoss), r.lost > 0 ? 'bad' : 'good'], ['Cost of lost hours', money(r.cost)]]; },
+      note: 'Compare like work (same crew type, same system, similar conditions). The comparison only holds up if both periods are documented in daily reports and quantity tracking.' },
+    { id: 'crew', name: 'Crew size', blurb: 'How many people the remaining hours really need.',
+      fields: [['remainingHrs', 'Remaining hours (forecast)', 4000], ['weeks', 'Weeks remaining', 10], ['hrsPerWeek', 'Hours per person per week', 40], ['productivityPct', 'Expected productivity vs plan (%)', 100]],
+      run(x) { const r = E.calc.crew(x); if (r.crew == null) return [['Weeks, hours, and productivity must be above zero', '']]; return [['Effective hours needed', num(r.effectiveHrs)], ['Average crew', num(r.crew, 1)], ['Crew to staff', String(r.crewRounded), 'good']]; },
+      note: 'Overtime and trade stacking usually lower productivity. Enter your own assumption from company history instead of a generic factor, and remember that crews ramp up and taper; the peak will be higher than the average.' },
+    { id: 'submit', name: 'Submit-by date', blurb: 'Work back from need-on-site to the latest submittal date.',
+      fields: [['needDate', 'Need-on-site date', nextYear, 'date'], ['leadWeeks', 'Manufacturer lead time (weeks)', 40], ['reviewWeeks', 'Engineer review (weeks)', 3], ['releaseWeeks', 'Release / order entry (weeks)', 1], ['bufferWeeks', 'Resubmittal buffer (weeks)', 3]],
+      run(x) { const r = E.calc.submitBy(x); if (!r.date) return [['Enter a need-on-site date', '']]; const late = r.date < todayISO();
+        return [['Total weeks back', String(r.totalWeeks)], ['Submit by', fmtDate(r.date, { weekday: 'short', year: 'numeric', month: 'short', day: 'numeric' }), late ? 'bad' : 'good'], ['Status', late ? 'Already late: escalate now' : `${E.daysBetween(todayISO(), r.date)} days of float`, late ? 'bad' : 'good']]; },
+      note: 'Confirm current lead times with your supplier and log the quote date. Lead times move; a number from last quarter is a guess.' },
+    { id: 'be', name: 'Break-even revenue', blurb: 'How much volume covers overhead at a given margin.',
+      fields: [['overhead', 'Annual overhead ($)', 3000000], ['marginPct', 'Average gross margin (%)', 15]],
+      run(x) { const r = E.calc.breakEven(x); return [['Break-even revenue', r == null ? 'n/a' : money(r)]]; },
+      note: 'Every point of margin you protect on a job lowers the volume the company needs just to stand still.' },
+  ];
+  const calcVals = {};
+  render.toolkit = function () {
+    const v = $('#v-toolkit'); v.replaceChildren();
+    const c = CALCS.find(x => x.id === ui.calc) || CALCS[0];
+    const vals = calcVals[c.id] || (calcVals[c.id] = Object.fromEntries(c.fields.map(f => [f[0], f[2]])));
+    const outBox = h('div', { class: 'out', 'aria-live': 'polite' });
+    const tableBox = h('div', { class: 'tablewrap' });
+    const update = () => {
+      outBox.replaceChildren();
+      const x = Object.fromEntries(c.fields.map(([id, , , kind]) => [id, kind === 'date' || ['material', 'size'].includes(id) ? vals[id] : Number(vals[id])]));
+      const bad = c.fields.some(([id, , , kind]) => kind !== 'date' && !['material', 'size'].includes(id) && !isFinite(x[id]));
+      if (bad || (c.id === 'submit' && !/^\d{4}-\d{2}-\d{2}$/.test(x.needDate))) { outBox.append(h('div', null, h('span', null, 'Enter a number in every field.'))); return; }
+      c.run(x).forEach(([label, value, tone]) => outBox.append(h('div', null, h('span', null, label), h('span', { class: 'v ' + (tone || '') }, value))));
+      tableBox.replaceChildren(c.table ? c.table(x) : '');
+    };
+    const form = h('div', { class: 'form' }, c.fields.map(([id, label, , kind]) => {
+      const fid = `calc-${c.id}-${id}`;
+      let input;
+      if (Array.isArray(kind)) {
+        input = h('select', { id: fid }, kind.map(([val, text]) => h('option', { value: String(val) }, text)));
+        input.value = String(vals[id]);
+      } else {
+        input = h('input', { id: fid, type: kind === 'date' ? 'date' : 'number', step: 'any', inputmode: 'decimal' });
+        input.value = vals[id];
+      }
+      input.addEventListener('input', () => { vals[id] = input.value; update(); });
+      input.addEventListener('change', () => { vals[id] = input.value; update(); });
+      return h('div', { class: 'field' }, h('label', { for: fid }, label), input);
+    }));
+    v.append(h('div', { class: 'tool' },
+      h('nav', { class: 'toollist', 'aria-label': 'Calculators' }, CALCS.map(x => h('button', { 'aria-pressed': String(x.id === c.id), onclick: () => { ui.calc = x.id; render.toolkit(); } }, x.name))),
+      h('div', { class: 'card' },
+        h('h2', null, c.name), h('p', { class: 'muted', style: 'margin:6px 0 16px' }, c.blurb + ' Example values are loaded; replace them with your job\'s numbers.'),
+        form, outBox, tableBox, h('p', { class: 'note' }, c.note),
+        h('div', { class: 'actions' }, h('button', { class: 'btn', onclick: () => { delete calcVals[c.id]; render.toolkit(); } }, 'Reset to example values')))));
+    update();
+  };
+
+  // ---------------- Skills ----------------
+  render.skills = function () {
+    const v = $('#v-skills'); v.replaceChildren();
+    const base = S.skills.base, now = S.skills.now;
+    const rated = Object.keys(now).length;
+
+    // Radar: 10 axes, rings 1-5.
+    const cx = 200, cy = 200, R = 130, N = E.SKILLS.length;
+    const pt = (i, val) => { const a = -Math.PI / 2 + i * 2 * Math.PI / N; return [cx + Math.cos(a) * R * val / 5, cy + Math.sin(a) * R * val / 5]; };
+    const g = svg('svg', { viewBox: '-50 -10 500 420', class: 'radar', role: 'img', 'aria-label': 'Skills radar: baseline vs current self-ratings' });
+    for (let ring = 1; ring <= 5; ring++) g.append(svg('polygon', { points: E.SKILLS.map((_, i) => pt(i, ring).join(',')).join(' '), fill: 'none', stroke: 'var(--line)', 'stroke-width': ring === 5 ? 1.5 : 1 }));
+    E.SKILLS.forEach((s, i) => {
+      const [x, y] = pt(i, 5);
+      g.append(svg('line', { x1: cx, y1: cy, x2: x, y2: y, stroke: 'var(--line)', 'stroke-width': 1 }));
+      const [lx, ly] = pt(i, 6.1);
+      const t = svg('text', { x: lx, y: ly + 4, 'text-anchor': Math.abs(lx - cx) < 8 ? 'middle' : lx > cx ? 'start' : 'end', fill: 'var(--muted)', 'font-size': 12, 'font-family': 'IBM Plex Sans, system-ui, sans-serif' });
+      t.textContent = s.name.split(' ')[0];
+      g.append(t);
+    });
+    const poly = (src, attrs) => g.append(svg('polygon', { points: E.SKILLS.map((s, i) => pt(i, src[s.id] || 0).join(',')).join(' '), ...attrs }));
+    if (Object.keys(base).length) poly(base, { fill: 'none', stroke: 'var(--muted)', 'stroke-width': 2, 'stroke-dasharray': '5 4' });
+    if (rated) poly(now, { fill: 'var(--accent)', 'fill-opacity': .18, stroke: 'var(--accent)', 'stroke-width': 2.5 });
+    E.SKILLS.forEach((s, i) => { if (now[s.id]) { const [x, y] = pt(i, now[s.id]); g.append(svg('circle', { cx: x, cy: y, r: 4, fill: 'var(--accent)' })); } });
+    [1, 3, 5].forEach(r => { const t = svg('text', { x: cx + 4, y: cy - R * r / 5 + 12, fill: 'var(--muted)', 'font-size': 10, 'font-family': 'IBM Plex Mono, monospace' }); t.textContent = String(r); g.append(t); });
+
+    const avg = o => { const vals = E.SKILLS.map(s => o[s.id] || 0).filter(Boolean); return vals.length ? vals.reduce((a, b) => a + b, 0) / vals.length : 0; };
+    const left = h('div', { class: 'card stack' },
+      h('h2', null, 'Skills radar'),
+      g,
+      h('div', { class: 'row small' },
+        h('span', { class: 'row', style: 'gap:6px' }, h('i', { class: 'dot', style: 'background:var(--accent)' }), `Current avg ${num(avg(now), 1)}`),
+        h('span', { class: 'row', style: 'gap:6px' }, h('i', { class: 'dot', style: 'background:var(--muted)' }), `Baseline avg ${num(avg(base), 1)} (dashed)`)),
+      h('ol', { class: 'small muted', start: 0, style: 'margin:0;padding-left:20px' }, E.LEVELS.map(l => h('li', null, l))),
+      h('div', { class: 'row' }, h('button', { class: 'btn', disabled: !rated, onclick: () => { S.skills.base = { ...S.skills.now }; save(); render.skills(); toast('Baseline updated'); } }, 'Set current as new baseline')),
+      h('p', { class: 'muted small' }, 'Rate honestly against the 20-year standard, not against your peers. Your first rating for each skill becomes its baseline. Re-rate at the end of every phase.'));
+
+    const list = h('div', { class: 'card' }, h('h3', { style: 'margin-bottom:6px' }, 'Self-assessment'),
+      E.SKILLS.map(s => h('div', { class: 'skill' },
+        h('div', { class: 'row', style: 'justify-content:space-between' }, h('b', null, s.name), base[s.id] != null ? h('span', { class: 'mono small muted' }, `baseline ${base[s.id]}`) : null),
+        h('span', { class: 'muted small' }, s.desc),
+        h('div', { class: 'seg', role: 'group', 'aria-label': `${s.name} rating` }, [1, 2, 3, 4, 5].map(n => h('button', {
+          'aria-pressed': String(now[s.id] === n), title: E.LEVELS[n],
+          onclick: () => { now[s.id] = n; if (base[s.id] == null) base[s.id] = n; save(); render.skills(); },
+        }, String(n)))))));
+    v.append(h('div', { class: 'skills' }, left, list));
+  };
+
+  // ---------------- Path (the reverse-engineered career) ----------------
+  const LADDER = [
+    { yrs: 'Years 0 to 4', role: 'Apprentice', learned: 'Materials, tools, installation methods, the NEC as a working document, and how long work really takes.', reps: 'Roughly 8,000 supervised field hours plus classroom in a typical registered apprenticeship.', here: 'Tuesday field reps, timing real tasks (Weeks 7 and 45), and the Systems phase (Weeks 18 to 30).' },
+    { yrs: 'Years 4 to 7', role: 'Journeyman to foreman', learned: 'Reading prints fast, sequencing, running a crew, material flow, passing inspections.', reps: 'Daily crew decisions and getting corrected by inspectors and general foremen.', here: 'Foreman partnership (Week 15), inspection prep (Week 17), foreman one-on-ones (Week 34).' },
+    { yrs: 'Years 7 to 11', role: 'General foreman, project engineer, estimator', learned: 'Takeoff and labor units, submittals, RFIs, coordination: the paper side of the job.', reps: 'Hundreds of takeoffs checked against results and dozens of submittal and RFI cycles.', here: 'Estimating (Weeks 7 and 8), procurement and RFIs (Weeks 13 and 14), your Labor Unit Book (Weeks 7 and 45).' },
+    { yrs: 'Years 10 to 15', role: 'Project manager', learned: 'Owning the P&L: contracts, changes, forecasting, cash, schedule, client trust.', reps: 'Monthly forecasts on 20 to 40 jobs, plus a few painful closeouts and claims.', here: 'Core Control phase (Weeks 5 to 17), claims and negotiation (Weeks 31 to 33), closed-job post-mortems (Week 44).' },
+    { yrs: 'Years 15 to 20+', role: 'Senior PM and operations', learned: 'Choosing work, portfolio finance, risk transfer, developing people, seeing problems before they show.', reps: 'Many full project cycles, go/no-go calls, and teaching others.', here: 'Operator phase (Weeks 35 to 43) and Mastery phase (Weeks 44 to 52).' },
+  ];
+  const LEVERS = [
+    ['Closed jobs are free answer keys', 'Veterans learned by watching estimates meet reality for 20 years. Your company already has that history in its closed job files. Reviewing estimate vs actual on dozens of jobs compresses years into weeks.'],
+    ['Mine the veterans', 'Every Thursday you ask a veteran one targeted question. Fifty conversations with general foremen, estimators, controllers, and inspectors transfer pattern knowledge you would otherwise learn by failing.'],
+    ['Field reps beat reading', 'Every Tuesday you apply the week\'s idea on a live job. Knowledge without a rep fades. A rep with feedback sticks.'],
+    ['Retrieval and spacing', 'The Drill deck brings each week\'s questions back on a 1, 2, 4, 8, 16 day schedule. Testing yourself is far more durable than rereading.'],
+    ['Teach it', 'Toolbox talks, lunch-and-learns, and coaching your project engineer force you to organize what you know and expose the gaps.'],
+    ['Encode it in a playbook', 'Every Saturday produces a template or standard. By Week 52 you have a written system that runs your jobs even on bad days.'],
+  ];
+  render.path = function () {
+    const v = $('#v-path'); v.replaceChildren();
+    v.append(h('div', { class: 'stack', style: 'gap:22px' },
+      h('div', { class: 'card stack' },
+        h('h2', null, 'How a 20-year master got there'),
+        h('p', { style: 'max-width:70ch' }, 'Nobody downloads 20 years. What a veteran has is a pattern library built from thousands of feedback loops: an estimate meeting its actual, a schedule meeting its job, a clause meeting its dispute. This plan cannot skip those loops. It runs more of them per week, on purpose, using free material and the jobs you already run.'),
+        h('div', { class: 'ladder' }, LADDER.map(r => h('div', { class: 'rung' },
+          h('div', { class: 'yrs' }, r.yrs),
+          h('div', null, h('h3', { style: 'color:var(--ink);text-transform:none;letter-spacing:0;font-size:1.3rem' }, r.role),
+            h('dl', null, h('dt', null, 'What it built'), h('dd', null, r.learned), h('dt', null, 'The reps'), h('dd', null, r.reps), h('dt', null, 'In this plan'), h('dd', null, r.here))))))),
+      h('div', { class: 'card stack' },
+        h('h2', null, 'Six compression levers'),
+        h('div', { class: 'levers' }, LEVERS.map(([t, p]) => h('div', { class: 'lever' }, h('h4', null, t), h('p', { class: 'small' }, p))))),
+      h('div', { class: 'card stack' },
+        h('h2', null, 'The weekly rhythm'),
+        h('div', { class: 'tablewrap' }, h('table', null,
+          h('thead', null, h('tr', null, h('th', null, 'Day'), h('th', null, 'Block'), h('th', { class: 'num' }, 'Minutes'), h('th', null, 'Purpose'))),
+          h('tbody', null, E.KINDS.map((k, i) => h('tr', null, h('td', null, ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'][i]), h('td', null, k.label), h('td', { class: 'num mono' }, String(k.minutes)), h('td', null, k.hint)))))),
+        h('p', { class: 'muted small' }, 'About 5 hours a week. The Tuesday and Friday blocks overlap with work you already do, so the true extra load is closer to 3.5 hours. Start on a Monday so Deep Work lands on Saturday.')),
+      h('div', { class: 'card stack' },
+        h('h2', null, 'Where you start'),
+        h('p', { style: 'max-width:70ch' }, 'You are already at the project manager rung, so the plan front-loads what decays fastest during two years away: code edition changes, market prices and lead times, tool features, and the relationships that move work. If you came up through the trade, move faster through the Systems phase and spend the saved time on closed-job analysis. If you did not, treat the Systems phase as non-negotiable; it is where your foremen will decide whether to trust you.'))));
+  };
+
+  // ---------------- Library ----------------
+  render.library = function () {
+    const v = $('#v-library'); v.replaceChildren();
+    const used = {};
+    E.WEEKS.forEach((w, i) => w.res.forEach(r => (used[r] = used[r] || []).push(i + 1)));
+    const cats = ['All', ...new Set(Object.values(E.RESOURCES).map(r => r.cat))];
+    const items = Object.entries(E.RESOURCES).filter(([, r]) => ui.libCat === 'All' || r.cat === ui.libCat);
+    v.append(
+      h('div', { class: 'row', style: 'justify-content:space-between;margin-bottom:12px' }, h('h2', null, 'Free and low-cost library'), h('span', { class: 'muted small' }, `${Object.keys(E.RESOURCES).length} resources`)),
+      h('div', { class: 'filters' }, cats.map(c => h('button', { 'aria-pressed': String(ui.libCat === c), onclick: () => { ui.libCat = c; render.library(); } }, c))),
+      h('div', { class: 'lib' }, items.map(([id, r]) => h('div', { class: 'card' },
+        h('div', { class: 'row', style: 'justify-content:space-between' }, h('span', { class: 'label' }, r.cat), h('span', { class: 'badge' }, r.cost)),
+        r.url ? h('a', { href: r.url, target: '_blank', rel: 'noopener', style: 'font-weight:600' }, r.name) : h('b', null, r.name),
+        h('p', { class: 'small muted' }, r.why),
+        used[id] ? h('p', { class: 'mono small muted' }, 'Weeks ' + used[id].join(', ')) : null))),
+      h('div', { class: 'card stack', style: 'margin-top:22px' },
+        h('h2', null, 'Mentor question bank'),
+        h('p', { class: 'muted small' }, 'One per week. Write the answer in your notes the same day; the specifics fade fast.'),
+        h('ol', { class: 'mq' }, E.WEEKS.map((w, i) => h('li', null, h('button', { class: 'linkbtn mono', style: 'margin:0', onclick: () => openDay(i * 7 + 4) }, 'W' + pad(i + 1)), h('span', null, w.days[3]))))));
+  };
+
+  // ---------------- Settings ----------------
+  function openSettings() { ui.confirmReset = false; renderSettings(); $('#settings').hidden = false; }
+  function closeSettings() { $('#settings').hidden = true; }
+  function renderSettings() {
+    const o = $('#settings'); o.replaceChildren();
+    const start = h('input', { id: 'set-start', type: 'date' }); start.value = S.start;
+    start.addEventListener('change', () => { if (/^\d{4}-\d{2}-\d{2}$/.test(start.value)) { S.start = start.value; save(); renderAll(); toast('Start date saved'); } });
+    const exp = h('textarea', { id: 'set-export', readonly: true, style: 'min-height:80px;font-family:var(--mono);font-size:.78rem' }); exp.value = JSON.stringify(S);
+    const imp = h('textarea', { id: 'set-import', placeholder: 'Paste a backup here', style: 'min-height:70px;font-family:var(--mono);font-size:.78rem' });
+    const msg = h('p', { class: 'small', 'aria-live': 'polite' });
+    const sync = { cloud: 'Saved to your Claude account and synced across devices.', local: 'Saved in this browser only. Open the published page while signed in to sync across devices.', error: 'Cloud sync paused. Progress is still saved in this browser.', full: 'Cloud storage is full. Progress is still saved in this browser; export a backup.' }[cloud.status];
+    o.append(h('div', { class: 'sheet', role: 'dialog', 'aria-modal': 'true', 'aria-label': 'Settings' },
+      h('div', { class: 'row', style: 'justify-content:space-between' }, h('h2', null, 'Settings'), h('button', { class: 'btn', onclick: closeSettings }, 'Close')),
+      h('div', { class: 'field' }, h('label', { for: 'set-start' }, 'Program start date (Day 1). A Monday keeps Deep Work on Saturdays.'), start),
+      h('p', { class: 'small muted' }, sync),
+      h('div', { class: 'field' }, h('label', { for: 'set-export' }, 'Backup (copy and keep somewhere safe)'), exp,
+        h('div', { class: 'row' }, h('button', { class: 'btn', onclick: () => {
+          navigator.clipboard.writeText(exp.value).then(() => { msg.textContent = 'Backup copied.'; }, () => { exp.select(); msg.textContent = 'Copy blocked here. The text is selected; copy it manually.'; });
+        } }, 'Copy backup'))),
+      h('div', { class: 'field' }, h('label', { for: 'set-import' }, 'Restore from backup'), imp,
+        h('div', { class: 'row' }, h('button', { class: 'btn', onclick: () => {
+          try { const o2 = JSON.parse(imp.value); if (!o2 || o2.v !== 1 || typeof o2.done !== 'object') throw new Error('shape'); S = normalize(o2); save(); renderAll(); msg.textContent = 'Backup restored.'; }
+          catch (e) { msg.textContent = 'That is not a valid backup from this app. Paste the full text from "Backup".'; }
+        } }, 'Restore'))),
+      msg,
+      h('div', { class: 'section' },
+        ui.confirmReset
+          ? h('div', { class: 'stack' }, h('p', { class: 'small' }, 'This erases done days, notes, skill ratings, and drill history here and in your synced copy. It cannot be undone.'),
+            h('div', { class: 'row' }, h('button', { class: 'btn', style: 'border-color:var(--bad);color:var(--bad)', onclick: () => { S = blank(); save(); ui.confirmReset = false; renderAll(); renderSettings(); toast('Progress erased'); } }, 'Erase everything'),
+              h('button', { class: 'btn', onclick: () => { ui.confirmReset = false; renderSettings(); } }, 'Cancel')))
+          : h('button', { class: 'btn', onclick: () => { ui.confirmReset = true; renderSettings(); } }, 'Reset progress...'))));
+  }
+  $('#settings').addEventListener('click', e => { if (e.target.id === 'settings') closeSettings(); });
+
+  // ---------------- Boot ----------------
+  function renderAll() { renderStatus(); renderTabs(); render[ui.tab](); }
+  document.addEventListener('keydown', e => {
+    if (e.key === 'Escape' && !$('#settings').hidden) return closeSettings();
+    if (ui.tab !== 'today' || /^(INPUT|TEXTAREA|SELECT)$/.test(document.activeElement && document.activeElement.tagName)) return;
+    if (e.key === 'ArrowLeft') openDay(ui.sel - 1);
+    if (e.key === 'ArrowRight') openDay(ui.sel + 1);
+  });
+
+  const hot = window.claude && window.claude.hot;
+  try { if (hot && hot.snapshot) hot.snapshot(() => ({ tab: ui.tab, sel: ui.sel, calc: ui.calc })); } catch (e) { /* optional */ }
+  function start(data) {
+    const tab = (location.hash || '').slice(1);
+    ui.sel = (data && data.sel) || calDay();
+    ui.calc = (data && data.calc) || ui.calc;
+    ui.tab = (data && data.tab) || (TABS.some(t => t[0] === tab) ? tab : 'today');
+    go(ui.tab);
+    renderStatus();
+    connectCloud();
+    connectCoach();
+  }
+  if (hot && hot.ready) hot.ready(start); else start((hot && hot.data) || {});
+})();
+</script>
