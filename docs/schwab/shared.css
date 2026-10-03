@@ -157,7 +157,6 @@ input:focus, select, textarea:focus { background: var(--surface); }
 .kv dt { color: var(--muted); font-size: .85rem; font-weight: 600; }
 .kv dd { margin: 0; min-width: 0; overflow-wrap: anywhere; }
 .scope-text { white-space: pre-wrap; margin: 0; overflow-wrap: anywhere; }
-.orig { display: block; margin-top: 4px; color: var(--muted); font-size: .85em; white-space: pre-wrap; }
 .icon-btn.lang { font: 700 1.05rem var(--display); letter-spacing: .06em; }
 
 .review-h { color: var(--warn); }

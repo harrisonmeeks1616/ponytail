@@ -8,8 +8,7 @@ export const KEYS = { settings: 'schwab.settings', tasks: 'schwab.tasks', report
 
 // ---------- language ----------
 // Spanish mode: every phrase on screen has a Spanish twin in es.mjs, looked up by its English text.
-// What people type (scope, steps, crew notes) is machine-translated separately by translate() below;
-// the text as written is never changed.
+// What people type is never translated; it shows and prints exactly as written.
 
 let lang = 'en';
 export const setLang = l => { lang = l === 'es' ? 'es' : 'en'; if (globalThis.document) document.documentElement.lang = lang; };
@@ -125,7 +124,7 @@ export const newFloor = (floor, crewNames) => ({ floor, crews: crewNames.map(nam
 
 // Roll the day's task sheets up into the report's floor / crew sections.
 // Only empty report fields are filled, so the superintendent's own wording is never overwritten.
-export function fillFromTasks(rep, tasks, crewNames, tl = x => x) {
+export function fillFromTasks(rep, tasks, crewNames) {
   const groups = new Map();
   for (const t of tasks) {
     const k = JSON.stringify([t.floor || 'Floor not set', t.crew || 'Crew not set']);
@@ -152,14 +151,14 @@ export function fillFromTasks(rep, tasks, crewNames, tl = x => x) {
       stop: stops.at(-1) || '',
       done: lines(t => {
         const n = t.items.filter(i => i.done).length;
-        return `${t.id}${t.status ? ' (' + t.status + ')' : ''}${t.items.length ? ` ${n}/${t.items.length} steps` : ''}: ${tl(t.doneText || t.scope)}`;
+        return `${t.id}${t.status ? ' (' + t.status + ')' : ''}${t.items.length ? ` ${n}/${t.items.length} steps` : ''}: ${t.doneText || t.scope}`;
       }),
       quality: lines(t => {
         const ok = t.checks.filter(c => c.done).map(c => c.text), open = t.checks.filter(c => !c.done).map(c => c.text);
         return ok.length || open.length ? `${t.id}: ${ok.length ? 'done ' + ok.join(', ') : ''}${ok.length && open.length ? '; ' : ''}${open.length ? 'open ' + open.join(', ') : ''}` : '';
       }),
       holdups: lines(t => {
-        const bits = [t.status === 'Blocked' && 'Blocked', t.delay && `${t.delay} min delay`, tl(t.comments)].filter(Boolean);
+        const bits = [t.status === 'Blocked' && 'Blocked', t.delay && `${t.delay} min delay`, t.comments].filter(Boolean);
         return bits.length ? `${t.id}: ${bits.join(' · ')}` : '';
       }),
     };
@@ -167,9 +166,8 @@ export function fillFromTasks(rep, tasks, crewNames, tl = x => x) {
     for (const [f, v] of Object.entries(fill)) if (!c[f] && v) c[f] = v;
   }
   for (const t of tasks) {
-    const follow = tl(t.followUp);
-    if (follow && !rep.next.some(s => s.step.endsWith(follow))) {
-      rep.next.push({ ...blank('next'), step: `${t.floor} · ${t.crew}: ${follow}`, lead: t.lead });
+    if (t.followUp && !rep.next.some(s => s.step.endsWith(t.followUp))) {
+      rep.next.push({ ...blank('next'), step: `${t.floor} · ${t.crew}: ${t.followUp}`, lead: t.lead });
     }
   }
   return groups.size;
@@ -381,7 +379,7 @@ function wrap(text, maxW, size, bold) {
 }
 
 // sections: [heading, [[label, value], ...]]; empty values are left out, like a clean paper copy.
-export function makePdf(title, sub, sections, footer, l = 'en') {
+export function makePdf(title, sub, sections, footer) {
   const W = 612, H = 792, M = 54, COL = 150, GAP = 12, LH = 13;
   const pages = [];
   let ops, y;
@@ -397,7 +395,7 @@ export function makePdf(title, sub, sections, footer, l = 'en') {
     room(48);
     ops.push(`1 w ${M} ${(y + 12).toFixed(1)} m ${W - M} ${(y + 12).toFixed(1)} l S`);
     for (const l of wrap(heading.toUpperCase(), W - 2 * M, 11, true)) { text(l, M, 11, true); y -= 15; }
-    for (const [k, v] of filled.length ? filled : [['', L('Nothing recorded', null, l)]]) {
+    for (const [k, v] of filled.length ? filled : [['', 'Nothing recorded']]) {
       const kl = wrap(k, COL, 10, true), vl = wrap(v, W - 2 * M - COL - GAP, 10);
       for (let i = 0; i < Math.max(kl.length, vl.length); i++) {
         room(LH);
@@ -408,8 +406,7 @@ export function makePdf(title, sub, sections, footer, l = 'en') {
       y -= 3;
     }
   }
-  const saved = L('Saved {when}', { when: stamp(Date.now(), l) }, l);
-  pages.forEach((p, i) => p.push(`BT /F1 8 Tf ${M} 30 Td ${lit(codes(`${footer} · ${saved} · ${L('Page {i} of {n}', { i: i + 1, n: pages.length }, l)}`))} Tj ET`));
+  pages.forEach((p, i) => p.push(`BT /F1 8 Tf ${M} 30 Td ${lit(codes(`${footer} · Saved ${stamp(Date.now(), 'en')} · Page ${i + 1} of ${pages.length}`))} Tj ET`));
 
   const objs = [
     '<< /Type /Catalog /Pages 2 0 R >>',
@@ -456,7 +453,6 @@ async function post(s, body) {
   const res = await fetch(s.folderUrl, { method: 'POST', body: JSON.stringify({ ...body, code: s.siteCode }) });
   const reply = await res.json().catch(() => ({}));
   if (!reply.ok) throw new Error(reply.error || `the folder answered with error ${res.status}`);
-  return reply;
 }
 
 let busy = null;
@@ -472,13 +468,11 @@ export const flush = s => (busy ||= (async () => {
   return { left: queued(), error };
 })().finally(() => { busy = null; }));
 
-// files: { date, name, bytes, v, full }. v is the record's last edit time and full says every translation was in;
-// the folder keeps the newest copy, so a phone that was offline for hours can't roll it back.
-// Several copies of one record (English and Spanish) give one message.
-export const queueFiles = (...files) => files.every(f => queue({ date: f.date, name: f.name, pdf: b64(f.bytes), v: f.v || 0, full: f.full !== false }));
-export async function fileAway(s, ...files) {
+// file: { date, name, bytes, v }. v is the record's last edit time; the folder keeps the newest copy,
+// so a phone that was offline for hours can't roll it back.
+export async function fileAway(s, f) {
   if (!s.folderUrl) return;
-  if (!queueFiles(...files)) return toast(L("This phone is out of space, so the PDF wasn't queued. Use Save as PDF."), 'bad');
+  if (!queue({ date: f.date, name: f.name, pdf: b64(f.bytes), v: f.v || 0 })) return toast(L("This phone is out of space, so the PDF wasn't queued. Use Save as PDF."), 'bad');
   let r = await flush(s);
   if (r.left && !r.error) r = await flush(s); // another upload was mid-way; go again for this one
   toast(r.error ? L('Review folder said: {error}. Kept on this phone; check Settings.', { error: r.error })
@@ -488,54 +482,6 @@ export async function fileAway(s, ...files) {
 export function retryUploads(s) {
   const before = queued();
   if (before && s.folderUrl) flush(s).then(r => r.left < before && toast(L('Uploaded to the review folder: {n}', { n: before - r.left })));
-}
-
-// ---------- translation of typed text ----------
-// Uses the review folder's Google script (Google Translate inside Apps Script, free). Results are kept
-// on the phone and travel inside links, so a phone with no signal still shows what it already knows.
-// ponytail: last 500 phrases per language in localStorage; a bigger job would want a real glossary.
-
-const BOOK = 'schwab.tr';
-const okPair = p => Array.isArray(p) && typeof p[0] === 'string' && typeof p[1] === 'string' && p[0].length <= 4000 && p[1].length <= 8000;
-let memo = null;
-const book = () => memo ||= Object.fromEntries(['en', 'es'].map(l => { const b = load(BOOK, {})?.[l]; return [l, new Map(Array.isArray(b) ? b.filter(okPair) : [])]; }));
-const keepBook = () => save(BOOK, Object.fromEntries(['en', 'es'].map(l => [l, [...book()[l]].slice(-500)])));
-const side = l => (l === 'es' ? 'es' : 'en');
-
-// Text in language l when a translation is known; otherwise exactly as written.
-export const inLang = (text, l = lang) => (text && book()[side(l)].get(text)) || text;
-export const hasLang = (text, l = lang) => !text || book()[side(l)].has(text);
-// Known translations of these texts, to send along inside a link. [text] alone means "already in that language".
-export const pairs = (texts, l) => [...new Set(texts)].filter(x => x && book()[l].has(x)).map(x => (book()[l].get(x) === x ? [x] : [x, book()[l].get(x)]));
-// Take translations from a link, but only for text that is really in that link's record.
-export function learn(tr, texts) {
-  const real = new Set(texts.filter(Boolean));
-  for (const l of ['en', 'es']) {
-    for (const p of Array.isArray(tr?.[l]) ? tr[l].slice(0, 300) : []) {
-      const pair = Array.isArray(p) && p.length === 1 ? [p[0], p[0]] : p;
-      if (okPair(pair) && real.has(pair[0])) book()[l].set(pair[0], pair[1]);
-    }
-  }
-  keepBook();
-}
-// Text typed on this phone is taken as already being in this phone's language, so it never costs a lookup.
-export function own(texts, l) {
-  for (const x of texts) if (x && !book()[side(l)].has(x)) book()[side(l)].set(x, x);
-  keepBook();
-}
-
-let quietUntil = 0;
-// Fills in missing translations; resolves to how many are still missing. Never throws.
-export async function translate(s, texts, l) {
-  const missing = () => [...new Set(texts)].filter(x => x && x.trim() && !book()[l].has(x));
-  const need = missing().slice(0, 40);
-  if (!need.length || !s.folderUrl || Date.now() < quietUntil) return missing().length;
-  try {
-    const r = await post(s, { translate: { to: l, texts: need } });
-    need.forEach((x, i) => typeof r.out?.[i] === 'string' && book()[l].set(x, r.out[i]));
-    keepBook();
-  } catch { quietUntil = Date.now() + 60000; } // no signal or no translator yet: retry in a minute, show text as written meanwhile
-  return missing().length;
 }
 
 // ---------- settings (same screen in both apps; same phone = same settings) ----------
@@ -563,7 +509,7 @@ export function settingsView(s, opts = {}) {
       <button class="btn" data-act="addCrew">${L('+ Add crew')}</button></section>
     <section class="card"><h2>${L('Finish / accuracy checks')}</h2><p class="hint">${L('One per line. Tap them onto a task as required checks.')}</p>
       <textarea data-k="s.checks" data-lines rows="6">${esc(s.checks.join('\n'))}</textarea></section>
-    <section class="card"><h2>${L('Review folder')}</h2><p class="hint">${L('Finished task sheets and daily reports save themselves as PDFs to a shared Google Drive folder, one folder per day. Set up once with review-folder.gs (steps inside it), then use the same link and code on every phone. Crew phones pick it up from the first task sheet they open. The same script translates Spanish mode text.')}</p>
+    <section class="card"><h2>${L('Review folder')}</h2><p class="hint">${L('Finished task sheets and daily reports save themselves as PDFs to a shared Google Drive folder, one folder per day. Set up once with review-folder.gs (steps inside it), then use the same link and code on every phone. Crew phones pick it up from the first task sheet they open.')}</p>
       <div class="grid">${field(L('Folder upload link'), 's.folderUrl', s.folderUrl, { wide: true, ph: 'https://script.google.com/macros/s/.../exec', mode: 'url' })}${field(L('Site code'), 's.siteCode', s.siteCode)}</div>
       <div class="btns"><button class="btn" data-act="testFolder">${L('Test the connection')}</button></div>
       <p class="hint">${n ? L('Waiting to upload: {n}', { n }) : L('Nothing waiting to upload.')}</p></section>

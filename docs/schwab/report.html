@@ -22,7 +22,7 @@
 import {
   KEYS, esc, load, save, loadSettings, normTask, normReport, blank, newFloor, fillFromTasks, mergeAnswers, CREW_TPL, pack, unpack, linkTo,
   today, niceDate, span, fmtMin, t12, stamp, hrs, field, datalist, seg, setPath, getPath, readInput,
-  toast, sheet, ask, sendSheet, pasteSheet, makePdf, savePdf, fileAway, retryUploads, settingsView, settingsAct, restore, registerSW, dateBar, crewVar, setLang, inLang, translate,
+  toast, sheet, ask, sendSheet, pasteSheet, makePdf, savePdf, fileAway, retryUploads, settingsView, settingsAct, restore, registerSW, dateBar, crewVar, setLang,
 } from './shared.mjs';
 
 registerSW();
@@ -272,9 +272,7 @@ async function act(a, el) {
     case 'fill': {
       const ts = load(KEYS.tasks, []).map(normTask).filter(t => t.date === day);
       if (!ts.length) return toast(`No task sheets for ${niceDate(day)} on this phone. Load them in Task Sheets first.`, 'bad');
-      // Crew notes written in Spanish mode go into this English report as their English translation.
-      await translate(S, ts.flatMap(t => [t.doneText, t.scope, t.comments, t.followUp]), 'en');
-      const n = fillFromTasks(r, ts, S.crews.map(c => c.name), x => inLang(x, 'en'));
+      const n = fillFromTasks(r, ts, S.crews.map(c => c.name));
       open.add('floors');
       toast(`Filled ${n} crew section${n === 1 ? '' : 's'} from ${ts.length} task sheet${ts.length === 1 ? '' : 's'}. Empty fields only.`);
       break;
