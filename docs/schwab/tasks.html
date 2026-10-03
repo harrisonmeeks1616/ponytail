@@ -129,7 +129,7 @@ async function openCode(code) {
   if (data.kind === 'task') {
     if (!t) {
       T.push(t = Object.assign(inc, { origin: 'link', gotAt: Date.now() })); // a crew phone opening its sheet
-      firstSheet = !S.lang && !T.some(x => x.origin === 'mine');
+      firstSheet = !S.lang && !S.me && !T.some(x => x.origin === 'mine'); // a phone with a name in Settings is an office phone
     } else if (t.origin === 'link') mergeTask(t, inc, 'assign'); // re-sent sheet: new assignment, crew check-offs kept
   } else if (!t || t.origin !== 'link') { // results reaching the superintendent (not the crew re-opening its own)
     if (!t) T.push(t = Object.assign(inc, { origin: 'mine' }));
