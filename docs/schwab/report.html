@@ -1,0 +1,342 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<meta name="theme-color" content="#1F242A">
+<meta name="apple-mobile-web-app-title" content="Daily Report">
+<title>Superintendent Daily Report</title>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@600;700&family=Barlow:wght@400;600&display=swap">
+<link rel="stylesheet" href="shared.css">
+</head>
+<body>
+<header class="top"><div class="top-in">
+  <svg viewBox="0 0 24 24" width="28" height="28" aria-hidden="true"><path d="M13 2 4 14h7l-1 8 9-12h-7z" fill="var(--accent)"/></svg>
+  <div class="grow"><h1>Daily <b>Report</b></h1><p id="proj"></p></div>
+  <a class="icon-btn" href="tasks.html" aria-label="Open task sheets"><svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m4 6 2 2 3-3M4 13l2 2 3-3M12 7h8M12 14h8M5 20h15"/></svg></a>
+  <a class="icon-btn" href="#settings" aria-label="Settings and crews"><svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M4 6h9M19 6h1M4 12h3M11 12h9M4 18h11M19 18h1"/><circle cx="16" cy="6" r="2.2"/><circle cx="9" cy="12" r="2.2"/><circle cx="17" cy="18" r="2.2"/></svg></a>
+</div></header>
+<main id="app"></main>
+<nav class="bar" id="bar"></nav>
+<div id="print"></div>
+<script type="module">
+import {
+  KEYS, esc, load, save, loadSettings, normTask, normReport, blank, newFloor, fillFromTasks, mergeAnswers, CREW_TPL, pack, unpack, linkTo,
+  today, niceDate, span, fmtMin, t12, stamp, hrs, field, datalist, seg, setPath, getPath, readInput,
+  toast, sheet, ask, sendSheet, pasteSheet, printDoc, settingsView, settingsAct, restore, registerSW, dateBar, crewVar,
+} from './shared.mjs';
+
+registerSW();
+const app = document.getElementById('app'), bar = document.getElementById('bar');
+let S = loadSettings();
+let R = loadReports();
+let day = today(), view = 'report';
+const open = new Set(['sum']);
+
+function loadReports() {
+  const raw = load(KEYS.reports, {});
+  return Object.fromEntries(Object.entries(raw && typeof raw === 'object' ? raw : {}).map(([d, r]) => [d, normReport(r)]));
+}
+// Only reports someone has touched get stored; browsing an empty day leaves nothing behind.
+const persist = () => save(KEYS.reports, Object.fromEntries(Object.entries(R).filter(([, r]) => r.updatedAt)))
+  || toast("This phone wouldn't save. Open Settings and download a backup.", 'bad');
+const isPM = () => S.role === 'Project manager';
+const rep = () => (R[day] ||= normReport({
+  date: day, floors: [],
+  super: S.super || (S.role === 'Superintendent' ? S.me : ''),
+  preparedBy: S.role === 'Superintendent' ? S.me : '',
+}));
+const go = h => (location.hash === '#' + h ? route() : (location.hash = h));
+
+const STATUS = [['On plan', 'good'], ['At risk', 'warn'], ['Behind plan', 'bad'], ['No work today', '']];
+const crewHours = c => span(c.start, c.stop) / 60 * c.workers;
+const active = r => r.floors.flatMap(f => f.crews.filter(c => !c.na));
+const laborHrs = r => active(r).reduce((n, c) => n + crewHours(c), 0);
+const waiting = r => r.decisions.filter(d => d.q && !d.pm);
+const isLate = s => s.finish && s.deadline && s.finish > s.deadline; // datetime-local strings sort as times
+const when = v => (v ? new Date(v).toLocaleString('en-US', { weekday: 'short', month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' }) : '');
+
+function lateLine(s) {
+  if (!s.finish || !s.deadline) return 'Add the expected finish and the deadline to check the forecast.';
+  const h = (new Date(s.finish) - new Date(s.deadline)) / 36e5;
+  const amt = Math.abs(h) >= 24 ? `${hrs(Math.abs(h) / 24)} days` : `${hrs(Math.abs(h))} hrs`;
+  return h > 0 ? `⚠ Forecast finishes ${amt} after the deadline` : `On track: ${amt} of float before the deadline`;
+}
+const OUT = {
+  lh: (r, d) => { const c = r.floors[d.f].crews[d.c]; return `Total labor-hours: ${hrs(crewHours(c))}${c.start && c.stop ? ` (${c.workers} × ${fmtMin(span(c.start, c.stop))})` : ''}`; },
+  late: (r, d) => lateLine(r.next[d.i]),
+};
+
+// ---------- routing: #day/2026-10-03, #settings, #p=<link code> ----------
+
+function route() {
+  const h = location.hash.slice(1);
+  if (h.startsWith('p=')) return openCode(h.slice(2));
+  const [v, a] = h.split('/');
+  if (v === 'day' && /^\d{4}-\d{2}-\d{2}$/.test(a)) day = a;
+  view = v === 'settings' ? 'settings' : 'report';
+  render();
+  scrollTo(0, 0);
+}
+
+async function openCode(code) {
+  let data;
+  try { data = await unpack(code); } catch { toast('That link is damaged or cut off. Ask for it to be sent again.', 'bad'); return location.replace('#day/' + day); }
+  if (data.kind !== 'report') return location.replace(linkTo('tasks.html', code));
+  const inc = normReport(data.report);
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(inc.date)) { toast('That link has no report in it', 'bad'); return location.replace('#day/' + day); }
+  const mine = R[inc.date], pmSent = data.from === 'Project manager';
+  if (mine?.updatedAt && mine.updatedAt !== inc.updatedAt && pmSent !== isPM()) {
+    // Normal back-and-forth: neither side's work is lost, so there's nothing to ask.
+    R[inc.date] = pmSent ? mergeAnswers(mine, inc) : mergeAnswers(inc, mine);
+    R[inc.date].updatedAt = Date.now();
+    toast(pmSent ? 'PM answers added to your report' : 'Updated report loaded. Your answers are kept.');
+    open.add('pm');
+  } else if (!mine?.updatedAt || mine.updatedAt === inc.updatedAt
+    || await ask(`Replace your copy of the ${niceDate(inc.date)} report with the one in this link? Link copy saved ${stamp(inc.updatedAt)}. Yours saved ${stamp(mine.updatedAt)}.`, 'Use the link copy')) {
+    R[inc.date] = inc;
+    inc.updatedAt ||= Date.now();
+    toast('Report loaded');
+    if (isPM()) open.add('pm');
+  }
+  persist();
+  location.replace('#day/' + inc.date);
+}
+
+// ---------- views ----------
+
+const sec = (id, num, title, body, badge = '') => `<details class="card sec" id="sec-${id}" data-sec="${id}"${open.has(id) ? ' open' : ''}>
+  <summary><h2>${num ? `<span class="num">${num}</span>` : ''}${title}</h2>${badge}</summary><div class="sec-body">${body}</div></details>`;
+const remove = (list, i, label) => `<button class="link danger" data-act="del" data-list="${list}" data-i="${i}">Remove ${label}</button>`;
+const count = (n, label, tone = '') => (n ? `<span class="pill" data-tone="${tone}">${n} ${label}</span>` : '');
+
+function render() {
+  document.getElementById('proj').textContent = [S.project, S.site].filter(Boolean).join(' · ');
+  bar.hidden = view === 'settings';
+  if (view === 'settings') { app.innerHTML = `<button class="link" data-go="day/${day}">‹ Back to the daily report</button>${settingsView(S)}`; return; }
+  const r = rep(), late = r.next.filter(isLate).length, pend = waiting(r).length;
+  app.innerHTML = dateBar(day) + `<div id="summary" class="stack">${summary(r)}</div>
+    <section class="card"><div class="grid">
+      ${field('Superintendent', 'r.super', r.super)}${field('Shift start', 'r.shiftStart', r.shiftStart, { type: 'time' })}${field('Shift end', 'r.shiftEnd', r.shiftEnd, { type: 'time' })}
+    </div><p class="hint">${r.submittedAt ? `Sent to the PM ${stamp(r.submittedAt)}` : 'Not sent to the PM yet'}${r.pmReview ? ` · PM reviewed: ${esc(r.pmReview)}` : ''}</p></section>
+    ${sec('sum', 1, 'Overall status & today’s results', `${seg('r.status', r.status, STATUS)}
+      ${field('Most important results today, planned work missed, and effect on the job', 'r.results', r.results, { rows: 4 })}`,
+      r.status ? `<span class="pill" data-tone="${STATUS.find(s => s[0] === r.status)[1]}">${r.status}</span>` : '')}
+    ${sec('wins', 2, 'Good results & lessons to repeat', field('Crew wins, quality improvements, faster methods, repeat-floor lessons', 'r.wins', r.wins, { rows: 3 }))}
+    ${sec('issues', 3, 'Site issues, concerns & coordination', field('Safety / quality issues, other trades, access, inspections, scope changes', 'r.issues', r.issues, { rows: 3 })
+      + field('Who was notified / when', 'r.notified', r.notified))}
+    ${sec('needs', 4, 'Material, equipment & manpower', r.needs.map((n, i) => `<div class="item"><div class="grid">
+        ${field('Item / resource', `r.needs.${i}.item`, n.item, { wide: true, ph: 'e.g. 2" EMT, scissor lift, 2 more journeymen' })}
+        ${field('Quantity', `r.needs.${i}.qty`, n.qty)}${field('Floor / crew', `r.needs.${i}.where`, n.where, { list: 'floors' })}
+        ${field('Needed by', `r.needs.${i}.by`, n.by, { type: 'datetime-local' })}</div>
+        <label class="switch"><input type="checkbox" data-k="r.needs.${i}.confirmed"${n.confirmed ? ' checked' : ''}> Availability confirmed</label>
+        ${remove('needs', i, 'need')}</div>`).join('') + '<button class="btn" data-act="add" data-v="needs">+ Add a need</button>',
+      count(r.needs.filter(n => n.item && !n.confirmed).length, 'unconfirmed', 'warn'))}
+    ${sec('pm', 5, 'Project manager decision help', `<p class="hint">State the decision, your recommendation, and when you need an answer. The PM answers right here.</p>`
+      + r.decisions.map((d, i) => `<div class="item">
+        ${field('Decision / support needed', `r.decisions.${i}.q`, d.q, { rows: 2 })}
+        <div class="grid">${field('Recommendation', `r.decisions.${i}.rec`, d.rec, { wide: true })}${field('Needed by', `r.decisions.${i}.by`, d.by, { type: 'datetime-local' })}</div>
+        ${d.by && !d.pm && new Date(d.by) < new Date() ? '<span class="pill" data-tone="bad">Past due</span>' : ''}
+        <div class="field"><span>PM response</span>${seg(`r.decisions.${i}.pm`, d.pm, [['Approved', 'good'], ['Declined', 'bad'], ['Discuss', 'info']])}</div>
+        ${field('PM note', `r.decisions.${i}.pmNote`, d.pmNote)}
+        ${remove('decisions', i, 'decision')}</div>`).join('') + '<button class="btn" data-act="add" data-v="decisions">+ Add a decision</button>',
+      count(pend, 'waiting', 'warn'))}
+    ${sec('floors', '', 'Floor reports · crew detail', r.floors.map((f, fi) => `<div class="floor">
+        <div class="edit-row">${field('Actual floor / level', `r.floors.${fi}.floor`, f.floor, { list: 'floors' })}<button class="x" data-act="delFloor" data-i="${fi}" aria-label="Remove floor">✕</button></div>
+        ${f.crews.map((c, ci) => crewBlock(r, fi, ci, c)).join('')}
+        <button class="link" data-act="addCrewTo" data-i="${fi}">+ Add another crew to this floor</button></div>`).join('')
+      + `${r.floors.length ? '' : '<p class="hint">Add each floor worked today, or fill them in from the crews’ task sheets on this phone.</p>'}
+        <div class="btns"><button class="btn" data-act="addFloor">+ Add floor</button><button class="btn primary" data-act="fill">Fill from task sheets</button></div>
+        ${datalist('floors', S.floors)}`,
+      count(active(r).filter(c => !c.done).length, 'need notes', 'warn'))}
+    ${sec('next', '', 'Next steps & completion forecast', r.next.map((s, i) => `<div class="item">
+        ${field('Next step / floor / crew', `r.next.${i}.step`, s.step, { rows: 2 })}
+        ${field('Prerequisites / resources', `r.next.${i}.prereq`, s.prereq)}
+        <div class="grid">${field('Planned start', `r.next.${i}.start`, s.start, { type: 'datetime-local' })}${field('Estimated duration', `r.next.${i}.dur`, s.dur, { ph: 'e.g. 2 days' })}
+        ${field('Expected finish', `r.next.${i}.finish`, s.finish, { type: 'datetime-local' })}${field('Required deadline', `r.next.${i}.deadline`, s.deadline, { type: 'datetime-local' })}
+        ${field('Responsible lead', `r.next.${i}.lead`, s.lead)}${field('Confirm / check-in by', `r.next.${i}.checkin`, s.checkin, { type: 'datetime-local' })}</div>
+        <p class="out ${isLate(s) ? 'late' : ''}" data-out="late" data-i="${i}">${lateLine(s)}</p>
+        ${remove('next', i, 'step')}</div>`).join('') + '<button class="btn" data-act="add" data-v="next">+ Add next step</button>',
+      count(late, 'late', 'bad'))}
+    ${sec('risks', '', 'Potential delays & workarounds', r.risks.map((x, i) => `<div class="item">
+        ${field('Risk / affected floor & crew', `r.risks.${i}.risk`, x.risk, { rows: 2 })}
+        ${field('Expected impact / time at risk', `r.risks.${i}.impact`, x.impact)}
+        ${field('Prevention / workaround', `r.risks.${i}.prevent`, x.prevent, { rows: 2 })}
+        ${field('Fallback work if blocked', `r.risks.${i}.fallback`, x.fallback)}
+        <div class="grid">${field('Action owner', `r.risks.${i}.owner`, x.owner)}${field('Action needed by', `r.risks.${i}.by`, x.by, { type: 'datetime-local' })}</div>
+        ${remove('risks', i, 'risk')}</div>`).join('') + '<button class="btn" data-act="add" data-v="risks">+ Add a risk</button>'
+      + '<p class="hint">Escalate urgent issues when you find them, and note who you told in section 3.</p>')}
+    ${sec('sign', '', 'Sign-off', `<div class="grid">${field('Prepared by', 'r.preparedBy', r.preparedBy)}${field('PM review / time', 'r.pmReview', r.pmReview)}</div>
+      ${isPM() ? '<button class="btn" data-act="stampPM">Stamp my review now</button>' : ''}`)}`;
+  bar.innerHTML = `<div class="bar-in"><button class="btn primary big" data-act="send">${isPM() ? 'Send back to superintendent' : 'Send to PM'}</button>
+    <button class="btn more" data-act="menu" aria-label="More actions">⋯</button></div>`;
+}
+
+// Totals and section check marks, redrawn as the superintendent types.
+function summary(r) {
+  const late = r.next.filter(isLate).length, pend = waiting(r).length;
+  const ready = [
+    ['sum', 'Summary', r.status && (r.results || r.status === 'No work today')],
+    ['floors', 'Floors', active(r).length && active(r).every(c => c.done)],
+    ['next', 'Next steps', r.next.some(s => s.step)],
+    ['risks', 'Risks', r.risks.some(x => x.risk)],
+    ['sign', 'Sign-off', r.preparedBy],
+  ];
+  return `<div class="stats">
+      <div class="stat"><b>${hrs(laborHrs(r))}</b><span>Labor-hrs</span></div>
+      <div class="stat"><b>${active(r).length}</b><span>Crew sections</span></div>
+      <div class="stat"><b class="${pend ? 'warn' : ''}">${pend}</b><span>Decisions waiting</span></div>
+      <div class="stat"><b class="${late ? 'bad' : ''}">${late}</b><span>Late forecasts</span></div>
+    </div>
+    <div class="chips" role="group" aria-label="Jump to section">${ready.map(([id, label, ok]) => `<button class="chip${ok ? ' ok' : ''}" data-act="jump" data-v="${id}">${ok ? '✓ ' : ''}${label}</button>`).join('')}</div>`;
+}
+
+function crewBlock(r, fi, ci, c) {
+  const k = `r.floors.${fi}.crews.${ci}`;
+  return `<div class="crew-edit" style="${crewVar(S, c.name)}">
+    <div class="row1"><strong>${esc(c.name)}</strong>
+      <button class="chip" data-act="na" data-f="${fi}" data-c="${ci}" aria-pressed="${!c.na}">${c.na ? 'N/A, tap to add' : 'Worked here'}</button></div>
+    ${c.na ? '' : `<div class="grid">
+      ${field('Crew / lead', `${k}.lead`, c.lead)}${field('Worker count', `${k}.workers`, c.workers, { type: 'number', mode: 'numeric' })}
+      ${field('Members', `${k}.members`, c.members, { wide: true })}
+      ${field('Room / area', `${k}.area`, c.area)}${field('Task / drawing ref.', `${k}.ref`, c.ref)}
+      ${field('Work start', `${k}.start`, c.start, { type: 'time' })}${field('Work stop', `${k}.stop`, c.stop, { type: 'time' })}</div>
+      <p class="out" data-out="lh" data-f="${fi}" data-c="${ci}">${OUT.lh(r, { f: fi, c: ci })}</p>
+      ${field('Work completed: installation, quantities, exact locations, remaining work', `${k}.done`, c.done, { rows: 3 })}
+      ${field('Quality / testing / accuracy', `${k}.quality`, c.quality, { rows: 2 })}
+      ${field('Hold-ups / delays: cause, duration, workers affected, action taken', `${k}.holdups`, c.holdups, { rows: 2 })}
+      ${field('Good results / improvements', `${k}.good`, c.good, { rows: 2 })}`}</div>`;
+}
+
+const printSecs = r => [
+  ['Daily summary & PM actions', [['Report date', niceDate(r.date)], ['Superintendent', r.super],
+    ['Shift / work hours', r.shiftStart && `${t12(r.shiftStart)} to ${t12(r.shiftEnd)}`], ['Submitted at', stamp(r.submittedAt)], ['Labor-hours', hrs(laborHrs(r))]]],
+  ['1 Overall status & today’s results', [['Status', r.status], ['Results', r.results]]],
+  ['2 Good results & lessons to repeat', [['Notes', r.wins]]],
+  ['3 Site issues, concerns & coordination', [['Issues', r.issues], ['Who was notified / when', r.notified]]],
+  ['4 Material, equipment & manpower needs', r.needs.map((n, i) => [`Need ${i + 1}`,
+    [n.item, n.qty && `qty ${n.qty}`, n.where, n.confirmed ? 'availability confirmed' : 'not confirmed', n.by && `needed by ${when(n.by)}`].filter(Boolean).join(' · ')])],
+  ['5 Project manager decision help', r.decisions.flatMap((d, i) => [[`Decision ${i + 1}`, d.q], ['Recommendation', d.rec], ['Needed by', when(d.by)], ['PM response', [d.pm, d.pmNote].filter(Boolean).join(' · ')]])],
+  ...r.floors.map(f => [`Floor report · ${f.floor}`, f.crews.flatMap(c => (c.na ? [[c.name, 'N/A']] : [
+    [c.name, [c.lead && `lead ${c.lead}`, c.workers && `${c.workers} workers`, c.members].filter(Boolean).join(' · ')],
+    ['Room / area', c.area], ['Task / drawing ref.', c.ref], ['Work hours', c.start && `${t12(c.start)} to ${t12(c.stop)}`], ['Total labor-hours', hrs(crewHours(c))],
+    ['Work completed', c.done], ['Quality / testing', c.quality], ['Hold-ups / delays', c.holdups], ['Good results', c.good]]))]),
+  ['Next work & completion forecast', r.next.flatMap((s, i) => [[`Next step ${i + 1}`, s.step], ['Prerequisites', s.prereq], ['Planned start', when(s.start)],
+    ['Estimated duration', s.dur], ['Expected finish', when(s.finish)], ['Required deadline', when(s.deadline)], ['Forecast', s.finish && s.deadline && lateLine(s)],
+    ['Responsible lead', s.lead], ['Confirm / check-in by', when(s.checkin)]])],
+  ['Potential delays & workarounds', r.risks.flatMap((x, i) => [[`Risk ${i + 1}`, x.risk], ['Impact / time at risk', x.impact], ['Prevention / workaround', x.prevent],
+    ['Fallback work', x.fallback], ['Action owner', x.owner], ['Needed by', when(x.by)]])],
+  ['Sign-off', [['Prepared by', r.preparedBy], ['PM review / time', r.pmReview]]],
+];
+
+// ---------- actions ----------
+
+async function send() {
+  const r = rep();
+  if (!r.status) { open.add('sum'); render(); return toast('Set the overall status first', 'bad'); }
+  if (!isPM()) r.submittedAt = Date.now();
+  r.updatedAt = Date.now();
+  persist();
+  render();
+  const url = linkTo('report.html', await pack({ v: 1, kind: 'report', from: S.role, report: r }));
+  const answered = r.decisions.filter(d => d.q && d.pm).length, asked = r.decisions.filter(d => d.q).length;
+  const firstDue = waiting(r).map(d => d.by).filter(Boolean).sort()[0];
+  sendSheet(isPM()
+    ? { title: `PM review · ${niceDate(r.date)}`, url, text: `PM review of the ${niceDate(r.date)} daily report: ${answered} of ${asked} decisions answered.` }
+    : { title: `Daily report · ${niceDate(r.date)}`, url,
+      text: `Daily report ${niceDate(r.date)}, ${S.project}: ${r.status}. ${active(r).length} crew sections, ${hrs(laborHrs(r))} labor-hrs.`
+        + (asked - answered ? ` ${asked - answered} decision${asked - answered === 1 ? ' needs' : 's need'} you${firstDue ? ' by ' + when(firstDue) : ''}.` : '') });
+}
+
+async function act(a, el) {
+  const r = rep(), v = el.dataset.v, i = +el.dataset.i;
+  switch (a) {
+    case 'set': { const ctx = { r, s: S }; setPath(ctx, el.dataset.k, getPath(ctx, el.dataset.k) === v ? '' : v); break; }
+    case 'jump': open.add(v); render(); return document.getElementById('sec-' + v).scrollIntoView({ behavior: 'smooth', block: 'start' });
+    case 'add': r[v].push(blank(v)); open.add({ needs: 'needs', decisions: 'pm', next: 'next', risks: 'risks' }[v]); break;
+    case 'del': if (!await ask('Remove this entry?', 'Remove', 'danger')) return; r[el.dataset.list].splice(i, 1); break;
+    case 'addFloor': r.floors.push(newFloor('', S.crews.map(c => c.name))); open.add('floors'); break;
+    case 'delFloor': if (!await ask(`Remove ${r.floors[i].floor || 'this floor'} and its crew notes?`, 'Remove', 'danger')) return; r.floors.splice(i, 1); break;
+    case 'addCrewTo': r.floors[i].crews.push({ ...CREW_TPL, na: false, name: `Crew ${String.fromCharCode(65 + r.floors[i].crews.length)}` }); break;
+    case 'na': { const c = r.floors[+el.dataset.f].crews[+el.dataset.c]; c.na = !c.na; break; }
+    case 'fill': {
+      const ts = load(KEYS.tasks, []).map(normTask).filter(t => t.date === day);
+      if (!ts.length) return toast(`No task sheets for ${niceDate(day)} on this phone. Load them in Task Sheets first.`, 'bad');
+      const n = fillFromTasks(r, ts, S.crews.map(c => c.name));
+      open.add('floors');
+      toast(`Filled ${n} crew section${n === 1 ? '' : 's'} from ${ts.length} task sheet${ts.length === 1 ? '' : 's'}. Empty fields only.`);
+      break;
+    }
+    case 'carry': {
+      const prev = Object.keys(R).filter(d => d < day && R[d].updatedAt).sort().at(-1);
+      if (!prev) return toast('No earlier report on this phone to copy from');
+      const p = R[prev], copy = x => structuredClone(x);
+      Object.assign(r, { super: r.super || p.super, shiftStart: r.shiftStart || p.shiftStart, shiftEnd: r.shiftEnd || p.shiftEnd });
+      if (!r.floors.length) r.floors = p.floors.map(f => ({ floor: f.floor, crews: f.crews.map(c => ({ ...CREW_TPL, name: c.name, na: c.na, lead: c.lead, workers: c.workers, members: c.members, area: c.area, start: c.start, stop: c.stop })) }));
+      r.needs.push(...p.needs.filter(n => !n.confirmed && !r.needs.some(x => x.item === n.item)).map(copy));
+      r.next.push(...p.next.filter(s => !r.next.some(x => x.step === s.step)).map(copy));
+      r.risks.push(...p.risks.filter(x => !r.risks.some(y => y.risk === x.risk)).map(copy));
+      toast(`Copied crews, open needs, next steps and risks from ${niceDate(prev)}`);
+      break;
+    }
+    case 'stampPM': r.pmReview = `${S.me || 'PM'} · ${stamp(Date.now())}`; break;
+    case 'send': return send();
+    case 'menu': {
+      const items = [['fill', 'Fill floors from task sheets'], ['carry', 'Copy crews, needs and risks from last report'], ['paste', 'Open a link someone sent you'],
+        ['print', 'Print / save PDF'], ['tasks', 'Open task sheets'], ['settings', 'Settings, crews and backup'], ['clear', 'Clear this report', 'danger']];
+      return sheet(`<h3>More</h3><div class="menu">${items.map(([x, label, cls]) => `<button class="btn ${cls || ''}" data-act="${x}">${label}</button>`).join('')}</div>`);
+    }
+    case 'print': return printDoc('Superintendent daily report', `${S.project} · ${S.site} · ${niceDate(r.date)}`, printSecs(r));
+    case 'paste': return pasteSheet(code => go('p=' + code));
+    case 'tasks': location.href = 'tasks.html#day/' + day; return;
+    case 'settings': return go('settings');
+    case 'clear':
+      if (!await ask(`Clear everything in the ${niceDate(day)} report?`, 'Clear', 'danger')) return;
+      delete R[day];
+      persist();
+      return render();
+    case 'addCrew': case 'delCrew': case 'backup': await settingsAct(a, S, el); return render();
+  }
+  r.updatedAt = Date.now();
+  persist();
+  render();
+}
+
+document.addEventListener('click', e => {
+  if (e.target.matches('[data-pick]') && matchMedia('(pointer: fine)').matches) try { e.target.showPicker(); } catch {} // desktop: open the calendar anywhere on the date
+  const el = e.target.closest('[data-act],[data-go]');
+  if (!el) return;
+  e.preventDefault();
+  el.closest('dialog')?.close();
+  if (el.dataset.go) go(el.dataset.go);
+  else act(el.dataset.act, el);
+});
+
+document.addEventListener('input', e => {
+  const el = e.target, k = el.dataset.k;
+  if (!k) return;
+  const r = rep();
+  setPath({ r, s: S }, k, readInput(el));
+  if (k.startsWith('s.')) return save(KEYS.settings, S);
+  r.updatedAt = Date.now();
+  persist();
+  for (const o of app.querySelectorAll('[data-out]')) o.textContent = OUT[o.dataset.out](r, o.dataset);
+  document.getElementById('summary').innerHTML = summary(r);
+});
+
+document.addEventListener('change', e => {
+  if (e.target.matches('[data-pick]') && e.target.value) go('day/' + e.target.value);
+  if (e.target.matches('[data-restore]') && e.target.files[0]) restore(e.target.files[0]);
+});
+
+// Remember which sections are open across re-renders.
+app.addEventListener('toggle', e => { const id = e.target.dataset?.sec; if (id) e.target.open ? open.add(id) : open.delete(id); }, true);
+
+const reload = () => { S = loadSettings(); R = loadReports(); render(); };
+addEventListener('storage', e => Object.values(KEYS).includes(e.key) && reload());
+addEventListener('pageshow', e => e.persisted && reload());
+addEventListener('hashchange', route);
+route();
+</script>
+</body>
+</html>
