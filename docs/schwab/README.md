@@ -34,6 +34,15 @@ Schwab Field Records/
 - **No signal:** the PDF waits on the phone and uploads when the app is next opened or the phone reconnects. Settings shows how many are waiting.
 - **Any time:** every screen's **⋯** menu has **Save as PDF** (phones get the share sheet: Save to Files, Mail, AirDrop, Drive; computers download it).
 
+## Spanish mode (Task Sheets)
+
+- Tap **ES** in the header, or Settings → Language. A crew phone asks "English / Español" the first time it opens a sheet.
+- Every label, button and message switches to Spanish (wording in `es.mjs`; a bilingual foreman can fix any phrase there). What people type is machine-translated by the review-folder script through Google Translate, and the original stays visible underneath.
+- When a Spanish-mode crew taps **Enviar resultados**, the review folder gets two PDFs: `T1003-01 Crew A Level 3.pdf` (English labels, crew notes translated to English) and `T1003-01 Crew A Level 3 (Español).pdf` (Spanish labels, the crew's own words). The text message to the superintendent carries both languages, and the superintendent's review screen shows English with the Spanish original under it. The Daily Report's **Fill from task sheets** uses the English translations.
+- No review folder or no signal: screens still switch to Spanish, and typed text shows as written until a translation arrives. An English copy filed before its translation marks those notes "(not translated yet)"; the superintendent's phone files the translated copy over it when the results reach it.
+- Machine translation handles plain field notes well and trade slang less well. The Spanish copy always keeps the crew's exact words.
+- Already deployed `review-folder.gs`? Paste the new version and publish a new deployment version (Deploy → Manage deployments → edit → New version) so translation works.
+
 ## How the data moves
 
 - Each phone keeps its own records in the browser, saved as you type.

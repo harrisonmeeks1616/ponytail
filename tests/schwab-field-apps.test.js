@@ -130,6 +130,74 @@ test('finished records wait on the phone until the review folder takes them', as
     assert.deepEqual(await flush(s), { left: 0, error: '' });
     assert.equal(queued(), 0);
     assert.deepEqual(sent.slice(-2).map(b => [b.name, b.pdf, b.code]), [['T1', 'JVBERi0x', 'sparky'], ['Daily Report 2026-10-03', 'JVBERi0y', 'sparky']]);
+
+    // Every upload says which edit it is and whether its translations were complete, so the folder keeps the newest.
+    const { queueFiles } = await lib;
+    queueFiles({ date: '2026-10-03', name: 'T2', bytes: new Uint8Array([37, 80, 68, 70, 45]), v: 7, full: false });
+    await flush(s);
+    assert.deepEqual([sent.at(-1).v, sent.at(-1).full], [7, false]);
+  } finally {
+    globalThis.fetch = realFetch;
+    delete globalThis.localStorage;
+  }
+});
+
+test('Spanish mode has a Spanish version of every on-screen phrase', async () => {
+  const fs = require('fs');
+  const path = require('path');
+  const ES = (await import('../docs/schwab/es.mjs')).default;
+  const dir = path.join(__dirname, '..', 'docs', 'schwab');
+  const used = new Set(['Complete', 'Partial', 'Blocked', 'Accepted', 'Follow-up needed', 'Superintendent', 'Project manager', 'Crew lead', '1 person', '{n} people']); // looked up from data, not literals
+  for (const f of ['tasks.html', 'shared.mjs']) {
+    const src = fs.readFileSync(path.join(dir, f), 'utf8');
+    for (const m of src.matchAll(/\b(?:L|x)\(\s*(['"])((?:\\.|(?!\1)[^\\])*)\1/g)) used.add(m[2].replace(/\\(.)/g, '$1'));
+  }
+  const holes = s => (s.match(/\{\w+\}/g) || []).sort().join(' ');
+  for (const en of used) {
+    assert.ok(Object.hasOwn(ES, en), `missing Spanish for: ${en}`);
+    assert.equal(holes(ES[en]), holes(en), `placeholders differ in: ${en}`);
+  }
+  for (const en of Object.keys(ES)) assert.ok(used.has(en), `Spanish entry no longer used: ${en}`);
+});
+
+test('Spanish labels, safe placeholders and remembered translations', async () => {
+  const { L, setLang, inLang, hasLang, learn, pairs, translate, makePdf, normTask, mergeTask } = await lib;
+  assert.equal(L('Task {id}', { id: 'T1' }, 'es'), 'Tarea T1');
+  assert.equal(L('Task {id}', { id: '$& pay' }, 'en'), 'Task $& pay', 'typed text is inserted literally');
+  setLang('es');
+  assert.equal(L('Status'), 'Estado');
+  setLang('en');
+  assert.equal(L('Status'), 'Status');
+
+  const store = new Map();
+  Object.defineProperty(globalThis, 'localStorage', { configurable: true, value: { getItem: k => store.get(k) ?? null, setItem: (k, v) => store.set(k, String(v)) } });
+  const realFetch = globalThis.fetch;
+  let calls = 0;
+  globalThis.fetch = async (url, o) => {
+    calls++;
+    const b = JSON.parse(o.body);
+    return { status: 200, json: async () => ({ ok: true, out: b.translate.texts.map(t => (t === 'Se jalaron cables' ? 'Wires were pulled' : t)) }) };
+  };
+  try {
+    const s = { folderUrl: 'https://script.google.com/macros/s/x/exec', siteCode: 'sparky' };
+    assert.equal(await translate(s, ['Se jalaron cables', 'Pull wire'], 'en'), 0);
+    assert.equal(inLang('Se jalaron cables', 'en'), 'Wires were pulled');
+    assert.equal(inLang('Something new', 'en'), 'Something new', 'unknown text shows as written');
+    await translate(s, ['Se jalaron cables'], 'en');
+    assert.equal(calls, 1, 'a known phrase is not translated twice');
+    assert.deepEqual(pairs(['Se jalaron cables', 'Pull wire', 'Never seen'], 'en'), [['Se jalaron cables', 'Wires were pulled'], ['Pull wire']], 'links carry what is known; [text] means already English');
+
+    learn({ es: [['Pull wire', 'Jalar cable'], ['Complete', 'Mentira'], ['Terminado']] }, ['Pull wire', 'Terminado']);
+    assert.equal(inLang('Pull wire', 'es'), 'Jalar cable');
+    assert.ok(hasLang('Terminado', 'es') && inLang('Terminado', 'es') === 'Terminado', '[text] teaches "already Spanish"');
+    assert.ok(!hasLang('Complete', 'es'), 'a link cannot plant translations for text it does not contain');
+
+    const pdf = Buffer.from(makePdf('Hoja de tarea eléctrica', 'Obra', [['Pasos', [['Nota', 'Señal débil en el sótano']]]], 'Obra', 'es')).toString('latin1');
+    assert.match(pdf, /\(P\\341gina 1 de 1\) Tj|P\\341gina 1 de 1\) Tj/, 'Spanish footer with accented letters');
+    assert.match(pdf, /Se\\361al d\\351bil en el s\\363tano/);
+
+    const office = normTask({ uid: 'u', items: [] }), crew = normTask({ uid: 'u', status: 'Partial', cLang: 'es', items: [] });
+    assert.equal(mergeTask(office, crew, 'crew').cLang, 'es', 'the crew language travels with the results');
   } finally {
     globalThis.fetch = realFetch;
     delete globalThis.localStorage;

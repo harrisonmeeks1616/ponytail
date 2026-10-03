@@ -2,7 +2,24 @@
 // Nothing leaves the phone except a link the user chooses to send. The data rides in the
 // part of the URL after "#", which browsers never send to the web server.
 
+import ES from './es.mjs';
+
 export const KEYS = { settings: 'schwab.settings', tasks: 'schwab.tasks', reports: 'schwab.reports' };
+
+// ---------- language ----------
+// Spanish mode: every phrase on screen has a Spanish twin in es.mjs, looked up by its English text.
+// What people type (scope, steps, crew notes) is machine-translated separately by translate() below;
+// the text as written is never changed.
+
+let lang = 'en';
+export const setLang = l => { lang = l === 'es' ? 'es' : 'en'; if (globalThis.document) document.documentElement.lang = lang; };
+export const getLang = () => lang;
+export function L(en, vars, l = lang) {
+  let s = l === 'es' && Object.hasOwn(ES, en) ? ES[en] : en;
+  for (const k in vars) s = s.replaceAll(`{${k}}`, () => vars[k]); // a function, so "$&" in typed text stays literal
+  return s;
+}
+const locale = l => (l === 'es' ? 'es-US' : 'en-US');
 
 // ---------- data ----------
 
@@ -31,9 +48,9 @@ export function save(key, val) {
   try { localStorage.setItem(key, JSON.stringify(val)); return true; } catch { return false; }
 }
 
-export const SETTINGS_TPL = { me: '', role: '', super: '', pm: '', project: '', site: '', floors: [''], crews: [{ name: '', lead: '', members: '' }], checks: [''], folderUrl: '', siteCode: '' };
+export const SETTINGS_TPL = { lang: '', me: '', role: '', super: '', pm: '', project: '', site: '', floors: [''], crews: [{ name: '', lead: '', members: '' }], checks: [''], folderUrl: '', siteCode: '' };
 export const DEFAULT_SETTINGS = {
-  me: '', role: 'Superintendent', super: '', pm: '', folderUrl: '', siteCode: '',
+  lang: '', me: '', role: 'Superintendent', super: '', pm: '', folderUrl: '', siteCode: '',
   project: 'Charles Schwab Building', site: 'Charlotte, NC',
   floors: ['Basement', 'Level 1', 'Level 2', 'Level 3', 'Level 4', 'Level 5', 'Roof'],
   crews: ['A', 'B', 'C', 'D'].map(x => ({ name: 'Crew ' + x, lead: '', members: '' })),
@@ -47,14 +64,14 @@ export const TASK_TPL = {
   uid: '', origin: '', from: '', id: '', date: '', by: '', floor: '', area: '', crew: '', lead: '', members: [''], size: 0,
   scope: '', refs: '', items: [ITEM], checks: [ITEM],
   allot: 0, allotNote: '', est: 0, estNote: '', pStart: '', pStop: '', checkIn: '',
-  aStart: '', aStop: '', delay: 0, status: '', doneText: '', remain: '', comments: '',
+  aStart: '', aStop: '', delay: 0, status: '', doneText: '', remain: '', comments: '', cLang: '',
   review: '', reviewer: '', followUp: '', sentAt: 0, gotAt: 0, updatedAt: 0, filedAt: 0,
 };
 export const normTask = t => shape(TASK_TPL, t);
 export const newItem = text => ({ id: uid(), text, done: false, at: 0 });
 
 const ASSIGN = ['id', 'date', 'by', 'floor', 'area', 'crew', 'members', 'size', 'scope', 'refs', 'allot', 'allotNote', 'est', 'estNote', 'pStart', 'pStop', 'checkIn'];
-const CREW = ['lead', 'aStart', 'aStop', 'delay', 'status', 'doneText', 'remain', 'comments'];
+const CREW = ['lead', 'aStart', 'aStop', 'delay', 'status', 'doneText', 'remain', 'comments', 'cLang'];
 
 // part 'crew': take the crew's results and check-offs, keep my assignment.
 // part 'assign': take the new assignment and checklist, keep check-offs already made here.
@@ -108,7 +125,7 @@ export const newFloor = (floor, crewNames) => ({ floor, crews: crewNames.map(nam
 
 // Roll the day's task sheets up into the report's floor / crew sections.
 // Only empty report fields are filled, so the superintendent's own wording is never overwritten.
-export function fillFromTasks(rep, tasks, crewNames) {
+export function fillFromTasks(rep, tasks, crewNames, tl = x => x) {
   const groups = new Map();
   for (const t of tasks) {
     const k = JSON.stringify([t.floor || 'Floor not set', t.crew || 'Crew not set']);
@@ -135,14 +152,14 @@ export function fillFromTasks(rep, tasks, crewNames) {
       stop: stops.at(-1) || '',
       done: lines(t => {
         const n = t.items.filter(i => i.done).length;
-        return `${t.id}${t.status ? ' (' + t.status + ')' : ''}${t.items.length ? ` ${n}/${t.items.length} steps` : ''}: ${t.doneText || t.scope}`;
+        return `${t.id}${t.status ? ' (' + t.status + ')' : ''}${t.items.length ? ` ${n}/${t.items.length} steps` : ''}: ${tl(t.doneText || t.scope)}`;
       }),
       quality: lines(t => {
         const ok = t.checks.filter(c => c.done).map(c => c.text), open = t.checks.filter(c => !c.done).map(c => c.text);
         return ok.length || open.length ? `${t.id}: ${ok.length ? 'done ' + ok.join(', ') : ''}${ok.length && open.length ? '; ' : ''}${open.length ? 'open ' + open.join(', ') : ''}` : '';
       }),
       holdups: lines(t => {
-        const bits = [t.status === 'Blocked' && 'Blocked', t.delay && `${t.delay} min delay`, t.comments].filter(Boolean);
+        const bits = [t.status === 'Blocked' && 'Blocked', t.delay && `${t.delay} min delay`, tl(t.comments)].filter(Boolean);
         return bits.length ? `${t.id}: ${bits.join(' · ')}` : '';
       }),
     };
@@ -150,8 +167,9 @@ export function fillFromTasks(rep, tasks, crewNames) {
     for (const [f, v] of Object.entries(fill)) if (!c[f] && v) c[f] = v;
   }
   for (const t of tasks) {
-    if (t.followUp && !rep.next.some(s => s.step.endsWith(t.followUp))) {
-      rep.next.push({ ...blank('next'), step: `${t.floor} · ${t.crew}: ${t.followUp}`, lead: t.lead });
+    const follow = tl(t.followUp);
+    if (follow && !rep.next.some(s => s.step.endsWith(follow))) {
+      rep.next.push({ ...blank('next'), step: `${t.floor} · ${t.crew}: ${follow}`, lead: t.lead });
     }
   }
   return groups.size;
@@ -192,14 +210,15 @@ const pad = n => String(n).padStart(2, '0');
 export const iso = d => `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
 export const today = () => iso(new Date());
 export const addDays = (day, n) => { const [y, m, d] = day.split('-').map(Number); return iso(new Date(y, m - 1, d + n)); };
-export const niceDate = day => new Date(day + 'T12:00').toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric' });
+export const niceDate = (day, l = lang) => new Date(day + 'T12:00').toLocaleDateString(locale(l), { weekday: 'short', month: 'short', day: 'numeric' });
 export const nowHM = () => { const d = new Date(); return `${pad(d.getHours())}:${pad(d.getMinutes())}`; };
 export const toMin = t => { const m = /^(\d{1,2}):(\d{2})/.exec(t || ''); return m ? +m[1] * 60 + +m[2] : null; };
 // Minutes from start to stop; a stop earlier than the start is an overnight shift.
 export const span = (start, stop) => { const a = toMin(start), b = toMin(stop); return a == null || b == null ? 0 : (b - a + 1440) % 1440; };
 export const fmtMin = m => m >= 60 ? `${Math.floor(m / 60)}h ${m % 60}m` : `${m}m`;
 export const t12 = t => { const m = toMin(t); return m == null ? '' : `${(Math.floor(m / 60) + 11) % 12 + 1}:${pad(m % 60)} ${m < 720 ? 'AM' : 'PM'}`; };
-export const stamp = ts => ts ? new Date(ts).toLocaleString('en-US', { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' }) : '';
+export const stamp = (ts, l = lang) => ts ? new Date(ts).toLocaleString(locale(l), { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' }) : '';
+export const timeOf = ts => new Date(ts).toLocaleTimeString(locale(lang), { hour: 'numeric', minute: '2-digit' });
 export const hrs = n => (Math.round(n * 10) / 10).toString();
 
 // ---------- UI pieces ----------
@@ -207,10 +226,10 @@ export const hrs = n => (Math.round(n * 10) / 10).toString();
 export const crewVar = (s, name) => { const i = s.crews.findIndex(c => c.name === name); return `--crew:var(--c${i < 0 ? 4 : i % 6})`; };
 
 export const dateBar = day => `<div class="datebar">
-  <button class="nav-btn" data-go="day/${addDays(day, -1)}" aria-label="Previous day">‹</button>
-  <label class="day">${niceDate(day)}<small>${day === today() ? 'Today' : day < today() ? 'Past day' : 'Planning ahead'}</small>
-    <input type="date" value="${day}" data-pick aria-label="Pick a date"></label>
-  <button class="nav-btn" data-go="day/${addDays(day, 1)}" aria-label="Next day">›</button></div>`;
+  <button class="nav-btn" data-go="day/${addDays(day, -1)}" aria-label="${L('Previous day')}">‹</button>
+  <label class="day">${niceDate(day)}<small>${day === today() ? L('Today') : day < today() ? L('Past day') : L('Planning ahead')}</small>
+    <input type="date" value="${day}" data-pick aria-label="${L('Pick a date')}"></label>
+  <button class="nav-btn" data-go="day/${addDays(day, 1)}" aria-label="${L('Next day')}">›</button></div>`;
 
 export const attr = (k, v) => v ? ` ${k}="${esc(v)}"` : '';
 
@@ -256,7 +275,7 @@ export function toast(msg, tone = '') {
 export function sheet(html) {
   const d = document.createElement('dialog');
   d.className = 'sheet';
-  d.innerHTML = `<div class="sheet-in"><form method="dialog"><button class="sheet-x" aria-label="Close">✕</button></form>${html}</div>`;
+  d.innerHTML = `<div class="sheet-in"><form method="dialog"><button class="sheet-x" aria-label="${L('Close')}">✕</button></form>${html}</div>`;
   d.addEventListener('close', () => d.remove());
   d.addEventListener('click', e => { if (e.target === d) d.close(); }); // tap outside
   document.body.append(d);
@@ -266,7 +285,7 @@ export function sheet(html) {
 
 // In-page confirm: bigger targets than the browser's, and it can say what the buttons do.
 export const ask = (msg, yes, tone = 'primary') => new Promise(res => {
-  const d = sheet(`<p class="ask">${esc(msg)}</p><div class="btns"><button class="btn ${tone}" data-a="1">${esc(yes)}</button><button class="btn" data-a="0">Cancel</button></div>`);
+  const d = sheet(`<p class="ask">${esc(msg)}</p><div class="btns"><button class="btn ${tone}" data-a="1">${esc(yes)}</button><button class="btn" data-a="0">${L('Cancel')}</button></div>`);
   d.addEventListener('click', e => { const b = e.target.closest('[data-a]'); if (b) { res(b.dataset.a === '1'); d.close(); } });
   d.addEventListener('close', () => res(false));
 });
@@ -275,36 +294,36 @@ export function sendSheet({ title, text, url }) {
   const msg = `${text}\n${url}`;
   const d = sheet(`<h3>${esc(title)}</h3><p class="preview">${esc(text)}</p>
     <div class="btns">
-      ${navigator.share ? '<button class="btn primary" data-s="share">Share…</button>' : ''}
-      <a class="btn" href="sms:?&body=${encodeURIComponent(msg)}">Text message</a>
-      <a class="btn" href="mailto:?subject=${encodeURIComponent(title)}&body=${encodeURIComponent(msg)}">Email</a>
-      <button class="btn" data-s="copy">Copy link</button>
+      ${navigator.share ? `<button class="btn primary" data-s="share">${L('Share…')}</button>` : ''}
+      <a class="btn" href="sms:?&body=${encodeURIComponent(msg)}">${L('Text message')}</a>
+      <a class="btn" href="mailto:?subject=${encodeURIComponent(title)}&body=${encodeURIComponent(msg)}">${L('Email')}</a>
+      <button class="btn" data-s="copy">${L('Copy link')}</button>
     </div>
-    <p class="hint">${url.length > 1800 ? 'Long link: send by iMessage, WhatsApp or email. Some plain SMS apps cut long links. ' : ''}The work details are inside the link itself. Nothing is uploaded.</p>
-    <textarea class="linkbox" readonly rows="2" aria-label="Link">${esc(url)}</textarea>`);
+    <p class="hint">${url.length > 1800 ? L('Long link: send by iMessage, WhatsApp or email. Some plain SMS apps cut long links.') + ' ' : ''}${L('The work details are inside the link itself.')}</p>
+    <textarea class="linkbox" readonly rows="2" aria-label="${L('Link')}">${esc(url)}</textarea>`);
   d.addEventListener('click', async e => {
     const b = e.target.closest('[data-s]');
     if (!b) return;
     try {
       if (b.dataset.s === 'share') await navigator.share({ title, text, url });
-      else { await navigator.clipboard.writeText(msg); toast('Link copied. Paste it into a text or email.'); }
+      else { await navigator.clipboard.writeText(msg); toast(L('Link copied. Paste it into a text or email.')); }
       d.close();
     } catch (err) {
       if (err.name === 'AbortError') return;
       const box = d.querySelector('.linkbox');
       box.focus(); box.select();
-      toast('Select the link below and copy it');
+      toast(L('Select the link below and copy it'));
     }
   });
 }
 
 // Paste box for when a link was copied instead of tapped.
 export const pasteSheet = onCode => {
-  const d = sheet(`<h3>Open a link someone sent you</h3><p class="hint">Paste the whole message or just the link. Use this when a link opened in a different browser or app than this one.</p>
-    <textarea class="linkbox" rows="3" aria-label="Paste link here"></textarea><div class="btns"><button class="btn primary" data-go>Open</button></div>`);
-  d.querySelector('[data-go]').onclick = () => {
+  const d = sheet(`<h3>${L('Open a link someone sent you')}</h3><p class="hint">${L('Paste the whole message or just the link. Use this when a link opened in a different browser or app than this one.')}</p>
+    <textarea class="linkbox" rows="3" aria-label="${L('Paste link here')}"></textarea><div class="btns"><button class="btn primary" data-open>${L('Open')}</button></div>`);
+  d.querySelector('[data-open]').onclick = () => {
     const code = codeFrom(d.querySelector('textarea').value);
-    if (!code) return toast("That doesn't look like a field app link", 'bad');
+    if (!code) return toast(L("That doesn't look like a field app link"), 'bad');
     d.close();
     onCode(code);
   };
@@ -362,7 +381,7 @@ function wrap(text, maxW, size, bold) {
 }
 
 // sections: [heading, [[label, value], ...]]; empty values are left out, like a clean paper copy.
-export function makePdf(title, sub, sections, footer) {
+export function makePdf(title, sub, sections, footer, l = 'en') {
   const W = 612, H = 792, M = 54, COL = 150, GAP = 12, LH = 13;
   const pages = [];
   let ops, y;
@@ -378,7 +397,7 @@ export function makePdf(title, sub, sections, footer) {
     room(48);
     ops.push(`1 w ${M} ${(y + 12).toFixed(1)} m ${W - M} ${(y + 12).toFixed(1)} l S`);
     for (const l of wrap(heading.toUpperCase(), W - 2 * M, 11, true)) { text(l, M, 11, true); y -= 15; }
-    for (const [k, v] of filled.length ? filled : [['', 'Nothing recorded']]) {
+    for (const [k, v] of filled.length ? filled : [['', L('Nothing recorded', null, l)]]) {
       const kl = wrap(k, COL, 10, true), vl = wrap(v, W - 2 * M - COL - GAP, 10);
       for (let i = 0; i < Math.max(kl.length, vl.length); i++) {
         room(LH);
@@ -389,7 +408,8 @@ export function makePdf(title, sub, sections, footer) {
       y -= 3;
     }
   }
-  pages.forEach((p, i) => p.push(`BT /F1 8 Tf ${M} 30 Td ${lit(codes(`${footer} · Saved ${stamp(Date.now())} · Page ${i + 1} of ${pages.length}`))} Tj ET`));
+  const saved = L('Saved {when}', { when: stamp(Date.now(), l) }, l);
+  pages.forEach((p, i) => p.push(`BT /F1 8 Tf ${M} 30 Td ${lit(codes(`${footer} · ${saved} · ${L('Page {i} of {n}', { i: i + 1, n: pages.length }, l)}`))} Tj ET`));
 
   const objs = [
     '<< /Type /Catalog /Pages 2 0 R >>',
@@ -436,6 +456,7 @@ async function post(s, body) {
   const res = await fetch(s.folderUrl, { method: 'POST', body: JSON.stringify({ ...body, code: s.siteCode }) });
   const reply = await res.json().catch(() => ({}));
   if (!reply.ok) throw new Error(reply.error || `the folder answered with error ${res.status}`);
+  return reply;
 }
 
 let busy = null;
@@ -451,67 +472,122 @@ export const flush = s => (busy ||= (async () => {
   return { left: queued(), error };
 })().finally(() => { busy = null; }));
 
-export async function fileAway(s, date, name, bytes) {
+// files: { date, name, bytes, v, full }. v is the record's last edit time and full says every translation was in;
+// the folder keeps the newest copy, so a phone that was offline for hours can't roll it back.
+// Several copies of one record (English and Spanish) give one message.
+export const queueFiles = (...files) => files.every(f => queue({ date: f.date, name: f.name, pdf: b64(f.bytes), v: f.v || 0, full: f.full !== false }));
+export async function fileAway(s, ...files) {
   if (!s.folderUrl) return;
-  if (!queue({ date, name, pdf: b64(bytes) })) return toast("This phone is out of space, so the PDF wasn't queued. Use Save as PDF.", 'bad');
+  if (!queueFiles(...files)) return toast(L("This phone is out of space, so the PDF wasn't queued. Use Save as PDF."), 'bad');
   let r = await flush(s);
   if (r.left && !r.error) r = await flush(s); // another upload was mid-way; go again for this one
-  toast(r.error ? `Review folder said: ${r.error}. Kept on this phone; check Settings.`
-    : r.left ? 'Saved on this phone. It goes to the review folder when there is signal.' : 'Saved to the review folder', r.error ? 'bad' : '');
+  toast(r.error ? L('Review folder said: {error}. Kept on this phone; check Settings.', { error: r.error })
+    : r.left ? L('Saved on this phone. It goes to the review folder when there is signal.') : L('Saved to the review folder'), r.error ? 'bad' : '');
 }
 
 export function retryUploads(s) {
   const before = queued();
-  if (before && s.folderUrl) flush(s).then(r => r.left < before && toast(`${before - r.left} saved record${before - r.left === 1 ? '' : 's'} uploaded to the review folder`));
+  if (before && s.folderUrl) flush(s).then(r => r.left < before && toast(L('Uploaded to the review folder: {n}', { n: before - r.left })));
+}
+
+// ---------- translation of typed text ----------
+// Uses the review folder's Google script (Google Translate inside Apps Script, free). Results are kept
+// on the phone and travel inside links, so a phone with no signal still shows what it already knows.
+// ponytail: last 500 phrases per language in localStorage; a bigger job would want a real glossary.
+
+const BOOK = 'schwab.tr';
+const okPair = p => Array.isArray(p) && typeof p[0] === 'string' && typeof p[1] === 'string' && p[0].length <= 4000 && p[1].length <= 8000;
+let memo = null;
+const book = () => memo ||= Object.fromEntries(['en', 'es'].map(l => { const b = load(BOOK, {})?.[l]; return [l, new Map(Array.isArray(b) ? b.filter(okPair) : [])]; }));
+const keepBook = () => save(BOOK, Object.fromEntries(['en', 'es'].map(l => [l, [...book()[l]].slice(-500)])));
+const side = l => (l === 'es' ? 'es' : 'en');
+
+// Text in language l when a translation is known; otherwise exactly as written.
+export const inLang = (text, l = lang) => (text && book()[side(l)].get(text)) || text;
+export const hasLang = (text, l = lang) => !text || book()[side(l)].has(text);
+// Known translations of these texts, to send along inside a link. [text] alone means "already in that language".
+export const pairs = (texts, l) => [...new Set(texts)].filter(x => x && book()[l].has(x)).map(x => (book()[l].get(x) === x ? [x] : [x, book()[l].get(x)]));
+// Take translations from a link, but only for text that is really in that link's record.
+export function learn(tr, texts) {
+  const real = new Set(texts.filter(Boolean));
+  for (const l of ['en', 'es']) {
+    for (const p of Array.isArray(tr?.[l]) ? tr[l].slice(0, 300) : []) {
+      const pair = Array.isArray(p) && p.length === 1 ? [p[0], p[0]] : p;
+      if (okPair(pair) && real.has(pair[0])) book()[l].set(pair[0], pair[1]);
+    }
+  }
+  keepBook();
+}
+// Text typed on this phone is taken as already being in this phone's language, so it never costs a lookup.
+export function own(texts, l) {
+  for (const x of texts) if (x && !book()[side(l)].has(x)) book()[side(l)].set(x, x);
+  keepBook();
+}
+
+let quietUntil = 0;
+// Fills in missing translations; resolves to how many are still missing. Never throws.
+export async function translate(s, texts, l) {
+  const missing = () => [...new Set(texts)].filter(x => x && x.trim() && !book()[l].has(x));
+  const need = missing().slice(0, 40);
+  if (!need.length || !s.folderUrl || Date.now() < quietUntil) return missing().length;
+  try {
+    const r = await post(s, { translate: { to: l, texts: need } });
+    need.forEach((x, i) => typeof r.out?.[i] === 'string' && book()[l].set(x, r.out[i]));
+    keepBook();
+  } catch { quietUntil = Date.now() + 60000; } // no signal or no translator yet: retry in a minute, show text as written meanwhile
+  return missing().length;
 }
 
 // ---------- settings (same screen in both apps; same phone = same settings) ----------
 
-export function settingsView(s) {
+// opts.lang: show the language switch (Task Sheets only; the Daily Report stays in English).
+export function settingsView(s, opts = {}) {
   const roles = ['Superintendent', 'Project manager', 'Crew lead'];
-  return `<section class="card"><h2>This phone</h2><div class="grid">
-      ${field('Your name', 's.me', s.me, { ph: 'Used for "Assigned by", sign-offs' })}
-      <label class="field"><span>Your role</span><select data-k="s.role">${roles.map(r => `<option${r === s.role ? ' selected' : ''}>${r}</option>`).join('')}</select></label>
+  const n = queued();
+  return `<section class="card"><h2>${L('This phone')}</h2><div class="grid">
+      ${opts.lang ? `<label class="field"><span>${L('Language')}</span><select data-k="s.lang">${[['en', 'English'], ['es', 'Español']].map(([v, name]) => `<option value="${v}"${v === getLang() ? ' selected' : ''}>${name}</option>`).join('')}</select></label>` : ''}
+      ${field(L('Your name'), 's.me', s.me, { ph: L('Used for "Assigned by", sign-offs') })}
+      <label class="field"><span>${L('Your role')}</span><select data-k="s.role">${roles.map(r => `<option value="${r}"${r === s.role ? ' selected' : ''}>${L(r)}</option>`).join('')}</select></label>
     </div></section>
-    <section class="card"><h2>Project</h2><div class="grid">
-      ${field('Project', 's.project', s.project)}${field('Location', 's.site', s.site)}
-      ${field('Superintendent', 's.super', s.super)}${field('Project manager', 's.pm', s.pm)}
+    <section class="card"><h2>${L('Project')}</h2><div class="grid">
+      ${field(L('Project'), 's.project', s.project)}${field(L('Location'), 's.site', s.site)}
+      ${field(L('Superintendent'), 's.super', s.super)}${field(L('Project manager'), 's.pm', s.pm)}
     </div></section>
-    <section class="card"><h2>Floors / levels</h2><p class="hint">One per line. They show up as quick picks; you can still type any floor.</p>
+    <section class="card"><h2>${L('Floors / levels')}</h2><p class="hint">${L('One per line. They show up as quick picks; you can still type any floor.')}</p>
       <textarea data-k="s.floors" data-lines rows="6">${esc(s.floors.join('\n'))}</textarea></section>
-    <section class="card"><h2>Crews</h2><p class="hint">Members are separated by commas. Picking a crew on a task fills these in.</p>
+    <section class="card"><h2>${L('Crews')}</h2><p class="hint">${L('Members are separated by commas. Picking a crew on a task fills these in.')}</p>
       ${s.crews.map((c, i) => `<div class="crew-edit" style="--crew:var(--c${i % 6})"><div class="grid">
-        ${field('Crew name', `s.crews.${i}.name`, c.name)}${field('Lead', `s.crews.${i}.lead`, c.lead)}
-        ${field('Members', `s.crews.${i}.members`, c.members, { wide: true, ph: 'Mike R, Jose L, Tre W' })}</div>
-        <button class="link danger" data-act="delCrew" data-i="${i}">Remove ${esc(c.name || 'crew')}</button></div>`).join('')}
-      <button class="btn" data-act="addCrew">+ Add crew</button></section>
-    <section class="card"><h2>Finish / accuracy checks</h2><p class="hint">One per line. Tap them onto a task as required checks.</p>
+        ${field(L('Crew name'), `s.crews.${i}.name`, c.name)}${field(L('Lead'), `s.crews.${i}.lead`, c.lead)}
+        ${field(L('Members'), `s.crews.${i}.members`, c.members, { wide: true, ph: 'Mike R, Jose L, Tre W' })}</div>
+        <button class="link danger" data-act="delCrew" data-i="${i}">${L('Remove {name}', { name: esc(c.name || L('crew')) })}</button></div>`).join('')}
+      <button class="btn" data-act="addCrew">${L('+ Add crew')}</button></section>
+    <section class="card"><h2>${L('Finish / accuracy checks')}</h2><p class="hint">${L('One per line. Tap them onto a task as required checks.')}</p>
       <textarea data-k="s.checks" data-lines rows="6">${esc(s.checks.join('\n'))}</textarea></section>
-    <section class="card"><h2>Review folder</h2><p class="hint">Finished task sheets and daily reports save themselves as PDFs to a shared Google Drive folder, one folder per day. Set up once with review-folder.gs (steps inside it), then use the same link and code on every phone. Crew phones pick it up from the first task sheet they open.</p>
-      <div class="grid">${field('Folder upload link', 's.folderUrl', s.folderUrl, { wide: true, ph: 'https://script.google.com/macros/s/.../exec', mode: 'url' })}${field('Site code', 's.siteCode', s.siteCode)}</div>
-      <div class="btns"><button class="btn" data-act="testFolder">Test the connection</button></div>
-      <p class="hint">${queued() ? `${queued()} finished record${queued() === 1 ? '' : 's'} waiting to upload.` : 'Nothing waiting to upload.'}</p></section>
-    <section class="card"><h2>Backup</h2><p class="hint">Everything is stored on this phone only. Download a backup weekly, or before clearing browser data or switching phones.</p>
-      <div class="btns"><button class="btn" data-act="backup">Download backup</button>
-      <label class="btn">Restore from backup<input type="file" accept="application/json,.json" data-restore hidden></label></div>
-      <p class="hint">Using about ${Math.ceil(Object.values(KEYS).reduce((n, k) => n + JSON.stringify(load(k, '')).length, 0) / 1024)} KB of roughly 5,000 KB.</p></section>`;
+    <section class="card"><h2>${L('Review folder')}</h2><p class="hint">${L('Finished task sheets and daily reports save themselves as PDFs to a shared Google Drive folder, one folder per day. Set up once with review-folder.gs (steps inside it), then use the same link and code on every phone. Crew phones pick it up from the first task sheet they open. The same script translates Spanish mode text.')}</p>
+      <div class="grid">${field(L('Folder upload link'), 's.folderUrl', s.folderUrl, { wide: true, ph: 'https://script.google.com/macros/s/.../exec', mode: 'url' })}${field(L('Site code'), 's.siteCode', s.siteCode)}</div>
+      <div class="btns"><button class="btn" data-act="testFolder">${L('Test the connection')}</button></div>
+      <p class="hint">${n ? L('Waiting to upload: {n}', { n }) : L('Nothing waiting to upload.')}</p></section>
+    <section class="card"><h2>${L('Backup')}</h2><p class="hint">${L('Everything is stored on this phone only. Download a backup weekly, or before clearing browser data or switching phones.')}</p>
+      <div class="btns"><button class="btn" data-act="backup">${L('Download backup')}</button>
+      <label class="btn">${L('Restore from backup')}<input type="file" accept="application/json,.json" data-restore hidden></label></div>
+      <p class="hint">${L('Using about {kb} KB of roughly 5,000 KB.', { kb: Math.ceil(Object.values(KEYS).reduce((n, k) => n + JSON.stringify(load(k, '')).length, 0) / 1024) })}</p></section>`;
 }
 
 export async function settingsAct(act, s, el) {
-  if (act === 'addCrew') s.crews.push({ name: 'Crew ' + String.fromCharCode(65 + s.crews.length), lead: '', members: '' });
-  if (act === 'delCrew' && await ask(`Remove ${s.crews[el.dataset.i].name} from the crew list? Existing sheets keep their crew name.`, 'Remove', 'danger')) s.crews.splice(el.dataset.i, 1);
+  if (act === 'addCrew') s.crews.push({ name: L('Crew {x}', { x: String.fromCharCode(65 + s.crews.length) }), lead: '', members: '' });
+  if (act === 'delCrew' && await ask(L('Remove {name} from the crew list? Existing sheets keep their crew name.', { name: s.crews[el.dataset.i].name }), L('Remove'), 'danger')) s.crews.splice(el.dataset.i, 1);
   if (act === 'backup') {
     const data = Object.fromEntries(Object.values(KEYS).map(k => [k, load(k, null)]));
     download(new Blob([JSON.stringify(data)], { type: 'application/json' }), `schwab-field-backup-${today()}.json`);
   }
   if (act === 'testFolder') {
-    if (!/^https:\/\//.test(s.folderUrl)) return toast('Paste the folder upload link first. It starts with https://', 'bad');
+    if (!/^https:\/\//.test(s.folderUrl)) return toast(L('Paste the folder upload link first. It starts with https://'), 'bad');
     try {
       await post(s, { ping: true });
-      toast('Connected. Finished sheets and reports will save to the review folder.');
+      toast(L('Connected. Finished sheets and reports will save to the review folder.'));
       retryUploads(s);
     } catch (e) {
-      toast(e instanceof TypeError ? "Couldn't reach the review folder. Check the link and your signal." : `Review folder said: ${e.message}`, 'bad');
+      toast(e instanceof TypeError ? L("Couldn't reach the review folder. Check the link and your signal.") : L('Review folder said: {error}', { error: e.message }), 'bad');
     }
   }
   save(KEYS.settings, s);
@@ -519,9 +595,9 @@ export async function settingsAct(act, s, el) {
 
 export async function restore(file) {
   let data;
-  try { data = JSON.parse(await file.text()); } catch { return toast("That file isn't a field app backup", 'bad'); }
-  if (!data || !Object.values(KEYS).some(k => k in data)) return toast("That file isn't a field app backup", 'bad');
-  if (!await ask('Replace everything on this phone with this backup?', 'Replace', 'danger')) return;
+  try { data = JSON.parse(await file.text()); } catch { return toast(L("That file isn't a field app backup"), 'bad'); }
+  if (!data || !Object.values(KEYS).some(k => k in data)) return toast(L("That file isn't a field app backup"), 'bad');
+  if (!await ask(L('Replace everything on this phone with this backup?'), L('Replace'), 'danger')) return;
   for (const k of Object.values(KEYS)) if (data[k] != null) save(k, data[k]);
   location.reload();
 }

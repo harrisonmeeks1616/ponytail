@@ -45,7 +45,7 @@ button, input, select, textarea { font: inherit; color: inherit; }
   border-bottom: 5px solid; border-image: repeating-linear-gradient(-45deg, var(--accent) 0 10px, var(--bar) 10px 20px) 5;
 }
 .top-in { max-width: 760px; margin: 0 auto; display: flex; align-items: center; gap: 12px; }
-.top h1 { font-size: 1.45rem; text-transform: uppercase; letter-spacing: .04em; }
+.top h1 { font-size: clamp(1.15rem, 4.6vw, 1.45rem); text-transform: uppercase; letter-spacing: .04em; }
 .top h1 b { color: var(--accent); }
 .top p { margin: 0; font-size: .82rem; opacity: .75; }
 .top .grow { flex: 1; min-width: 0; }
@@ -90,7 +90,7 @@ input:focus, select, textarea:focus { background: var(--surface); }
 
 .bar { position: fixed; left: 0; right: 0; bottom: 0; z-index: 5; background: var(--surface); border-top: 1px solid var(--line); padding: 10px 16px calc(env(safe-area-inset-bottom, 0px) + 10px); }
 .bar-in { max-width: 760px; margin: 0 auto; display: flex; gap: 8px; }
-.bar .btn { flex: 1; padding: 0 12px; white-space: nowrap; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+.bar .btn { flex: 1; display: block; line-height: 54px; padding: 0 12px; white-space: nowrap; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
 .bar .btn.more { flex: 0 0 56px; padding: 0; font-size: 1.4rem; }
 
 /* ---- chips, pills, segmented ---- */
@@ -157,6 +157,8 @@ input:focus, select, textarea:focus { background: var(--surface); }
 .kv dt { color: var(--muted); font-size: .85rem; font-weight: 600; }
 .kv dd { margin: 0; min-width: 0; overflow-wrap: anywhere; }
 .scope-text { white-space: pre-wrap; margin: 0; overflow-wrap: anywhere; }
+.orig { display: block; margin-top: 4px; color: var(--muted); font-size: .85em; white-space: pre-wrap; }
+.icon-btn.lang { font: 700 1.05rem var(--display); letter-spacing: .06em; }
 
 .review-h { color: var(--warn); }
 .done-group > summary { cursor: pointer; list-style: none; }
