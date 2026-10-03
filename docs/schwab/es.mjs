@@ -100,7 +100,7 @@ export default {
   'Your estimate (hrs)': 'Su estimado (h)',
   'Allotted notes': 'Notas del tiempo asignado',
   'Estimate notes': 'Notas del estimado',
-  'Allotted': 'Asignado',
+  'Allotted': 'Tiempo asignado',
   'Estimate': 'Estimado',
   '{n} hrs': '{n} h',
   'Planned start': 'Inicio planeado',
