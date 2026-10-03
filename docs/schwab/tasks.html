@@ -525,7 +525,7 @@ async function act(a, el) {
     case 'taskMenu':
       return menu([['dup', L('Duplicate for another crew or floor')], ['carry', L('Carry open work to {date}', { date: niceDate(addDays(t.date, 1)) })],
         ...pdfItems(t), S.folderUrl && ['fileNow', L('Save to the review folder now')], ['del', L('Delete this task sheet'), 'danger']]);
-    case 'crewMenu': return menu([...pdfItems(t), ['paste', L('Open a link someone sent you')], ['settings', L('Settings')]]);
+    case 'crewMenu': return menu([...pdfItems(t), ['paste', L('Open a link someone sent you')], ['settings', L('Settings')], ['del', L('Delete this task sheet'), 'danger']]);
     case 'carryDay': {
       const prev = prevDay();
       const open = T.filter(x => x.date === prev && isOpen(x) && !T.some(y => y.from === x.uid));
