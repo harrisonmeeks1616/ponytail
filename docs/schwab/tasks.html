@@ -18,12 +18,11 @@
 </div></header>
 <main id="app"></main>
 <nav class="bar" id="bar"></nav>
-<div id="print"></div>
 <script type="module">
 import {
   KEYS, esc, uid, load, save, loadSettings, roster, normTask, newItem, mergeTask, cloneTask, pack, unpack, linkTo,
   today, addDays, niceDate, nowHM, span, fmtMin, t12, stamp, hrs, field, datalist, seg, setPath, getPath, readInput,
-  toast, sheet, ask, sendSheet, pasteSheet, printDoc, settingsView, settingsAct, restore, registerSW, dateBar, crewVar as cv,
+  toast, sheet, ask, sendSheet, pasteSheet, makePdf, savePdf, fileAway, retryUploads, settingsView, settingsAct, restore, registerSW, dateBar, crewVar as cv,
 } from './shared.mjs';
 
 registerSW();
@@ -72,6 +71,7 @@ function pickCrew(t, name) {
 // ---------- routing: #day/2026-10-03, #task/<uid>/<tab>, #settings, #p=<link code> ----------
 
 function route() {
+  fileIfChanged(current());
   const h = location.hash.slice(1);
   if (h.startsWith('p=')) return openCode(h.slice(2));
   const [v, a, b] = h.split('/');
@@ -89,6 +89,11 @@ async function openCode(code) {
   if (data.kind === 'day') return importDay(data);
   const inc = normTask(data.task);
   let t = find(inc.uid);
+  if (data.kind === 'task' && data.folder && !S.folderUrl && /^https:\/\//.test(data.folder.url)) {
+    // Only a phone with no review folder yet adopts one, so a later link can't redirect finished sheets.
+    Object.assign(S, { folderUrl: String(data.folder.url), siteCode: String(data.folder.code || '') });
+    save(KEYS.settings, S);
+  }
   if (!inc.uid || !['task', 'result'].includes(data.kind)) { toast('That link has no task sheet in it', 'bad'); return location.replace('#day/' + day); }
   if (data.kind === 'task') {
     if (!t) T.push(t = Object.assign(inc, { origin: 'link', gotAt: Date.now() })); // a crew phone opening its sheet
@@ -98,6 +103,7 @@ async function openCode(code) {
     else mergeTask(t, inc, 'crew');
     t.gotAt = Date.now();
     toast(`${t.crew || 'Crew'} results for ${t.id} received`);
+    fileTask(t);
   }
   persist();
   location.replace(`#task/${t.uid}/${data.kind === 'result' ? 'review' : 'assign'}`);
@@ -131,7 +137,11 @@ function renderBoard() {
   const all = dayTasks();
   const list = all.filter(t => !crewFilter || t.crew === crewFilter)
     .sort((a, b) => floorRank(a.floor) - floorRank(b.floor) || a.floor.localeCompare(b.floor) || a.pStart.localeCompare(b.pStart));
-  const floors = [...new Set(list.map(t => t.floor || 'Floor not set'))];
+  // Finished sheets wait in their own group for review; accepted ones fold away at the bottom.
+  const toReview = list.filter(t => t.origin !== 'link' && t.status && !t.review);
+  const accepted = list.filter(t => t.review === 'Accepted');
+  const active = list.filter(t => !toReview.includes(t) && !accepted.includes(t));
+  const floors = [...new Set(active.map(t => t.floor || 'Floor not set'))];
   const est = all.reduce((n, t) => n + t.est * (t.size || 1), 0);
   const act = all.reduce((n, t) => n + worked(t) / 60 * (t.size || 1), 0);
   const done = all.filter(t => !isOpen(t)).length, blocked = all.filter(t => t.status === 'Blocked').length;
@@ -148,10 +158,13 @@ function renderBoard() {
       <button class="chip" data-act="filter" data-v="" aria-pressed="${!crewFilter}">All crews</button>
       ${crews.map(c => `<button class="chip" data-act="filter" data-v="${esc(c)}" aria-pressed="${crewFilter === c}" style="${crewVar(c)}"><i class="dot"></i>${esc(c)}</button>`).join('')}
     </div>
+    ${toReview.length ? `<h2 class="group-h review-h"><span>Finished · ready for review</span><span>${toReview.length}</span></h2>${toReview.map(card).join('')}` : ''}
     ${floors.map(f => {
-      const ts = list.filter(t => (t.floor || 'Floor not set') === f);
+      const ts = active.filter(t => (t.floor || 'Floor not set') === f);
       return `<h2 class="group-h"><span>${esc(f)}</span><span>${ts.length}</span></h2>${ts.map(card).join('')}`;
-    }).join('') || '<p class="hint">No sheets for this crew on this day.</p>'}`
+    }).join('')}
+    ${accepted.length ? `<details class="done-group"><summary class="group-h"><span>Accepted</span><span>${accepted.length}</span></summary><div class="stack">${accepted.map(card).join('')}</div></details>` : ''}
+    ${list.length ? '' : '<p class="hint">No sheets for this crew on this day.</p>'}`
     : `<div class="empty"><h2>No task sheets for ${niceDate(day)}</h2>
       <p>Build the day's assignments here and send each crew its sheet. Crews check off steps on their phones and send results back to you.</p>
       <div class="btns"><button class="btn primary" data-act="new">+ New task</button>
@@ -179,9 +192,11 @@ function renderTask(t) {
   app.innerHTML = `<button class="link" data-go="day/${t.date}">‹ ${niceDate(t.date)} task sheets</button>` + (crewSide
     ? brief(t) + results(t)
     : `<nav class="tabs">${tabs.map(([k, l]) => `<a href="#task/${t.uid}/${k}" data-act="tab" data-v="${k}"${k === view.tab ? ' aria-current="page"' : ''}>${l}</a>`).join('')}</nav>`
-      + (view.tab === 'results' ? brief(t) + results(t) : view.tab === 'review' ? review(t) : assign(t)));
+      + (view.tab === 'results' ? brief(t) + results(t) : view.tab === 'review' ? review(t) : assign(t)))
+    + '<p class="hint">Changes save on this phone as you type.</p>';
   bar.innerHTML = `<div class="bar-in">${crewSide
-    ? '<button class="btn primary big" data-act="sendResults">Send results to superintendent</button>'
+    ? `<button class="btn primary big" data-act="sendResults">Send results to superintendent</button>
+       <button class="btn more" data-act="crewMenu" aria-label="More actions">⋯</button>`
     : `<button class="btn primary big" data-act="sendTask">${t.sentAt ? 'Resend to crew' : 'Send to crew'}</button>
        <button class="btn more" data-act="taskMenu" aria-label="More actions">⋯</button>`}</div>`;
 }
@@ -295,7 +310,7 @@ function review(t) {
 
 const OUT = { crewHrs: crewHrsLine, worked: workedLine };
 
-const printRows = t => [
+const recordRows = t => [
   [`Task ${t.id} · ${t.floor} · ${t.crew}`, [['Date', niceDate(t.date)], ['Assigned by', t.by], ['Room / area', t.area], ['Crew members', t.members.join(', ')], ['Crew size', t.size], ['Crew / lead', t.lead]]],
   ['1 Assigned task & required finish', [['Scope', t.scope], ['Drawings', t.refs],
     ['Steps', t.items.map(i => `${i.done ? '[x]' : '[ ]'} ${i.text}`).join('\n')], ['Finish checks', t.checks.map(i => `${i.done ? '[x]' : '[ ]'} ${i.text}`).join('\n')]]],
@@ -307,6 +322,12 @@ const printRows = t => [
   ['5 Review', [['Result', t.review], ['Reviewed by', t.reviewer], ['Follow-up', t.followUp]]],
 ];
 
+const record = t => makePdf('Electrical task sheet', `${S.project} · ${S.site}`, recordRows(t), `${S.project} · Task ${t.id}`);
+const fileTask = t => { if (!S.folderUrl) return; t.filedAt = Date.now(); persist(); return fileAway(S, t.date, `${t.id} ${t.crew} ${t.floor}`.trim(), record(t)); };
+// A finished sheet edited after it was filed (say, a follow-up note typed after tapping the review
+// button) is filed again when you leave it, so the folder always has the last word.
+const fileIfChanged = t => t && (t.status || t.review) && t.updatedAt > t.filedAt && fileTask(t);
+
 // ---------- actions ----------
 
 function menu(items) {
@@ -315,6 +336,7 @@ function menu(items) {
 
 async function send(kind, t) {
   const payload = kind === 'day' ? { v: 1, kind, date: day, tasks: dayTasks() } : { v: 1, kind, task: t };
+  if (kind === 'task' && S.folderUrl) payload.folder = { url: S.folderUrl, code: S.siteCode }; // so the crew phone files its finished sheet
   const url = linkTo('tasks.html', await pack(payload));
   if (kind === 'task') {
     t.sentAt = Date.now();
@@ -350,6 +372,7 @@ async function act(a, el) {
       setPath(ctx, el.dataset.k, getPath(ctx, el.dataset.k) === v ? '' : v);
       if (el.dataset.k === 't.review' && t.review && !t.reviewer) t.reviewer = S.me;
       if (el.dataset.k === 't.status' && t.status === 'Blocked' && !t.comments) toast('Say what is blocking the work in Crew comments');
+      if (el.dataset.k === 't.review' && t.review) { t.updatedAt = Date.now(); render(); return fileTask(t); } // stamp the edit, then file
       break;
     }
     case 'crew': pickCrew(t, v); break;
@@ -383,16 +406,18 @@ async function act(a, el) {
       return send('task', t);
     case 'sendResults':
       if (!t.status) return toast('Pick Complete, Partial or Blocked first', 'bad');
-      return send('result', t);
+      await send('result', t);
+      return fileTask(t);
     case 'sendDay': return send('day');
     case 'boardMenu': {
       const prev = prevDay();
       return menu([prev && ['carryDay', `Copy unfinished work from ${niceDate(prev)}`], ['paste', 'Open a link someone sent you'],
-        dayTasks().length && ['printDay', "Print / save PDF of this day's sheets"], ['report', 'Open the daily report'], ['settings', 'Settings, crews and backup']]);
+        dayTasks().length && ['pdfDay', "Save this day's sheets as one PDF"], ['report', 'Open the daily report'], ['settings', 'Settings, crews and backup']]);
     }
     case 'taskMenu':
       return menu([['dup', 'Duplicate for another crew or floor'], ['carry', `Carry open work to ${niceDate(addDays(t.date, 1))}`],
-        ['printTask', 'Print / save PDF of this sheet'], ['del', 'Delete this task sheet', 'danger']]);
+        ['pdfTask', 'Save this sheet as PDF'], S.folderUrl && ['fileNow', 'Save to the review folder now'], ['del', 'Delete this task sheet', 'danger']]);
+    case 'crewMenu': return menu([['pdfTask', 'Save this sheet as PDF'], ['paste', 'Open a link someone sent you'], ['settings', 'Settings']]);
     case 'carryDay': {
       const prev = prevDay();
       const open = T.filter(x => x.date === prev && isOpen(x) && !T.some(y => y.from === x.uid));
@@ -419,12 +444,13 @@ async function act(a, el) {
       T = T.filter(x => x !== t);
       persist();
       return go('day/' + t.date);
-    case 'printTask': return printDoc('Electrical task sheet', `${S.project} · ${S.site}`, printRows(t));
-    case 'printDay': return printDoc(`Electrical task sheets · ${niceDate(day)}`, `${S.project} · ${S.site}`, dayTasks().flatMap(printRows));
+    case 'pdfTask': return savePdf(`Task ${t.id} ${t.crew}.pdf`, record(t));
+    case 'pdfDay': return savePdf(`Task sheets ${day}.pdf`, makePdf(`Electrical task sheets · ${niceDate(day)}`, `${S.project} · ${S.site}`, dayTasks().flatMap(recordRows), `${S.project} · ${niceDate(day)}`));
+    case 'fileNow': return fileTask(t);
     case 'paste': return pasteSheet(code => go('p=' + code));
     case 'report': location.href = 'report.html#day/' + day; return;
     case 'settings': return go('settings');
-    case 'addCrew': case 'delCrew': case 'backup': await settingsAct(a, S, el); break;
+    case 'addCrew': case 'delCrew': case 'backup': case 'testFolder': await settingsAct(a, S, el); break;
   }
   if (t) t.updatedAt = Date.now();
   persist();
@@ -467,7 +493,11 @@ const reload = () => { S = loadSettings(); T = load(KEYS.tasks, []).map(normTask
 addEventListener('storage', e => Object.values(KEYS).includes(e.key) && reload());
 addEventListener('pageshow', e => e.persisted && reload());
 addEventListener('hashchange', route);
+addEventListener('online', () => retryUploads(S));
+addEventListener('visibilitychange', () => document.hidden && fileIfChanged(current()));
+addEventListener('pagehide', () => fileIfChanged(current())); // queued even if the upload can't finish; retried on next open
 route();
+retryUploads(S);
 </script>
 </body>
 </html>

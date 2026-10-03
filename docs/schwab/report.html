@@ -18,12 +18,11 @@
 </div></header>
 <main id="app"></main>
 <nav class="bar" id="bar"></nav>
-<div id="print"></div>
 <script type="module">
 import {
   KEYS, esc, load, save, loadSettings, normTask, normReport, blank, newFloor, fillFromTasks, mergeAnswers, CREW_TPL, pack, unpack, linkTo,
   today, niceDate, span, fmtMin, t12, stamp, hrs, field, datalist, seg, setPath, getPath, readInput,
-  toast, sheet, ask, sendSheet, pasteSheet, printDoc, settingsView, settingsAct, restore, registerSW, dateBar, crewVar,
+  toast, sheet, ask, sendSheet, pasteSheet, makePdf, savePdf, fileAway, retryUploads, settingsView, settingsAct, restore, registerSW, dateBar, crewVar,
 } from './shared.mjs';
 
 registerSW();
@@ -70,6 +69,7 @@ const OUT = {
 // ---------- routing: #day/2026-10-03, #settings, #p=<link code> ----------
 
 function route() {
+  fileIfChanged(R[day]);
   const h = location.hash.slice(1);
   if (h.startsWith('p=')) return openCode(h.slice(2));
   const [v, a] = h.split('/');
@@ -92,12 +92,14 @@ async function openCode(code) {
     R[inc.date].updatedAt = Date.now();
     toast(pmSent ? 'PM answers added to your report' : 'Updated report loaded. Your answers are kept.');
     open.add('pm');
+    fileReport(R[inc.date]);
   } else if (!mine?.updatedAt || mine.updatedAt === inc.updatedAt
     || await ask(`Replace your copy of the ${niceDate(inc.date)} report with the one in this link? Link copy saved ${stamp(inc.updatedAt)}. Yours saved ${stamp(mine.updatedAt)}.`, 'Use the link copy')) {
     R[inc.date] = inc;
     inc.updatedAt ||= Date.now();
     toast('Report loaded');
     if (isPM()) open.add('pm');
+    fileReport(inc);
   }
   persist();
   location.replace('#day/' + inc.date);
@@ -167,7 +169,8 @@ function render() {
         ${remove('risks', i, 'risk')}</div>`).join('') + '<button class="btn" data-act="add" data-v="risks">+ Add a risk</button>'
       + '<p class="hint">Escalate urgent issues when you find them, and note who you told in section 3.</p>')}
     ${sec('sign', '', 'Sign-off', `<div class="grid">${field('Prepared by', 'r.preparedBy', r.preparedBy)}${field('PM review / time', 'r.pmReview', r.pmReview)}</div>
-      ${isPM() ? '<button class="btn" data-act="stampPM">Stamp my review now</button>' : ''}`)}`;
+      ${isPM() ? '<button class="btn" data-act="stampPM">Stamp my review now</button>' : ''}`)}
+    <p class="hint">Changes save on this phone as you type.${S.folderUrl ? ' Sending the report also files a PDF in the review folder.' : ''}</p>`;
   bar.innerHTML = `<div class="bar-in"><button class="btn primary big" data-act="send">${isPM() ? 'Send back to superintendent' : 'Send to PM'}</button>
     <button class="btn more" data-act="menu" aria-label="More actions">⋯</button></div>`;
 }
@@ -208,7 +211,7 @@ function crewBlock(r, fi, ci, c) {
       ${field('Good results / improvements', `${k}.good`, c.good, { rows: 2 })}`}</div>`;
 }
 
-const printSecs = r => [
+const recordSecs = r => [
   ['Daily summary & PM actions', [['Report date', niceDate(r.date)], ['Superintendent', r.super],
     ['Shift / work hours', r.shiftStart && `${t12(r.shiftStart)} to ${t12(r.shiftEnd)}`], ['Submitted at', stamp(r.submittedAt)], ['Labor-hours', hrs(laborHrs(r))]]],
   ['1 Overall status & today’s results', [['Status', r.status], ['Results', r.results]]],
@@ -229,6 +232,11 @@ const printSecs = r => [
   ['Sign-off', [['Prepared by', r.preparedBy], ['PM review / time', r.pmReview]]],
 ];
 
+const record = r => makePdf('Superintendent daily report', `${S.project} · ${S.site} · ${niceDate(r.date)}`, recordSecs(r), `${S.project} · Daily report ${r.date}`);
+const fileReport = r => { if (!S.folderUrl) return; r.filedAt = Date.now(); persist(); return fileAway(S, r.date, `Daily Report ${r.date}`, record(r)); };
+// A sent report edited afterwards is filed again when you leave it, so the folder has the last word.
+const fileIfChanged = r => r?.submittedAt && r.updatedAt > r.filedAt && fileReport(r);
+
 // ---------- actions ----------
 
 async function send() {
@@ -246,6 +254,7 @@ async function send() {
     : { title: `Daily report · ${niceDate(r.date)}`, url,
       text: `Daily report ${niceDate(r.date)}, ${S.project}: ${r.status}. ${active(r).length} crew sections, ${hrs(laborHrs(r))} labor-hrs.`
         + (asked - answered ? ` ${asked - answered} decision${asked - answered === 1 ? ' needs' : 's need'} you${firstDue ? ' by ' + when(firstDue) : ''}.` : '') });
+  fileReport(r);
 }
 
 async function act(a, el) {
@@ -283,10 +292,11 @@ async function act(a, el) {
     case 'send': return send();
     case 'menu': {
       const items = [['fill', 'Fill floors from task sheets'], ['carry', 'Copy crews, needs and risks from last report'], ['paste', 'Open a link someone sent you'],
-        ['print', 'Print / save PDF'], ['tasks', 'Open task sheets'], ['settings', 'Settings, crews and backup'], ['clear', 'Clear this report', 'danger']];
-      return sheet(`<h3>More</h3><div class="menu">${items.map(([x, label, cls]) => `<button class="btn ${cls || ''}" data-act="${x}">${label}</button>`).join('')}</div>`);
+        ['pdf', 'Save as PDF'], S.folderUrl && ['fileNow', 'Save to the review folder now'], ['tasks', 'Open task sheets'], ['settings', 'Settings, crews and backup'], ['clear', 'Clear this report', 'danger']];
+      return sheet(`<h3>More</h3><div class="menu">${items.filter(Boolean).map(([x, label, cls]) => `<button class="btn ${cls || ''}" data-act="${x}">${label}</button>`).join('')}</div>`);
     }
-    case 'print': return printDoc('Superintendent daily report', `${S.project} · ${S.site} · ${niceDate(r.date)}`, printSecs(r));
+    case 'pdf': return savePdf(`Daily Report ${r.date}.pdf`, record(r));
+    case 'fileNow': return fileReport(r);
     case 'paste': return pasteSheet(code => go('p=' + code));
     case 'tasks': location.href = 'tasks.html#day/' + day; return;
     case 'settings': return go('settings');
@@ -295,7 +305,7 @@ async function act(a, el) {
       delete R[day];
       persist();
       return render();
-    case 'addCrew': case 'delCrew': case 'backup': await settingsAct(a, S, el); return render();
+    case 'addCrew': case 'delCrew': case 'backup': case 'testFolder': await settingsAct(a, S, el); return render();
   }
   r.updatedAt = Date.now();
   persist();
@@ -336,7 +346,11 @@ const reload = () => { S = loadSettings(); R = loadReports(); render(); };
 addEventListener('storage', e => Object.values(KEYS).includes(e.key) && reload());
 addEventListener('pageshow', e => e.persisted && reload());
 addEventListener('hashchange', route);
+addEventListener('online', () => retryUploads(S));
+addEventListener('visibilitychange', () => document.hidden && fileIfChanged(R[day]));
+addEventListener('pagehide', () => fileIfChanged(R[day])); // queued even if the upload can't finish; retried on next open
 route();
+retryUploads(S);
 </script>
 </body>
 </html>

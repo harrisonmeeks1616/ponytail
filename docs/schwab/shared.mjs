@@ -31,9 +31,9 @@ export function save(key, val) {
   try { localStorage.setItem(key, JSON.stringify(val)); return true; } catch { return false; }
 }
 
-export const SETTINGS_TPL = { me: '', role: '', super: '', pm: '', project: '', site: '', floors: [''], crews: [{ name: '', lead: '', members: '' }], checks: [''] };
+export const SETTINGS_TPL = { me: '', role: '', super: '', pm: '', project: '', site: '', floors: [''], crews: [{ name: '', lead: '', members: '' }], checks: [''], folderUrl: '', siteCode: '' };
 export const DEFAULT_SETTINGS = {
-  me: '', role: 'Superintendent', super: '', pm: '',
+  me: '', role: 'Superintendent', super: '', pm: '', folderUrl: '', siteCode: '',
   project: 'Charles Schwab Building', site: 'Charlotte, NC',
   floors: ['Basement', 'Level 1', 'Level 2', 'Level 3', 'Level 4', 'Level 5', 'Roof'],
   crews: ['A', 'B', 'C', 'D'].map(x => ({ name: 'Crew ' + x, lead: '', members: '' })),
@@ -48,7 +48,7 @@ export const TASK_TPL = {
   scope: '', refs: '', items: [ITEM], checks: [ITEM],
   allot: 0, allotNote: '', est: 0, estNote: '', pStart: '', pStop: '', checkIn: '',
   aStart: '', aStop: '', delay: 0, status: '', doneText: '', remain: '', comments: '',
-  review: '', reviewer: '', followUp: '', sentAt: 0, gotAt: 0, updatedAt: 0,
+  review: '', reviewer: '', followUp: '', sentAt: 0, gotAt: 0, updatedAt: 0, filedAt: 0,
 };
 export const normTask = t => shape(TASK_TPL, t);
 export const newItem = text => ({ id: uid(), text, done: false, at: 0 });
@@ -100,7 +100,7 @@ export const REPORT_TPL = {
   floors: [{ floor: '', crews: [CREW_TPL] }],
   next: [{ step: '', prereq: '', start: '', dur: '', finish: '', deadline: '', lead: '', checkin: '' }],
   risks: [{ risk: '', impact: '', prevent: '', fallback: '', owner: '', by: '' }],
-  preparedBy: '', pmReview: '', updatedAt: 0,
+  preparedBy: '', pmReview: '', updatedAt: 0, filedAt: 0,
 };
 export const normReport = r => shape(REPORT_TPL, r);
 export const blank = list => shape(REPORT_TPL[list][0], {});
@@ -159,12 +159,11 @@ export function fillFromTasks(rep, tasks, crewNames) {
 
 // ---------- link codec ----------
 
+export const b64 = bytes => { let s = ''; for (const b of bytes) s += String.fromCharCode(b); return btoa(s); };
+
 export async function pack(obj) {
   const stream = new Blob([JSON.stringify(obj)]).stream().pipeThrough(new CompressionStream('deflate-raw'));
-  const bytes = new Uint8Array(await new Response(stream).arrayBuffer());
-  let s = '';
-  for (const b of bytes) s += String.fromCharCode(b);
-  return btoa(s).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+  return b64(new Uint8Array(await new Response(stream).arrayBuffer())).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
 }
 
 const MAX_UNPACKED = 1 << 20; // a crafted link can't balloon into something that freezes the phone
@@ -311,12 +310,159 @@ export const pasteSheet = onCode => {
   };
 };
 
-export function printDoc(title, sub, sections) {
-  const el = document.getElementById('print');
-  el.innerHTML = `<h1>${esc(title)}</h1><p>${esc(sub)}</p>` + sections.map(([h, rows]) => `<section><h2>${esc(h)}</h2><dl>${
-    rows.filter(([, v]) => v !== '' && v != null && v !== 0).map(([k, v]) => `<dt>${esc(k)}</dt><dd>${esc(v)}</dd>`).join('') || '<dd>Nothing recorded</dd>'
-  }</dl></section>`).join('');
-  window.print();
+export function download(blob, filename) {
+  const a = Object.assign(document.createElement('a'), { href: URL.createObjectURL(blob), download: filename });
+  a.click();
+  setTimeout(() => URL.revokeObjectURL(a.href), 10000);
+}
+
+// ---------- PDF ----------
+// A plain text PDF written by hand: Letter pages, the built-in Helvetica fonts, nothing embedded.
+// ponytail: built-in fonts only cover Windows-1252, so symbols outside it print as "?".
+// Embedding a font (or a PDF library) is the upgrade if crews start typing other scripts.
+
+// Helvetica glyph widths in 1/1000 em for ASCII 32 to 126, from the standard font metrics.
+const HELV = [
+  278, 278, 355, 556, 556, 889, 667, 191, 333, 333, 389, 584, 278, 333, 278, 278, // space to /
+  556, 556, 556, 556, 556, 556, 556, 556, 556, 556, 278, 278, 584, 584, 584, 556, 1015, // 0 to @
+  667, 667, 722, 722, 667, 611, 778, 722, 278, 500, 667, 556, 833, 722, 778, 667, 778, 722, 667, 611, 722, 667, 944, 667, 667, 611, // A to Z
+  278, 278, 278, 469, 556, 333, // [ to `
+  556, 556, 500, 556, 556, 278, 556, 556, 222, 222, 500, 222, 833, 556, 556, 556, 556, 333, 500, 278, 556, 500, 722, 500, 500, 500, // a to z
+  334, 260, 334, 584, // { to ~
+];
+const CP1252 = { '€': 128, '…': 133, '‘': 145, '’': 146, '“': 147, '”': 148, '•': 149, '–': 150, '—': 151, '™': 153 };
+const SWAP = { '\u202f': ' ', '\u00a0': ' ', '\u2009': ' ', '\t': ' ', '✓': 'x', '⚠': '!', '−': '-' };
+const codes = text => [...String(text).replace(/[\u202f\u00a0\u2009\t✓⚠−]/g, c => SWAP[c])].map(c => {
+  const n = c.codePointAt(0);
+  return (n > 31 && n < 127) || (n > 159 && n < 256) ? n : CP1252[c] || 63;
+});
+const lit = cs => `(${cs.map(n => (n > 126 ? '\\' + n.toString(8) : (n === 40 || n === 41 || n === 92 ? '\\' : '') + String.fromCharCode(n))).join('')})`;
+// Bold is wider than regular; 1.15x over-estimates it so a label never runs into its value.
+const textW = (cs, size, bold) => cs.reduce((w, n) => w + (n > 31 && n < 127 ? HELV[n - 32] : 600), 0) * size / 1000 * (bold ? 1.15 : 1);
+
+function wrap(text, maxW, size, bold) {
+  const lines = [];
+  for (const para of String(text).replace(/\r/g, '').split('\n')) {
+    let line = [];
+    for (const word of para.split(' ').map(codes)) {
+      const next = line.length ? [...line, 32, ...word] : word;
+      if (textW(next, size, bold) <= maxW) { line = next; continue; }
+      if (line.length) lines.push(line);
+      line = word;
+      while (textW(line, size, bold) > maxW) { // one word wider than the column, like a long link
+        let n = line.length;
+        while (n > 1 && textW(line.slice(0, n), size, bold) > maxW) n--;
+        lines.push(line.slice(0, n));
+        line = line.slice(n);
+      }
+    }
+    lines.push(line);
+  }
+  return lines;
+}
+
+// sections: [heading, [[label, value], ...]]; empty values are left out, like a clean paper copy.
+export function makePdf(title, sub, sections, footer) {
+  const W = 612, H = 792, M = 54, COL = 150, GAP = 12, LH = 13;
+  const pages = [];
+  let ops, y;
+  const page = () => { pages.push(ops = []); y = H - M; };
+  const text = (cs, x, size, bold) => ops.push(`BT /F${bold ? 2 : 1} ${size} Tf ${x} ${y.toFixed(1)} Td ${lit(cs)} Tj ET`);
+  const room = h => { if (y - h < M) page(); };
+  page();
+  for (const l of wrap(title.toUpperCase(), W - 2 * M, 18, true)) { text(l, M, 18, true); y -= 22; }
+  for (const l of wrap(sub, W - 2 * M, 10)) { text(l, M, 10); y -= LH; }
+  for (const [heading, rows] of sections) {
+    const filled = rows.filter(([, v]) => v !== '' && v != null && v !== 0);
+    y -= 10;
+    room(48);
+    ops.push(`1 w ${M} ${(y + 12).toFixed(1)} m ${W - M} ${(y + 12).toFixed(1)} l S`);
+    for (const l of wrap(heading.toUpperCase(), W - 2 * M, 11, true)) { text(l, M, 11, true); y -= 15; }
+    for (const [k, v] of filled.length ? filled : [['', 'Nothing recorded']]) {
+      const kl = wrap(k, COL, 10, true), vl = wrap(v, W - 2 * M - COL - GAP, 10);
+      for (let i = 0; i < Math.max(kl.length, vl.length); i++) {
+        room(LH);
+        if (kl[i]) text(kl[i], M, 10, true);
+        if (vl[i]) text(vl[i], M + COL + GAP, 10);
+        y -= LH;
+      }
+      y -= 3;
+    }
+  }
+  pages.forEach((p, i) => p.push(`BT /F1 8 Tf ${M} 30 Td ${lit(codes(`${footer} · Saved ${stamp(Date.now())} · Page ${i + 1} of ${pages.length}`))} Tj ET`));
+
+  const objs = [
+    '<< /Type /Catalog /Pages 2 0 R >>',
+    `<< /Type /Pages /Kids [${pages.map((_, i) => `${5 + 2 * i} 0 R`).join(' ')}] /Count ${pages.length} >>`,
+    '<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica /Encoding /WinAnsiEncoding >>',
+    '<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica-Bold /Encoding /WinAnsiEncoding >>',
+    ...pages.flatMap((p, i) => {
+      const body = p.join('\n');
+      return [`<< /Type /Page /Parent 2 0 R /MediaBox [0 0 ${W} ${H}] /Resources << /Font << /F1 3 0 R /F2 4 0 R >> >> /Contents ${6 + 2 * i} 0 R >>`,
+        `<< /Length ${body.length} >>\nstream\n${body}\nendstream`];
+    }),
+  ];
+  // Everything above is plain ASCII (lit escapes the rest), so string length is byte offset.
+  let out = '%PDF-1.4\n';
+  const at = objs.map((o, i) => { const pos = out.length; out += `${i + 1} 0 obj\n${o}\nendobj\n`; return pos; });
+  const xref = out.length;
+  out += `xref\n0 ${objs.length + 1}\n0000000000 65535 f \n${at.map(n => String(n).padStart(10, '0') + ' 00000 n \n').join('')}`
+    + `trailer\n<< /Size ${objs.length + 1} /Root 1 0 R >>\nstartxref\n${xref}\n%%EOF\n`;
+  return Uint8Array.from(out, c => c.charCodeAt(0));
+}
+
+// Phones get the share sheet (Save to Files, Mail, AirDrop, Drive); computers get a normal download.
+export async function savePdf(filename, bytes) {
+  const file = new File([bytes], filename.replace(/[\\/:*?"<>|]/g, '-'), { type: 'application/pdf' });
+  if (matchMedia('(pointer: coarse)').matches && navigator.canShare?.({ files: [file] })) {
+    try { return await navigator.share({ files: [file] }); } catch (e) { if (e.name === 'AbortError') return; }
+  }
+  download(file, file.name);
+}
+
+// ---------- review folder ----------
+// Finished records are queued on the phone first, then uploaded as PDFs to the shared folder
+// (review-folder.gs). No signal, a closed app or a refused upload never loses one: the queue
+// retries when an app opens or the phone reconnects. Same date and name replaces the old copy.
+
+const OUTBOX = 'schwab.outbox';
+const box = () => { const b = load(OUTBOX, []); return Array.isArray(b) ? b : []; };
+const same = (a, b) => a.date === b.date && a.name === b.name;
+export const queue = item => save(OUTBOX, [...box().filter(x => !same(x, item)), item]);
+export const queued = () => box().length;
+
+async function post(s, body) {
+  // A plain-text body keeps this a "simple" request, which Apps Script answers without a CORS preflight.
+  const res = await fetch(s.folderUrl, { method: 'POST', body: JSON.stringify({ ...body, code: s.siteCode }) });
+  const reply = await res.json().catch(() => ({}));
+  if (!reply.ok) throw new Error(reply.error || `the folder answered with error ${res.status}`);
+}
+
+let busy = null;
+// Resolves to { left, error }. error stays empty for "no signal", which simply waits for the next try.
+export const flush = s => (busy ||= (async () => {
+  let error = '';
+  try {
+    for (const item of s.folderUrl ? box() : []) {
+      await post(s, item);
+      save(OUTBOX, box().filter(x => !same(x, item)));
+    }
+  } catch (e) { if (!(e instanceof TypeError)) error = e.message; }
+  return { left: queued(), error };
+})().finally(() => { busy = null; }));
+
+export async function fileAway(s, date, name, bytes) {
+  if (!s.folderUrl) return;
+  if (!queue({ date, name, pdf: b64(bytes) })) return toast("This phone is out of space, so the PDF wasn't queued. Use Save as PDF.", 'bad');
+  let r = await flush(s);
+  if (r.left && !r.error) r = await flush(s); // another upload was mid-way; go again for this one
+  toast(r.error ? `Review folder said: ${r.error}. Kept on this phone; check Settings.`
+    : r.left ? 'Saved on this phone. It goes to the review folder when there is signal.' : 'Saved to the review folder', r.error ? 'bad' : '');
+}
+
+export function retryUploads(s) {
+  const before = queued();
+  if (before && s.folderUrl) flush(s).then(r => r.left < before && toast(`${before - r.left} saved record${before - r.left === 1 ? '' : 's'} uploaded to the review folder`));
 }
 
 // ---------- settings (same screen in both apps; same phone = same settings) ----------
@@ -341,6 +487,10 @@ export function settingsView(s) {
       <button class="btn" data-act="addCrew">+ Add crew</button></section>
     <section class="card"><h2>Finish / accuracy checks</h2><p class="hint">One per line. Tap them onto a task as required checks.</p>
       <textarea data-k="s.checks" data-lines rows="6">${esc(s.checks.join('\n'))}</textarea></section>
+    <section class="card"><h2>Review folder</h2><p class="hint">Finished task sheets and daily reports save themselves as PDFs to a shared Google Drive folder, one folder per day. Set up once with review-folder.gs (steps inside it), then use the same link and code on every phone. Crew phones pick it up from the first task sheet they open.</p>
+      <div class="grid">${field('Folder upload link', 's.folderUrl', s.folderUrl, { wide: true, ph: 'https://script.google.com/macros/s/.../exec', mode: 'url' })}${field('Site code', 's.siteCode', s.siteCode)}</div>
+      <div class="btns"><button class="btn" data-act="testFolder">Test the connection</button></div>
+      <p class="hint">${queued() ? `${queued()} finished record${queued() === 1 ? '' : 's'} waiting to upload.` : 'Nothing waiting to upload.'}</p></section>
     <section class="card"><h2>Backup</h2><p class="hint">Everything is stored on this phone only. Download a backup weekly, or before clearing browser data or switching phones.</p>
       <div class="btns"><button class="btn" data-act="backup">Download backup</button>
       <label class="btn">Restore from backup<input type="file" accept="application/json,.json" data-restore hidden></label></div>
@@ -352,12 +502,17 @@ export async function settingsAct(act, s, el) {
   if (act === 'delCrew' && await ask(`Remove ${s.crews[el.dataset.i].name} from the crew list? Existing sheets keep their crew name.`, 'Remove', 'danger')) s.crews.splice(el.dataset.i, 1);
   if (act === 'backup') {
     const data = Object.fromEntries(Object.values(KEYS).map(k => [k, load(k, null)]));
-    const a = Object.assign(document.createElement('a'), {
-      href: URL.createObjectURL(new Blob([JSON.stringify(data)], { type: 'application/json' })),
-      download: `schwab-field-backup-${today()}.json`,
-    });
-    a.click();
-    setTimeout(() => URL.revokeObjectURL(a.href), 10000);
+    download(new Blob([JSON.stringify(data)], { type: 'application/json' }), `schwab-field-backup-${today()}.json`);
+  }
+  if (act === 'testFolder') {
+    if (!/^https:\/\//.test(s.folderUrl)) return toast('Paste the folder upload link first. It starts with https://', 'bad');
+    try {
+      await post(s, { ping: true });
+      toast('Connected. Finished sheets and reports will save to the review folder.');
+      retryUploads(s);
+    } catch (e) {
+      toast(e instanceof TypeError ? "Couldn't reach the review folder. Check the link and your signal." : `Review folder said: ${e.message}`, 'bad');
+    }
   }
   save(KEYS.settings, s);
 }

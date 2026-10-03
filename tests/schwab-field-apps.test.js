@@ -93,3 +93,45 @@ test('daily report fills from task sheets without overwriting', async () => {
   fillFromTasks(rep, tasks, ['Crew A', 'Crew B']);
   assert.equal(rep.next.length, 1, 'follow-ups are not duplicated on a second fill');
 });
+
+test('PDFs are well-formed and keep the text', async () => {
+  const { makePdf } = await lib;
+  const rows = Array.from({ length: 90 }, (_, i) => [`Step ${i}`, `Pulled 12 AWG (L3-${i}) \\ crew’s note`]);
+  const pdf = Buffer.from(makePdf('Electrical task sheet', 'Charles Schwab Building', [['Steps', rows], ['Empty', [['x', '']]]], 'Footer')).toString('latin1');
+  assert.ok(pdf.startsWith('%PDF-1.4\n') && pdf.endsWith('%%EOF\n'));
+  const xref = +/startxref\n(\d+)/.exec(pdf)[1];
+  assert.ok(pdf.startsWith('xref', xref), 'startxref points at the xref table');
+  const offsets = [...pdf.slice(xref).matchAll(/^(\d{10}) 00000 n $/gm)].map(m => +m[1]);
+  offsets.forEach((at, i) => assert.ok(pdf.startsWith(`${i + 1} 0 obj`, at), `object ${i + 1} sits where the xref says`));
+  for (const [, len, body] of pdf.matchAll(/<< \/Length (\d+) >>\nstream\n([\s\S]*?)\nendstream/g)) assert.equal(body.length, +len);
+  assert.ok(+/\/Count (\d+)/.exec(pdf)[1] > 1, 'long sheets flow onto more pages');
+  assert.match(pdf, /\(Pulled 12 AWG \\\(L3-7\\\) \\\\ crew\\222s note\) Tj/, 'parens, backslash and smart quote are escaped');
+  assert.match(pdf, /\(Nothing recorded\) Tj/);
+});
+
+test('finished records wait on the phone until the review folder takes them', async () => {
+  const { queue, flush, queued } = await lib;
+  const store = new Map();
+  Object.defineProperty(globalThis, 'localStorage', { configurable: true, value: { getItem: k => store.get(k) ?? null, setItem: (k, v) => store.set(k, String(v)) } });
+  const realFetch = globalThis.fetch, sent = [];
+  const answer = reply => async (url, o) => ({ status: 200, json: async () => (sent.push(JSON.parse(o.body)), reply) });
+  const s = { folderUrl: 'https://script.google.com/macros/s/x/exec', siteCode: 'sparky' };
+  try {
+    globalThis.fetch = async () => { throw new TypeError('Failed to fetch'); }; // no signal on the floor
+    queue({ date: '2026-10-03', name: 'T1', pdf: 'JVBERi0w' });
+    queue({ date: '2026-10-03', name: 'T1', pdf: 'JVBERi0x' }); // a re-save replaces, never duplicates
+    assert.deepEqual(await flush(s), { left: 1, error: '' });
+
+    globalThis.fetch = answer({ ok: false, error: 'Wrong site code' });
+    assert.deepEqual(await flush(s), { left: 1, error: 'Wrong site code' }, 'a refused upload stays queued');
+
+    globalThis.fetch = answer({ ok: true });
+    queue({ date: '2026-10-03', name: 'Daily Report 2026-10-03', pdf: 'JVBERi0y' });
+    assert.deepEqual(await flush(s), { left: 0, error: '' });
+    assert.equal(queued(), 0);
+    assert.deepEqual(sent.slice(-2).map(b => [b.name, b.pdf, b.code]), [['T1', 'JVBERi0x', 'sparky'], ['Daily Report 2026-10-03', 'JVBERi0y', 'sparky']]);
+  } finally {
+    globalThis.fetch = realFetch;
+    delete globalThis.localStorage;
+  }
+});

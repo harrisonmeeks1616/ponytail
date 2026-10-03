@@ -158,6 +158,12 @@ input:focus, select, textarea:focus { background: var(--surface); }
 .kv dd { margin: 0; min-width: 0; overflow-wrap: anywhere; }
 .scope-text { white-space: pre-wrap; margin: 0; overflow-wrap: anywhere; }
 
+.review-h { color: var(--warn); }
+.done-group > summary { cursor: pointer; list-style: none; }
+.done-group > summary::-webkit-details-marker { display: none; }
+.done-group > summary > span:first-child::before { content: '▸ '; }
+.done-group[open] > summary > span:first-child::before { content: '▾ '; }
+.done-group > .stack { margin-top: 12px; }
 .empty { text-align: center; padding: 28px 16px; border: 2px dashed var(--line); border-radius: var(--r); display: flex; flex-direction: column; gap: 12px; align-items: center; }
 .empty h2 { font-size: 1.4rem; }
 .empty p { margin: 0; color: var(--muted); max-width: 40ch; }
@@ -199,18 +205,3 @@ dialog.sheet::backdrop { background: rgb(0 0 0 / .45); }
   background: var(--ink); color: var(--surface); padding: 12px 18px; border-radius: 12px; font-weight: 600; width: max-content; max-width: calc(100% - 32px); transition: .2s; }
 #toast.show { opacity: 1; transform: translate(-50%, 0); }
 #toast[data-tone=bad] { background: var(--bad); color: #fff; }
-
-/* ---- print: a clean paper record built from the data, not a screenshot of the form ---- */
-#print { display: none; }
-@media print {
-  body { background: #fff; color: #000; font-size: 11pt; }
-  body > :not(#print) { display: none !important; }
-  #print { display: block; }
-  #print h1 { font-size: 18pt; text-transform: uppercase; }
-  #print > p { margin: 2pt 0 10pt; }
-  #print section { break-inside: avoid; border-top: 1.5pt solid #000; padding-top: 4pt; margin-top: 10pt; }
-  #print h2 { font-size: 12pt; text-transform: uppercase; margin-bottom: 4pt; }
-  #print dl { display: grid; grid-template-columns: 34% 1fr; gap: 2pt 10pt; margin: 0; }
-  #print dt { font-weight: 700; }
-  #print dd { margin: 0; white-space: pre-wrap; }
-}

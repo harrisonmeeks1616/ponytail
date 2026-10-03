@@ -1,0 +1,49 @@
+// Review folder for the Schwab field apps.
+// Files every finished task sheet and daily report as a PDF in your Google Drive:
+//   Schwab Field Records / 2026-10-03 / T1003-01 Crew A Level 3.pdf
+//   Schwab Field Records / 2026-10-03 / Daily Report 2026-10-03.pdf
+//
+// Set up once (about 5 minutes, free):
+// 1. Go to script.google.com, click New project, delete what's there and paste this whole file.
+// 2. Change SITE_CODE below to a word only your team knows. Save.
+// 3. Deploy > New deployment > gear icon > Web app.
+//    Execute as: Me.  Who has access: Anyone.  Deploy, then allow access when Google asks.
+// 4. Copy the Web app URL (ends in /exec). In either field app: Settings > Review folder,
+//    paste the URL and the site code, tap Test the connection.
+// 5. In Google Drive, share the "Schwab Field Records" folder with your superintendent.
+//
+// "Anyone" lets crew phones upload without Google accounts. Uploads without the site code are
+// refused, and the link can only add PDFs to this one folder; it cannot read or delete anything.
+
+const SITE_CODE = 'change-me';
+const ROOT = 'Schwab Field Records';
+
+function doPost(e) {
+  const lock = LockService.getScriptLock();
+  lock.waitLock(20000); // two phones saving at once must not create the same day's folder twice
+  try {
+    const d = JSON.parse(e.postData.contents);
+    if (d.code !== SITE_CODE) return reply({ ok: false, error: 'Wrong site code' });
+    if (d.ping) return reply({ ok: true });
+    const pdf = Utilities.base64Decode(String(d.pdf || ''));
+    const isPdf = Utilities.newBlob(pdf.slice(0, 5)).getDataAsString() === '%PDF-';
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(d.date) || !isPdf || pdf.length > 5e6) return reply({ ok: false, error: 'Not a field app PDF' });
+    const name = String(d.name || 'Record').replace(/[\\/:*?"<>|]/g, '-').slice(0, 120) + '.pdf';
+    const day = folder(folder(DriveApp.getRootFolder(), ROOT), d.date);
+    const old = day.getFilesByName(name);
+    while (old.hasNext()) old.next().setTrashed(true); // a re-save replaces the earlier copy (it stays in Trash for 30 days)
+    const file = day.createFile(Utilities.newBlob(pdf, 'application/pdf', name));
+    return reply({ ok: true, url: file.getUrl() });
+  } finally {
+    lock.releaseLock();
+  }
+}
+
+function folder(parent, name) {
+  const found = parent.getFoldersByName(name);
+  return found.hasNext() ? found.next() : parent.createFolder(name);
+}
+
+function reply(body) {
+  return ContentService.createTextOutput(JSON.stringify(body)).setMimeType(ContentService.MimeType.JSON);
+}
