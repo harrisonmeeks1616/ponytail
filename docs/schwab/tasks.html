@@ -1,0 +1,567 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<meta name="theme-color" content="#1F242A">
+<meta name="apple-mobile-web-app-title" content="Task Sheets">
+<title>Electrical Task Sheets</title>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@600;700&family=Barlow:wght@400;600&display=swap">
+<link rel="stylesheet" href="shared.css">
+</head>
+<body>
+<header class="top"><div class="top-in">
+  <svg viewBox="0 0 24 24" width="28" height="28" aria-hidden="true"><path d="M13 2 4 14h7l-1 8 9-12h-7z" fill="var(--accent)"/></svg>
+  <div class="grow"><h1 id="title">Task <b>Sheets</b></h1><p id="proj"></p></div>
+  <button class="icon-btn lang" id="langBtn" data-act="toggleLang" aria-label="Español">ES</button>
+  <a class="icon-btn" id="toReport" href="report.html" aria-label="Open the daily report"><svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><rect x="5" y="3" width="14" height="18" rx="2"/><path d="M9 8h6M9 12h6M9 16h3"/></svg></a>
+  <a class="icon-btn" id="toSettings" href="#settings" aria-label="Settings and crews"><svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M4 6h9M19 6h1M4 12h3M11 12h9M4 18h11M19 18h1"/><circle cx="16" cy="6" r="2.2"/><circle cx="9" cy="12" r="2.2"/><circle cx="17" cy="18" r="2.2"/></svg></a>
+</div></header>
+<main id="app"></main>
+<nav class="bar" id="bar"></nav>
+<script type="module">
+import {
+  KEYS, esc, uid, load, save, loadSettings, roster, normTask, newItem, mergeTask, cloneTask, pack, unpack, linkTo,
+  today, addDays, niceDate, nowHM, span, fmtMin, t12, stamp, hrs, timeOf, field, datalist, seg, setPath, getPath, readInput,
+  toast, sheet, ask, sendSheet, pasteSheet, makePdf, savePdf, fileAway, retryUploads, settingsView, settingsAct, restore,
+  registerSW, dateBar, crewVar as cv, L, setLang, getLang,
+} from './shared.mjs';
+
+registerSW();
+const app = document.getElementById('app'), bar = document.getElementById('bar');
+let S = loadSettings();
+setLang(S.lang);
+let T = load(KEYS.tasks, []).map(normTask);
+let day = today(), crewFilter = '', view = { v: 'board' };
+
+const persist = () => save(KEYS.tasks, T) || toast(L("This phone wouldn't save. Open Settings and download a backup."), 'bad');
+const find = u => T.find(t => t.uid === u);
+const current = () => (view.v === 'task' ? find(view.uid) : null);
+const go = h => (location.hash === '#' + h ? route() : (location.hash = h));
+const crewVar = name => cv(S, name);
+const floorRank = f => { const i = S.floors.indexOf(f); return i < 0 ? 999 : i; };
+const doneCount = t => t.items.filter(i => i.done).length;
+const worked = t => (t.aStart && t.aStop ? Math.max(0, span(t.aStart, t.aStop) - t.delay) : 0);
+const isOpen = t => t.status !== 'Complete' && t.review !== 'Accepted';
+const prevDay = () => [...new Set(T.map(t => t.date))].filter(d => d < day).sort().at(-1);
+const dayTasks = () => T.filter(t => t.date === day);
+const isCrewPhone = () => S.role === 'Crew lead';
+const fromTo = (a, b) => L('{start} to {stop}', { start: t12(a), stop: t12(b) });
+
+function stage(t) {
+  if (t.review === 'Accepted') return [L('Accepted'), 'good'];
+  if (t.review) return [L('Follow-up'), 'warn'];
+  if (t.status) return [L(t.status), { Complete: 'good', Partial: 'warn', Blocked: 'bad' }[t.status]];
+  if (t.aStart) return [L('Working'), 'info'];
+  if (t.sentAt) return [L('Sent'), 'info'];
+  return [L('Draft'), ''];
+}
+
+function nextId(date) {
+  const mmdd = date.slice(5).replace('-', '');
+  for (let i = 1; ; i++) {
+    const id = `T${mmdd}-${String(i).padStart(2, '0')}`;
+    if (!T.some(t => t.date === date && t.id === id)) return id;
+  }
+}
+
+function pickCrew(t, name) {
+  if (t.crew === name) return;
+  t.crew = name;
+  t.lead = S.crews.find(c => c.name === name)?.lead || '';
+  t.members = roster(S, name);
+  t.size = t.members.length || t.size;
+}
+
+// ---------- routing: #day/2026-10-03, #task/<uid>/<tab>, #settings, #p=<link code> ----------
+
+function route() {
+  fileIfChanged(current());
+  const h = location.hash.slice(1);
+  if (h.startsWith('p=')) return openCode(h.slice(2));
+  const [v, a, b] = h.split('/');
+  if (v === 'day' && /^\d{4}-\d{2}-\d{2}$/.test(a)) day = a;
+  view = v === 'task' && find(a) ? { v: 'task', uid: a, tab: b || 'assign' } : { v: v === 'settings' ? 'settings' : 'board' };
+  if (view.v === 'task') day = find(a).date;
+  render();
+  scrollTo(0, 0);
+}
+
+async function openCode(code) {
+  let data;
+  try { data = await unpack(code); } catch { toast(L('That link is damaged or cut off. Ask for it to be sent again.'), 'bad'); return location.replace('#day/' + day); }
+  if (data.kind === 'report') return location.replace(linkTo('report.html', code));
+  if (data.kind === 'day') return importDay(data);
+  const inc = normTask(data.task);
+  let t = find(inc.uid), firstSheet = false;
+  if (data.kind === 'task' && data.folder && !S.folderUrl && /^https:\/\//.test(data.folder.url)) {
+    // Only a phone with no review folder yet adopts one, so a later link can't redirect finished sheets.
+    Object.assign(S, { folderUrl: String(data.folder.url), siteCode: String(data.folder.code || '') });
+    save(KEYS.settings, S);
+  }
+  if (!inc.uid || !['task', 'result'].includes(data.kind)) { toast(L('That link has no task sheet in it'), 'bad'); return location.replace('#day/' + day); }
+  if (data.kind === 'task') {
+    if (!t) {
+      T.push(t = Object.assign(inc, { origin: 'link', gotAt: Date.now() })); // a crew phone opening its sheet
+      firstSheet = !S.lang && !S.me && !T.some(x => x.origin === 'mine'); // a phone with a name in Settings is an office phone
+    } else if (t.origin === 'link') mergeTask(t, inc, 'assign'); // re-sent sheet: new assignment, crew check-offs kept
+  } else if (!t || t.origin !== 'link') { // results reaching the superintendent (not the crew re-opening its own)
+    if (!t) T.push(t = Object.assign(inc, { origin: 'mine' }));
+    else mergeTask(t, inc, 'crew');
+    t.gotAt = Date.now();
+    toast(L('{crew} results for {id} received', { crew: t.crew || L('Crew'), id: t.id }));
+  }
+  if (data.kind === 'result' && t.origin !== 'link') fileTask(t);
+  persist();
+  location.replace(`#task/${t.uid}/${data.kind === 'result' ? 'review' : 'assign'}`);
+  if (firstSheet) { // first sheet on a new crew phone: it is a crew phone, and ask the language once
+    S.role = 'Crew lead';
+    save(KEYS.settings, S);
+    sheet(`<h3>Language · Idioma</h3><div class="btns"><button class="btn big" data-act="lang" data-v="en">English</button><button class="btn big primary" data-act="lang" data-v="es">Español</button></div>`);
+  }
+}
+
+async function importDay(data) {
+  const date = /^\d{4}-\d{2}-\d{2}$/.test(data.date) ? data.date : day;
+  const inc = (Array.isArray(data.tasks) ? data.tasks : []).map(normTask).filter(t => t.uid);
+  const fresh = inc.filter(t => !find(t.uid)), known = inc.filter(t => find(t.uid));
+  if (inc.length && await ask(L('Load the task plan for {date}? New sheets: {fresh}. Updated: {known}. Check-offs already on this phone are kept.', { date: niceDate(date), fresh: fresh.length, known: known.length }), L('Load plan'))) {
+    for (const t of fresh) T.push(Object.assign(t, { origin: 'mine' }));
+    for (const t of known) mergeTask(find(t.uid), t, 'assign');
+    persist();
+    toast(L('Plan loaded'));
+  }
+  location.replace('#day/' + date);
+}
+
+// ---------- views ----------
+
+function render() {
+  const title = L('Task Sheets'), cut = title.lastIndexOf(' ');
+  document.getElementById('title').innerHTML = `${esc(title.slice(0, cut))} <b>${esc(title.slice(cut + 1))}</b>`;
+  document.title = L('Electrical Task Sheets');
+  const lb = document.getElementById('langBtn');
+  lb.textContent = getLang() === 'es' ? 'EN' : 'ES';
+  lb.setAttribute('aria-label', getLang() === 'es' ? 'English' : 'Español');
+  document.getElementById('toReport').hidden = isCrewPhone();
+  document.getElementById('toReport').setAttribute('aria-label', L('Open the daily report'));
+  document.getElementById('toSettings').setAttribute('aria-label', L('Settings and crews'));
+  document.getElementById('proj').textContent = [S.project, S.site].filter(Boolean).join(' · ');
+  bar.hidden = view.v === 'settings';
+  if (view.v === 'settings') app.innerHTML = `<button class="link" data-go="day/${day}">‹ ${L('Back to task sheets')}</button>${settingsView(S, { lang: true })}`;
+  else if (view.v === 'task') renderTask(current());
+  else renderBoard();
+}
+
+function renderBoard() {
+  const all = dayTasks();
+  const list = all.filter(t => !crewFilter || t.crew === crewFilter)
+    .sort((a, b) => floorRank(a.floor) - floorRank(b.floor) || a.floor.localeCompare(b.floor) || a.pStart.localeCompare(b.pStart));
+  // Finished sheets wait in their own group for review; accepted ones fold away at the bottom.
+  const toReview = list.filter(t => t.origin !== 'link' && t.status && !t.review);
+  const accepted = list.filter(t => t.review === 'Accepted');
+  const active = list.filter(t => !toReview.includes(t) && !accepted.includes(t));
+  const floors = [...new Set(active.map(t => t.floor))];
+  const est = all.reduce((n, t) => n + t.est * (t.size || 1), 0);
+  const act = all.reduce((n, t) => n + worked(t) / 60 * (t.size || 1), 0);
+  const done = all.filter(t => !isOpen(t)).length, blocked = all.filter(t => t.status === 'Blocked').length;
+  const crews = [...new Set([...S.crews.map(c => c.name), ...all.map(t => t.crew)].filter(Boolean))];
+  const prev = prevDay();
+  app.innerHTML = dateBar(day) + (all.length ? `
+    <div class="stats">
+      <div class="stat"><b>${all.length}</b><span>${L('Task sheets')}</span></div>
+      <div class="stat"><b>${done}</b><span>${L('Complete')}</span></div>
+      <div class="stat"><b class="${blocked ? 'bad' : ''}">${blocked}</b><span>${L('Blocked')}</span></div>
+      <div class="stat"><b>${hrs(act)}<small> / ${hrs(est)}</small></b><span>${L('Crew-hrs actual / est.')}</span></div>
+    </div>
+    <div class="chips" role="group" aria-label="${L('Show crew')}">
+      <button class="chip" data-act="filter" data-v="" aria-pressed="${!crewFilter}">${L('All crews')}</button>
+      ${crews.map(c => `<button class="chip" data-act="filter" data-v="${esc(c)}" aria-pressed="${crewFilter === c}" style="${crewVar(c)}"><i class="dot"></i>${esc(c)}</button>`).join('')}
+    </div>
+    ${toReview.length ? `<h2 class="group-h review-h"><span>${L('Finished · ready for review')}</span><span>${toReview.length}</span></h2>${toReview.map(card).join('')}` : ''}
+    ${floors.map(f => {
+      const ts = active.filter(t => t.floor === f);
+      return `<h2 class="group-h"><span>${f ? esc(f) : esc(L('Floor not set'))}</span><span>${ts.length}</span></h2>${ts.map(card).join('')}`;
+    }).join('')}
+    ${accepted.length ? `<details class="done-group"><summary class="group-h"><span>${L('Accepted')}</span><span>${accepted.length}</span></summary><div class="stack">${accepted.map(card).join('')}</div></details>` : ''}
+    ${list.length ? '' : `<p class="hint">${L('No sheets for this crew on this day.')}</p>`}`
+    : isCrewPhone()
+      ? `<div class="empty"><h2>${L('No task sheets for {date}', { date: niceDate(day) })}</h2>
+        <p>${L('Open the link your superintendent texted you, or paste it here.')}</p>
+        <button class="btn primary" data-act="paste">${L('Open a link someone sent you')}</button></div>`
+      : `<div class="empty"><h2>${L('No task sheets for {date}', { date: niceDate(day) })}</h2>
+        <p>${L("Build the day's assignments here and send each crew its sheet. Crews check off steps on their phones and send results back to you.")}</p>
+        <div class="btns"><button class="btn primary" data-act="new">${L('+ New task')}</button>
+        ${prev ? `<button class="btn" data-act="carryDay">${L('Copy unfinished from {date}', { date: niceDate(prev) })}</button>` : ''}</div>
+        <button class="link" data-act="paste">${L('Crew member? Paste the link your superintendent sent')}</button></div>`);
+  bar.innerHTML = `<div class="bar-in">${isCrewPhone()
+    ? `<button class="btn big" data-act="paste">${L('Open a link')}</button>`
+    : `<button class="btn primary big" data-act="new">${L('+ New task')}</button>`}
+    <button class="btn more" data-act="boardMenu" aria-label="${L('More actions')}">⋯</button></div>`;
+}
+
+function card(t) {
+  const [label, tone] = stage(t), n = t.items.length, d = doneCount(t);
+  return `<a class="tcard" href="#task/${t.uid}/${t.status && !t.review ? 'review' : 'assign'}" style="${crewVar(t.crew)}">
+    <div class="row1"><span class="tid">${esc(t.id || L('New task'))}</span><span class="pill" data-tone="${tone}">${esc(label)}</span></div>
+    <div class="meta"><span><i class="dot"></i> ${esc(t.crew || L('No crew yet'))}${t.size ? ' · ' + esc(L(t.size === 1 ? '1 person' : '{n} people', { n: t.size })) : ''}</span>
+      ${t.area ? `<span>${esc(t.area)}</span>` : ''}${t.pStart ? `<span>${esc(t.pStop ? fromTo(t.pStart, t.pStop) : t12(t.pStart))}</span>` : ''}${t.est ? `<span>${esc(L('Est. {n} hrs', { n: t.est }))}</span>` : ''}</div>
+    ${t.scope ? `<p class="scope">${esc(t.scope)}</p>` : ''}
+    ${n ? `<div class="progress" role="img" aria-label="${esc(L('{d} of {n} steps done', { d, n }))}"><i style="width:${d / n * 100}%"></i></div>` : ''}
+  </a>`;
+}
+
+function renderTask(t) {
+  const crewSide = t.origin === 'link';
+  const tabs = [['assign', L('Assign')], ['results', L('Crew results')], ['review', L('Review')]];
+  app.innerHTML = `<button class="link" data-go="day/${t.date}">‹ ${esc(L('{date} task sheets', { date: niceDate(t.date) }))}</button>` + (crewSide
+    ? brief(t) + results(t)
+    : `<nav class="tabs">${tabs.map(([k, l]) => `<a href="#task/${t.uid}/${k}" data-act="tab" data-v="${k}"${k === view.tab ? ' aria-current="page"' : ''}>${l}</a>`).join('')}</nav>`
+      + (view.tab === 'results' ? brief(t) + results(t) : view.tab === 'review' ? review(t) : assign(t)))
+    + `<p class="hint">${L('Changes save on this phone as you type.')}</p>`;
+  bar.innerHTML = `<div class="bar-in">${crewSide
+    ? `<button class="btn primary big" data-act="sendResults">${L('Send results')}</button>
+       <button class="btn more" data-act="crewMenu" aria-label="${L('More actions')}">⋯</button>`
+    : `<button class="btn primary big" data-act="sendTask">${t.sentAt ? L('Resend to crew') : L('Send to crew')}</button>
+       <button class="btn more" data-act="taskMenu" aria-label="${L('More actions')}">⋯</button>`}</div>`;
+}
+
+const crewHrsLine = t => L('Crew of {size}: {allot} crew-hrs allotted, {est} estimated.', { size: t.size || 1, allot: hrs(t.allot * (t.size || 1)), est: hrs(t.est * (t.size || 1)) })
+  + (t.pStart && t.pStop ? ' ' + L('Planned window {time}.', { time: fmtMin(span(t.pStart, t.pStop)) }) : '');
+
+const addRow = (id, ph, a) => `<div class="edit-row"><input id="${id}" placeholder="${esc(ph)}" enterkeyhint="done" data-enter="${a}"><button class="x add" data-act="${a}" aria-label="${esc(ph)}">+</button></div>`;
+
+function assign(t) {
+  const people = [...new Set([...roster(S, t.crew), ...t.members])];
+  const checks = [...new Set([...S.checks, ...t.checks.map(c => c.text)])];
+  return `<section class="card"><h2>${L('Assignment')}</h2><div class="grid">
+      ${field(L('Date'), 't.date', t.date, { type: 'date' })}${field(L('Assigned by'), 't.by', t.by)}
+      ${field(L('Floor / level'), 't.floor', t.floor, { list: 'floors' })}${field(L('Task ID'), 't.id', t.id)}
+      ${field(L('Room / area'), 't.area', t.area, { list: 'areas', wide: true, ph: L('e.g. Elec room 3E, east corridor') })}
+    </div>
+    <div class="field"><span>${L('Crew')}</span><div class="chips">${S.crews.map(c => `<button class="chip" data-act="crew" data-v="${esc(c.name)}" aria-pressed="${t.crew === c.name}" style="${crewVar(c.name)}"><i class="dot"></i>${esc(c.name)}</button>`).join('')}</div></div>
+    <div class="field"><span>${L('Crew members on this task')}</span>
+      ${people.length ? `<div class="chips">${people.map(p => `<button class="chip" data-act="member" data-v="${esc(p)}" aria-pressed="${t.members.includes(p)}">${esc(p)}</button>`).join('')}</div>` : ''}
+      ${addRow('newMember', L('Add a name'), 'addMember')}</div>
+    <div class="grid">${field(L('Crew lead'), 't.lead', t.lead)}${field(L('Crew size'), 't.size', t.size, { type: 'number', mode: 'numeric' })}</div>
+    ${datalist('floors', S.floors)}${datalist('areas', T.map(x => x.area))}
+  </section>
+  <section class="card"><h2><span class="num">1</span>${L('Assigned task & required finish')}</h2>
+    ${field(L('Work, quantities and limits of scope'), 't.scope', t.scope, { rows: 4, ph: L('e.g. Pull and terminate 12 AWG for lighting circuits L3-14 to L3-18, east corridor. Stop at grid line 7.') })}
+    ${field(L('Drawing / detail references'), 't.refs', t.refs, { ph: L('e.g. E-301, detail 4/E-502') })}
+    <div class="field"><span>${L('Steps the crew checks off')}</span><div class="checklist">
+      ${t.items.map((it, i) => `<div class="edit-row"><input data-k="t.items.${i}.text" value="${esc(it.text)}" aria-label="${esc(L('Step {n}', { n: i + 1 }))}"><button class="x" data-act="delItem" data-i="${i}" aria-label="${esc(L('Remove step {n}', { n: i + 1 }))}">✕</button></div>`).join('')}
+      ${addRow('newItem', L('Add a step'), 'addItem')}</div></div>
+    <div class="field"><span>${L('Required finish / accuracy checks')}</span>
+      <div class="chips">${checks.map(p => `<button class="chip" data-act="check" data-v="${esc(p)}" aria-pressed="${t.checks.some(c => c.text === p)}">${esc(p)}</button>`).join('')}</div>
+      ${addRow('newCheck', L('Add another check'), 'addCheck')}</div>
+  </section>
+  <section class="card"><h2><span class="num">2</span>${L('Assigned work time & estimate')}</h2>
+    <div class="grid">
+      ${field(L('Allotted time (hrs)'), 't.allot', t.allot, { type: 'number', mode: 'decimal' })}
+      ${field(L('Your estimate (hrs)'), 't.est', t.est, { type: 'number', mode: 'decimal' })}
+      ${field(L('Allotted notes'), 't.allotNote', t.allotNote)}${field(L('Estimate notes'), 't.estNote', t.estNote)}
+    </div>
+    <p class="hint out" data-out="crewHrs">${crewHrsLine(t)}</p>
+    <div class="grid">${field(L('Planned start'), 't.pStart', t.pStart, { type: 'time' })}${field(L('Planned stop'), 't.pStop', t.pStop, { type: 'time' })}${field(L('Check-in at'), 't.checkIn', t.checkIn, { type: 'time' })}</div>
+  </section>`;
+}
+
+function brief(t) {
+  const [label, tone] = stage(t);
+  const row = (k, html) => (html ? `<dt>${esc(k)}</dt><dd>${html}</dd>` : ''); // html: already escaped
+  const note = n => (n ? ' · ' + esc(n) : '');
+  return `<section class="card brief" style="${crewVar(t.crew)}">
+    <div class="row1"><span class="label">${esc(t.crew || L('Crew'))} · ${esc(L('Task {id}', { id: t.id }))}</span><span class="pill" data-tone="${tone}">${esc(label)}</span></div>
+    <div class="big">${t.floor ? esc(t.floor) : esc(L('Floor not set'))}${t.area ? ' · ' + esc(t.area) : ''}</div>
+    ${t.scope ? `<p class="scope-text">${esc(t.scope)}</p>` : ''}
+    <dl class="kv">${row(L('Drawings'), esc(t.refs))}${row(L('Planned'), t.pStart && esc(fromTo(t.pStart, t.pStop)))}${row(L('Check in at'), esc(t12(t.checkIn)))}
+      ${row(L('Allotted'), t.allot && esc(L('{n} hrs', { n: t.allot })) + note(t.allotNote))}${row(L('Estimate'), t.est && esc(L('{n} hrs', { n: t.est })) + note(t.estNote))}
+      ${row(L('Crew'), esc(t.members.join(', ')))}${row(L('Assigned'), esc(niceDate(t.date) + (t.by ? ' · ' + L('by {name}', { name: t.by }) : '')))}</dl></section>`;
+}
+
+function workedLine(t) {
+  if (!t.aStart) return L('Tap Start when the crew begins.');
+  if (!t.aStop) return L('Started {time}. Tap Stop when the crew wraps up.', { time: t12(t.aStart) });
+  const w = worked(t);
+  return L('{on} on task', { on: fmtMin(span(t.aStart, t.aStop)) }) + (t.delay ? ' ' + L('minus {m}m delays', { m: t.delay }) : '')
+    + ` = ${L('{w} worked', { w: fmtMin(w) })} · ${L('{n} crew-hrs', { n: hrs(w / 60 * (t.size || 1)) })}`
+    + (t.est ? ` · ${L('{sign}{n} hrs vs estimate', { sign: w / 60 > t.est ? '+' : '', n: hrs(w / 60 - t.est) })}` : '');
+}
+
+function results(t) {
+  const d = doneCount(t), n = t.items.length;
+  const tick = (list, it, i) => `<button class="tick" data-act="tick" data-list="${list}" data-i="${i}" aria-pressed="${it.done}"><span class="box">✓</span><span class="txt">${esc(it.text)}</span>${it.at ? `<small>${timeOf(it.at)}</small>` : ''}</button>`;
+  const clock = (k, label, now, primary) => t[k]
+    ? `<input type="time" data-k="t.${k}" value="${t[k]}" aria-label="${label}">`
+    : `<button class="btn${primary ? ' primary' : ''}" data-act="clock" data-v="${k}">${now}</button>`;
+  return `${n || t.checks.length ? `<section class="card"><h2>${L('Check off as you go')}</h2>
+      ${n ? `<div class="label">${L('Steps · {d} of {n} done', { d, n })}</div><div class="progress"><i style="width:${d / n * 100}%"></i></div>
+        <div class="checklist">${t.items.map((it, i) => tick('items', it, i)).join('')}</div>` : ''}
+      ${t.checks.length ? `<div class="label">${L('Required finish checks')}</div><div class="checklist">${t.checks.map((it, i) => tick('checks', it, i)).join('')}</div>` : ''}
+    </section>` : ''}
+  <section class="card"><h2><span class="num">3</span>${L('Actual time & progress')}</h2>
+    <div class="grid"><div class="field"><span>${L('Actual start')}</span>${clock('aStart', L('Actual start'), L('▶ Start now'), true)}</div>
+      <div class="field"><span>${L('Actual stop')}</span>${clock('aStop', L('Actual stop'), L('■ Stop now'), !!t.aStart)}</div></div>
+    <div class="field"><span>${L('Delay / interruption (minutes)')}</span><div class="edit-row">
+      <button class="x" data-act="delay" data-v="-15" aria-label="${L('15 minutes less')}">−</button>
+      <input type="number" inputmode="numeric" min="0" step="any" data-k="t.delay" value="${t.delay || ''}" placeholder="0" aria-label="${L('Delay minutes')}">
+      <button class="x" data-act="delay" data-v="15" aria-label="${L('15 minutes more')}">+</button></div></div>
+    <p class="out" data-out="worked">${workedLine(t)}</p>
+    <div class="field"><span>${L('Status')}</span>${seg('t.status', t.status, [['Complete', 'good', L('Complete')], ['Partial', 'warn', L('Partial')], ['Blocked', 'bad', L('Blocked')]])}</div>
+    ${field(L('Work / quantity completed (locations and details)'), 't.doneText', t.doneText, { rows: 3 })}
+    ${field(L('Work remaining'), 't.remain', t.remain, { rows: 2 })}
+  </section>
+  <section class="card"><h2><span class="num">4</span>${L('Crew comments / concerns')}</h2>
+    ${field(L('What helped or slowed the work? Quality, rework, support needed'), 't.comments', t.comments, { rows: 3 })}
+    ${field(L('Crew / lead'), 't.lead', t.lead)}
+  </section>`;
+}
+
+function review(t) {
+  const [label, tone] = stage(t), w = worked(t);
+  const row = (k, html) => (html ? `<dt>${esc(k)}</dt><dd>${html}</dd>` : '');
+  return `<section class="card brief" style="${crewVar(t.crew)}"><div class="row1"><span class="label">${esc(t.crew || L('Crew'))} · ${esc(L('Task {id}', { id: t.id }))} · ${t.floor ? esc(t.floor) : ''}</span><span class="pill" data-tone="${tone}">${esc(label)}</span></div>
+    ${t.status || t.aStart ? `<dl class="kv">${row(L('Status'), esc(t.status ? L(t.status) : L('In progress')))}${row(L('Steps'), t.items.length && esc(L('{d} of {n} done', { d: doneCount(t), n: t.items.length })))}
+      ${row(L('Checks'), t.checks.length && esc(L('{d} of {n} done', { d: t.checks.filter(c => c.done).length, n: t.checks.length })))}
+      ${row(L('Worked'), w && esc(`${fmtMin(w)} · ${L('{n} crew-hrs', { n: hrs(w / 60 * (t.size || 1)) })}`))}${row(L('Estimate'), t.est && esc(`${L('{n} hrs', { n: t.est })} · ${L('{n} crew-hrs', { n: hrs(t.est * (t.size || 1)) })}`))}
+      ${row(L('Delays'), t.delay && esc(L('{n} min', { n: t.delay })))}${row(L('Completed'), t.doneText && esc(t.doneText))}${row(L('Remaining'), t.remain && esc(t.remain))}${row(L('Crew notes'), t.comments && esc(t.comments))}
+      ${row(L('Received'), esc(stamp(t.gotAt)))}</dl>`
+    : `<p class="hint">${L("No results from the crew yet. They'll show here when the crew sends them, or fill them in yourself on the Crew results tab.")}</p>`}</section>
+  <section class="card"><h2><span class="num">5</span>${L('Lead / superintendent review')}</h2>
+    ${seg('t.review', t.review, [['Accepted', 'good', L('Accepted')], ['Follow-up needed', 'warn', L('Follow-up needed')]])}
+    ${field(L('Reviewed by'), 't.reviewer', t.reviewer)}
+    ${field(L('Follow-up / next step'), 't.followUp', t.followUp, { rows: 3 })}
+    <button class="btn" data-act="carry">${L('Carry open work to {date}', { date: niceDate(addDays(t.date, 1)) })}</button>
+  </section>`;
+}
+
+const OUT = { crewHrs: crewHrsLine, worked: workedLine };
+
+// ---------- PDF: always an English form; notes appear exactly as typed ----------
+
+function recordRows(t) {
+  const box = i => `${i.done ? '[x]' : '[ ]'} ${i.text}`;
+  return [
+    [`Task ${t.id} · ${t.floor} · ${t.crew}`, [['Date', niceDate(t.date, 'en')], ['Assigned by', t.by], ['Room / area', t.area], ['Crew members', t.members.join(', ')], ['Crew size', t.size], ['Crew / lead', t.lead]]],
+    ['1 Assigned task & required finish', [['Scope', t.scope], ['Drawings', t.refs], ['Steps', t.items.map(box).join('\n')], ['Finish checks', t.checks.map(box).join('\n')]]],
+    ['2 Assigned work time & estimate', [['Allotted', t.allot && `${t.allot} hrs ${t.allotNote}`], ['Estimate', t.est && `${t.est} hrs ${t.estNote}`],
+      ['Planned', t.pStart && `${t12(t.pStart)} to ${t12(t.pStop)}`], ['Check-in at', t12(t.checkIn)]]],
+    ['3 Actual time & progress', [['Actual start', t12(t.aStart)], ['Actual stop', t12(t.aStop)], ['Delay', t.delay && `${t.delay} min`],
+      ['Time worked', worked(t) && fmtMin(worked(t))], ['Status', t.status], ['Completed', t.doneText], ['Remaining', t.remain]]],
+    ['4 Crew comments / concerns', [['Comments', t.comments]]],
+    ['5 Review', [['Result', t.review], ['Reviewed by', t.reviewer], ['Follow-up', t.followUp]]],
+  ];
+}
+
+const record = t => makePdf('Electrical task sheet', `${S.project} · ${S.site}`, recordRows(t), `${S.project} · Task ${t.id}`);
+const fileName = t => `${t.id} ${t.crew} ${t.floor}`.trim();
+function fileTask(t) {
+  if (!S.folderUrl) return;
+  t.filedAt = Date.now();
+  persist();
+  return fileAway(S, { date: t.date, name: fileName(t), bytes: record(t), v: t.updatedAt });
+}
+// A finished sheet edited after it was filed (say, a follow-up note typed after tapping the review
+// button) is filed again when you leave it, so the folder always has the last word.
+const fileIfChanged = t => t && (t.status || t.review) && t.updatedAt > t.filedAt && fileTask(t);
+
+// ---------- actions ----------
+
+function menu(items) {
+  sheet(`<h3>${L('More')}</h3><div class="menu">${items.filter(Boolean).map(([a, label, cls]) => `<button class="btn ${cls || ''}" data-act="${a}">${esc(label)}</button>`).join('')}</div>`);
+}
+
+function resultMsg(t, l) {
+  const x = (en, v) => L(en, v, l), w = worked(t);
+  return x('{crew} results for task {id} ({floor}): {status}. {d} of {n} steps done.', { crew: t.crew, id: t.id, floor: t.floor, status: x(t.status), d: doneCount(t), n: t.items.length })
+    + (w ? ' ' + x('Worked {time}.', { time: fmtMin(w) }) : '')
+    + (t.status === 'Blocked' && t.comments ? ' ' + t.comments.slice(0, 140) : '');
+}
+function taskMsg(t, l) {
+  const x = (en, v) => L(en, v, l);
+  const where = [t.floor, t.area].filter(Boolean).join(', ');
+  const when = [niceDate(t.date, l), t.pStart && x('{start} to {stop}', { start: t12(t.pStart), stop: t12(t.pStop) })].filter(Boolean).join(', ');
+  return x('{crew}: task {id}, {where}, {when}. Open it, check off steps as you go, then tap "Send results".', { crew: t.crew, id: t.id, where, when });
+}
+
+async function send(kind, t) {
+  const payload = kind === 'day' ? { v: 1, kind, date: day, tasks: dayTasks() } : { v: 1, kind, task: t };
+  if (kind === 'task' && S.folderUrl) payload.folder = { url: S.folderUrl, code: S.siteCode }; // so the crew phone files its finished sheet
+  const url = linkTo('tasks.html', await pack(payload));
+  if (kind === 'task') {
+    t.sentAt = Date.now();
+    persist();
+    render();
+    // A crew that has answered in Spanish before gets the message in both languages.
+    const both = getLang() === 'es' || T.some(x => x.crew === t.crew && x.cLang === 'es');
+    sendSheet({ title: L('Task {id} for {crew}', { id: t.id, crew: t.crew }), url, text: both ? `${taskMsg(t, 'en')}\n\n${taskMsg(t, 'es')}` : taskMsg(t, 'en') });
+  } else if (kind === 'result') {
+    // A Spanish-mode crew sees its own language first; the superintendent gets the English line.
+    sendSheet({ title: L('Results for task {id}', { id: t.id }), url, text: t.cLang === 'es' ? `${resultMsg(t, 'es')}\n\n${resultMsg(t, 'en')}` : resultMsg(t, 'en') });
+  } else {
+    const ts = dayTasks();
+    sendSheet({ title: L('Task plan for {date}', { date: niceDate(day) }), url,
+      text: L('Task plan for {date}: {n} sheets ({crews}). Open to load it on your phone.', { date: niceDate(day), n: ts.length, crews: [...new Set(ts.map(x => x.crew).filter(Boolean))].join(', ') }) });
+  }
+}
+
+async function act(a, el) {
+  const t = current(), v = el.dataset.v;
+  switch (a) {
+    case 'new': {
+      const nt = normTask({ uid: uid(), origin: 'mine', id: nextId(day), date: day, by: S.me, updatedAt: Date.now() });
+      if (crewFilter) pickCrew(nt, crewFilter);
+      T.push(nt);
+      persist();
+      return go(`task/${nt.uid}/assign`);
+    }
+    case 'toggleLang': return act('lang', { dataset: { v: getLang() === 'es' ? 'en' : 'es' } });
+    case 'lang':
+      S.lang = v;
+      save(KEYS.settings, S);
+      setLang(v);
+      return render();
+    case 'filter': crewFilter = v; break;
+    case 'tab': history.replaceState(null, '', `#task/${t.uid}/${v}`); view.tab = v; render(); return scrollTo(0, 0);
+    case 'set': {
+      const ctx = { t, s: S };
+      setPath(ctx, el.dataset.k, getPath(ctx, el.dataset.k) === v ? '' : v);
+      if (el.dataset.k === 't.review' && t.review && !t.reviewer) t.reviewer = S.me;
+      if (el.dataset.k === 't.status' && t.status === 'Blocked' && !t.comments) toast(L('Say what is blocking the work in Crew comments'));
+      if (el.dataset.k === 't.review' && t.review) { t.updatedAt = Date.now(); render(); return fileTask(t); } // stamp the edit, then file
+      break;
+    }
+    case 'crew': pickCrew(t, v); break;
+    case 'member': t.members = t.members.includes(v) ? t.members.filter(m => m !== v) : [...t.members, v]; t.size = t.members.length; break;
+    case 'addMember': case 'addItem': case 'addCheck': {
+      const input = document.getElementById({ addMember: 'newMember', addItem: 'newItem', addCheck: 'newCheck' }[a]);
+      const text = input.value.trim();
+      if (!text) return input.focus();
+      if (a === 'addMember') { if (!t.members.includes(text)) t.members.push(text); t.size = t.members.length; }
+      if (a === 'addItem') t.items.push(newItem(text));
+      if (a === 'addCheck' && !t.checks.some(c => c.text === text)) t.checks.push(newItem(text));
+      t.updatedAt = Date.now();
+      persist();
+      render();
+      return document.getElementById(input.id).focus(); // keep the keyboard up for the next entry
+    }
+    case 'delItem': t.items.splice(+el.dataset.i, 1); break;
+    case 'check': t.checks = t.checks.some(c => c.text === v) ? t.checks.filter(c => c.text !== v) : [...t.checks, newItem(v)]; break;
+    case 'tick': {
+      const it = t[el.dataset.list][+el.dataset.i];
+      it.done = !it.done;
+      it.at = it.done ? Date.now() : 0;
+      navigator.vibrate?.(12);
+      if (it.done && [...t.items, ...t.checks].every(i => i.done) && !t.status) toast(L('Everything is checked off. Set the status and send results.'));
+      break;
+    }
+    case 'clock': t[v] = nowHM(); break;
+    case 'delay': t.delay = Math.max(0, t.delay + +v); break;
+    case 'sendTask':
+      if (!t.crew || !(t.scope || t.items.length)) return toast(L('Pick a crew and describe the work first'), 'bad');
+      return send('task', t);
+    case 'sendResults': {
+      if (!t.status) return toast(L('Pick Complete, Partial or Blocked first'), 'bad');
+      t.cLang = getLang();
+      persist();
+      await send('result', t);
+      return fileTask(t);
+    }
+    case 'sendDay': return send('day');
+    case 'boardMenu': {
+      const prev = prevDay();
+      return menu([!isCrewPhone() && dayTasks().length && ['sendDay', L('Send day plan')], !isCrewPhone() && prev && ['carryDay', L('Copy unfinished work from {date}', { date: niceDate(prev) })], ['paste', L('Open a link someone sent you')],
+        dayTasks().length && ['pdfDay', L("Save this day's sheets as one PDF")], !isCrewPhone() && ['report', L('Open the daily report')], ['settings', L('Settings, crews and backup')]]);
+    }
+    case 'taskMenu':
+      return menu([['dup', L('Duplicate for another crew or floor')], ['carry', L('Carry open work to {date}', { date: niceDate(addDays(t.date, 1)) })],
+        ['pdfTask', L('Save this sheet as PDF')], S.folderUrl && ['fileNow', L('Save to the review folder now')], ['del', L('Delete this task sheet'), 'danger']]);
+    case 'crewMenu': return menu([['pdfTask', L('Save this sheet as PDF')], ['paste', L('Open a link someone sent you')], ['settings', L('Settings')], ['del', L('Delete this task sheet'), 'danger']]);
+    case 'carryDay': {
+      const prev = prevDay();
+      const open = T.filter(x => x.date === prev && isOpen(x) && !T.some(y => y.from === x.uid));
+      if (!open.length) return toast(L('Nothing left open from {date}', { date: niceDate(prev) }));
+      for (const x of open) {
+        const c = cloneTask(x, day, true);
+        Object.assign(c, { from: x.uid, id: nextId(day), by: S.me || x.by, scope: x.remain ? `${x.remain}\n\n${L('Carried over from {id}: {scope}', { id: x.id, scope: x.scope })}` : x.scope });
+        T.push(c);
+      }
+      toast(L('Unfinished sheets copied: {n}', { n: open.length }));
+      break;
+    }
+    case 'carry': case 'dup': {
+      const date = a === 'carry' ? addDays(t.date, 1) : t.date;
+      const c = cloneTask(t, date, a === 'carry');
+      Object.assign(c, { id: nextId(date), from: a === 'carry' ? t.uid : '', scope: a === 'carry' && t.remain ? `${t.remain}\n\n${L('Carried over from {id}: {scope}', { id: t.id, scope: t.scope })}` : t.scope });
+      T.push(c);
+      persist();
+      toast(a === 'carry' ? L('Carried to {date}', { date: niceDate(date) }) : L('Duplicated. Change the crew or floor.'));
+      return go(`task/${c.uid}/assign`);
+    }
+    case 'del':
+      if (!await ask(L("Delete task {id}? This can't be undone.", { id: t.id }), L('Delete'), 'danger')) return;
+      T = T.filter(x => x !== t);
+      persist();
+      return go('day/' + t.date);
+    case 'pdfTask': return savePdf(`${fileName(t)}.pdf`, record(t));
+    case 'pdfDay': return savePdf(`Task sheets ${day}.pdf`, makePdf(`Electrical task sheets · ${niceDate(day, 'en')}`, `${S.project} · ${S.site}`, dayTasks().flatMap(recordRows), `${S.project} · ${niceDate(day, 'en')}`));
+    case 'fileNow': return fileTask(t);
+    case 'paste': return pasteSheet(code => go('p=' + code));
+    case 'report': location.href = 'report.html#day/' + day; return;
+    case 'settings': return go('settings');
+    case 'addCrew': case 'delCrew': case 'backup': case 'testFolder': await settingsAct(a, S, el); break;
+  }
+  if (t) t.updatedAt = Date.now();
+  persist();
+  render();
+}
+
+document.addEventListener('click', e => {
+  if (e.target.matches('[data-pick]') && matchMedia('(pointer: fine)').matches) try { e.target.showPicker(); } catch {} // desktop: open the calendar anywhere on the date
+  const el = e.target.closest('[data-act],[data-go]');
+  if (!el) return;
+  e.preventDefault();
+  el.closest('dialog')?.close();
+  if (el.dataset.go) go(el.dataset.go);
+  else act(el.dataset.act, el);
+});
+
+document.addEventListener('input', e => {
+  const el = e.target, k = el.dataset.k;
+  if (!k) return;
+  const t = current();
+  setPath({ t, s: S }, k, readInput(el));
+  if (k.startsWith('s.')) {
+    save(KEYS.settings, S);
+    if (k === 's.lang' || k === 's.role') { setLang(S.lang); render(); }
+    return;
+  }
+  t.updatedAt = Date.now();
+  persist();
+  for (const o of app.querySelectorAll('[data-out]')) o.textContent = OUT[o.dataset.out](t);
+});
+
+document.addEventListener('change', e => {
+  if (e.target.matches('[data-pick]') && e.target.value) go('day/' + e.target.value);
+  if (e.target.matches('[data-restore]') && e.target.files[0]) restore(e.target.files[0]);
+  if (e.target.dataset.k === 't.date') { day = e.target.value || day; } // moved to another day
+});
+
+document.addEventListener('keydown', e => {
+  if (e.key === 'Enter' && e.target.dataset.enter) { e.preventDefault(); act(e.target.dataset.enter, e.target); }
+});
+
+// The other app (or another tab) changed shared data: reload so a stale copy here never overwrites it.
+const reload = () => { S = loadSettings(); setLang(S.lang); T = load(KEYS.tasks, []).map(normTask); render(); };
+addEventListener('storage', e => Object.values(KEYS).includes(e.key) && reload());
+addEventListener('pageshow', e => e.persisted && reload());
+addEventListener('hashchange', route);
+addEventListener('online', () => retryUploads(S));
+addEventListener('visibilitychange', () => document.hidden && fileIfChanged(current()));
+addEventListener('pagehide', () => fileIfChanged(current())); // queued even if the upload can't finish; retried on next open
+route();
+retryUploads(S);
+</script>
+</body>
+</html>

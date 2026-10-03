@@ -1,0 +1,46 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<meta name="theme-color" content="#1F242A">
+<title>Schwab Building Field Apps</title>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@600;700&family=Barlow:wght@400;600&display=swap">
+<link rel="stylesheet" href="shared.css">
+<style>
+  .launch .tid { font-size: 1.6rem; }
+  .launch p { margin: 0; color: var(--muted); }
+  ol { margin: 0; padding-left: 1.3em; display: flex; flex-direction: column; gap: 8px; }
+</style>
+</head>
+<body>
+<header class="top"><div class="top-in">
+  <svg viewBox="0 0 24 24" width="28" height="28" aria-hidden="true"><path d="M13 2 4 14h7l-1 8 9-12h-7z" fill="var(--accent)"/></svg>
+  <div class="grow"><h1>Field <b>Apps</b></h1><p>Charles Schwab Building · Charlotte, NC</p></div>
+</div></header>
+<main>
+  <a class="tcard launch" href="tasks.html" style="--crew:var(--c1)">
+    <span class="tid">Electrical Task Sheets</span>
+    <p>The superintendent or PM builds each crew's assignment for the day. Crews open it from a text, check off steps, clock their time and send results back. Crews can switch it to Spanish.</p>
+  </a>
+  <a class="tcard launch" href="report.html" style="--crew:var(--c3)">
+    <span class="tid">Superintendent Daily Report</span>
+    <p>Daily summary, floor-by-floor crew detail filled in from the task sheets, next steps, risks and decisions for the PM. One tap sends it.</p>
+  </a>
+  <section class="card"><h2>How a day flows</h2>
+    <ol>
+      <li>Superintendent (or PM) makes the task sheets and taps <b>Send to crew</b>. Each goes out as a text or email link.</li>
+      <li>The crew lead opens the link, taps <b>Start</b>, checks off steps, picks a status and taps <b>Send results</b>.</li>
+      <li>The superintendent opens the results link, reviews it, then taps <b>Fill from task sheets</b> in the Daily Report.</li>
+      <li>The superintendent taps <b>Send to PM</b>. The PM answers the decisions and sends it back.</li>
+      <li>Each finished sheet and report saves itself as a PDF in the shared review folder (set up once in Settings). <b>Save as PDF</b> in any <b>⋯</b> menu makes one any time.</li>
+    </ol>
+  </section>
+  <section class="card"><h2>Add it to your home screen</h2>
+    <p class="hint">iPhone: in Safari tap Share, then Add to Home Screen. If it shows an "Open as Web App" switch, turn it off, so links you get by text land in the same place as the icon. Android: Chrome's menu, then Add to Home screen. After the first open it works with no signal.</p>
+  </section>
+  <p class="hint">Each phone keeps its own records, and links carry the details inside them. The only upload is the PDF copy to your own review folder, once you set one up.</p>
+</main>
+<script type="module">import { registerSW } from './shared.mjs'; registerSW();</script>
+</body>
+</html>
