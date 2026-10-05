@@ -1,6 +1,6 @@
 // Shared by tasks.html and report.html: storage, link codec, time math, small UI pieces.
-// Nothing leaves the phone except a link the user chooses to send. The data rides in the
-// part of the URL after "#", which browsers never send to the web server.
+// Handoff data rides in the URL fragment after "#", which browsers don't send to the host.
+// An explicitly configured review receiver also receives PDF copies of finished records.
 
 import ES from './es.mjs';
 
@@ -440,7 +440,8 @@ export async function savePdf(filename, bytes) {
 // ---------- review folder ----------
 // Finished records are queued on the phone first, then uploaded as PDFs to the shared folder
 // (review-folder.gs). No signal, a closed app or a refused upload never loses one: the queue
-// retries when an app opens or the phone reconnects. Same date and name replaces the old copy.
+// retries when an app opens or the phone reconnects. The queue keeps the latest pending edit
+// per date and name; the receiver preserves earlier uploaded edits as separate files.
 
 const OUTBOX = 'schwab.outbox';
 const box = () => { const b = load(OUTBOX, []); return Array.isArray(b) ? b : []; };
@@ -449,8 +450,10 @@ export const queue = item => save(OUTBOX, [...box().filter(x => !same(x, item)),
 export const queued = () => box().length;
 
 async function post(s, body) {
+  const url = String(s.folderUrl || '').trim();
+  if (!/^https:\/\/script\.google\.com\/macros\/s\/[\w-]+\/exec$/.test(url)) throw new Error(L('Use the Apps Script upload link ending in /exec'));
   // A plain-text body keeps this a "simple" request, which Apps Script answers without a CORS preflight.
-  const res = await fetch(s.folderUrl, { method: 'POST', body: JSON.stringify({ ...body, code: s.siteCode }) });
+  const res = await fetch(url, { method: 'POST', body: JSON.stringify({ ...body, code: s.siteCode }) });
   const reply = await res.json().catch(() => ({}));
   if (!reply.ok) throw new Error(reply.error || `the folder answered with error ${res.status}`);
 }
@@ -462,14 +465,14 @@ export const flush = s => (busy ||= (async () => {
   try {
     for (const item of s.folderUrl ? box() : []) {
       await post(s, item);
-      save(OUTBOX, box().filter(x => !same(x, item)));
+      save(OUTBOX, box().filter(x => !(same(x, item) && x.pdf === item.pdf && x.v === item.v)));
     }
   } catch (e) { if (!(e instanceof TypeError)) error = e.message; }
   return { left: queued(), error };
 })().finally(() => { busy = null; }));
 
-// file: { date, name, bytes, v }. v is the record's last edit time; the folder keeps the newest copy,
-// so a phone that was offline for hours can't roll it back.
+// file: { date, name, bytes, v }. v is the record's last edit time, preserved in the receiver's
+// metadata so an older offline edit can be distinguished without deleting newer records.
 export async function fileAway(s, f) {
   if (!s.folderUrl) return;
   if (!queue({ date: f.date, name: f.name, pdf: b64(f.bytes), v: f.v || 0 })) return toast(L("This phone is out of space, so the PDF wasn't queued. Use Save as PDF."), 'bad');
@@ -509,8 +512,8 @@ export function settingsView(s, opts = {}) {
       <button class="btn" data-act="addCrew">${L('+ Add crew')}</button></section>
     <section class="card"><h2>${L('Finish / accuracy checks')}</h2><p class="hint">${L('One per line. Tap them onto a task as required checks.')}</p>
       <textarea data-k="s.checks" data-lines rows="6">${esc(s.checks.join('\n'))}</textarea></section>
-    <section class="card"><h2>${L('Review folder')}</h2><p class="hint">${L('Finished task sheets and daily reports save themselves as PDFs to a shared Google Drive folder, one folder per day. Set up once with review-folder.gs (steps inside it), then use the same link and code on every phone. Crew phones pick it up from the first task sheet they open.')}</p>
-      <div class="grid">${field(L('Folder upload link'), 's.folderUrl', s.folderUrl, { wide: true, ph: 'https://script.google.com/macros/s/.../exec', mode: 'url' })}${field(L('Site code'), 's.siteCode', s.siteCode)}</div>
+    <section class="card"><h2>${L('Review folder')}</h2><p class="hint">${L('Optional PDF filing needs an owner-approved Google Drive receiver. Enter its upload link and code manually on each phone that should upload. Task links do not carry the upload code or change these settings.')}</p>
+      <div class="grid">${field(L('Folder upload link'), 's.folderUrl', s.folderUrl, { wide: true, ph: 'https://script.google.com/macros/s/.../exec', mode: 'url' })}${field(L('Site code'), 's.siteCode', s.siteCode, { type: 'password' })}</div>
       <div class="btns"><button class="btn" data-act="testFolder">${L('Test the connection')}</button></div>
       <p class="hint">${n ? L('Waiting to upload: {n}', { n }) : L('Nothing waiting to upload.')}</p></section>
     <section class="card"><h2>${L('Backup')}</h2><p class="hint">${L('Everything is stored on this phone only. Download a backup weekly, or before clearing browser data or switching phones.')}</p>
@@ -527,7 +530,6 @@ export async function settingsAct(act, s, el) {
     download(new Blob([JSON.stringify(data)], { type: 'application/json' }), `schwab-field-backup-${today()}.json`);
   }
   if (act === 'testFolder') {
-    if (!/^https:\/\//.test(s.folderUrl)) return toast(L('Paste the folder upload link first. It starts with https://'), 'bad');
     try {
       await post(s, { ping: true });
       toast(L('Connected. Finished sheets and reports will save to the review folder.'));

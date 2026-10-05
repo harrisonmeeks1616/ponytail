@@ -94,11 +94,6 @@ async function openCode(code) {
   if (data.kind === 'day') return importDay(data);
   const inc = normTask(data.task);
   let t = find(inc.uid), firstSheet = false;
-  if (data.kind === 'task' && data.folder && !S.folderUrl && /^https:\/\//.test(data.folder.url)) {
-    // Only a phone with no review folder yet adopts one, so a later link can't redirect finished sheets.
-    Object.assign(S, { folderUrl: String(data.folder.url), siteCode: String(data.folder.code || '') });
-    save(KEYS.settings, S);
-  }
   if (!inc.uid || !['task', 'result'].includes(data.kind)) { toast(L('That link has no task sheet in it'), 'bad'); return location.replace('#day/' + day); }
   if (data.kind === 'task') {
     if (!t) {
@@ -386,13 +381,10 @@ function taskMsg(t, l) {
 }
 
 async function send(kind, t) {
+  if (kind === 'task') { t.sentAt = Date.now(); persist(); render(); }
   const payload = kind === 'day' ? { v: 1, kind, date: day, tasks: dayTasks() } : { v: 1, kind, task: t };
-  if (kind === 'task' && S.folderUrl) payload.folder = { url: S.folderUrl, code: S.siteCode }; // so the crew phone files its finished sheet
   const url = linkTo('tasks.html', await pack(payload));
   if (kind === 'task') {
-    t.sentAt = Date.now();
-    persist();
-    render();
     // A crew that has answered in Spanish before gets the message in both languages.
     const both = getLang() === 'es' || T.some(x => x.crew === t.crew && x.cLang === 'es');
     sendSheet({ title: L('Task {id} for {crew}', { id: t.id, crew: t.crew }), url, text: both ? `${taskMsg(t, 'en')}\n\n${taskMsg(t, 'es')}` : taskMsg(t, 'en') });
