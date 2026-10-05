@@ -57,7 +57,7 @@ Schwab Field Records/
 - Each phone keeps its own records in the browser, saved as you type.
 - Handoffs are links. **Send to crew**, **Send results**, **Send day plan** and **Send to PM** pack the details into the part of the link after `#`, which browsers never send to the web server. Compression/base64 is readable encoding, not encryption or authentication. Anyone with the link can read or alter its contents, so send it only to the intended people.
 - Opening a link merges it in: crew results join the superintendent's sheet without touching the assignment; a re-sent sheet keeps the crew's check-offs; PM answers join the report without touching what the superintendent wrote since.
-- **Fill from task sheets** in the Daily Report rolls the day's task sheets (on the same phone) into the floor and crew sections. It only fills empty fields.
+- **Fill from task sheets** in the Daily Report rolls the day's task sheets (on the same phone) into the floor and crew sections. It fills only empty text fields; the work hours and labor-hours follow the sheets on every fill.
 - **Settings → Download backup** saves everything on that phone to a file.
 - Backups contain work records and settings, including the upload code if configured. Keep backups private.
 

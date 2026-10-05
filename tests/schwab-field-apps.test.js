@@ -287,3 +287,48 @@ test('a crafted link cannot inject markup, crash a report, or hide a sheet', asy
   assert.equal(normReport({ status: '<b>Done</b>' }).status, '', 'an unknown status is dropped, not rendered');
   assert.equal(normReport({ status: 'At risk' }).status, 'At risk');
 });
+
+test('a crew on several floors is billed its sheets once, and a later fill widens the work window', async () => {
+  const { normTask, normReport, fillFromTasks } = await lib;
+  const sheet = (id, floor, aStart, aStop, delay = 0) => normTask({ id, floor, crew: 'Crew A', size: 2, aStart, aStop, delay });
+  const tasks = [sheet('T1', 'Level 3', '07:00', '09:00'), sheet('T2', 'Level 4', '09:00', '12:00', 30), sheet('T3', 'Level 3', '13:00', '15:00')];
+  const rep = normReport({});
+  fillFromTasks(rep, tasks, ['Crew A']);
+  const [l3, l4] = rep.floors.map(f => f.crews[0]);
+  assert.equal([l3.start, l3.stop].join('-'), '07:00-15:00');
+  assert.equal(l3.labor, 8, '2 + 2 hours worked by 2 people, not 07:00 to 15:00 by 2');
+  assert.equal(l4.labor, 5, 'delays are not billed');
+
+  l3.start = '06:30'; // typed by the superintendent
+  tasks.push(sheet('T4', 'Level 3', '15:00', '16:30'));
+  fillFromTasks(rep, tasks, ['Crew A']);
+  assert.equal([l3.start, l3.stop].join('-'), '06:30-16:30', 'a later fill only widens the window');
+  assert.equal(l3.labor, 11);
+});
+
+test('merges keep the send and result stamps an older link is checked against', async () => {
+  const { normTask, mergeTask } = await lib;
+  const crew = normTask({ uid: 'u', sentAt: 1, scope: 'first' });
+  mergeTask(crew, normTask({ uid: 'u', sentAt: 2, scope: 'resent' }), 'assign');
+  assert.equal(crew.sentAt, 2, 'reopening the first text is then seen as older');
+  const office = normTask({ uid: 'u', sentAt: 2 });
+  mergeTask(office, normTask({ uid: 'u', sentAt: 2, status: 'Partial', resultAt: 9 }), 'crew');
+  assert.equal(office.resultAt, 9);
+});
+
+test('a restored file with the wrong shape cannot crash the apps', async () => {
+  const { load, KEYS } = await lib;
+  const store = new Map([[KEYS.tasks, '{"not":"a list"}'], [KEYS.settings, '{"me":"H"}']]);
+  Object.defineProperty(globalThis, 'localStorage', { configurable: true, value: { getItem: k => store.get(k) ?? null, setItem: (k, v) => store.set(k, String(v)) } });
+  try {
+    assert.deepEqual(load(KEYS.tasks, []), []);
+    assert.deepEqual(load(KEYS.settings, null), { me: 'H' });
+  } finally { delete globalThis.localStorage; }
+});
+
+test('a short crafted link cannot expand into a huge list or carry an impossible report date', async () => {
+  const { normTask, normReport } = await lib;
+  assert.equal(normTask({ items: Array(1e5).fill({}) }).items.length, 500);
+  assert.equal(normReport({ date: '2026-02-30' }).date, '', 'the review folder would refuse it forever');
+  assert.equal(normReport({ date: '2026-02-28' }).date, '2026-02-28');
+});

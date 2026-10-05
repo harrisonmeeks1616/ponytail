@@ -161,6 +161,7 @@ export default {
   "This phone wouldn't save. Open Settings and download a backup.": 'Este teléfono no pudo guardar. Abra Ajustes y descargue una copia de seguridad.',
   'That link is damaged or cut off. Ask for it to be sent again.': 'Ese enlace está dañado o incompleto. Pida que se lo vuelvan a enviar.',
   'That link has no task sheet in it': 'Ese enlace no trae ninguna hoja de tarea',
+  'This is an older copy of this sheet. The newer one is kept.': 'Esta es una copia anterior de esta hoja. Se conserva la más reciente.',
   'Load the task plan for {date}? New sheets: {fresh}. Updated: {known}. Check-offs already on this phone are kept.': '¿Cargar el plan de tareas del {date}? Hojas nuevas: {fresh}. Actualizadas: {known}. Lo que ya está marcado en este teléfono se conserva.',
   'Load plan': 'Cargar plan',
   'Plan loaded': 'Plan cargado',
@@ -250,4 +251,5 @@ export default {
   "That file isn't a field app backup": 'Ese archivo no es una copia de seguridad de la app',
   'Replace everything on this phone with this backup?': '¿Reemplazar todo lo de este teléfono con esta copia?',
   'Replace': 'Reemplazar',
+  'Restore stopped: this phone is out of space. Free space and restore again.': 'Restauración detenida: este teléfono no tiene espacio. Libere espacio y vuelva a restaurar.',
 };

@@ -6,7 +6,7 @@
 <meta name="theme-color" content="#1F242A">
 <meta name="apple-mobile-web-app-title" content="Task Sheets">
 <title>Electrical Task Sheets</title>
-<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@600;700&family=Barlow:wght@400;600&display=swap">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@600;700&family=Barlow:wght@400;600&display=swap" media="print" onload="this.media='all'">
 <link rel="stylesheet" href="shared.css">
 </head>
 <body>
@@ -42,7 +42,7 @@ const go = h => (location.hash === '#' + h ? route() : (location.hash = h));
 const crewVar = name => cv(S, name);
 const floorRank = f => { const i = S.floors.indexOf(f); return i < 0 ? 999 : i; };
 const doneCount = t => t.items.filter(i => i.done).length;
-const worked = t => (t.aStart && t.aStop ? Math.max(0, span(t.aStart, t.aStop) - t.delay) : 0);
+const worked = t => (t.aStart && t.aStop ? Math.max(0, span(t.aStart, t.aStop) - t.delay) : 0); // same as shared.mjs; kept here so a stale cached shared.mjs can't break this page
 const isOpen = t => t.status !== 'Complete' && t.review !== 'Accepted';
 const prevDay = () => [...new Set(T.map(t => t.date))].filter(d => d < day).sort().at(-1);
 const dayTasks = () => T.filter(t => t.date === day);
@@ -81,7 +81,7 @@ function route() {
   const h = location.hash.slice(1);
   if (h.startsWith('p=')) return openCode(h.slice(2));
   const [v, a, b] = h.split('/');
-  if (v === 'day' && /^\d{4}-\d{2}-\d{2}$/.test(a)) day = a;
+  if (v === 'day' && /^\d{4}-\d{2}-\d{2}$/.test(a) && addDays(a, 0) === a) day = a; // a real day, not 2026-02-30
   view = v === 'task' && find(a) ? { v: 'task', uid: a, tab: b || 'assign' } : { v: v === 'settings' ? 'settings' : 'board' };
   if (view.v === 'task') day = find(a).date;
   render();
@@ -96,6 +96,10 @@ async function openCode(code) {
   const inc = normTask(data.task);
   let t = find(inc.uid), firstSheet = false;
   if (!inc.uid || !['task', 'result'].includes(data.kind)) { toast(L('That link has no task sheet in it'), 'bad'); return location.replace('#day/' + day); }
+  // An older text opened after a newer one (a re-sent sheet on the crew phone, results on the office phone) changes nothing.
+  const older = data.kind === 'task' ? t?.origin === 'link' && inc.sentAt && t.sentAt && inc.sentAt < t.sentAt
+    : t && t.origin !== 'link' && t.resultAt && inc.resultAt < t.resultAt;
+  if (older) { toast(L('This is an older copy of this sheet. The newer one is kept.')); return location.replace(`#task/${t.uid}/${data.kind === 'result' ? 'review' : 'assign'}`); }
   if (data.kind === 'task') {
     if (!t) {
       T.push(t = Object.assign(inc, { origin: 'link', gotAt: Date.now() })); // a crew phone opening its sheet
@@ -119,7 +123,7 @@ async function openCode(code) {
 
 async function importDay(data) {
   const date = /^\d{4}-\d{2}-\d{2}$/.test(data.date) ? data.date : day;
-  const inc = (Array.isArray(data.tasks) ? data.tasks : []).map(normTask).filter(t => t.uid);
+  const inc = (Array.isArray(data.tasks) ? data.tasks : []).slice(0, 500).map(normTask).filter(t => t.uid);
   const fresh = inc.filter(t => !find(t.uid)), known = inc.filter(t => find(t.uid));
   if (inc.length && await ask(L('Load the task plan for {date}? New sheets: {fresh}. Updated: {known}. Check-offs already on this phone are kept.', { date: niceDate(date), fresh: fresh.length, known: known.length }), L('Load plan'))) {
     for (const t of fresh) T.push(Object.assign(t, { origin: 'mine' }));
@@ -422,7 +426,7 @@ async function act(a, el) {
       setPath(ctx, el.dataset.k, getPath(ctx, el.dataset.k) === v ? '' : v);
       if (el.dataset.k === 't.review' && t.review && !t.reviewer) t.reviewer = S.me;
       if (el.dataset.k === 't.status' && t.status === 'Blocked' && !t.comments) toast(L('Say what is blocking the work in Crew comments'));
-      if (el.dataset.k === 't.review' && t.review) { t.updatedAt = Date.now(); render(); return fileTask(t); } // stamp the edit, then file
+      if (el.dataset.k === 't.review' && t.review) { t.updatedAt = Date.now(); persist(); render(); return fileTask(t); } // stamp the edit, then file
       break;
     }
     case 'crew': pickCrew(t, v); break;
@@ -457,6 +461,7 @@ async function act(a, el) {
     case 'sendResults': {
       if (!t.status) return toast(L('Pick Complete, Partial or Blocked first'), 'bad');
       t.cLang = getLang();
+      t.resultAt = Date.now(); // the office phone keeps these over an older results text
       persist();
       await send('result', t);
       return fileTask(t);
@@ -547,7 +552,7 @@ document.addEventListener('keydown', e => {
 });
 
 // The other app (or another tab) changed shared data: reload so a stale copy here never overwrites it.
-const reload = () => { S = loadSettings(); setLang(S.lang); T = loadTasks(); render(); };
+const reload = () => { S = loadSettings(); setLang(S.lang); T = loadTasks(); if (view.v === 'task' && !current()) view = { v: 'board' }; render(); };
 addEventListener('storage', e => Object.values(KEYS).includes(e.key) && reload());
 addEventListener('pageshow', e => e.persisted && reload());
 addEventListener('hashchange', route);
