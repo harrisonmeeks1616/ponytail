@@ -222,3 +222,68 @@ test('Spanish labels, safe placeholders, and notes printed as typed', async () =
   const office = normTask({ uid: 'u', items: [] }), crew = normTask({ uid: 'u', status: 'Partial', cLang: 'es', items: [] });
   assert.equal(mergeTask(office, crew, 'crew').cLang, 'es', 'the crew language travels with the results');
 });
+
+test('upload queue: newer edits survive, refusals cannot block or flood, dead records clear', async () => {
+  const { queue, flush, queued } = await lib;
+  const store = new Map();
+  Object.defineProperty(globalThis, 'localStorage', { configurable: true, value: { getItem: k => store.get(k) ?? null, setItem: (k, v) => store.set(k, String(v)) } });
+  const realFetch = globalThis.fetch, sent = [];
+  const s = { folderUrl: 'https://script.google.com/macros/s/x/exec', siteCode: 'sparky' };
+  const answer = decide => async (url, o) => {
+    const b = JSON.parse(o.body);
+    sent.push(b.pdf);
+    return { status: 200, json: async () => decide(b) };
+  };
+  try {
+    // The superintendent edits a sheet while an earlier upload is running.
+    queue({ date: '2026-10-03', name: 'A', pdf: 'a' });
+    queue({ date: '2026-10-03', name: 'T1', pdf: 'old', v: 1 });
+    globalThis.fetch = answer(b => {
+      if (b.pdf === 'a') queue({ date: '2026-10-03', name: 'T1', pdf: 'new', v: 2 });
+      return { ok: true };
+    });
+    assert.equal((await flush(s)).left, 1, 'the newer copy is still waiting');
+    assert.deepEqual(sent, ['a'], 'the replaced copy is never sent');
+    await flush(s);
+    assert.deepEqual(sent, ['a', 'new']);
+    assert.equal(queued(), 0);
+
+    // A refused record goes to the back of the line: the next try sends what is behind it.
+    sent.length = 0;
+    queue({ date: '2026-10-04', name: 'Bad', pdf: 'bad' });
+    queue({ date: '2026-10-04', name: 'Good', pdf: 'good' });
+    globalThis.fetch = answer(b => (b.pdf === 'bad' ? { ok: false, error: 'Not a field app PDF' } : { ok: true }));
+    assert.deepEqual(await flush(s), { left: 2, error: 'Not a field app PDF' }, 'one refused post per try, not one per record');
+    assert.deepEqual(await flush(s), { left: 1, error: 'Not a field app PDF' });
+    assert.deepEqual(sent, ['bad', 'good', 'bad']);
+
+    // A record saved with a blank date before the fix can never upload; it is dropped, not retried forever.
+    store.set('schwab.outbox', JSON.stringify([{ date: '', name: 'T9', pdf: 'x' }, ...JSON.parse(store.get('schwab.outbox'))]));
+    assert.equal(queued(), 1);
+  } finally {
+    globalThis.fetch = realFetch;
+    delete globalThis.localStorage;
+  }
+});
+
+test('a crafted link cannot inject markup, crash a report, or hide a sheet', async () => {
+  const { normTask, normReport, today } = await lib;
+  const evil = '"><img src=x onerror=alert(1)>';
+  const before = today();
+  const t = normTask({ uid: evil, date: evil, pStart: evil, aStart: evil, aStop: '07:30', checkIn: '7:05', pStop: '99:99', filedAt: 5 });
+  const after = today();
+  assert.equal(t.uid, '');
+  assert.deepEqual([t.pStart, t.aStart, t.aStop, t.checkIn, t.pStop], ['', '', '07:30', '', ''], 'only real HH:MM times survive');
+  assert.ok([before, after].includes(t.date), 'a sheet with no usable date lands on today instead of vanishing');
+  assert.equal(t.filedAt, 0, 'a re-dated sheet is filed again under its new date');
+  const ok = normTask({ uid: 'mfq1a2b3c', date: '2026-10-03', filedAt: 5 });
+  assert.deepEqual([ok.uid, ok.date, ok.filedAt], ['mfq1a2b3c', '2026-10-03', 5]);
+  // A sheet saved with a cleared or impossible date comes back on the day it was last edited.
+  const edited = new Date(2026, 9, 2, 15).getTime();
+  assert.equal(normTask({ uid: 'u', date: '', updatedAt: edited }).date, '2026-10-02');
+  assert.equal(normTask({ uid: 'u', date: '2026-02-30', updatedAt: edited }).date, '2026-10-02');
+  assert.match(normTask({ uid: 'u', date: '', updatedAt: 1e15 }).date, /^\d{4}-\d{2}-\d{2}$/, 'a wild edit time still gives a real day');
+
+  assert.equal(normReport({ status: '<b>Done</b>' }).status, '', 'an unknown status is dropped, not rendered');
+  assert.equal(normReport({ status: 'At risk' }).status, 'At risk');
+});

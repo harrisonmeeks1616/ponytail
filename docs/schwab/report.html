@@ -124,7 +124,7 @@ function render() {
     </div><p class="hint">${r.submittedAt ? `Sent to the PM ${stamp(r.submittedAt)}` : 'Not sent to the PM yet'}${r.pmReview ? ` · PM reviewed: ${esc(r.pmReview)}` : ''}</p></section>
     ${sec('sum', 1, 'Overall status & today’s results', `${seg('r.status', r.status, STATUS)}
       ${field('Most important results today, planned work missed, and effect on the job', 'r.results', r.results, { rows: 4 })}`,
-      r.status ? `<span class="pill" data-tone="${STATUS.find(s => s[0] === r.status)[1]}">${r.status}</span>` : '')}
+      r.status ? `<span class="pill" data-tone="${STATUS.find(s => s[0] === r.status)?.[1] || ''}">${esc(r.status)}</span>` : '')}
     ${sec('wins', 2, 'Good results & lessons to repeat', field('Crew wins, quality improvements, faster methods, repeat-floor lessons', 'r.wins', r.wins, { rows: 3 }))}
     ${sec('issues', 3, 'Site issues, concerns & coordination', field('Safety / quality issues, other trades, access, inspections, scope changes', 'r.issues', r.issues, { rows: 3 })
       + field('Who was notified / when', 'r.notified', r.notified))}

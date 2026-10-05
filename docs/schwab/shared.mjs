@@ -66,7 +66,23 @@ export const TASK_TPL = {
   aStart: '', aStop: '', delay: 0, status: '', doneText: '', remain: '', comments: '', cLang: '',
   review: '', reviewer: '', followUp: '', sentAt: 0, gotAt: 0, updatedAt: 0, filedAt: 0,
 };
-export const normTask = t => shape(TASK_TPL, t);
+// Ids, dates and times end up in addresses and page markup, so they must keep their exact format.
+// Anything else in them (a damaged or crafted link) is dropped here, once, for every link, backup and save.
+const FORMAT = { uid: /^[\w-]{1,40}$/, date: /^\d{4}-\d{2}-\d{2}$/, time: /^([01]\d|2[0-3]):[0-5]\d(?::[0-5]\d)?$/ };
+const isDay = d => FORMAT.date.test(d) && addDays(d, 0) === d; // a real calendar day, not 2026-02-30
+export function normTask(t) {
+  const n = shape(TASK_TPL, t);
+  if (!FORMAT.uid.test(n.uid)) n.uid = '';
+  for (const k of ['pStart', 'pStop', 'checkIn', 'aStart', 'aStop']) if (!FORMAT.time.test(n[k])) n[k] = '';
+  // Every sheet belongs to a day; one with no usable date would vanish from every board.
+  // It goes back on the day it was last edited (or today), and is filed again under that date.
+  if (!isDay(n.date)) {
+    const edited = iso(new Date(n.updatedAt || Date.now()));
+    n.date = isDay(edited) ? edited : today();
+    n.filedAt = 0;
+  }
+  return n;
+}
 export const newItem = text => ({ id: uid(), text, done: false, at: 0 });
 
 const ASSIGN = ['id', 'date', 'by', 'floor', 'area', 'crew', 'members', 'size', 'scope', 'refs', 'allot', 'allotNote', 'est', 'estNote', 'pStart', 'pStop', 'checkIn'];
@@ -118,7 +134,12 @@ export const REPORT_TPL = {
   risks: [{ risk: '', impact: '', prevent: '', fallback: '', owner: '', by: '' }],
   preparedBy: '', pmReview: '', updatedAt: 0, filedAt: 0,
 };
-export const normReport = r => shape(REPORT_TPL, r);
+const REPORT_STATUS = ['On plan', 'At risk', 'Behind plan', 'No work today']; // same list as STATUS in report.html
+export function normReport(r) {
+  const n = shape(REPORT_TPL, r);
+  if (!REPORT_STATUS.includes(n.status)) n.status = ''; // one the page doesn't know would break it
+  return n;
+}
 export const blank = list => shape(REPORT_TPL[list][0], {});
 export const newFloor = (floor, crewNames) => ({ floor, crews: crewNames.map(name => ({ ...CREW_TPL, name })) });
 
@@ -444,8 +465,11 @@ export async function savePdf(filename, bytes) {
 // per date and name; the receiver preserves earlier uploaded edits as separate files.
 
 const OUTBOX = 'schwab.outbox';
-const box = () => { const b = load(OUTBOX, []); return Array.isArray(b) ? b : []; };
+// A record with no valid date (saved before blank dates were fixed) is refused forever; drop it.
+// Its sheet is re-dated on load and filed again, so nothing is lost.
+const box = () => { const b = load(OUTBOX, []); return Array.isArray(b) ? b.filter(x => FORMAT.date.test(x?.date)) : []; };
 const same = (a, b) => a.date === b.date && a.name === b.name;
+const sameCopy = (a, b) => same(a, b) && a.pdf === b.pdf && a.v === b.v;
 export const queue = item => save(OUTBOX, [...box().filter(x => !same(x, item)), item]);
 export const queued = () => box().length;
 
@@ -462,12 +486,19 @@ let busy = null;
 // Resolves to { left, error }. error stays empty for "no signal", which simply waits for the next try.
 export const flush = s => (busy ||= (async () => {
   let error = '';
-  try {
-    for (const item of s.folderUrl ? box() : []) {
+  for (const item of s.folderUrl ? box() : []) {
+    if (!box().some(x => sameCopy(x, item))) continue; // replaced by a newer copy while this ran; that one goes next time
+    try {
       await post(s, item);
-      save(OUTBOX, box().filter(x => !(same(x, item) && x.pdf === item.pdf && x.v === item.v)));
+      save(OUTBOX, box().filter(x => !sameCopy(x, item))); // only this copy: an edit saved meanwhile stays queued
+    } catch (e) {
+      if (!(e instanceof TypeError)) { // refused: back of the line, so it can't hold up the records behind it
+        error = e.message;
+        save(OUTBOX, [...box().filter(x => !sameCopy(x, item)), item]);
+      }
+      break; // no signal or a refusal: one try per flush keeps a wrong site code from re-sending every PDF
     }
-  } catch (e) { if (!(e instanceof TypeError)) error = e.message; }
+  }
   return { left: queued(), error };
 })().finally(() => { busy = null; }));
 
@@ -475,11 +506,14 @@ export const flush = s => (busy ||= (async () => {
 // metadata so an older offline edit can be distinguished without deleting newer records.
 export async function fileAway(s, f) {
   if (!s.folderUrl) return;
-  if (!queue({ date: f.date, name: f.name, pdf: b64(f.bytes), v: f.v || 0 })) return toast(L("This phone is out of space, so the PDF wasn't queued. Use Save as PDF."), 'bad');
+  const item = { date: f.date, name: f.name, pdf: b64(f.bytes), v: f.v || 0 };
+  if (!queue(item)) return toast(L("This phone is out of space, so the PDF wasn't queued. Use Save as PDF."), 'bad');
+  const waiting = () => box().some(x => sameCopy(x, item));
   let r = await flush(s);
-  if (r.left && !r.error) r = await flush(s); // another upload was mid-way; go again for this one
-  toast(r.error ? L('Review folder said: {error}. Kept on this phone; check Settings.', { error: r.error })
-    : r.left ? L('Saved on this phone. It goes to the review folder when there is signal.') : L('Saved to the review folder'), r.error ? 'bad' : '');
+  if (waiting()) r = await flush(s); // another upload was mid-way, or a refused record went first; go again for this one
+  // Report on this record only; another record's refusal is not this one's failure.
+  toast(!waiting() ? L('Saved to the review folder') : r.error ? L('Review folder said: {error}. Kept on this phone; check Settings.', { error: r.error })
+    : L('Saved on this phone. It goes to the review folder when there is signal.'), waiting() && r.error ? 'bad' : '');
 }
 
 export function retryUploads(s) {

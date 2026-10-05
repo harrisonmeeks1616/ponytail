@@ -31,7 +31,8 @@ registerSW();
 const app = document.getElementById('app'), bar = document.getElementById('bar');
 let S = loadSettings();
 setLang(S.lang);
-let T = load(KEYS.tasks, []).map(normTask);
+const loadTasks = () => load(KEYS.tasks, []).map(normTask).filter(t => t.uid); // a sheet with no usable id can't be opened or told apart
+let T = loadTasks();
 let day = today(), crewFilter = '', view = { v: 'board' };
 
 const persist = () => save(KEYS.tasks, T) || toast(L("This phone wouldn't save. Open Settings and download a backup."), 'bad');
@@ -197,7 +198,7 @@ function renderBoard() {
 
 function card(t) {
   const [label, tone] = stage(t), n = t.items.length, d = doneCount(t);
-  return `<a class="tcard" href="#task/${t.uid}/${t.status && !t.review ? 'review' : 'assign'}" style="${crewVar(t.crew)}">
+  return `<a class="tcard" href="#task/${esc(t.uid)}/${t.status && !t.review ? 'review' : 'assign'}" style="${crewVar(t.crew)}">
     <div class="row1"><span class="tid">${esc(t.id || L('New task'))}</span><span class="pill" data-tone="${tone}">${esc(label)}</span></div>
     <div class="meta"><span><i class="dot"></i> ${esc(t.crew || L('No crew yet'))}${t.size ? ' · ' + esc(L(t.size === 1 ? '1 person' : '{n} people', { n: t.size })) : ''}</span>
       ${t.area ? `<span>${esc(t.area)}</span>` : ''}${t.pStart ? `<span>${esc(t.pStop ? fromTo(t.pStart, t.pStop) : t12(t.pStart))}</span>` : ''}${t.est ? `<span>${esc(L('Est. {n} hrs', { n: t.est }))}</span>` : ''}</div>
@@ -209,9 +210,9 @@ function card(t) {
 function renderTask(t) {
   const crewSide = t.origin === 'link';
   const tabs = [['assign', L('Assign')], ['results', L('Crew results')], ['review', L('Review')]];
-  app.innerHTML = `<button class="link" data-go="day/${t.date}">‹ ${esc(L('{date} task sheets', { date: niceDate(t.date) }))}</button>` + (crewSide
+  app.innerHTML = `<button class="link" data-go="day/${esc(t.date)}">‹ ${esc(L('{date} task sheets', { date: niceDate(t.date) }))}</button>` + (crewSide
     ? brief(t) + results(t)
-    : `<nav class="tabs">${tabs.map(([k, l]) => `<a href="#task/${t.uid}/${k}" data-act="tab" data-v="${k}"${k === view.tab ? ' aria-current="page"' : ''}>${l}</a>`).join('')}</nav>`
+    : `<nav class="tabs">${tabs.map(([k, l]) => `<a href="#task/${esc(t.uid)}/${k}" data-act="tab" data-v="${k}"${k === view.tab ? ' aria-current="page"' : ''}>${l}</a>`).join('')}</nav>`
       + (view.tab === 'results' ? brief(t) + results(t) : view.tab === 'review' ? review(t) : assign(t)))
     + `<p class="hint">${L('Changes save on this phone as you type.')}</p>`;
   bar.innerHTML = `<div class="bar-in">${crewSide
@@ -288,7 +289,7 @@ function results(t) {
   const d = doneCount(t), n = t.items.length;
   const tick = (list, it, i) => `<button class="tick" data-act="tick" data-list="${list}" data-i="${i}" aria-pressed="${it.done}"><span class="box">✓</span><span class="txt">${esc(it.text)}</span>${it.at ? `<small>${timeOf(it.at)}</small>` : ''}</button>`;
   const clock = (k, label, now, primary) => t[k]
-    ? `<input type="time" data-k="t.${k}" value="${t[k]}" aria-label="${label}">`
+    ? `<input type="time" data-k="t.${k}" value="${esc(t[k])}" aria-label="${label}">`
     : `<button class="btn${primary ? ' primary' : ''}" data-act="clock" data-v="${k}">${now}</button>`;
   return `${n || t.checks.length ? `<section class="card"><h2>${L('Check off as you go')}</h2>
       ${n ? `<div class="label">${L('Steps · {d} of {n} done', { d, n })}</div><div class="progress"><i style="width:${d / n * 100}%"></i></div>
@@ -523,6 +524,7 @@ document.addEventListener('input', e => {
   const el = e.target, k = el.dataset.k;
   if (!k) return;
   const t = current();
+  if (k === 't.date' && !/^\d{4}-\d{2}-\d{2}$/.test(el.value)) return; // every sheet needs a real day; a cleared or half-typed date would hide it
   setPath({ t, s: S }, k, readInput(el));
   if (k.startsWith('s.')) {
     save(KEYS.settings, S);
@@ -537,7 +539,7 @@ document.addEventListener('input', e => {
 document.addEventListener('change', e => {
   if (e.target.matches('[data-pick]') && e.target.value) go('day/' + e.target.value);
   if (e.target.matches('[data-restore]') && e.target.files[0]) restore(e.target.files[0]);
-  if (e.target.dataset.k === 't.date') { day = e.target.value || day; } // moved to another day
+  if (e.target.dataset.k === 't.date' && /^\d{4}-\d{2}-\d{2}$/.test(e.target.value)) day = e.target.value; // moved to another day
 });
 
 document.addEventListener('keydown', e => {
@@ -545,7 +547,7 @@ document.addEventListener('keydown', e => {
 });
 
 // The other app (or another tab) changed shared data: reload so a stale copy here never overwrites it.
-const reload = () => { S = loadSettings(); setLang(S.lang); T = load(KEYS.tasks, []).map(normTask); render(); };
+const reload = () => { S = loadSettings(); setLang(S.lang); T = loadTasks(); render(); };
 addEventListener('storage', e => Object.values(KEYS).includes(e.key) && reload());
 addEventListener('pageshow', e => e.persisted && reload());
 addEventListener('hashchange', route);
