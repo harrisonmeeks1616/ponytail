@@ -126,7 +126,7 @@ export function cloneTask(t, date, onlyOpen) {
   return Object.assign(c, { uid: uid(), origin: 'mine', date, updatedAt: Date.now() });
 }
 
-export const CREW_TPL = { name: '', na: true, lead: '', workers: 0, labor: 0, members: '', area: '', ref: '', start: '', stop: '', done: '', quality: '', holdups: '', good: '' };
+export const CREW_TPL = { name: '', na: true, lead: '', workers: 0, labor: 0, laborFromTasks: false, members: '', area: '', ref: '', start: '', stop: '', done: '', quality: '', holdups: '', good: '' };
 export const REPORT_TPL = {
   date: '', super: '', shiftStart: '', shiftEnd: '', submittedAt: 0,
   status: '', results: '', wins: '', issues: '', notified: '',
@@ -194,6 +194,7 @@ export function fillFromTasks(rep, tasks, crewNames) {
     if (stops.length && (!c.stop || stops.at(-1) > c.stop)) c.stop = stops.at(-1);
     // Each sheet's worked hours, so a crew moving between floors isn't billed its whole day on each one.
     c.labor = ts.reduce((n, t) => n + worked(t) / 60 * (t.size || 1), 0);
+    c.laborFromTasks = true;
   }
   for (const t of tasks) {
     if (t.followUp && !rep.next.some(s => s.step.endsWith(t.followUp))) {
