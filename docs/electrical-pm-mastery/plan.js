@@ -964,9 +964,9 @@
       return SIZES.find(size => (AMP75[material][size] || 0) >= amps) || null;
     },
 
-    // Smallest conductor in the table that meets maxPct, or null.
+    // Smallest listed conductor that meets maxPct, or null (aluminum starts at 12 AWG in Table 310.16).
     minSizeForDrop({ phase, material, amps, feet, volts, maxPct }) {
-      return SIZES.find(size => calc.voltageDrop({ phase, material, size, amps, feet, volts }).pct <= maxPct) || null;
+      return SIZES.find(size => AMP75[material][size] && calc.voltageDrop({ phase, material, size, amps, feet, volts }).pct <= maxPct) || null;
     },
 
     amps({ kva, volts, phase }) { return kva * 1000 / (+phase === 3 ? Math.sqrt(3) * volts : volts); },
@@ -999,7 +999,27 @@
     breakEven({ overhead, marginPct }) { return marginPct > 0 ? overhead / (marginPct / 100) : null; },
   };
 
-  const EPM = { PHASES, KINDS, RESOURCES, WEEKS, SKILLS, LEVELS, FINAL_DAY, SIZES, CMIL, AMP75, buildDays, buildCards, phaseOfWeek, addDays, daysBetween, dayNumber, review, calc };
+  // ---------- Progress sync ----------
+  // Two copies of one learner's progress (two devices, two tabs, the cloud copy) combine instead of
+  // the newer one replacing the other, so a fresh or offline device can't wipe months of work.
+  // ponytail: union per day, card and skill; the newer copy wins a clash, and a day un-marked on one
+  // device while another still has it comes back. Per-entry edit times are the upgrade if that matters.
+  // An Erase or Restore stamps replacedAt, and that copy then replaces everything older outright.
+  const canon = o => JSON.stringify(o, (k, v) => (v && typeof v === 'object' && !Array.isArray(v) ? Object.fromEntries(Object.entries(v).sort()) : v));
+  function mergeProgress(a, b) {
+    const ua = a.updated || 0, ub = b.updated || 0;
+    const [older, newer] = ua > ub || (ua === ub && canon(a) > canon(b)) ? [b, a] : [a, b]; // same answer in either order
+    if ((newer.replacedAt || 0) >= (older.updated || 0)) return { ...newer };
+    const both = k => ({ ...(older[k] || {}), ...(newer[k] || {}) });
+    const sk = k => ({ ...((older.skills || {})[k] || {}), ...((newer.skills || {})[k] || {}) });
+    // The start date comes from the copy where it was last chosen; a fresh device's default never wins.
+    const n = o => Object.keys(o.done || {}).length;
+    const sa = a.startAt || 0, sb = b.startAt || 0;
+    const from = sa !== sb ? (sa > sb ? a : b) : n(older) > n(newer) ? older : newer;
+    return { ...older, ...newer, start: from.start, startAt: Math.max(sa, sb), done: both('done'), notes: both('notes'), cards: both('cards'), skills: { base: sk('base'), now: sk('now') }, updated: Math.max(ua, ub) };
+  }
+
+  const EPM = { canon, mergeProgress, PHASES, KINDS, RESOURCES, WEEKS, SKILLS, LEVELS, FINAL_DAY, SIZES, CMIL, AMP75, buildDays, buildCards, phaseOfWeek, addDays, daysBetween, dayNumber, review, calc };
   root.EPM = EPM;
   if (typeof module === 'object' && module.exports) module.exports = EPM;
 })(typeof window !== 'undefined' ? window : globalThis);
