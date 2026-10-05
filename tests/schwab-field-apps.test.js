@@ -141,6 +141,51 @@ test('finished records wait on the phone until the review folder takes them', as
   }
 });
 
+test('review uploads reject other destinations without sending PDF data or the code', async () => {
+  const { queue, flush } = await lib;
+  const store = new Map(), sent = [];
+  Object.defineProperty(globalThis, 'localStorage', { configurable: true, value: { getItem: k => store.get(k) ?? null, setItem: (k, v) => store.set(k, String(v)) } });
+  const realFetch = globalThis.fetch;
+  globalThis.fetch = async (url, o) => { sent.push([url, JSON.parse(o.body)]); return { status: 200, json: async () => ({ ok: true }) }; };
+  try {
+    queue({ date: '2026-10-04', name: 'Fictional test', pdf: 'JVBERi0=' });
+    for (const folderUrl of ['https://example.invalid/exec', 'https://script.google.com.evil.invalid/macros/s/x/exec', 'https://script.google.com@evil.invalid/macros/s/x/exec', 'https://script.google.com/macros/s/x/dev', 'https://script.google.com/macros/s/x/exec?redirect=elsewhere']) {
+      const r = await flush({ folderUrl, siteCode: 'fictional-code' });
+      assert.equal(r.left, 1);
+      assert.match(r.error, /Apps Script/);
+    }
+    assert.equal(sent.length, 0);
+    assert.equal((await flush({ folderUrl: ' https://script.google.com/macros/s/x/exec ', siteCode: 'fictional-code' })).left, 0);
+    assert.equal(sent[0][0], 'https://script.google.com/macros/s/x/exec');
+  } finally { globalThis.fetch = realFetch; delete globalThis.localStorage; }
+});
+
+test('a newer queued PDF survives completion of an older upload', async () => {
+  const { queue, flush } = await lib;
+  const store = new Map(), sent = [];
+  Object.defineProperty(globalThis, 'localStorage', { configurable: true, value: { getItem: k => store.get(k) ?? null, setItem: (k, v) => store.set(k, String(v)) } });
+  const realFetch = globalThis.fetch, s = { folderUrl: 'https://script.google.com/macros/s/x/exec', siteCode: 'fictional-code' };
+  let release, started;
+  const began = new Promise(resolve => { started = resolve; });
+  globalThis.fetch = async (url, o) => {
+    sent.push(JSON.parse(o.body));
+    started();
+    await new Promise(resolve => { release = resolve; });
+    return { status: 200, json: async () => ({ ok: true }) };
+  };
+  try {
+    queue({ date: '2026-10-04', name: 'Fictional test', pdf: 'older', v: 1 });
+    const uploading = flush(s);
+    await began;
+    queue({ date: '2026-10-04', name: 'Fictional test', pdf: 'newer', v: 2 });
+    release();
+    assert.deepEqual(await uploading, { left: 1, error: '' });
+    globalThis.fetch = async (url, o) => { sent.push(JSON.parse(o.body)); return { status: 200, json: async () => ({ ok: true }) }; };
+    assert.equal((await flush(s)).left, 0);
+    assert.deepEqual(sent.map(x => x.pdf), ['older', 'newer']);
+  } finally { globalThis.fetch = realFetch; delete globalThis.localStorage; }
+});
+
 test('Spanish mode has a Spanish version of every on-screen phrase', async () => {
   const fs = require('fs');
   const path = require('path');
