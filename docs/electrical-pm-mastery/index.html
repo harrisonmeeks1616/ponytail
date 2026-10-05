@@ -266,7 +266,7 @@ td.num, th.num { text-align: right; }
   const dow = iso => new Date(iso + 'T00:00:00Z').getUTCDay();
   const nextMonday = iso => E.addDays(iso, (8 - dow(iso)) % 7);
   const fmtDate = (iso, opts = { weekday: 'short', month: 'short', day: 'numeric' }) => new Date(iso + 'T00:00:00Z').toLocaleDateString(undefined, { ...opts, timeZone: 'UTC' });
-  const money = v => (v < 0 ? '(' : '') + '$' + Math.abs(v).toLocaleString(undefined, { maximumFractionDigits: 0 }) + (v < 0 ? ')' : '');
+  const money = (v, d = 0) => (v < 0 ? '(' : '') + '$' + Math.abs(v).toLocaleString(undefined, { minimumFractionDigits: d, maximumFractionDigits: d }) + (v < 0 ? ')' : '');
   const num = (v, d = 0) => v == null || !isFinite(v) ? 'n/a' : v.toLocaleString(undefined, { minimumFractionDigits: d, maximumFractionDigits: d });
   const pctf = (v, d = 1) => v == null || !isFinite(v) ? 'n/a' : (v * 100).toFixed(d) + '%';
   const ckt = n => 'CKT ' + String(n).padStart(3, '0');
@@ -642,7 +642,7 @@ td.num, th.num { text-align: right; }
     { id: 'labor', name: 'Labor productivity (PF)', blurb: 'Earned hours, productivity factor, and where the job lands if nothing changes.',
       fields: [['budgetHrs', 'Budget hours', 1000], ['pct', '% complete (from installed quantities)', 40], ['actualHrs', 'Actual hours to date', 520], ['rate', 'Burdened labor rate ($/hr)', 95]],
       run(x) { const r = E.calc.labor(x); const tone = r.pf == null ? '' : r.pf >= 1 ? 'good' : r.pf >= 0.95 ? 'warn' : 'bad';
-        return [['Earned hours', num(r.earned)], ['Productivity factor (earned / actual)', num(r.pf, 2), tone], ['Projected hours at completion', num(r.eac)], ['Gain or (fade), hours', r.variance == null ? 'n/a' : num(r.variance), r.variance < 0 ? 'bad' : 'good'], ['Gain or (fade), dollars', r.varianceCost == null ? 'n/a' : money(r.varianceCost), r.varianceCost < 0 ? 'bad' : 'good']]; },
+        return [['Earned hours', num(r.earned)], ['Productivity factor (earned / actual)', num(r.pf, 3), tone], ['Projected hours at completion', num(r.eac)], ['Gain or (fade), hours', r.variance == null ? 'n/a' : num(r.variance), r.variance < 0 ? 'bad' : 'good'], ['Gain or (fade), dollars', r.varianceCost == null ? 'n/a' : money(r.varianceCost), r.varianceCost < 0 ? 'bad' : 'good']]; },
       note: 'Assumes the remaining work runs at today\'s PF. Take % complete from installed quantities, never from hours spent, or fade stays hidden until closeout.' },
     { id: 'wip', name: 'WIP and over/under billing', blurb: 'Cost-to-cost percent complete, earned revenue, and billing position.',
       fields: [['contract', 'Contract value incl. approved COs ($)', 2000000], ['estCost', 'Estimated total cost, current forecast ($)', 1700000], ['costToDate', 'Cost to date ($)', 850000], ['billed', 'Billed to date ($)', 1100000]],
@@ -650,7 +650,7 @@ td.num, th.num { text-align: right; }
       note: 'Overbilling is cash ahead but it is a liability, not profit. Persistent underbilling usually means unbilled changes or hidden fade. The forecast is only as honest as the estimated total cost.' },
     { id: 'co', name: 'Change order pricing', blurb: 'Build a CO price the way the contract allows.',
       fields: [['hours', 'Labor hours (incl. supervision)', 40], ['rate', 'Burdened labor rate ($/hr)', 95], ['material', 'Material ($)', 6500], ['taxPct', 'Sales tax on material (%)', 8.25], ['equipment', 'Equipment / rental ($)', 1200], ['subs', 'Subcontractors ($)', 0], ['markupPct', 'Markup on self-performed work (%)', 15], ['subMarkupPct', 'Markup on subcontracts (%)', 5], ['bondPct', 'Bond premium (%)', 1]],
-      run(x) { const r = E.calc.changeOrder(x); return [['Labor', money(r.labor)], ['Material incl. tax', money(r.mat)], ['Equipment', money(r.equipment)], ['Markup on self-performed', money(r.selfMarkup)], ['Subcontracts + markup', money(r.subs + r.subMarkup)], ['Bond', money(r.bond)], ['Total change order', money(r.total), 'good']]; },
+      run(x) { const r = E.calc.changeOrder(x); return [['Labor', money(r.labor, 2)], ['Material incl. tax', money(r.mat, 2)], ['Equipment', money(r.equipment, 2)], ['Markup on self-performed', money(r.selfMarkup, 2)], ['Subcontracts + markup', money(r.subs + r.subMarkup, 2)], ['Bond', money(r.bond, 2)], ['Total change order', money(r.total, 2), 'good']]; },
       note: 'Use the markups and allowable costs your contract states. If impacts (remobilization, out-of-sequence work, extended supervision) cannot be priced yet, say so and reserve rights in writing.' },
     { id: 'vd', name: 'Voltage drop', blurb: 'K-method screening for feeders and branch circuits.',
       fields: [['phase', 'System', 3, [[1, 'Single phase'], [3, 'Three phase']]], ['material', 'Conductor', 'cu', [['cu', 'Copper (K 12.9)'], ['al', 'Aluminum (K 21.2)']]], ['size', 'Conductor size', '3/0', SIZE_OPTS], ['amps', 'Load (A)', 160], ['feet', 'One-way length (ft)', 250], ['volts', 'System voltage (V)', 480], ['maxPct', 'Target max drop (%)', 3]],
@@ -855,7 +855,9 @@ td.num, th.num { text-align: right; }
       h('div', { class: 'field' }, h('label', { for: 'set-export' }, 'Backup (copy and keep somewhere safe)'), exp,
         h('div', { class: 'row' }, h('button', { class: 'btn', onclick: () => {
           exp.value = JSON.stringify(S); // the latest, not the copy from when Settings opened
-          navigator.clipboard.writeText(exp.value).then(() => { msg.textContent = 'Backup copied.'; }, () => { exp.select(); msg.textContent = 'Copy blocked here. The text is selected; copy it manually.'; });
+          const manualCopy = () => { exp.focus(); exp.select(); msg.textContent = 'Copy blocked here. The text is selected; copy it manually.'; };
+          try { navigator.clipboard.writeText(exp.value).then(() => { msg.textContent = 'Backup copied.'; }, manualCopy); }
+          catch (_) { manualCopy(); }
         } }, 'Copy backup'))),
       h('div', { class: 'field' }, h('label', { for: 'set-import' }, 'Restore from backup'), imp,
         ui.pendingRestore

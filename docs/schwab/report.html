@@ -49,7 +49,7 @@ const rep = () => (R[day] ||= normReport({
 const go = h => (location.hash === '#' + h ? route() : (location.hash = h));
 
 const STATUS = [['On plan', 'good'], ['At risk', 'warn'], ['Behind plan', 'bad'], ['No work today', '']];
-const crewHours = c => c.labor || span(c.start, c.stop) / 60 * c.workers; // labor: summed from the task sheets by Fill
+const crewHours = c => c.laborFromTasks || c.labor ? c.labor : span(c.start, c.stop) / 60 * c.workers; // labor: summed from the task sheets by Fill
 const active = r => r.floors.flatMap(f => f.crews.filter(c => !c.na));
 const laborHrs = r => active(r).reduce((n, c) => n + crewHours(c), 0);
 const waiting = r => r.decisions.filter(d => d.q && !d.pm);
@@ -63,7 +63,7 @@ function lateLine(s) {
   return h > 0 ? `⚠ Forecast finishes ${amt} after the deadline` : `On track: ${amt} of float before the deadline`;
 }
 const OUT = {
-  lh: (r, d) => { const c = r.floors[d.f].crews[d.c]; return `Total labor-hours: ${hrs(crewHours(c))}${c.labor ? ' (from the task sheets)' : c.start && c.stop ? ` (${c.workers} × ${fmtMin(span(c.start, c.stop))})` : ''}`; },
+  lh: (r, d) => { const c = r.floors[d.f].crews[d.c]; return `Total labor-hours: ${hrs(crewHours(c))}${c.laborFromTasks || c.labor ? ' (from the task sheets)' : c.start && c.stop ? ` (${c.workers} × ${fmtMin(span(c.start, c.stop))})` : ''}`; },
   late: (r, d) => lateLine(r.next[d.i]),
 };
 
@@ -328,7 +328,10 @@ document.addEventListener('input', e => {
   if (!k) return;
   const r = rep();
   setPath({ r, s: S }, k, readInput(el));
-  if (/^r\.floors\.\d+\.crews\.\d+\.(start|stop|workers)$/.test(k)) setPath({ r }, k.replace(/\w+$/, 'labor'), 0); // typed hours take over from the sheets
+  if (/^r\.floors\.\d+\.crews\.\d+\.(start|stop|workers)$/.test(k)) { // typed hours take over from the sheets
+    const c = getPath({ r }, k.replace(/\.\w+$/, ''));
+    c.labor = 0; c.laborFromTasks = false;
+  }
   if (k.startsWith('s.')) return save(KEYS.settings, S);
   r.updatedAt = Date.now();
   persist();
