@@ -27,7 +27,9 @@ export const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;'
 // Copy only the keys and types the template knows; arrays use their first entry as the item template.
 // Every link, backup and old save passes through here, so a bad or hostile payload can't break the page.
 export function shape(tpl, src) {
-  if (Array.isArray(tpl)) return Array.isArray(src) ? src.map(x => shape(tpl[0], x)) : [];
+  // ponytail: lists stop at 500 entries, far past a real sheet or report, so a short crafted link can't
+  // expand into hundreds of thousands that freeze the phone and fill its storage. Raise it if a real list nears it.
+  if (Array.isArray(tpl)) return Array.isArray(src) ? src.slice(0, 500).map(x => shape(tpl[0], x)) : [];
   if (tpl && typeof tpl === 'object') {
     const out = {};
     for (const k of Object.keys(tpl)) out[k] = shape(tpl[k], src && typeof src === 'object' ? src[k] : undefined);
@@ -39,7 +41,8 @@ export function shape(tpl, src) {
 export const uid = () => Date.now().toString(36) + Math.random().toString(36).slice(2, 7);
 
 export function load(key, fallback) {
-  try { const v = localStorage.getItem(key); return v ? JSON.parse(v) : fallback; } catch { return fallback; }
+  // A list key holding something else (say, from a restored file) would crash the page that maps over it.
+  try { const v = localStorage.getItem(key), x = v ? JSON.parse(v) : fallback; return Array.isArray(fallback) && !Array.isArray(x) ? fallback : x; } catch { return fallback; }
 }
 // ponytail: everything lives in localStorage (~5 MB per site), roughly a year of daily sheets.
 // Past that, move to IndexedDB or a shared backend; Backup keeps a copy until then.
@@ -64,13 +67,29 @@ export const TASK_TPL = {
   scope: '', refs: '', items: [ITEM], checks: [ITEM],
   allot: 0, allotNote: '', est: 0, estNote: '', pStart: '', pStop: '', checkIn: '',
   aStart: '', aStop: '', delay: 0, status: '', doneText: '', remain: '', comments: '', cLang: '',
-  review: '', reviewer: '', followUp: '', sentAt: 0, gotAt: 0, updatedAt: 0, filedAt: 0,
+  review: '', reviewer: '', followUp: '', sentAt: 0, resultAt: 0, gotAt: 0, updatedAt: 0, filedAt: 0,
 };
-export const normTask = t => shape(TASK_TPL, t);
+// Ids, dates and times end up in addresses and page markup, so they must keep their exact format.
+// Anything else in them (a damaged or crafted link) is dropped here, once, for every link, backup and save.
+const FORMAT = { uid: /^[\w-]{1,40}$/, date: /^\d{4}-\d{2}-\d{2}$/, time: /^([01]\d|2[0-3]):[0-5]\d(?::[0-5]\d)?$/ };
+const isDay = d => FORMAT.date.test(d) && addDays(d, 0) === d; // a real calendar day, not 2026-02-30
+export function normTask(t) {
+  const n = shape(TASK_TPL, t);
+  if (!FORMAT.uid.test(n.uid)) n.uid = '';
+  for (const k of ['pStart', 'pStop', 'checkIn', 'aStart', 'aStop']) if (!FORMAT.time.test(n[k])) n[k] = '';
+  // Every sheet belongs to a day; one with no usable date would vanish from every board.
+  // It goes back on the day it was last edited (or today), and is filed again under that date.
+  if (!isDay(n.date)) {
+    const edited = iso(new Date(n.updatedAt || Date.now()));
+    n.date = isDay(edited) ? edited : today();
+    n.filedAt = 0;
+  }
+  return n;
+}
 export const newItem = text => ({ id: uid(), text, done: false, at: 0 });
 
 const ASSIGN = ['id', 'date', 'by', 'floor', 'area', 'crew', 'members', 'size', 'scope', 'refs', 'allot', 'allotNote', 'est', 'estNote', 'pStart', 'pStop', 'checkIn'];
-const CREW = ['lead', 'aStart', 'aStop', 'delay', 'status', 'doneText', 'remain', 'comments', 'cLang'];
+const CREW = ['lead', 'aStart', 'aStop', 'delay', 'status', 'doneText', 'remain', 'comments', 'cLang', 'resultAt'];
 
 // part 'crew': take the crew's results and check-offs, keep my assignment.
 // part 'assign': take the new assignment and checklist, keep check-offs already made here.
@@ -81,7 +100,7 @@ export function mergeTask(local, inc, part) {
     for (const it of keep) { const m = take.find(x => x.id === it.id); if (m) { it.done = m.done; it.at = m.at; } }
     local[list] = keep;
   }
-  local.updatedAt = Math.max(local.updatedAt, inc.updatedAt);
+  for (const k of ['updatedAt', 'sentAt']) local[k] = Math.max(local[k], inc[k]); // newest send seen, so an older link can't revert it
   return local;
 }
 
@@ -107,7 +126,7 @@ export function cloneTask(t, date, onlyOpen) {
   return Object.assign(c, { uid: uid(), origin: 'mine', date, updatedAt: Date.now() });
 }
 
-export const CREW_TPL = { name: '', na: true, lead: '', workers: 0, members: '', area: '', ref: '', start: '', stop: '', done: '', quality: '', holdups: '', good: '' };
+export const CREW_TPL = { name: '', na: true, lead: '', workers: 0, labor: 0, members: '', area: '', ref: '', start: '', stop: '', done: '', quality: '', holdups: '', good: '' };
 export const REPORT_TPL = {
   date: '', super: '', shiftStart: '', shiftEnd: '', submittedAt: 0,
   status: '', results: '', wins: '', issues: '', notified: '',
@@ -118,12 +137,19 @@ export const REPORT_TPL = {
   risks: [{ risk: '', impact: '', prevent: '', fallback: '', owner: '', by: '' }],
   preparedBy: '', pmReview: '', updatedAt: 0, filedAt: 0,
 };
-export const normReport = r => shape(REPORT_TPL, r);
+const REPORT_STATUS = ['On plan', 'At risk', 'Behind plan', 'No work today']; // same list as STATUS in report.html
+export function normReport(r) {
+  const n = shape(REPORT_TPL, r);
+  if (!REPORT_STATUS.includes(n.status)) n.status = ''; // one the page doesn't know would break it
+  if (!isDay(n.date)) n.date = ''; // an impossible day (2026-02-30) is refused by the review folder forever
+  return n;
+}
 export const blank = list => shape(REPORT_TPL[list][0], {});
 export const newFloor = (floor, crewNames) => ({ floor, crews: crewNames.map(name => ({ ...CREW_TPL, name })) });
 
 // Roll the day's task sheets up into the report's floor / crew sections.
-// Only empty report fields are filled, so the superintendent's own wording is never overwritten.
+// Only empty text fields are filled, so the superintendent's own wording is never overwritten.
+// The work window and labor-hours come from the sheets' clock times and follow them on every fill.
 export function fillFromTasks(rep, tasks, crewNames) {
   const groups = new Map();
   for (const t of tasks) {
@@ -147,8 +173,6 @@ export function fillFromTasks(rep, tasks, crewNames) {
       members: uniq(ts.flatMap(t => t.members)),
       area: uniq(ts.map(t => t.area)),
       ref: uniq(ts.flatMap(t => [t.id, t.refs])),
-      start: starts[0] || '',
-      stop: stops.at(-1) || '',
       done: lines(t => {
         const n = t.items.filter(i => i.done).length;
         return `${t.id}${t.status ? ' (' + t.status + ')' : ''}${t.items.length ? ` ${n}/${t.items.length} steps` : ''}: ${t.doneText || t.scope}`;
@@ -164,6 +188,12 @@ export function fillFromTasks(rep, tasks, crewNames) {
     };
     c.na = false;
     for (const [f, v] of Object.entries(fill)) if (!c[f] && v) c[f] = v;
+    // ponytail: the window only widens, by plain "HH:MM" string compare, so an overnight shift (stop past
+    // midnight) isn't handled. Compare minutes from the shift start if night work comes up.
+    if (starts[0] && (!c.start || starts[0] < c.start)) c.start = starts[0];
+    if (stops.length && (!c.stop || stops.at(-1) > c.stop)) c.stop = stops.at(-1);
+    // Each sheet's worked hours, so a crew moving between floors isn't billed its whole day on each one.
+    c.labor = ts.reduce((n, t) => n + worked(t) / 60 * (t.size || 1), 0);
   }
   for (const t of tasks) {
     if (t.followUp && !rep.next.some(s => s.step.endsWith(t.followUp))) {
@@ -213,6 +243,7 @@ export const nowHM = () => { const d = new Date(); return `${pad(d.getHours())}:
 export const toMin = t => { const m = /^(\d{1,2}):(\d{2})/.exec(t || ''); return m ? +m[1] * 60 + +m[2] : null; };
 // Minutes from start to stop; a stop earlier than the start is an overnight shift.
 export const span = (start, stop) => { const a = toMin(start), b = toMin(stop); return a == null || b == null ? 0 : (b - a + 1440) % 1440; };
+export const worked = t => (t.aStart && t.aStop ? Math.max(0, span(t.aStart, t.aStop) - t.delay) : 0); // a sheet's minutes on task, less delays
 export const fmtMin = m => m >= 60 ? `${Math.floor(m / 60)}h ${m % 60}m` : `${m}m`;
 export const t12 = t => { const m = toMin(t); return m == null ? '' : `${(Math.floor(m / 60) + 11) % 12 + 1}:${pad(m % 60)} ${m < 720 ? 'AM' : 'PM'}`; };
 export const stamp = (ts, l = lang) => ts ? new Date(ts).toLocaleString(locale(l), { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' }) : '';
@@ -444,8 +475,11 @@ export async function savePdf(filename, bytes) {
 // per date and name; the receiver preserves earlier uploaded edits as separate files.
 
 const OUTBOX = 'schwab.outbox';
-const box = () => { const b = load(OUTBOX, []); return Array.isArray(b) ? b : []; };
+// A record with no valid date (saved before blank dates were fixed) is refused forever; drop it.
+// Its sheet is re-dated on load and filed again, so nothing is lost.
+const box = () => load(OUTBOX, []).filter(x => isDay(x?.date));
 const same = (a, b) => a.date === b.date && a.name === b.name;
+const sameCopy = (a, b) => same(a, b) && a.pdf === b.pdf && a.v === b.v;
 export const queue = item => save(OUTBOX, [...box().filter(x => !same(x, item)), item]);
 export const queued = () => box().length;
 
@@ -462,12 +496,19 @@ let busy = null;
 // Resolves to { left, error }. error stays empty for "no signal", which simply waits for the next try.
 export const flush = s => (busy ||= (async () => {
   let error = '';
-  try {
-    for (const item of s.folderUrl ? box() : []) {
+  for (const item of s.folderUrl ? box() : []) {
+    if (!box().some(x => sameCopy(x, item))) continue; // replaced by a newer copy while this ran; that one goes next time
+    try {
       await post(s, item);
-      save(OUTBOX, box().filter(x => !(same(x, item) && x.pdf === item.pdf && x.v === item.v)));
+      save(OUTBOX, box().filter(x => !sameCopy(x, item))); // only this copy: an edit saved meanwhile stays queued
+    } catch (e) {
+      if (!(e instanceof TypeError)) { // refused: back of the line, so it can't hold up the records behind it
+        error = e.message;
+        save(OUTBOX, [...box().filter(x => !sameCopy(x, item)), item]);
+      }
+      break; // no signal or a refusal: one try per flush keeps a wrong site code from re-sending every PDF
     }
-  } catch (e) { if (!(e instanceof TypeError)) error = e.message; }
+  }
   return { left: queued(), error };
 })().finally(() => { busy = null; }));
 
@@ -475,11 +516,15 @@ export const flush = s => (busy ||= (async () => {
 // metadata so an older offline edit can be distinguished without deleting newer records.
 export async function fileAway(s, f) {
   if (!s.folderUrl) return;
-  if (!queue({ date: f.date, name: f.name, pdf: b64(f.bytes), v: f.v || 0 })) return toast(L("This phone is out of space, so the PDF wasn't queued. Use Save as PDF."), 'bad');
+  const item = { date: f.date, name: f.name, pdf: b64(f.bytes), v: f.v || 0 };
+  if (!isDay(item.date)) return; // the folder refuses an impossible day; never claim it was filed
+  if (!queue(item)) return toast(L("This phone is out of space, so the PDF wasn't queued. Use Save as PDF."), 'bad');
+  const waiting = () => box().some(x => sameCopy(x, item));
   let r = await flush(s);
-  if (r.left && !r.error) r = await flush(s); // another upload was mid-way; go again for this one
-  toast(r.error ? L('Review folder said: {error}. Kept on this phone; check Settings.', { error: r.error })
-    : r.left ? L('Saved on this phone. It goes to the review folder when there is signal.') : L('Saved to the review folder'), r.error ? 'bad' : '');
+  if (waiting()) r = await flush(s); // another upload was mid-way, or a refused record went first; go again for this one
+  // Report on this record only; another record's refusal is not this one's failure.
+  toast(!waiting() ? L('Saved to the review folder') : r.error ? L('Review folder said: {error}. Kept on this phone; check Settings.', { error: r.error })
+    : L('Saved on this phone. It goes to the review folder when there is signal.'), waiting() && r.error ? 'bad' : '');
 }
 
 export function retryUploads(s) {
@@ -519,7 +564,7 @@ export function settingsView(s, opts = {}) {
     <section class="card"><h2>${L('Backup')}</h2><p class="hint">${L('Everything is stored on this phone only. Download a backup weekly, or before clearing browser data or switching phones.')}</p>
       <div class="btns"><button class="btn" data-act="backup">${L('Download backup')}</button>
       <label class="btn">${L('Restore from backup')}<input type="file" accept="application/json,.json" data-restore hidden></label></div>
-      <p class="hint">${L('Using about {kb} KB of roughly 5,000 KB.', { kb: Math.ceil(Object.values(KEYS).reduce((n, k) => n + JSON.stringify(load(k, '')).length, 0) / 1024) })}</p></section>`;
+      <p class="hint">${L('Using about {kb} KB of roughly 5,000 KB.', { kb: Math.ceil([...Object.values(KEYS), OUTBOX].reduce((n, k) => n + JSON.stringify(load(k, '')).length, 0) / 1024) })}</p></section>`;
 }
 
 export async function settingsAct(act, s, el) {
@@ -546,7 +591,7 @@ export async function restore(file) {
   try { data = JSON.parse(await file.text()); } catch { return toast(L("That file isn't a field app backup"), 'bad'); }
   if (!data || !Object.values(KEYS).some(k => k in data)) return toast(L("That file isn't a field app backup"), 'bad');
   if (!await ask(L('Replace everything on this phone with this backup?'), L('Replace'), 'danger')) return;
-  for (const k of Object.values(KEYS)) if (data[k] != null) save(k, data[k]);
+  if (!Object.values(KEYS).every(k => data[k] == null || save(k, data[k]))) return toast(L('Restore stopped: this phone is out of space. Free space and restore again.'), 'bad');
   location.reload();
 }
 

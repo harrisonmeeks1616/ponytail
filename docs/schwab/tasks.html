@@ -6,7 +6,7 @@
 <meta name="theme-color" content="#1F242A">
 <meta name="apple-mobile-web-app-title" content="Task Sheets">
 <title>Electrical Task Sheets</title>
-<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@600;700&family=Barlow:wght@400;600&display=swap">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@600;700&family=Barlow:wght@400;600&display=swap" media="print" onload="this.media='all'">
 <link rel="stylesheet" href="shared.css">
 </head>
 <body>
@@ -31,7 +31,8 @@ registerSW();
 const app = document.getElementById('app'), bar = document.getElementById('bar');
 let S = loadSettings();
 setLang(S.lang);
-let T = load(KEYS.tasks, []).map(normTask);
+const loadTasks = () => load(KEYS.tasks, []).map(normTask).filter(t => t.uid); // a sheet with no usable id can't be opened or told apart
+let T = loadTasks();
 let day = today(), crewFilter = '', view = { v: 'board' };
 
 const persist = () => save(KEYS.tasks, T) || toast(L("This phone wouldn't save. Open Settings and download a backup."), 'bad');
@@ -41,7 +42,7 @@ const go = h => (location.hash === '#' + h ? route() : (location.hash = h));
 const crewVar = name => cv(S, name);
 const floorRank = f => { const i = S.floors.indexOf(f); return i < 0 ? 999 : i; };
 const doneCount = t => t.items.filter(i => i.done).length;
-const worked = t => (t.aStart && t.aStop ? Math.max(0, span(t.aStart, t.aStop) - t.delay) : 0);
+const worked = t => (t.aStart && t.aStop ? Math.max(0, span(t.aStart, t.aStop) - t.delay) : 0); // same as shared.mjs; kept here so a stale cached shared.mjs can't break this page
 const isOpen = t => t.status !== 'Complete' && t.review !== 'Accepted';
 const prevDay = () => [...new Set(T.map(t => t.date))].filter(d => d < day).sort().at(-1);
 const dayTasks = () => T.filter(t => t.date === day);
@@ -80,7 +81,7 @@ function route() {
   const h = location.hash.slice(1);
   if (h.startsWith('p=')) return openCode(h.slice(2));
   const [v, a, b] = h.split('/');
-  if (v === 'day' && /^\d{4}-\d{2}-\d{2}$/.test(a)) day = a;
+  if (v === 'day' && /^\d{4}-\d{2}-\d{2}$/.test(a) && addDays(a, 0) === a) day = a; // a real day, not 2026-02-30
   view = v === 'task' && find(a) ? { v: 'task', uid: a, tab: b || 'assign' } : { v: v === 'settings' ? 'settings' : 'board' };
   if (view.v === 'task') day = find(a).date;
   render();
@@ -95,6 +96,10 @@ async function openCode(code) {
   const inc = normTask(data.task);
   let t = find(inc.uid), firstSheet = false;
   if (!inc.uid || !['task', 'result'].includes(data.kind)) { toast(L('That link has no task sheet in it'), 'bad'); return location.replace('#day/' + day); }
+  // An older text opened after a newer one (a re-sent sheet on the crew phone, results on the office phone) changes nothing.
+  const older = data.kind === 'task' ? t?.origin === 'link' && inc.sentAt && t.sentAt && inc.sentAt < t.sentAt
+    : t && t.origin !== 'link' && t.resultAt && inc.resultAt < t.resultAt;
+  if (older) { toast(L('This is an older copy of this sheet. The newer one is kept.')); return location.replace(`#task/${t.uid}/${data.kind === 'result' ? 'review' : 'assign'}`); }
   if (data.kind === 'task') {
     if (!t) {
       T.push(t = Object.assign(inc, { origin: 'link', gotAt: Date.now() })); // a crew phone opening its sheet
@@ -118,7 +123,7 @@ async function openCode(code) {
 
 async function importDay(data) {
   const date = /^\d{4}-\d{2}-\d{2}$/.test(data.date) ? data.date : day;
-  const inc = (Array.isArray(data.tasks) ? data.tasks : []).map(normTask).filter(t => t.uid);
+  const inc = (Array.isArray(data.tasks) ? data.tasks : []).slice(0, 500).map(normTask).filter(t => t.uid);
   const fresh = inc.filter(t => !find(t.uid)), known = inc.filter(t => find(t.uid));
   if (inc.length && await ask(L('Load the task plan for {date}? New sheets: {fresh}. Updated: {known}. Check-offs already on this phone are kept.', { date: niceDate(date), fresh: fresh.length, known: known.length }), L('Load plan'))) {
     for (const t of fresh) T.push(Object.assign(t, { origin: 'mine' }));
@@ -197,7 +202,7 @@ function renderBoard() {
 
 function card(t) {
   const [label, tone] = stage(t), n = t.items.length, d = doneCount(t);
-  return `<a class="tcard" href="#task/${t.uid}/${t.status && !t.review ? 'review' : 'assign'}" style="${crewVar(t.crew)}">
+  return `<a class="tcard" href="#task/${esc(t.uid)}/${t.status && !t.review ? 'review' : 'assign'}" style="${crewVar(t.crew)}">
     <div class="row1"><span class="tid">${esc(t.id || L('New task'))}</span><span class="pill" data-tone="${tone}">${esc(label)}</span></div>
     <div class="meta"><span><i class="dot"></i> ${esc(t.crew || L('No crew yet'))}${t.size ? ' · ' + esc(L(t.size === 1 ? '1 person' : '{n} people', { n: t.size })) : ''}</span>
       ${t.area ? `<span>${esc(t.area)}</span>` : ''}${t.pStart ? `<span>${esc(t.pStop ? fromTo(t.pStart, t.pStop) : t12(t.pStart))}</span>` : ''}${t.est ? `<span>${esc(L('Est. {n} hrs', { n: t.est }))}</span>` : ''}</div>
@@ -209,9 +214,9 @@ function card(t) {
 function renderTask(t) {
   const crewSide = t.origin === 'link';
   const tabs = [['assign', L('Assign')], ['results', L('Crew results')], ['review', L('Review')]];
-  app.innerHTML = `<button class="link" data-go="day/${t.date}">‹ ${esc(L('{date} task sheets', { date: niceDate(t.date) }))}</button>` + (crewSide
+  app.innerHTML = `<button class="link" data-go="day/${esc(t.date)}">‹ ${esc(L('{date} task sheets', { date: niceDate(t.date) }))}</button>` + (crewSide
     ? brief(t) + results(t)
-    : `<nav class="tabs">${tabs.map(([k, l]) => `<a href="#task/${t.uid}/${k}" data-act="tab" data-v="${k}"${k === view.tab ? ' aria-current="page"' : ''}>${l}</a>`).join('')}</nav>`
+    : `<nav class="tabs">${tabs.map(([k, l]) => `<a href="#task/${esc(t.uid)}/${k}" data-act="tab" data-v="${k}"${k === view.tab ? ' aria-current="page"' : ''}>${l}</a>`).join('')}</nav>`
       + (view.tab === 'results' ? brief(t) + results(t) : view.tab === 'review' ? review(t) : assign(t)))
     + `<p class="hint">${L('Changes save on this phone as you type.')}</p>`;
   bar.innerHTML = `<div class="bar-in">${crewSide
@@ -288,7 +293,7 @@ function results(t) {
   const d = doneCount(t), n = t.items.length;
   const tick = (list, it, i) => `<button class="tick" data-act="tick" data-list="${list}" data-i="${i}" aria-pressed="${it.done}"><span class="box">✓</span><span class="txt">${esc(it.text)}</span>${it.at ? `<small>${timeOf(it.at)}</small>` : ''}</button>`;
   const clock = (k, label, now, primary) => t[k]
-    ? `<input type="time" data-k="t.${k}" value="${t[k]}" aria-label="${label}">`
+    ? `<input type="time" data-k="t.${k}" value="${esc(t[k])}" aria-label="${label}">`
     : `<button class="btn${primary ? ' primary' : ''}" data-act="clock" data-v="${k}">${now}</button>`;
   return `${n || t.checks.length ? `<section class="card"><h2>${L('Check off as you go')}</h2>
       ${n ? `<div class="label">${L('Steps · {d} of {n} done', { d, n })}</div><div class="progress"><i style="width:${d / n * 100}%"></i></div>
@@ -421,7 +426,7 @@ async function act(a, el) {
       setPath(ctx, el.dataset.k, getPath(ctx, el.dataset.k) === v ? '' : v);
       if (el.dataset.k === 't.review' && t.review && !t.reviewer) t.reviewer = S.me;
       if (el.dataset.k === 't.status' && t.status === 'Blocked' && !t.comments) toast(L('Say what is blocking the work in Crew comments'));
-      if (el.dataset.k === 't.review' && t.review) { t.updatedAt = Date.now(); render(); return fileTask(t); } // stamp the edit, then file
+      if (el.dataset.k === 't.review' && t.review) { t.updatedAt = Date.now(); persist(); render(); return fileTask(t); } // stamp the edit, then file
       break;
     }
     case 'crew': pickCrew(t, v); break;
@@ -456,6 +461,7 @@ async function act(a, el) {
     case 'sendResults': {
       if (!t.status) return toast(L('Pick Complete, Partial or Blocked first'), 'bad');
       t.cLang = getLang();
+      t.resultAt = Date.now(); // the office phone keeps these over an older results text
       persist();
       await send('result', t);
       return fileTask(t);
@@ -523,6 +529,7 @@ document.addEventListener('input', e => {
   const el = e.target, k = el.dataset.k;
   if (!k) return;
   const t = current();
+  if (k === 't.date' && !/^\d{4}-\d{2}-\d{2}$/.test(el.value)) return; // every sheet needs a real day; a cleared or half-typed date would hide it
   setPath({ t, s: S }, k, readInput(el));
   if (k.startsWith('s.')) {
     save(KEYS.settings, S);
@@ -537,7 +544,7 @@ document.addEventListener('input', e => {
 document.addEventListener('change', e => {
   if (e.target.matches('[data-pick]') && e.target.value) go('day/' + e.target.value);
   if (e.target.matches('[data-restore]') && e.target.files[0]) restore(e.target.files[0]);
-  if (e.target.dataset.k === 't.date') { day = e.target.value || day; } // moved to another day
+  if (e.target.dataset.k === 't.date' && /^\d{4}-\d{2}-\d{2}$/.test(e.target.value)) day = e.target.value; // moved to another day
 });
 
 document.addEventListener('keydown', e => {
@@ -545,7 +552,7 @@ document.addEventListener('keydown', e => {
 });
 
 // The other app (or another tab) changed shared data: reload so a stale copy here never overwrites it.
-const reload = () => { S = loadSettings(); setLang(S.lang); T = load(KEYS.tasks, []).map(normTask); render(); };
+const reload = () => { S = loadSettings(); setLang(S.lang); T = loadTasks(); if (view.v === 'task' && !current()) view = { v: 'board' }; render(); };
 addEventListener('storage', e => Object.values(KEYS).includes(e.key) && reload());
 addEventListener('pageshow', e => e.persisted && reload());
 addEventListener('hashchange', route);

@@ -86,3 +86,30 @@ test('measured mile, crew size, submit-by, break-even, and their guards', () => 
   assert.equal(c.submitBy({ needDate: '', leadWeeks: 40, reviewWeeks: 3, releaseWeeks: 1 }).date, null);
   assert.equal(c.breakEven({ overhead: 3e6, marginPct: 15 }), 20e6);
 });
+
+test('progress copies merge instead of the newer one wiping the other', () => {
+  const cloud = { v: 1, start: '2026-10-05', done: { 1: 'a', 2: 'b' }, notes: { 1: 'phone note' }, cards: { w1q1: { box: 3, due: '2026-10-09' } }, skills: { base: { code: 2 }, now: { code: 3 } }, updated: 100 };
+  // A fresh device that marked day 3 while the cloud copy was still loading.
+  const fresh = { v: 1, start: '2026-10-12', done: { 3: 'c' }, notes: {}, cards: {}, skills: { base: {}, now: {} }, updated: 200 };
+  const m = E.mergeProgress(cloud, fresh);
+  assert.deepEqual(Object.keys(m.done).sort(), ['1', '2', '3']);
+  assert.equal(m.notes[1], 'phone note');
+  assert.equal(m.cards.w1q1.box, 3);
+  assert.equal(m.skills.now.code, 3);
+  assert.equal(m.updated, 200);
+  assert.equal(E.canon(E.mergeProgress(fresh, cloud)), E.canon(m), 'same result in either order');
+  // A fresh device's default start date never replaces the real one; a start the user chose later does.
+  assert.equal(m.start, '2026-10-05');
+  assert.equal(E.mergeProgress(cloud, { ...fresh, startAt: 150 }).start, '2026-10-12');
+  // A clash goes to the newer copy.
+  assert.equal(E.mergeProgress({ ...cloud, notes: { 1: 'old' }, updated: 1 }, { ...cloud, notes: { 1: 'new' }, updated: 2 }).notes[1], 'new');
+  // Erase or Restore replaces everything older outright.
+  const erased = { v: 1, start: '2026-10-19', done: {}, notes: {}, cards: {}, skills: { base: {}, now: {} }, updated: 300, replacedAt: 300 };
+  assert.deepEqual(E.mergeProgress(cloud, erased).done, {});
+  // Edits made after a restore elsewhere still merge.
+  assert.deepEqual(Object.keys(E.mergeProgress(erased, { ...cloud, updated: 400 }).done).sort(), ['1', '2']);
+});
+
+test('aluminum sizing starts at 12 AWG', () => {
+  assert.equal(c.minSizeForDrop({ phase: 3, material: 'al', amps: 20, feet: 50, volts: 480, maxPct: 3 }), '12');
+});

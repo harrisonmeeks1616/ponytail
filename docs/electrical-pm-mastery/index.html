@@ -14,7 +14,7 @@
 :root {
   --bg: #eef1f4; --surface: #ffffff; --sunk: #e4e9ee; --ink: #17202a; --muted: #55636f; --line: #cdd5dd;
   --accent: #a4502a; --accent-ink: #ffffff; --accent-soft: #f3e2d8;
-  --p1: #7a4b2a; --p2: #c9640f; --p3: #a87e00; --p4: #2d68ad; --p5: #2e8549;
+  --p1: #7a4b2a; --p2: #b0560c; --p3: #8c6900; --p4: #2d68ad; --p5: #2e8549;
   --good: #2e7d46; --warn: #9a6400; --bad: #b3261e;
   --display: "Barlow Condensed", "Arial Narrow", "Roboto Condensed", sans-serif;
   --body: "IBM Plex Sans", "Segoe UI", system-ui, -apple-system, sans-serif;
@@ -191,8 +191,9 @@ td.num, th.num { text-align: right; }
 
 @media (max-width: 860px) {
   .today, .skills, .tool { grid-template-columns: minmax(0, 1fr); }
-  .toollist { flex-direction: row; overflow-x: auto; }
-  .toollist button { white-space: nowrap; }
+  .tabs, .toollist { flex-direction: row; flex-wrap: wrap; } /* every tab and calculator visible on a phone, no hidden scroll */
+  .tab { padding: 8px 10px 6px; }
+  .toollist button { border-color: var(--line); padding: 5px 10px; font-size: .88rem; }
   .rung, .rung dl { grid-template-columns: minmax(0, 1fr); }
   h2 { font-size: 1.6rem; }
 }
@@ -226,13 +227,14 @@ td.num, th.num { text-align: right; }
   </main>
 </div>
 <div class="overlay" id="settings" hidden></div>
-<div class="toast" id="toast" hidden></div>
+<div class="toast" id="toast" role="status" aria-live="polite" hidden></div>
 
 <script src="plan.js"></script>
 <script>
 (() => {
   'use strict';
   const E = window.EPM;
+  if (!E) { document.querySelector('main').textContent = 'Could not load plan.js. Check your connection and reload.'; return; }
   const DAYS = E.buildDays();
   const CARDS = E.buildCards();
   const PH = Object.fromEntries(E.PHASES.map(p => [p.id, p]));
@@ -246,7 +248,12 @@ td.num, th.num { text-align: right; }
       if (v == null || v === false) continue;
       if (k === 'class') n.className = v;
       else if (k === 'text') n.textContent = v;
-      else if (k.startsWith('on')) n.addEventListener(k.slice(2), v);
+      else if (k.startsWith('on')) n.addEventListener(k.slice(2), e => {
+        v(e);
+        // A re-render replaced the control that had focus: move focus to its replacement (keyboard and screen readers).
+        const id = props['data-focus'] || n.id;
+        if (id && !n.isConnected) { const t = document.getElementById(id); if (t) t.focus({ preventScroll: true }); }
+      });
       else n.setAttribute(k, v === true ? '' : v);
     }
     for (const c of kids.flat()) if (c != null && c !== false) n.append(c.nodeType ? c : String(c));
@@ -276,15 +283,32 @@ td.num, th.num { text-align: right; }
     const s = Object.assign(blank(), o && typeof o === 'object' ? o : {});
     for (const k of ['done', 'notes', 'cards']) if (!s[k] || typeof s[k] !== 'object') s[k] = {};
     if (!s.skills || typeof s.skills !== 'object') s.skills = {};
-    s.skills.base = s.skills.base || {}; s.skills.now = s.skills.now || {};
+    for (const k of ['base', 'now']) if (!s.skills[k] || typeof s.skills[k] !== 'object') s.skills[k] = {};
     if (!/^\d{4}-\d{2}-\d{2}$/.test(s.start)) s.start = blank().start;
     return s;
   }
   let S = blank();
   try { const raw = localStorage.getItem(KEY); if (raw) S = normalize(JSON.parse(raw)); } catch (e) { /* storage blocked: run in memory */ }
 
-  const cloud = { ref: null, writing: false, queued: false, timer: 0, status: 'local' };
-  function saveLocal() { try { localStorage.setItem(KEY, JSON.stringify(S)); } catch (e) { /* ignore */ } }
+  const cloud = { ref: null, writing: false, queued: false, timer: 0, retry: 0, status: 'local' };
+  let localOk = true;
+  function saveLocal() {
+    try { localStorage.setItem(KEY, JSON.stringify(S)); localOk = true; }
+    catch (e) { if (localOk) toast("This browser wouldn't save your progress. Open Settings and copy a backup."); localOk = false; renderStatus(); }
+  }
+  const clone = o => JSON.parse(JSON.stringify(o));
+  const typing = () => /^(INPUT|TEXTAREA)$/.test(document.activeElement && document.activeElement.tagName);
+  // Fold another copy of this progress (the cloud copy, another tab) into this one; true if anything here changed.
+  function absorb(other) {
+    const merged = normalize(E.mergeProgress(normalize(clone(other)), S));
+    if (E.canon(merged) === E.canon(S)) return false;
+    const atToday = ui.sel === calDay();
+    S = merged;
+    if (atToday) ui.sel = calDay();
+    saveLocal();
+    if (typing()) renderStatus(); else renderAll(); // never rebuild a note mid-sentence
+    return true;
+  }
   function save() {
     S.updated = Date.now();
     saveLocal();
@@ -293,13 +317,32 @@ td.num, th.num { text-align: right; }
   async function pushCloud() {
     if (!cloud.ref) return;
     if (cloud.writing) { cloud.queued = true; return; }
+    const body = JSON.stringify(S);
+    // ponytail: one cloud doc per learner caps at 256 KiB (about a year of long daily notes). Split notes into per-phase docs if anyone gets there.
+    if (new Blob([body]).size > 250000) return setSync('full');
     cloud.writing = true;
-    try { await cloud.ref.set(JSON.parse(JSON.stringify(S))); setSync('cloud'); }
-    catch (e) { setSync(e && e.code === 'quota_exceeded' ? 'full' : 'error'); if (e && (e.code === 'invalid_argument' || e.code === 'revoked')) cloud.ref = null; }
+    try { await cloud.ref.set(JSON.parse(body)); cloud.retry = 0; setSync('cloud'); }
+    catch (e) {
+      const code = e && e.code;
+      if (code === 'quota_exceeded') setSync('full');
+      else if (code === 'invalid_argument' || code === 'revoked') { cloud.ref = null; setSync('error'); }
+      else { // no signal or busy: try again on a backoff instead of waiting for the next edit
+        setSync('error');
+        clearTimeout(cloud.timer);
+        cloud.timer = setTimeout(() => { cloud.timer = 0; pushCloud(); }, Math.min(60000, 2000 * 2 ** ++cloud.retry));
+      }
+    }
     cloud.writing = false;
     if (cloud.queued) { cloud.queued = false; pushCloud(); }
   }
-  function setSync(s) { cloud.status = s; renderStatus(); if (!$('#settings').hidden) renderSettings(); }
+  const SYNC_TEXT = {
+    cloud: 'Saved to your Claude account and synced across devices.',
+    local: 'Saved in this browser only. Open the published page while signed in to sync across devices.',
+    error: 'Cloud sync paused; it retries on its own. Progress is still saved in this browser.',
+    full: 'Your notes outgrew the 256 KB cloud copy, so sync is paused. Progress is still saved in this browser; copy a backup and shorten old notes.',
+  };
+  // Only the status line changes: rebuilding Settings would wipe a backup being pasted.
+  function setSync(s) { if (s === cloud.status) return; cloud.status = s; renderStatus(); const p = $('#set-sync'); if (p) p.textContent = SYNC_TEXT[s]; }
 
   async function connectCloud() {
     const C = window.claude;
@@ -311,17 +354,15 @@ td.num, th.num { text-align: right; }
       if (!id) return;
       cloud.ref = db.doc(`data/users/${id}/progress`);
       const snap = await cloud.ref.get();
-      if (snap.exists) {
-        const remote = normalize(JSON.parse(JSON.stringify(snap.data())));
-        if ((remote.updated || 0) >= (S.updated || 0)) { S = remote; saveLocal(); renderAll(); setSync('cloud'); }
-        else await pushCloud();
-      } else if (S.updated) await pushCloud();
-      else setSync('cloud');
+      const remote = snap.exists ? snap.data() : null;
+      if (remote) absorb(remote); // merge, never replace: edits made on this device while loading survive
+      const behind = r => !r || E.canon(normalize(clone(r))) !== E.canon(S); // this copy holds something the cloud lacks
+      if (remote ? behind(remote) : S.updated) await pushCloud(); else setSync('cloud');
       cloud.ref.onSnapshot(s => {
-        if (!s.exists || s.metadata.hasPendingWrites || cloud.timer || cloud.writing) return;
-        const remote = s.data();
-        if ((remote.updated || 0) > (S.updated || 0)) { S = normalize(JSON.parse(JSON.stringify(remote))); saveLocal(); renderAll(); }
-      }, () => setSync('local'));
+        if (!s.exists || s.metadata.hasPendingWrites) return;
+        absorb(s.data()); // also while a save is pending, so that save carries both devices' edits
+        if (!cloud.timer && !cloud.writing && behind(s.data())) pushCloud();
+      }, () => { cloud.ref = null; setSync('error'); }); // a dead listener must not keep writing blind
     } catch (e) { cloud.ref = null; setSync('local'); }
   }
 
@@ -337,6 +378,7 @@ td.num, th.num { text-align: right; }
     TABS.forEach(([id]) => { $('#v-' + id).hidden = id !== tab; });
     renderTabs();
     render[tab]();
+    if (tab === 'panel') { const t = $('.brk.is-today'); if (t) t.scrollIntoView({ block: 'center' }); } // mid-year, today is screens down
     try { history.replaceState(null, '', '#' + tab); } catch (e) { /* ignore */ }
   }
   function openDay(n) { ui.sel = Math.min(365, Math.max(1, n)); go('today'); window.scrollTo({ top: 0 }); }
@@ -344,7 +386,7 @@ td.num, th.num { text-align: right; }
   // ---------------- Header ----------------
   function renderTabs() {
     const nav = $('#tabs'); nav.replaceChildren();
-    TABS.forEach(([id, label]) => nav.append(h('button', { class: 'tab', role: 'tab', 'aria-selected': String(ui.tab === id), onclick: () => go(id) }, label)));
+    TABS.forEach(([id, label]) => nav.append(h('button', { id: 'tab-' + id, class: 'tab', role: 'tab', 'aria-selected': String(ui.tab === id), onclick: () => go(id) }, label)));
   }
   function renderStatus() {
     const box = $('#status'); box.replaceChildren();
@@ -352,14 +394,15 @@ td.num, th.num { text-align: right; }
     const d = DAYS[calDay() - 1];
     const ph = PH[d.phase];
     const done = doneCount();
-    const expected = pre ? 0 : calDay();
+    const expected = pre ? 0 : calDay() - (S.done[calDay()] ? 0 : 1); // today isn't owed until it's over
     const diff = done - expected;
     box.append(...[
       h('span', { class: 'chip' }, pre ? 'Starts ' + fmtDate(S.start) : h('span', null, 'Day ', h('b', null, String(calDay())), ' of 365')),
       h('span', { class: 'chip' }, h('i', { class: 'dot', style: `background:${PHVAR(ph.id)}` }), `Phase ${ph.id} · ${ph.name}`),
       h('span', { class: 'chip' }, h('b', null, String(done)), ' done'),
       pre ? null : h('span', { class: 'chip ' + (diff >= 0 ? 'good' : diff >= -3 ? 'warn' : 'bad') }, diff > 0 ? `${diff} ahead` : diff === 0 ? 'On pace' : `${-diff} behind`),
-      h('span', { class: 'chip', title: 'Where your progress is saved' }, { cloud: 'Synced', local: 'This browser', error: 'Sync paused', full: 'Storage full' }[cloud.status]),
+      !localOk && cloud.status !== 'cloud' ? h('span', { class: 'chip bad', title: 'This browser refused to save' }, 'Not saved')
+        : h('span', { class: 'chip', title: 'Where your progress is saved' }, { cloud: 'Synced', local: 'This browser', error: 'Sync paused', full: 'Sync full' }[cloud.status]),
       h('button', { class: 'iconbtn', onclick: openSettings }, 'Settings'),
     ].filter(Boolean));
   }
@@ -378,7 +421,7 @@ td.num, th.num { text-align: right; }
     if (todayISO() < S.start) {
       v.append(h('div', { class: 'banner' },
         h('span', null, 'Day 1 is scheduled for ', h('b', null, fmtDate(S.start)), '. Preview the plan now, or start today.'),
-        h('button', { class: 'btn primary', onclick: () => { S.start = todayISO(); save(); renderAll(); toast('Day 1 starts today'); } }, 'Start today')));
+        h('button', { class: 'btn primary', onclick: () => { S.start = todayISO(); S.startAt = Date.now(); save(); renderAll(); toast('Day 1 starts today'); } }, 'Start today')));
     }
 
     const qa = wk.quiz.map(([q, a], i) => {
@@ -411,11 +454,11 @@ td.num, th.num { text-align: right; }
         }))),
       h('div', { class: 'section' }, h('label', { for: 'notes' }, h('h3', null, `Field notes for day ${d.n}`)), notes),
       h('div', { class: 'actions' },
-        h('button', { class: 'btn ' + (isDone ? 'done' : 'primary'), 'aria-pressed': String(isDone), onclick: () => toggleDone(d.n) }, isDone ? `Day ${d.n} done ✓` : `Mark day ${d.n} done`),
+        h('button', { class: 'btn ' + (isDone ? 'done' : 'primary'), id: 'mark-done', 'aria-pressed': String(isDone), onclick: () => toggleDone(d.n) }, isDone ? `Day ${d.n} done ✓` : `Mark day ${d.n} done`),
         h('span', { class: 'spacer' }),
-        h('button', { class: 'btn', onclick: () => openDay(d.n - 1), disabled: d.n === 1, 'aria-label': 'Previous day' }, '‹ Prev'),
-        h('button', { class: 'btn', onclick: () => openDay(calDay()) }, 'Today'),
-        h('button', { class: 'btn', onclick: () => openDay(d.n + 1), disabled: d.n === 365, 'aria-label': 'Next day' }, 'Next ›')),
+        h('button', { class: 'btn', id: 'day-prev', onclick: () => openDay(d.n - 1), disabled: d.n === 1, 'aria-label': 'Previous day' }, '‹ Prev'),
+        h('button', { class: 'btn', id: 'day-today', onclick: () => openDay(calDay()) }, 'Today'),
+        h('button', { class: 'btn', id: 'day-next', onclick: () => openDay(d.n + 1), disabled: d.n === 365, 'aria-label': 'Next day' }, 'Next ›')),
     );
 
     // Week strip
@@ -457,9 +500,9 @@ td.num, th.num { text-align: right; }
   function coachCard(d) {
     if (!coach.sample || coach.off) return null;
     if (coach.day !== d.n) { coach.day = d.n; coach.turns = []; coach.out = ''; coach.note = ''; }
-    const out = h('div', { class: 'coach-out', 'aria-live': 'polite' }, coach.out || 'Ask about today\'s task, a code section, a CO you are pricing, or a field situation.');
+    const out = h('div', { id: 'coach-out', class: 'coach-out', 'aria-live': 'polite' }, coach.out || 'Ask about today\'s task, a code section, a CO you are pricing, or a field situation.');
     const input = h('textarea', { id: 'coach-q', placeholder: 'Ask the master...', style: 'min-height:64px' });
-    const note = h('p', { class: 'muted small' }, coach.note);
+    const note = h('p', { id: 'coach-note', class: 'muted small' }, coach.note);
     const askBtn = h('button', { class: 'btn primary', disabled: coach.busy, onclick: () => { const q = input.value.trim(); if (q) { input.value = ''; ask(q, out, note); } } }, 'Ask');
     const stop = h('button', { class: 'btn', hidden: !coach.busy, onclick: () => coach.ctl && coach.ctl.abort() }, 'Stop');
     const quick = [
@@ -474,6 +517,8 @@ td.num, th.num { text-align: right; }
       h('label', { for: 'coach-q', class: 'label' }, 'Your question'), input,
       h('div', { class: 'row' }, askBtn, stop));
   }
+  // The Today card may have been rebuilt while Claude answers; write to the copy on screen.
+  const live = el => (el.isConnected ? el : $('#' + el.id)) || el;
   async function ask(question, out, note) {
     const d = DAYS[ui.sel - 1];
     const ph = PH[d.phase];
@@ -495,24 +540,24 @@ td.num, th.num { text-align: right; }
     setCoachBusy(true);
     try {
       const { text, truncated } = await coach.sample([{ role: 'user', content: rules }, ...coach.turns], {
-        cache: false, signal: coach.ctl.signal, onText: ({ text }) => { out.textContent = text; coach.out = text; },
+        cache: false, signal: coach.ctl.signal, onText: ({ text }) => { coach.out = text; live(out).textContent = text; },
       });
-      coach.out = text; out.textContent = text;
+      coach.out = text; live(out).textContent = text;
       coach.turns.push({ role: 'assistant', content: text });
       if (truncated) coach.note = 'The answer was cut short. Ask for less at a time.';
     } catch (e) {
       coach.turns.pop();
       coach.out = (e && e.text) || '';
-      out.textContent = coach.out || 'No answer.';
+      live(out).textContent = coach.out || 'No answer.';
       const code = e && e.code;
       if (['not_granted', 'sampling_disabled', 'not_declared', 'capability_disabled', 'capability_removed'].includes(code)) { coach.off = true; }
       else if (code === 'rate_limited') coach.note = 'Too many questions too fast, or your usage limit was reached. Try again later.';
       else if (code === 'session_expired') coach.note = 'Your Claude session expired. Sign in again, then retry.';
-      else if (code === 'refused') { coach.out = ''; out.textContent = ''; coach.note = 'Claude declined that question. Rephrase it.'; }
+      else if (code === 'refused') { coach.out = ''; live(out).textContent = ''; coach.note = 'Claude declined that question. Rephrase it.'; }
       else if (code !== 'cancelled') coach.note = 'The answer was interrupted. Try again.';
     } finally {
       coach.busy = false;
-      note.textContent = coach.note;
+      live(note).textContent = coach.note;
       if (coach.off) { if (ui.tab === 'today') render.today(); } else setCoachBusy(false);
     }
   }
@@ -580,8 +625,8 @@ td.num, th.num { text-align: right; }
         h('p', { class: 'q' }, card.q),
         ui.revealed ? h('p', { class: 'qa' }, card.a) : null,
         h('div', { class: 'row' }, ui.revealed
-          ? [h('button', { class: 'btn primary', onclick: () => grade(true) }, 'I knew it'), h('button', { class: 'btn', onclick: () => grade(false) }, 'Missed it')]
-          : h('button', { class: 'btn primary', onclick: () => { ui.revealed = true; render.drill(); } }, 'Reveal answer')));
+          ? [h('button', { id: 'drill-go', class: 'btn primary', onclick: () => grade(true) }, 'I knew it'), h('button', { id: 'drill-miss', 'data-focus': 'drill-go', class: 'btn', onclick: () => grade(false) }, 'Missed it')]
+          : h('button', { id: 'drill-go', class: 'btn primary', onclick: () => { ui.revealed = true; render.drill(); } }, 'Reveal answer')));
     }
     v.append(h('div', { class: 'drill' },
       h('div', { class: 'row', style: 'justify-content:space-between' }, h('h2', null, `${due.length} due`), scope),
@@ -650,7 +695,7 @@ td.num, th.num { text-align: right; }
     const update = () => {
       outBox.replaceChildren();
       const x = Object.fromEntries(c.fields.map(([id, , , kind]) => [id, kind === 'date' || ['material', 'size'].includes(id) ? vals[id] : Number(vals[id])]));
-      const bad = c.fields.some(([id, , , kind]) => kind !== 'date' && !['material', 'size'].includes(id) && !isFinite(x[id]));
+      const bad = c.fields.some(([id, , , kind]) => kind !== 'date' && !['material', 'size'].includes(id) && (String(vals[id]).trim() === '' || !isFinite(x[id]))); // a blank is not a zero
       if (bad || (c.id === 'submit' && !/^\d{4}-\d{2}-\d{2}$/.test(x.needDate))) { outBox.append(h('div', null, h('span', null, 'Enter a number in every field.'))); return; }
       c.run(x).forEach(([label, value, tone]) => outBox.append(h('div', null, h('span', null, label), h('span', { class: 'v ' + (tone || '') }, value))));
       tableBox.replaceChildren(c.table ? c.table(x) : '');
@@ -719,7 +764,7 @@ td.num, th.num { text-align: right; }
         h('div', { class: 'row', style: 'justify-content:space-between' }, h('b', null, s.name), base[s.id] != null ? h('span', { class: 'mono small muted' }, `baseline ${base[s.id]}`) : null),
         h('span', { class: 'muted small' }, s.desc),
         h('div', { class: 'seg', role: 'group', 'aria-label': `${s.name} rating` }, [1, 2, 3, 4, 5].map(n => h('button', {
-          'aria-pressed': String(now[s.id] === n), title: E.LEVELS[n],
+          id: `rate-${s.id}-${n}`, 'aria-pressed': String(now[s.id] === n), title: E.LEVELS[n],
           onclick: () => { now[s.id] = n; if (base[s.id] == null) base[s.id] = n; save(); render.skills(); },
         }, String(n)))))));
     v.append(h('div', { class: 'skills' }, left, list));
@@ -787,34 +832,47 @@ td.num, th.num { text-align: right; }
   };
 
   // ---------------- Settings ----------------
-  function openSettings() { ui.confirmReset = false; renderSettings(); $('#settings').hidden = false; }
-  function closeSettings() { $('#settings').hidden = true; }
+  function openSettings() { ui.confirmReset = false; ui.pendingRestore = null; renderSettings(); $('#settings').hidden = false; $('.app').inert = true; $('#settings .btn').focus(); }
+  function closeSettings() { $('#settings').hidden = true; $('.app').inert = false; const b = $('#status .iconbtn'); if (b) b.focus(); }
+  // Replace this copy outright (Erase, Restore): replacedAt tells every synced copy not to merge older progress back in.
+  function replaceAll(next) {
+    const atToday = ui.sel === calDay();
+    S = normalize({ ...next, replacedAt: Date.now() });
+    if (atToday) ui.sel = calDay();
+    save(); renderAll();
+  }
   function renderSettings() {
     const o = $('#settings'); o.replaceChildren();
     const start = h('input', { id: 'set-start', type: 'date' }); start.value = S.start;
-    start.addEventListener('change', () => { if (/^\d{4}-\d{2}-\d{2}$/.test(start.value)) { S.start = start.value; save(); renderAll(); toast('Start date saved'); } });
+    start.addEventListener('change', () => { if (/^\d{4}-\d{2}-\d{2}$/.test(start.value)) { const atToday = ui.sel === calDay(); S.start = start.value; S.startAt = Date.now(); if (atToday) ui.sel = calDay(); save(); renderAll(); toast('Start date saved'); } });
     const exp = h('textarea', { id: 'set-export', readonly: true, style: 'min-height:80px;font-family:var(--mono);font-size:.78rem' }); exp.value = JSON.stringify(S);
     const imp = h('textarea', { id: 'set-import', placeholder: 'Paste a backup here', style: 'min-height:70px;font-family:var(--mono);font-size:.78rem' });
     const msg = h('p', { class: 'small', 'aria-live': 'polite' });
-    const sync = { cloud: 'Saved to your Claude account and synced across devices.', local: 'Saved in this browser only. Open the published page while signed in to sync across devices.', error: 'Cloud sync paused. Progress is still saved in this browser.', full: 'Cloud storage is full. Progress is still saved in this browser; export a backup.' }[cloud.status];
     o.append(h('div', { class: 'sheet', role: 'dialog', 'aria-modal': 'true', 'aria-label': 'Settings' },
       h('div', { class: 'row', style: 'justify-content:space-between' }, h('h2', null, 'Settings'), h('button', { class: 'btn', onclick: closeSettings }, 'Close')),
       h('div', { class: 'field' }, h('label', { for: 'set-start' }, 'Program start date (Day 1). A Monday keeps Deep Work on Saturdays.'), start),
-      h('p', { class: 'small muted' }, sync),
+      h('p', { id: 'set-sync', class: 'small muted' }, SYNC_TEXT[cloud.status]),
       h('div', { class: 'field' }, h('label', { for: 'set-export' }, 'Backup (copy and keep somewhere safe)'), exp,
         h('div', { class: 'row' }, h('button', { class: 'btn', onclick: () => {
+          exp.value = JSON.stringify(S); // the latest, not the copy from when Settings opened
           navigator.clipboard.writeText(exp.value).then(() => { msg.textContent = 'Backup copied.'; }, () => { exp.select(); msg.textContent = 'Copy blocked here. The text is selected; copy it manually.'; });
         } }, 'Copy backup'))),
       h('div', { class: 'field' }, h('label', { for: 'set-import' }, 'Restore from backup'), imp,
-        h('div', { class: 'row' }, h('button', { class: 'btn', onclick: () => {
-          try { const o2 = JSON.parse(imp.value); if (!o2 || o2.v !== 1 || typeof o2.done !== 'object') throw new Error('shape'); S = normalize(o2); save(); renderAll(); msg.textContent = 'Backup restored.'; }
-          catch (e) { msg.textContent = 'That is not a valid backup from this app. Paste the full text from "Backup".'; }
-        } }, 'Restore'))),
+        ui.pendingRestore
+          ? h('div', { class: 'stack' },
+            h('p', { class: 'small' }, `Replace ${Object.keys(S.done).length} done days and ${Object.keys(S.notes).length} notes (here and in your synced copy) with ${Object.keys(ui.pendingRestore.done).length} done days and ${Object.keys(ui.pendingRestore.notes || {}).length} notes from this backup?`),
+            h('div', { class: 'row' },
+              h('button', { class: 'btn', style: 'border-color:var(--bad);color:var(--bad)', onclick: () => { replaceAll(ui.pendingRestore); ui.pendingRestore = null; renderSettings(); toast('Backup restored'); } }, 'Replace with backup'),
+              h('button', { class: 'btn', onclick: () => { ui.pendingRestore = null; renderSettings(); } }, 'Cancel')))
+          : h('div', { class: 'row' }, h('button', { class: 'btn', onclick: () => {
+            try { const o2 = JSON.parse(imp.value); if (!o2 || o2.v !== 1 || !o2.done || typeof o2.done !== 'object') throw new Error('shape'); ui.pendingRestore = o2; renderSettings(); }
+            catch (e) { msg.textContent = 'That is not a valid backup from this app. Paste the full text from "Backup".'; }
+          } }, 'Restore'))),
       msg,
       h('div', { class: 'section' },
         ui.confirmReset
           ? h('div', { class: 'stack' }, h('p', { class: 'small' }, 'This erases done days, notes, skill ratings, and drill history here and in your synced copy. It cannot be undone.'),
-            h('div', { class: 'row' }, h('button', { class: 'btn', style: 'border-color:var(--bad);color:var(--bad)', onclick: () => { S = blank(); save(); ui.confirmReset = false; renderAll(); renderSettings(); toast('Progress erased'); } }, 'Erase everything'),
+            h('div', { class: 'row' }, h('button', { class: 'btn', style: 'border-color:var(--bad);color:var(--bad)', onclick: () => { replaceAll(blank()); ui.confirmReset = false; renderSettings(); toast('Progress erased'); } }, 'Erase everything'),
               h('button', { class: 'btn', onclick: () => { ui.confirmReset = false; renderSettings(); } }, 'Cancel')))
           : h('button', { class: 'btn', onclick: () => { ui.confirmReset = true; renderSettings(); } }, 'Reset progress...'))));
   }
@@ -827,6 +885,19 @@ td.num, th.num { text-align: right; }
     if (ui.tab !== 'today' || /^(INPUT|TEXTAREA|SELECT)$/.test(document.activeElement && document.activeElement.tagName)) return;
     if (e.key === 'ArrowLeft') openDay(ui.sel - 1);
     if (e.key === 'ArrowRight') openDay(ui.sel + 1);
+  });
+
+  // Another tab saved: merge its progress instead of overwriting it with this tab's older copy on the next click.
+  addEventListener('storage', e => { if (e.key === KEY && e.newValue) try { absorb(JSON.parse(e.newValue)); } catch (err) { /* not ours */ } });
+  addEventListener('online', () => { if (cloud.ref && cloud.status === 'error') pushCloud(); });
+  // A tab left open overnight moves to the new day instead of showing yesterday as Today.
+  let shownDay = todayISO();
+  document.addEventListener('visibilitychange', () => {
+    if (document.visibilityState !== 'visible' || todayISO() === shownDay) return;
+    const was = shownDay < S.start ? 1 : E.dayNumber(S.start, shownDay);
+    shownDay = todayISO();
+    if (ui.sel === was) ui.sel = calDay();
+    renderAll();
   });
 
   const hot = window.claude && window.claude.hot;

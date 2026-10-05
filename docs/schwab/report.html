@@ -6,7 +6,7 @@
 <meta name="theme-color" content="#1F242A">
 <meta name="apple-mobile-web-app-title" content="Daily Report">
 <title>Superintendent Daily Report</title>
-<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@600;700&family=Barlow:wght@400;600&display=swap">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@600;700&family=Barlow:wght@400;600&display=swap" media="print" onload="this.media='all'">
 <link rel="stylesheet" href="shared.css">
 </head>
 <body>
@@ -21,7 +21,7 @@
 <script type="module">
 import {
   KEYS, esc, load, save, loadSettings, normTask, normReport, blank, newFloor, fillFromTasks, mergeAnswers, CREW_TPL, pack, unpack, linkTo,
-  today, niceDate, span, fmtMin, t12, stamp, hrs, field, datalist, seg, setPath, getPath, readInput,
+  today, addDays, niceDate, span, fmtMin, t12, stamp, hrs, field, datalist, seg, setPath, getPath, readInput,
   toast, sheet, ask, sendSheet, pasteSheet, makePdf, savePdf, fileAway, retryUploads, settingsView, settingsAct, restore, registerSW, dateBar, crewVar, setLang,
 } from './shared.mjs';
 
@@ -49,7 +49,7 @@ const rep = () => (R[day] ||= normReport({
 const go = h => (location.hash === '#' + h ? route() : (location.hash = h));
 
 const STATUS = [['On plan', 'good'], ['At risk', 'warn'], ['Behind plan', 'bad'], ['No work today', '']];
-const crewHours = c => span(c.start, c.stop) / 60 * c.workers;
+const crewHours = c => c.labor || span(c.start, c.stop) / 60 * c.workers; // labor: summed from the task sheets by Fill
 const active = r => r.floors.flatMap(f => f.crews.filter(c => !c.na));
 const laborHrs = r => active(r).reduce((n, c) => n + crewHours(c), 0);
 const waiting = r => r.decisions.filter(d => d.q && !d.pm);
@@ -63,7 +63,7 @@ function lateLine(s) {
   return h > 0 ? `⚠ Forecast finishes ${amt} after the deadline` : `On track: ${amt} of float before the deadline`;
 }
 const OUT = {
-  lh: (r, d) => { const c = r.floors[d.f].crews[d.c]; return `Total labor-hours: ${hrs(crewHours(c))}${c.start && c.stop ? ` (${c.workers} × ${fmtMin(span(c.start, c.stop))})` : ''}`; },
+  lh: (r, d) => { const c = r.floors[d.f].crews[d.c]; return `Total labor-hours: ${hrs(crewHours(c))}${c.labor ? ' (from the task sheets)' : c.start && c.stop ? ` (${c.workers} × ${fmtMin(span(c.start, c.stop))})` : ''}`; },
   late: (r, d) => lateLine(r.next[d.i]),
 };
 
@@ -74,7 +74,7 @@ function route() {
   const h = location.hash.slice(1);
   if (h.startsWith('p=')) return openCode(h.slice(2));
   const [v, a] = h.split('/');
-  if (v === 'day' && /^\d{4}-\d{2}-\d{2}$/.test(a)) day = a;
+  if (v === 'day' && /^\d{4}-\d{2}-\d{2}$/.test(a) && addDays(a, 0) === a) day = a; // a real day, not 2026-02-30
   view = v === 'settings' ? 'settings' : 'report';
   render();
   scrollTo(0, 0);
@@ -124,7 +124,7 @@ function render() {
     </div><p class="hint">${r.submittedAt ? `Sent to the PM ${stamp(r.submittedAt)}` : 'Not sent to the PM yet'}${r.pmReview ? ` · PM reviewed: ${esc(r.pmReview)}` : ''}</p></section>
     ${sec('sum', 1, 'Overall status & today’s results', `${seg('r.status', r.status, STATUS)}
       ${field('Most important results today, planned work missed, and effect on the job', 'r.results', r.results, { rows: 4 })}`,
-      r.status ? `<span class="pill" data-tone="${STATUS.find(s => s[0] === r.status)[1]}">${r.status}</span>` : '')}
+      r.status ? `<span class="pill" data-tone="${STATUS.find(s => s[0] === r.status)?.[1] || ''}">${esc(r.status)}</span>` : '')}
     ${sec('wins', 2, 'Good results & lessons to repeat', field('Crew wins, quality improvements, faster methods, repeat-floor lessons', 'r.wins', r.wins, { rows: 3 }))}
     ${sec('issues', 3, 'Site issues, concerns & coordination', field('Safety / quality issues, other trades, access, inspections, scope changes', 'r.issues', r.issues, { rows: 3 })
       + field('Who was notified / when', 'r.notified', r.notified))}
@@ -274,7 +274,7 @@ async function act(a, el) {
       if (!ts.length) return toast(`No task sheets for ${niceDate(day)} on this phone. Load them in Task Sheets first.`, 'bad');
       const n = fillFromTasks(r, ts, S.crews.map(c => c.name));
       open.add('floors');
-      toast(`Filled ${n} crew section${n === 1 ? '' : 's'} from ${ts.length} task sheet${ts.length === 1 ? '' : 's'}. Empty fields only.`);
+      toast(`Filled ${n} crew section${n === 1 ? '' : 's'} from ${ts.length} task sheet${ts.length === 1 ? '' : 's'}. Typed notes kept; work hours updated.`);
       break;
     }
     case 'carry': {
@@ -282,7 +282,7 @@ async function act(a, el) {
       if (!prev) return toast('No earlier report on this phone to copy from');
       const p = R[prev], copy = x => structuredClone(x);
       Object.assign(r, { super: r.super || p.super, shiftStart: r.shiftStart || p.shiftStart, shiftEnd: r.shiftEnd || p.shiftEnd });
-      if (!r.floors.length) r.floors = p.floors.map(f => ({ floor: f.floor, crews: f.crews.map(c => ({ ...CREW_TPL, name: c.name, na: c.na, lead: c.lead, workers: c.workers, members: c.members, area: c.area, start: c.start, stop: c.stop })) }));
+      if (!r.floors.length) r.floors = p.floors.map(f => ({ floor: f.floor, crews: f.crews.map(c => ({ ...CREW_TPL, name: c.name, na: c.na, lead: c.lead, workers: c.workers, members: c.members })) }));
       r.needs.push(...p.needs.filter(n => !n.confirmed && !r.needs.some(x => x.item === n.item)).map(copy));
       r.next.push(...p.next.filter(s => !r.next.some(x => x.step === s.step)).map(copy));
       r.risks.push(...p.risks.filter(x => !r.risks.some(y => y.risk === x.risk)).map(copy));
@@ -328,6 +328,7 @@ document.addEventListener('input', e => {
   if (!k) return;
   const r = rep();
   setPath({ r, s: S }, k, readInput(el));
+  if (/^r\.floors\.\d+\.crews\.\d+\.(start|stop|workers)$/.test(k)) setPath({ r }, k.replace(/\w+$/, 'labor'), 0); // typed hours take over from the sheets
   if (k.startsWith('s.')) return save(KEYS.settings, S);
   r.updatedAt = Date.now();
   persist();
