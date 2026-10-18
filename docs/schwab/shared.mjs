@@ -110,6 +110,8 @@ export function mergeTask(local, inc, part) {
 
 // The PM owns the decision answers and the review stamp; the superintendent owns everything else.
 // An answer whose question was reworded since is added as its own entry, never dropped.
+// The time clock is everyone's: a person either phone added comes across, and a time either phone
+// recorded fills an empty one; the superintendent's copy wins where both recorded a time.
 export function mergeAnswers(base, answers) {
   for (const d of answers.decisions) {
     if (!d.pm && !d.pmNote) continue;
@@ -118,6 +120,16 @@ export function mergeAnswers(base, answers) {
     else base.decisions.push(d);
   }
   base.pmReview = answers.pmReview || base.pmReview;
+  const who = p => p.name.trim().toLowerCase();
+  for (const p of answers.clock) {
+    if (!who(p) && !p.in && !p.out) continue; // an empty box carries nothing
+    const m = who(p) && base.clock.find(x => who(x) === who(p));
+    if (m) { m.in ||= p.in; m.out ||= p.out; }
+    else if (!base.clock.some(x => x.name === p.name && x.in === p.in && x.out === p.out)) {
+      const empty = base.clock.find(x => !who(x) && !x.in && !x.out);
+      if (empty) Object.assign(empty, p); else base.clock.push({ ...p });
+    }
+  }
   return base;
 }
 
@@ -349,7 +361,7 @@ export function sheet(html) {
   const d = document.createElement('dialog');
   d.className = 'sheet';
   d.innerHTML = `<div class="sheet-in"><form method="dialog"><button class="sheet-x" aria-label="${L('Close')}">✕</button></form>${html}</div>`;
-  d.addEventListener('close', () => d.remove());
+  d.addEventListener('close', () => { const t = d.querySelector('#toast'); if (t) document.body.append(t); d.remove(); }); // a toast shown in the sheet outlives it
   d.addEventListener('click', e => { if (e.target === d) d.close(); }); // tap outside
   document.body.append(d);
   d.showModal();

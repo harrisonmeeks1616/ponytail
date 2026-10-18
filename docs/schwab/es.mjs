@@ -259,6 +259,7 @@ export default {
   'Create the office passcode': 'Crear el código de oficina',
   'Change the passcode': 'Cambiar el código',
   'Delete a digit': 'Borrar un dígito',
+  '{n} of 4 digits': '{n} de 4 dígitos',
   'Enter the 4-digit passcode.': 'Escriba el código de 4 dígitos.',
   'Enter it again to confirm.': 'Escríbalo otra vez para confirmar.',
   "Pick 4 digits. Use the same code on the PM's and the superintendent's phones.": 'Escoja 4 dígitos. Use el mismo código en el teléfono del gerente de proyecto y en el del superintendente.',

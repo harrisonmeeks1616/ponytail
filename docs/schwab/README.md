@@ -9,7 +9,7 @@ company names (**H.A. Sack-Electrical**, **Sack Company-Electrical**) in its hea
 | Time clock | (new) | Everyone on site clocks in and out; the superintendent or PM sets how many people |
 | Daily report | Superintendent Daily Report (8 pages) | Superintendent fills it in; PM answers decisions and sends it back |
 
-`tasks.html` is the app; `report.mjs` holds the daily report and time clock; `index.html` just opens the app.
+`tasks.html` is the app; `report.mjs` holds the daily report and time clock; `index.html` and the old `report.html` just open the app.
 No build step and no accounts. Optional Drive filing needs a separately authorized and deployed Apps Script
 receiver; the static app does not connect it automatically.
 
@@ -81,7 +81,7 @@ Schwab Field Records/
 ## Spanish mode (crew screens and the time clock)
 
 - Tap **ES** in the header, or Settings → Language. A crew phone asks "English / Español" the first time it opens a sheet.
-- Every crew label, button and message, the sign-in pad and the time clock switch to Spanish (wording in `es.mjs`; a bilingual foreman can fix any phrase there). The daily report stays in English: it is the PM's record.
+- Every crew label, button and message, the sign-in pad and the time clock switch to Spanish (wording in `es.mjs`; a bilingual foreman can fix any phrase there). The daily report form itself stays in English, the PM's record; only the app around it (tabs, dates, menus) follows the phone's language.
 - What people type is never translated. Notes show and print exactly as written, so a note typed in Spanish stays in Spanish for whoever reads it.
 - PDFs and review-folder copies are always the English form, with the notes as typed. The text message a Spanish-mode crew sends carries a Spanish line and an English line.
 
@@ -98,7 +98,7 @@ Schwab Field Records/
 
 - **iPhone home screen:** if "Add to Home Screen" shows an **Open as Web App** switch, turn it off. Otherwise the icon keeps separate data from Safari, and links tapped in Messages land in Safari. Inside the app, **⋯ → Open a link someone sent you** imports a pasted link.
 - Same goes for browsers: links open in the phone's default browser, so use the app in that browser.
-- Old links to `report.html` (sent before the apps were combined) no longer open; send the report again from the app. A home-screen icon for the old Daily Report should be replaced with one for the app.
+- `report.html` only forwards to the app now, so old report links and an old Daily Report home-screen icon still land in the right place.
 - The PM selects **Project manager** in Settings before opening a daily report. Report links do not select the phone's role.
 - After an app update, reopen online and reload once more after the new offline cache installs. Saved records remain on the phone.
 - There is no live sync. The PM sees crew detail when the superintendent sends the report or it reaches the review folder, not before.

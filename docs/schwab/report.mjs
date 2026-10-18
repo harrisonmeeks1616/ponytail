@@ -6,7 +6,7 @@
 
 import {
   KEYS, COMPANY, esc, load, save, normTask, normReport, blank, newFloor, fillFromTasks, mergeAnswers, CREW_TPL, pack, linkTo,
-  niceDate, nowHM, span, fmtMin, t12, stamp, hrs, field, datalist, seg, setPath, getPath, readInput, roster,
+  today, niceDate, nowHM, span, fmtMin, t12, stamp, hrs, field, datalist, seg, setPath, getPath, readInput, roster,
   toast, sheet, ask, sendSheet, pasteSheet, makePdf, savePdf, fileAway, dateBar, crewVar, letterhead, L,
 } from './shared.mjs';
 
@@ -81,41 +81,55 @@ function clockView(S, day) {
   // Two boxes to start, the first for the superintendent. Not saved until someone types or taps.
   if (r.clock.length < MIN_ON_SITE) r.clock = headcount(r.clock.length ? r.clock : [clockRow(r.super)], MIN_ON_SITE).list;
   const names = [r.super, S.super, S.me, ...S.crews.flatMap(c => [c.lead, ...roster(S, c.name)])];
-  const prev = !r.clock.some(p => p.in || p.out) && lastClock(day);
-  const stampBtn = (p, i, f, label, primary) => p[f]
-    ? `<input type="time" data-k="r.clock.${i}.${f}" value="${esc(p[f])}" aria-label="${esc(`${label} · ${L('Person {n}', { n: i + 1 })}`)}">`
-    : `<button class="btn${primary ? ' primary' : ''}" data-act="cStamp" data-i="${i}" data-v="${f}">${esc(label)}</button>`;
+  const prev = !r.clock.some(p => p.in || p.out) && lastClock(day), now = day === today();
   $('app').innerHTML = dateBar(day, 'clock') + `
     <section class="card"><h2>${L('Time clock')}</h2>
       <label class="field headcount"><span>${L('People on site')}</span>
         <input type="number" inputmode="numeric" min="${MIN_ON_SITE}" max="${MAX_ON_SITE}" step="1" value="${r.clock.length}" data-headcount></label>
       <p class="hint">${L('Type how many people are on site, the superintendent included (2 or more). Each person gets a box below.')}</p>
       <div class="stats three" id="clockStats">${clockStats(r)}</div>
-      <div class="btns"><button class="btn" data-act="cAll" data-v="in">${L('Everyone in')}</button><button class="btn" data-act="cAll" data-v="out">${L('Everyone out')}</button></div>
+      ${now ? `<div class="btns"><button class="btn" data-act="cAll" data-v="in">${L('Everyone in')}</button><button class="btn" data-act="cAll" data-v="out">${L('Everyone out')}</button></div>` : ''}
       ${prev ? `<button class="link" data-act="cSame">${esc(L('Same people as {date}', { date: niceDate(prev) }))}</button>` : ''}
     </section>
-    ${r.clock.map((p, i) => `<section class="card person">
-      <div class="row1"><span class="label">${esc(L('Person {n}', { n: i + 1 }))}</span>
-        ${r.clock.length > MIN_ON_SITE ? `<button class="link danger" data-act="cDel" data-i="${i}">${esc(L('Remove'))}</button>` : ''}</div>
-      ${field(L('Name'), `r.clock.${i}.name`, p.name, { list: 'people' })}
-      <div class="grid two"><div class="field"><span>${L('In')}</span>${stampBtn(p, i, 'in', L('Clock in'), true)}</div>
-        <div class="field"><span>${L('Out')}</span>${stampBtn(p, i, 'out', L('Clock out'), !!p.in)}</div></div>
-      <p class="out" data-out="person" data-i="${i}">${esc(personLine(p))}</p></section>`).join('')}
+    <div id="clockPeople">${r.clock.map((p, i) => personCard(r, p, i, day)).join('')}</div>
     ${datalist('people', names)}
     <p class="hint">${esc(L("Times are saved on this phone with the {date} daily report, which goes to the PM. Clock in on the superintendent's phone or the site tablet.", { date: niceDate(day) }))}</p>`;
   $('bar').innerHTML = `<div class="bar-in"><button class="btn primary big" data-act="cAdd">${L('+ Add a person')}</button>
     <button class="btn more" data-act="cMenu" aria-label="${L('More actions')}">⋯</button></div>`;
 }
 
-// The people-on-site box: whatever number is typed, that many boxes (2 at the least).
-export async function setHeadcount(n, S, day) {
-  const r = rep(S, day), next = headcount(r.clock, n);
-  if (next.list.length === r.clock.length) return;
-  if (+n > MAX_ON_SITE) toast(L('Up to {n} people per day', { n: MAX_ON_SITE }));
-  if (next.lost && !await ask(L('Remove the last {n} people and their times?', { n: r.clock.length - next.list.length }), L('Remove'), 'danger')) return;
-  r.clock = next.list;
-  r.updatedAt = Date.now();
-  persist();
+function personCard(r, p, i, day) {
+  const now = day === today(); // tap-to-stamp only on today's clock; another day's times are typed
+  const who = L('Person {n}', { n: i + 1 });
+  const stampBtn = (f, label, primary) => p[f] || !now
+    ? `<input type="time" data-k="r.clock.${i}.${f}" value="${esc(p[f])}" aria-label="${esc(`${label} · ${who}`)}">`
+    : `<button class="btn${primary ? ' primary' : ''}" data-act="cStamp" data-i="${i}" data-v="${f}" aria-label="${esc(`${label} · ${who}`)}">${esc(label)}</button>`;
+  return `<section class="card person">
+      <div class="row1"><span class="label">${esc(who)}</span>
+        <button class="link danger" data-act="cDel" data-i="${i}" aria-label="${esc(`${L('Remove')} · ${who}`)}"${r.clock.length > MIN_ON_SITE ? '' : ' hidden'}>${esc(L('Remove'))}</button></div>
+      ${field(L('Name'), `r.clock.${i}.name`, p.name, { list: 'people' })}
+      <div class="grid two"><div class="field"><span>${L('In')}</span>${stampBtn('in', L('Clock in'), true)}</div>
+        <div class="field"><span>${L('Out')}</span>${stampBtn('out', L('Clock out'), !!p.in)}</div></div>
+      <p class="out" data-out="person" data-i="${i}">${esc(personLine(p))}</p></section>`;
+}
+
+// The people-on-site box: whatever number is typed, that many boxes (2 at the least). Boxes are added
+// and dropped in place: redrawing the screen here would swallow the tap that moved focus off the box.
+export async function headcountChanged(el, S, day) {
+  const r = rep(S, day), n = el.value.trim(), next = headcount(r.clock, +n);
+  const lost = r.clock.length - next.list.length;
+  if (n && next.list.length !== r.clock.length && (!next.lost || await ask(L('Remove the last {n} people and their times?', { n: lost }), L('Remove'), 'danger'))) {
+    if (+n > MAX_ON_SITE) toast(L('Up to {n} people per day', { n: MAX_ON_SITE }));
+    const list = $('clockPeople');
+    r.clock = next.list;
+    r.updatedAt = Date.now();
+    persist();
+    while (list.children.length > r.clock.length) list.lastElementChild.remove();
+    list.insertAdjacentHTML('beforeend', r.clock.slice(list.children.length).map((p, k, add) => personCard(r, p, r.clock.length - add.length + k, day)).join(''));
+    for (const b of list.querySelectorAll('[data-act=cDel]')) b.hidden = r.clock.length <= MIN_ON_SITE;
+    $('clockStats').innerHTML = clockStats(r);
+  }
+  el.value = r.clock.length; // a cleared, cancelled or out-of-range entry shows the real count again
 }
 
 export const OUT = {
@@ -336,7 +350,8 @@ export async function reportAct(a, el, S, day, v) {
       break;
     }
     case 'carry': {
-      const prev = Object.keys(R).filter(d => d < day && R[d].updatedAt).sort().at(-1);
+      const written = x => x.status || x.floors.length || x.needs.length || x.next.length || x.risks.length; // not just a time clock
+      const prev = Object.keys(R).filter(d => d < day && R[d].updatedAt && written(R[d])).sort().at(-1);
       if (!prev) return toast('No earlier report on this phone to copy from');
       const p = R[prev], copy = x => structuredClone(x);
       Object.assign(r, { super: r.super || p.super, shiftStart: r.shiftStart || p.shiftStart, shiftEnd: r.shiftEnd || p.shiftEnd });
@@ -379,7 +394,10 @@ export async function reportAct(a, el, S, day, v) {
       toast(val === 'in' ? L('Clocked in: {n}', { n: who.length }) : L('Clocked out: {n}', { n: who.length }));
       break;
     }
-    case 'cAdd': r.clock.push(clockRow()); break;
+    case 'cAdd':
+      if (r.clock.length >= MAX_ON_SITE) return toast(L('Up to {n} people per day', { n: MAX_ON_SITE }));
+      r.clock.push(clockRow());
+      break;
     case 'cDel': {
       const p = r.clock[i];
       if (r.clock.length <= MIN_ON_SITE) return;
@@ -387,10 +405,13 @@ export async function reportAct(a, el, S, day, v) {
       r.clock.splice(i, 1);
       break;
     }
-    case 'cSame': {
+    case 'cSame': { // fills empty boxes and adds who's missing; names already typed today stay
       const prev = lastClock(day);
       if (!prev) return;
-      r.clock = headcount(R[prev].clock.filter(p => p.name.trim()).map(p => clockRow(p.name)), Math.max(MIN_ON_SITE, R[prev].clock.filter(p => p.name.trim()).length)).list;
+      const have = new Set(r.clock.map(p => p.name.trim().toLowerCase()).filter(Boolean));
+      const add = [...new Set(R[prev].clock.map(p => p.name.trim()).filter(n => n && !have.has(n.toLowerCase())))];
+      for (const p of r.clock) if (add.length && !p.name.trim() && !p.in && !p.out) p.name = add.shift();
+      r.clock.push(...add.slice(0, MAX_ON_SITE - r.clock.length).map(n => clockRow(n)));
       toast(L('Same people as {date}', { date: niceDate(prev) }));
       break;
     }

@@ -385,3 +385,14 @@ test('time clock: at least 2 boxes, one per person typed, nothing with times rem
   assert.match(pdf, /\(H\.A\. Sack-Electrical \\267 Sack Company-Electrical\) Tj/, 'both company names head every PDF');
 });
 
+test('time clock entries from both phones survive a report round trip', async () => {
+  const { normReport, mergeAnswers } = await lib;
+  const sup = normReport({ clock: [{ name: 'Dana Super', in: '06:30', out: '15:00' }, { name: 'Jose L', in: '07:00' }, { name: '' }] });
+  const pm = normReport({ clock: [{ name: 'jose l ', in: '07:05', out: '15:30' }, { name: 'Ray K', in: '08:00' }, { name: '' }] });
+  mergeAnswers(sup, pm);
+  assert.deepEqual(sup.clock.map(p => [p.name, p.in, p.out]), [['Dana Super', '06:30', '15:00'], ['Jose L', '07:00', '15:30'], ['Ray K', '08:00', '']],
+    'a missing time is filled, the superintendent keeps his own, and a person added on the PM phone takes an empty box');
+  mergeAnswers(sup, pm);
+  assert.equal(sup.clock.length, 3, 'merging the same copy again adds nobody twice');
+});
+

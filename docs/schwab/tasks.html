@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
 <meta name="theme-color" content="#1B4332">
-<meta name="apple-mobile-web-app-title" content="Sack Electrical">
+<meta name="apple-mobile-web-app-title" content="H.A. Sack-Electrical">
 <title>H.A. Sack-Electrical · Field App</title>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@600;700&family=Barlow:wght@400;600&display=swap" media="print" onload="this.media='all'">
 <link rel="stylesheet" href="shared.css">
@@ -27,7 +27,7 @@ import {
   registerSW, dateBar, crewVar as cv, L, setLang, getLang, COMPANY, letterhead,
   UNLOCK, hasPin, adoptPin, pinHash, tryPin, unlocked, signIn, signOut,
 } from './shared.mjs';
-import { renderOffice, reportAct, reportInput, openReport, fileReportIfChanged, reloadReports, sectionToggle, setHeadcount } from './report.mjs';
+import { renderOffice, reportAct, reportInput, openReport, fileReportIfChanged, reloadReports, sectionToggle, headcountChanged } from './report.mjs';
 
 registerSW();
 const app = document.getElementById('app'), bar = document.getElementById('bar');
@@ -110,7 +110,9 @@ function route() {
 async function openCode(code) {
   let data;
   try { data = await unpack(code); } catch { toast(L('That link is damaged or cut off. Ask for it to be sent again.'), 'bad'); return location.replace('#day/' + day); }
-  adoptPin(S, data.pin); // a crew phone learns the office's code from its first sheet
+  // A crew phone (or a new office phone) learns the office's code from its first link. A phone with
+  // office-made sheets of its own never does, so no link can lock it out of its own records.
+  if (['task', 'result', 'day', 'report'].includes(data.kind) && !T.some(x => x.origin === 'mine')) adoptPin(S, data.pin);
   const forOffice = data.kind === 'report' || data.kind === 'day' || (data.kind === 'result' && find(data.task?.uid)?.origin !== 'link');
   if (forOffice && !office()) {
     const want = location.hash;
@@ -406,14 +408,17 @@ function passcode(mode = hasPin(S) ? 'enter' : 'create') {
     let first = '', code = '', busy = false;
     const d = sheet(`<h3>${{ enter: L('Office sign-in'), create: L('Create the office passcode'), change: L('Change the passcode') }[mode]}</h3>
       <p class="pin-msg" role="status"></p>
-      <div class="pin-dots" aria-hidden="true">${'<i></i>'.repeat(4)}</div>
+      <div class="pin-dots" aria-hidden="true">${'<i></i>'.repeat(4)}</div><span class="sr" aria-live="polite"></span>
       <div class="keypad">${[1, 2, 3, 4, 5, 6, 7, 8, 9].map(n => `<button type="button" data-pin="${n}">${n}</button>`).join('')}
         <span></span><button type="button" data-pin="0">0</button><button type="button" data-pin="back" aria-label="${L('Delete a digit')}">⌫</button></div>`);
     d.classList.add('pin');
     d.dataset.want = location.hash;
     const msg = d.querySelector('.pin-msg'), dots = d.querySelector('.pin-dots');
     const say = (text, bad = false) => { msg.textContent = text; msg.classList.toggle('bad', bad); };
-    const draw = () => dots.querySelectorAll('i').forEach((el, i) => el.classList.toggle('on', i < code.length));
+    const draw = () => {
+      dots.querySelectorAll('i').forEach((el, i) => el.classList.toggle('on', i < code.length));
+      d.querySelector('.sr').textContent = L('{n} of 4 digits', { n: code.length });
+    };
     const ask4 = () => say(mode === 'enter' ? L('Enter the 4-digit passcode.') : first ? L('Enter it again to confirm.')
       : L("Pick 4 digits. Use the same code on the PM's and the superintendent's phones."));
     const fail = text => { code = ''; draw(); dots.classList.remove('shake'); void dots.offsetWidth; dots.classList.add('shake'); say(text, true); navigator.vibrate?.(60); };
@@ -603,6 +608,7 @@ document.addEventListener('click', e => {
   if (!el) return;
   e.preventDefault();
   el.closest('dialog')?.close();
+  if (document.body.classList.contains('office') !== office()) return route(); // the sign-in ran out while this screen was up
   if (el.dataset.go) go(el.dataset.go);
   else if ((view.v === 'clock' || view.v === 'report') && !SHELL.has(el.dataset.act)) reportAct(el.dataset.act, el, S, day, view.v);
   else act(el.dataset.act, el);
@@ -628,10 +634,7 @@ document.addEventListener('input', e => {
 
 document.addEventListener('change', e => {
   if (e.target.matches('[data-pick]') && e.target.value) go(`${e.target.dataset.pick || 'day'}/${e.target.value}`);
-  if (e.target.matches('[data-headcount]')) { // a cleared box changes nothing; render puts the count back
-    const n = e.target.value.trim();
-    (n ? setHeadcount(+n, S, day) : Promise.resolve()).then(render);
-  }
+  if (e.target.matches('[data-headcount]')) headcountChanged(e.target, S, day);
   if (e.target.matches('[data-restore]') && e.target.files[0]) restore(e.target.files[0]);
   if (e.target.dataset.k === 't.date' && /^\d{4}-\d{2}-\d{2}$/.test(e.target.value)) day = e.target.value; // moved to another day
 });
@@ -647,7 +650,7 @@ addEventListener('pageshow', e => e.persisted && reload());
 addEventListener('hashchange', route);
 addEventListener('online', () => retryUploads(S));
 addEventListener('visibilitychange', () => {
-  if (document.hidden) { fileIfChanged(current()); fileReportIfChanged(S, day); } else if (needsOffice(view) && !office()) route(); // signed out while away
+  if (document.hidden) { fileIfChanged(current()); fileReportIfChanged(S, day); } else if (document.body.classList.contains('office') !== office()) route(); // signed out while away
 });
 addEventListener('pagehide', () => { fileIfChanged(current()); fileReportIfChanged(S, day); }); // queued even if the upload can't finish; retried on next open
 app.addEventListener('toggle', sectionToggle, true);
