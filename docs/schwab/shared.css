@@ -48,9 +48,8 @@ button, input, select, textarea { font: inherit; color: inherit; }
 /* ---- header: company names, sign-in, office tabs ---- */
 .top {
   position: sticky; top: 0; z-index: 5; background: var(--brand); color: var(--brand-ink);
-  padding: calc(env(safe-area-inset-top, 0px) + 10px) 16px 10px; border-bottom: 4px solid var(--accent);
+  padding: calc(env(safe-area-inset-top, 0px) + 10px) 16px 0; border-bottom: 4px solid var(--accent);
 }
-.office .top { padding-bottom: 0; }
 .top-in { max-width: 760px; margin: 0 auto; display: flex; align-items: center; gap: 10px; }
 .top .grow { flex: 1; min-width: 0; }
 .mark { flex: none; }
@@ -62,8 +61,9 @@ button, input, select, textarea { font: inherit; color: inherit; }
 @media (max-width: 359px) { .mark { display: none; } }
 .icon-btn { background: none; border: 1px solid rgb(255 255 255 / .28); color: inherit; border-radius: 10px; min-width: 44px; height: 44px; font-size: 1.2rem; cursor: pointer; text-decoration: none; display: grid; place-items: center; flex: none; }
 .office-tabs { max-width: 760px; margin: 8px auto 0; display: grid; grid-auto-flow: column; grid-auto-columns: 1fr; }
-.office-tabs a { min-height: 46px; display: grid; place-items: center; text-align: center; color: rgb(255 255 255 / .78); text-decoration: none; font-weight: 700; font-size: .95rem; border-bottom: 4px solid transparent; margin-bottom: -4px; line-height: 1.1; padding: 0 4px; }
+.office-tabs a { min-height: 46px; display: flex; align-items: center; justify-content: center; text-align: center; color: rgb(255 255 255 / .78); text-decoration: none; font-weight: 700; font-size: .95rem; border-bottom: 4px solid transparent; margin-bottom: -4px; line-height: 1.1; padding: 0 4px; }
 .office-tabs a[aria-current=page] { color: var(--brand-ink); border-bottom-color: var(--accent); }
+.office-tabs .lock { width: 13px; height: 13px; margin-left: 5px; vertical-align: -1px; opacity: .85; display: inline-block; }
 
 main { max-width: 760px; margin: 0 auto; padding: 12px 16px 140px; display: flex; flex-direction: column; gap: 12px; }
 #app { display: contents; } /* its cards sit in main's column */

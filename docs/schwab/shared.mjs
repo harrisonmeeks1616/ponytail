@@ -211,8 +211,8 @@ export function fillFromTasks(rep, tasks, crewNames) {
 }
 
 // ---------- office passcode ----------
-// The office screens (assigning, the time clock, the daily report, settings) open with a 4-digit code;
-// crews see only the sheets sent to them. The code is kept as a salted SHA-256 hash, never as typed, and
+// The superintendent's screens (making or changing assignments, the daily report, settings) open with a
+// 4-digit code; crew sheets and the time clock are open to everyone. The code is kept as a salted SHA-256 hash, never as typed, and
 // rides along in the links an office phone sends, so a crew phone asks for the office's code instead of
 // offering to make its own. A phone keeps the first code it learns; links never replace it.
 // ponytail: a 4-digit code in a phone web app is a door lock, not a vault: 10,000 codes, and anyone holding
@@ -586,7 +586,7 @@ export function settingsView(s) {
       ${field(L('Your name'), 's.me', s.me, { ph: L('Used for "Assigned by", sign-offs') })}
       <label class="field"><span>${L('Your role')}</span><select data-k="s.role">${roles.map(r => `<option value="${r}"${r === s.role ? ' selected' : ''}>${L(r)}</option>`).join('')}</select></label>
     </div></section>
-    <section class="card"><h2>${L('Office passcode')}</h2><p class="hint">${L("Opens task setup, the time clock, the daily report and settings. Use the same code on the PM's and the superintendent's phones. Crew phones learn it from the first task sheet they open.")}</p>
+    <section class="card"><h2>${L('Office passcode')}</h2><p class="hint">${L("Opens task setup, the daily report and settings. Crew sheets and the time clock stay open to everyone. Use the same code on the PM's and the superintendent's phones. Crew phones learn it from the first task sheet they open.")}</p>
       <div class="btns"><button class="btn" data-act="changePin">${L('Change the passcode')}</button></div></section>
     <section class="card"><h2>${L('Project')}</h2><div class="grid">
       ${field(L('Project'), 's.project', s.project)}${field(L('Location'), 's.site', s.site)}

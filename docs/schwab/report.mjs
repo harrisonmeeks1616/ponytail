@@ -1,7 +1,8 @@
 // Daily report and time clock: the office's record of each day, one per date, kept on this phone.
 // The report is the English office form for the PM. The time clock (everyone on site, superintendent
 // included) is saved with that day's report, so it goes to the PM with it and prints in its PDF.
-// Both sit behind the office passcode; tasks.html routes here for #report/<day> and #clock/<day>.
+// The report sits behind the office passcode; the time clock is open to everyone, so workers can clock
+// themselves in on the superintendent's phone. tasks.html routes here for #report/<day> and #clock/<day>.
 
 import {
   KEYS, COMPANY, esc, load, save, normTask, normReport, blank, newFloor, fillFromTasks, mergeAnswers, CREW_TPL, pack, linkTo,
@@ -101,7 +102,7 @@ function clockView(S, day) {
         <div class="field"><span>${L('Out')}</span>${stampBtn(p, i, 'out', L('Clock out'), !!p.in)}</div></div>
       <p class="out" data-out="person" data-i="${i}">${esc(personLine(p))}</p></section>`).join('')}
     ${datalist('people', names)}
-    <p class="hint">${esc(L('Saved with the {date} daily report. It prints with the report and goes to the PM when the report is sent.', { date: niceDate(day) }))}</p>`;
+    <p class="hint">${esc(L("Times are saved on this phone with the {date} daily report, which goes to the PM. Clock in on the superintendent's phone or the site tablet.", { date: niceDate(day) }))}</p>`;
   $('bar').innerHTML = `<div class="bar-in"><button class="btn primary big" data-act="cAdd">${L('+ Add a person')}</button>
     <button class="btn more" data-act="cMenu" aria-label="${L('More actions')}">⋯</button></div>`;
 }

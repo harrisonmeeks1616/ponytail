@@ -6,7 +6,7 @@ company names (**H.A. Sack-Electrical**, **Sack Company-Electrical**) in its hea
 | Screen | Paper form | Who uses it |
 | --- | --- | --- |
 | Tasks | Electrical Task Sheet (2 pages) | Superintendent or PM assigns; crews check off steps and send results back |
-| Time clock | (new) | Superintendent or PM clocks everyone on site in and out |
+| Time clock | (new) | Everyone on site clocks in and out; the superintendent or PM sets how many people |
 | Daily report | Superintendent Daily Report (8 pages) | Superintendent fills it in; PM answers decisions and sends it back |
 
 `tasks.html` is the app; `report.mjs` holds the daily report and time clock; `index.html` just opens the app.
@@ -15,8 +15,10 @@ receiver; the static app does not connect it automatically.
 
 ## Office passcode
 
-- Crews see only the task sheets sent to them. Tasks setup, the time clock, the daily report and settings
-  open with a **4-digit office passcode** (the padlock in the header, or **Superintendent or PM? Sign in**).
+- The superintendent's parts open with a **4-digit office passcode**: the daily report, settings, and making
+  or changing task assignments. Crew task sheets and the time clock stay open to everyone. Sign in with the
+  padlock in the header, the locked **Daily report** tab, or **Superintendent or PM? Sign in**. Signed out, the
+  Tasks tab shows only the sheets sent to that phone.
 - The first office phone to sign in creates the code. Use the same code on the PM's and the superintendent's
   phones. A phone that has no code yet learns it from the first task sheet or report link it opens, so a crew
   phone asks for the office code instead of offering to make one. A link never replaces a code a phone has.
@@ -30,6 +32,8 @@ receiver; the static app does not connect it automatically.
 
 ## Time clock
 
+- Open to everyone, no code needed. Times stay on the phone they are tapped on, so workers clock in on the
+  superintendent's phone or a site tablet, not their own.
 - **People on site:** type the number (2 or more: the superintendent and at least one worker). Each person
   gets a box with a name, **Clock in** and **Clock out**. **+ Add a person** adds one; **Remove** takes one off.
   Lowering the number asks first if a removed box has a name or times.

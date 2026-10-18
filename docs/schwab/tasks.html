@@ -16,7 +16,7 @@
   <button class="icon-btn lang" id="langBtn" data-act="toggleLang" aria-label="Español">ES</button>
   <button class="icon-btn" id="lockBtn" data-act="lockBtn" aria-label="Office sign-in"></button>
 </div>
-<nav class="office-tabs" id="officeTabs" aria-label="Office screens" hidden></nav></header>
+<nav class="office-tabs" id="officeTabs" aria-label="Screens"></nav></header>
 <main><p class="proj" id="proj"></p><div id="app"></div></main>
 <nav class="bar" id="bar"></nav>
 <script type="module">
@@ -80,22 +80,28 @@ function pickCrew(t, name) {
 
 // ---------- routing: #day/2026-10-03, #task/<uid>/<tab>, #clock/<day>, #report/<day>, #settings, #p=<link code> ----------
 
-const OFFICE_VIEWS = ['clock', 'report', 'settings'];
-const needsOffice = vw => OFFICE_VIEWS.includes(vw.v) || (vw.v === 'task' && find(vw.uid)?.origin !== 'link');
+// The passcode guards the superintendent's parts: the daily report, settings, and making or changing
+// assignments (any sheet this phone didn't receive). Crew sheets and the time clock are open to everyone.
+const VIEWS = ['clock', 'report', 'settings'];
+const needsOffice = vw => ['report', 'settings'].includes(vw.v) || (vw.v === 'task' && find(vw.uid)?.origin !== 'link');
 
 function route() {
+  // The sign-in pad guards one address: a repeat event for it changes nothing, moving on (back button, a link) closes it.
+  const pad = document.querySelector('dialog.pin[open]');
+  if (pad) { if (pad.dataset.want === location.hash) return; pad.close(); }
   fileIfChanged(current());
   fileReportIfChanged(S, day);
   const h = location.hash.slice(1);
   if (h.startsWith('p=')) return openCode(h.slice(2));
   const [v, a, b] = h.split('/');
   if (['day', 'clock', 'report'].includes(v) && /^\d{4}-\d{2}-\d{2}$/.test(a) && addDays(a, 0) === a) day = a; // a real day, not 2026-02-30
-  view = v === 'task' && find(a) ? { v: 'task', uid: a, tab: b || 'assign' } : { v: OFFICE_VIEWS.includes(v) ? v : 'board' };
+  view = v === 'task' && find(a) ? { v: 'task', uid: a, tab: b || 'assign' } : { v: VIEWS.includes(v) ? v : 'board' };
   if (view.v === 'task') day = find(a).date;
   if (needsOffice(view) && !office()) { // the crew board stays behind the passcode pad
     view = { v: 'board' };
     render();
-    return passcode().then(ok => (ok ? route() : location.replace('#day/' + day)));
+    const want = location.hash; // unless the person has moved on: signed in, show it; closed, back to the crew board
+    return passcode().then(ok => location.hash === want && (ok ? route() : location.replace('#day/' + day)));
   }
   render();
   scrollTo(0, 0);
@@ -106,7 +112,10 @@ async function openCode(code) {
   try { data = await unpack(code); } catch { toast(L('That link is damaged or cut off. Ask for it to be sent again.'), 'bad'); return location.replace('#day/' + day); }
   adoptPin(S, data.pin); // a crew phone learns the office's code from its first sheet
   const forOffice = data.kind === 'report' || data.kind === 'day' || (data.kind === 'result' && find(data.task?.uid)?.origin !== 'link');
-  if (forOffice && !office() && !await passcode()) return location.replace('#day/' + day);
+  if (forOffice && !office()) {
+    const want = location.hash;
+    if (!await passcode()) return location.hash === want && location.replace('#day/' + day);
+  }
   if (data.kind === 'report') { const d = await openReport(data, S); return location.replace(d ? '#report/' + d : '#day/' + day); }
   if (data.kind === 'day') return importDay(data);
   const inc = normTask(data.task);
@@ -160,11 +169,11 @@ function header() {
   lock.innerHTML = `<svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true">${on ? LOCK.open : LOCK.shut}</svg>`;
   lock.setAttribute('aria-label', on ? L('Lock the office screens') : L('Office sign-in'));
   document.getElementById('proj').textContent = [S.project, S.site].filter(Boolean).join(' · ');
-  tabs.hidden = !on;
-  tabs.setAttribute('aria-label', L('Office screens'));
+  tabs.setAttribute('aria-label', L('Screens'));
   const here = { clock: 'clock', report: 'report', settings: '' }[view.v] ?? 'day';
+  const locked = `<svg class="lock" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" aria-hidden="true">${LOCK.shut}</svg>`;
   tabs.innerHTML = [['day', L('Tasks')], ['clock', L('Time clock')], ['report', L('Daily report')]]
-    .map(([v, label]) => `<a href="#${v}/${day}"${v === here ? ' aria-current="page"' : ''}>${label}</a>`).join('');
+    .map(([v, label]) => `<a href="#${v}/${day}"${v === here ? ' aria-current="page"' : ''}${v === 'report' && !on ? ` aria-label="${esc(`${label}, ${L('needs the office passcode')}`)}">${label}${locked}` : `>${label}`}</a>`).join('');
 }
 
 function render() {
@@ -400,6 +409,8 @@ function passcode(mode = hasPin(S) ? 'enter' : 'create') {
       <div class="pin-dots" aria-hidden="true">${'<i></i>'.repeat(4)}</div>
       <div class="keypad">${[1, 2, 3, 4, 5, 6, 7, 8, 9].map(n => `<button type="button" data-pin="${n}">${n}</button>`).join('')}
         <span></span><button type="button" data-pin="0">0</button><button type="button" data-pin="back" aria-label="${L('Delete a digit')}">⌫</button></div>`);
+    d.classList.add('pin');
+    d.dataset.want = location.hash;
     const msg = d.querySelector('.pin-msg'), dots = d.querySelector('.pin-dots');
     const say = (text, bad = false) => { msg.textContent = text; msg.classList.toggle('bad', bad); };
     const draw = () => dots.querySelectorAll('i').forEach((el, i) => el.classList.toggle('on', i < code.length));
@@ -617,7 +628,10 @@ document.addEventListener('input', e => {
 
 document.addEventListener('change', e => {
   if (e.target.matches('[data-pick]') && e.target.value) go(`${e.target.dataset.pick || 'day'}/${e.target.value}`);
-  if (e.target.matches('[data-headcount]')) setHeadcount(+e.target.value, S, day).then(render);
+  if (e.target.matches('[data-headcount]')) { // a cleared box changes nothing; render puts the count back
+    const n = e.target.value.trim();
+    (n ? setHeadcount(+n, S, day) : Promise.resolve()).then(render);
+  }
   if (e.target.matches('[data-restore]') && e.target.files[0]) restore(e.target.files[0]);
   if (e.target.dataset.k === 't.date' && /^\d{4}-\d{2}-\d{2}$/.test(e.target.value)) day = e.target.value; // moved to another day
 });

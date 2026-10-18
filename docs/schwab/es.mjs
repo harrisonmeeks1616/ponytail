@@ -250,7 +250,8 @@ export default {
   // office sign-in
   'Office sign-in': 'Entrar a oficina',
   'Lock the office screens': 'Bloquear las pantallas de oficina',
-  'Office screens': 'Pantallas de oficina',
+  'Screens': 'Pantallas',
+  'needs the office passcode': 'requiere el código de oficina',
   'Tasks': 'Tareas',
   'Time clock': 'Asistencia',
   'Daily report': 'Reporte diario',
@@ -269,7 +270,7 @@ export default {
   'Wrong passcode. Try again.': 'Código incorrecto. Intente de nuevo.',
   'The passcode needs the secure https:// address of this app.': 'El código necesita la dirección segura https:// de esta app.',
   'Office passcode': 'Código de oficina',
-  "Opens task setup, the time clock, the daily report and settings. Use the same code on the PM's and the superintendent's phones. Crew phones learn it from the first task sheet they open.": 'Abre la preparación de tareas, la asistencia, el reporte diario y los ajustes. Use el mismo código en el teléfono del gerente de proyecto y en el del superintendente. Los teléfonos de las cuadrillas lo reciben con la primera hoja de tarea que abren.',
+  "Opens task setup, the daily report and settings. Crew sheets and the time clock stay open to everyone. Use the same code on the PM's and the superintendent's phones. Crew phones learn it from the first task sheet they open.": 'Abre la preparación de tareas, el reporte diario y los ajustes. Las hojas de las cuadrillas y la asistencia quedan abiertas para todos. Use el mismo código en el teléfono del gerente de proyecto y en el del superintendente. Los teléfonos de las cuadrillas lo reciben con la primera hoja de tarea que abren.',
 
   // time clock
   'People on site': 'Personas en la obra',
@@ -289,7 +290,7 @@ export default {
   'On site since {time}': 'En la obra desde las {time}',
   'Not clocked in yet': 'Todavía no marca entrada',
   '+ Add a person': '+ Agregar persona',
-  'Saved with the {date} daily report. It prints with the report and goes to the PM when the report is sent.': 'Se guarda con el reporte diario del {date}. Se imprime con el reporte y le llega al gerente cuando se envía el reporte.',
+  "Times are saved on this phone with the {date} daily report, which goes to the PM. Clock in on the superintendent's phone or the site tablet.": 'Las horas se guardan en este teléfono con el reporte diario del {date}, que se envía al gerente. Marque en el teléfono del superintendente o en la tableta de la obra.',
   'Up to {n} people per day': 'Hasta {n} personas por día',
   'Remove the last {n} people and their times?': '¿Quitar a las últimas {n} personas y sus horas?',
   'Remove {name} and their times?': '¿Quitar a {name} y sus horas?',
