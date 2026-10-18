@@ -262,6 +262,8 @@ export default {
   '{n} of 4 digits': '{n} de 4 dígitos',
   'Enter the 4-digit passcode.': 'Escriba el código de 4 dígitos.',
   'Enter it again to confirm.': 'Escríbalo otra vez para confirmar.',
+  'Enter the current passcode.': 'Escriba el código actual.',
+  'Signed in: tap the padlock before handing this phone to workers.': 'Sesión abierta: toque el candado antes de pasar este teléfono a los trabajadores.',
   "Pick 4 digits. Use the same code on the PM's and the superintendent's phones.": 'Escoja 4 dígitos. Use el mismo código en el teléfono del gerente de proyecto y en el del superintendente.',
   "The codes didn't match. Start again.": 'Los códigos no coinciden. Empiece de nuevo.',
   'Passcode changed': 'Código cambiado',

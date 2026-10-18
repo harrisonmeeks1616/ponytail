@@ -23,7 +23,7 @@ receiver; the static app does not connect it automatically.
   phones. A phone that has no code yet learns it from the first task sheet or report link it opens, so a crew
   phone asks for the office code instead of offering to make one. A link never replaces a code a phone has.
 - Signed in lasts 12 hours, or until the padlock is tapped. Five wrong codes in a row mean a one-minute wait.
-- **Settings → Office passcode → Change the passcode** changes it on that phone only. Phones that already
+- **Settings → Office passcode → Change the passcode** asks for the current code first, and changes it on that phone only. Phones that already
   learned the old code keep it; type the new one on them if that matters.
 - It is a door lock, not a vault. The code is stored as a salted hash, but there are only 10,000 codes, and
   anyone with a link or the phone's storage can try them all offline. It keeps crews on the crew screens
@@ -33,7 +33,8 @@ receiver; the static app does not connect it automatically.
 ## Time clock
 
 - Open to everyone, no code needed. Times stay on the phone they are tapped on, so workers clock in on the
-  superintendent's phone or a site tablet, not their own.
+  superintendent's phone or a site tablet, not their own. Tap the padlock first: a signed-in phone also opens
+  the daily report and settings (the clock screen reminds you while signed in).
 - **People on site:** type the number (2 or more: the superintendent and at least one worker). Each person
   gets a box with a name, **Clock in** and **Clock out**. **+ Add a person** adds one; **Remove** takes one off.
   Lowering the number asks first if a removed box has a name or times.

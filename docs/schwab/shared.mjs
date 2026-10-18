@@ -110,8 +110,7 @@ export function mergeTask(local, inc, part) {
 
 // The PM owns the decision answers and the review stamp; the superintendent owns everything else.
 // An answer whose question was reworded since is added as its own entry, never dropped.
-// The time clock is everyone's: a person either phone added comes across, and a time either phone
-// recorded fills an empty one; the superintendent's copy wins where both recorded a time.
+// The time clock is everyone's, so it merges box by box (mergeClock).
 export function mergeAnswers(base, answers) {
   for (const d of answers.decisions) {
     if (!d.pm && !d.pmNote) continue;
@@ -120,16 +119,26 @@ export function mergeAnswers(base, answers) {
     else base.decisions.push(d);
   }
   base.pmReview = answers.pmReview || base.pmReview;
+  return mergeClock(base, answers);
+}
+
+// Every time clock box has an id and the time it last changed; a removed box leaves its id in clockGone.
+// Merging keeps the newer copy of each box, adds boxes only the other phone has, and drops removed ones,
+// so a renamed person, a cleared time or a removal sticks on both phones. Two boxes made separately for
+// the same name become one.
+export function mergeClock(base, other) {
+  const gone = new Set([...base.clockGone, ...other.clockGone]);
   const who = p => p.name.trim().toLowerCase();
-  for (const p of answers.clock) {
-    if (!who(p) && !p.in && !p.out) continue; // an empty box carries nothing
-    const m = who(p) && base.clock.find(x => who(x) === who(p));
-    if (m) { m.in ||= p.in; m.out ||= p.out; }
-    else if (!base.clock.some(x => x.name === p.name && x.in === p.in && x.out === p.out)) {
-      const empty = base.clock.find(x => !who(x) && !x.in && !x.out);
-      if (empty) Object.assign(empty, p); else base.clock.push({ ...p });
-    }
+  const rows = base.clock.map(p => ({ ...p }));
+  for (const p of other.clock) {
+    const same = rows.find(x => x.id === p.id);
+    if (same) { if (p.at > same.at) Object.assign(same, p); continue; }
+    const twin = who(p) && rows.find(x => who(x) === who(p));
+    if (twin) { twin.in ||= p.in; twin.out ||= p.out; gone.add(p.id); continue; }
+    rows.push({ ...p });
   }
+  base.clock = rows.filter(p => !gone.has(p.id)).slice(0, 500); // shape()'s list cap
+  base.clockGone = [...gone].slice(-500);
   return base;
 }
 
@@ -151,7 +160,8 @@ export const REPORT_TPL = {
   floors: [{ floor: '', crews: [CREW_TPL] }],
   next: [{ step: '', prereq: '', start: '', dur: '', finish: '', deadline: '', lead: '', checkin: '' }],
   risks: [{ risk: '', impact: '', prevent: '', fallback: '', owner: '', by: '' }],
-  clock: [{ name: '', in: '', out: '' }], // the day's time clock: everyone on site, superintendent included
+  clock: [{ id: '', name: '', in: '', out: '', at: 0 }], // the day's time clock: everyone on site, superintendent included
+  clockGone: [''], // ids of boxes removed, so a merge doesn't bring them back
   preparedBy: '', pmReview: '', updatedAt: 0, filedAt: 0,
 };
 const REPORT_STATUS = ['On plan', 'At risk', 'Behind plan', 'No work today']; // same list as STATUS in report.mjs
@@ -159,7 +169,11 @@ export function normReport(r) {
   const n = shape(REPORT_TPL, r);
   if (!REPORT_STATUS.includes(n.status)) n.status = ''; // one the page doesn't know would break it
   if (!isDay(n.date)) n.date = ''; // an impossible day (2026-02-30) is refused by the review folder forever
-  for (const p of n.clock) for (const k of ['in', 'out']) if (!FORMAT.time.test(p[k])) p[k] = '';
+  for (const p of n.clock) {
+    for (const k of ['in', 'out']) if (!FORMAT.time.test(p[k])) p[k] = '';
+    if (!FORMAT.uid.test(p.id)) p.id = uid();
+  }
+  n.clockGone = n.clockGone.filter(id => FORMAT.uid.test(id));
   return n;
 }
 export const blank = list => shape(REPORT_TPL[list][0], {});

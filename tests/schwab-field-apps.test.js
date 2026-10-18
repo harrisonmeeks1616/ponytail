@@ -385,14 +385,26 @@ test('time clock: at least 2 boxes, one per person typed, nothing with times rem
   assert.match(pdf, /\(H\.A\. Sack-Electrical \\267 Sack Company-Electrical\) Tj/, 'both company names head every PDF');
 });
 
-test('time clock entries from both phones survive a report round trip', async () => {
+test('time clock: boxes merge by id, so renames, cleared times and removals stick on both phones', async () => {
   const { normReport, mergeAnswers } = await lib;
-  const sup = normReport({ clock: [{ name: 'Dana Super', in: '06:30', out: '15:00' }, { name: 'Jose L', in: '07:00' }, { name: '' }] });
-  const pm = normReport({ clock: [{ name: 'jose l ', in: '07:05', out: '15:30' }, { name: 'Ray K', in: '08:00' }, { name: '' }] });
-  mergeAnswers(sup, pm);
-  assert.deepEqual(sup.clock.map(p => [p.name, p.in, p.out]), [['Dana Super', '06:30', '15:00'], ['Jose L', '07:00', '15:30'], ['Ray K', '08:00', '']],
-    'a missing time is filled, the superintendent keeps his own, and a person added on the PM phone takes an empty box');
-  mergeAnswers(sup, pm);
-  assert.equal(sup.clock.length, 3, 'merging the same copy again adds nobody twice');
+  const { clockRow } = await import('../docs/schwab/report.mjs');
+  const copy = r => normReport(JSON.parse(JSON.stringify(r)));
+  const sup = normReport({ clock: [{ ...clockRow('Dana Super'), in: '06:30', out: '15:00', at: 1 }, { ...clockRow('Jose L'), in: '07:00', at: 1 }] });
+  const pm = copy(sup); // the PM opened the superintendent's report
+  Object.assign(pm.clock[1], { name: 'José L', out: '15:30', at: 2 }); // PM fixes the name and clocks him out
+  pm.clock.push({ ...clockRow('Ray K'), in: '08:00', at: 2 }); // and adds a person
+  mergeAnswers(sup, pm); // the PM sends it back
+  const rows = r => r.clock.map(p => [p.name, p.in, p.out]);
+  assert.deepEqual(rows(sup), [['Dana Super', '06:30', '15:00'], ['José L', '07:00', '15:30'], ['Ray K', '08:00', '']], 'a renamed person stays one person');
+
+  sup.clockGone.push(sup.clock[2].id); sup.clock.pop(); // the superintendent removes Ray
+  Object.assign(sup.clock[0], { out: '', at: 3 }); // and clears a wrong clock-out
+  const atPm = mergeAnswers(copy(sup), pm); // he sends it again; the PM's copy is older
+  assert.deepEqual(rows(atPm), [['Dana Super', '06:30', ''], ['José L', '07:00', '15:30']], 'a removal and a cleared time stick');
+  assert.deepEqual(rows(mergeAnswers(copy(atPm), pm)), rows(atPm), 'merging an old copy again changes nothing');
+
+  const a = normReport({ clock: [{ ...clockRow('Ana P'), in: '07:00', at: 1 }] }), b = normReport({ clock: [{ ...clockRow(' ana p'), out: '15:00', at: 1 }] });
+  assert.deepEqual(rows(mergeAnswers(a, b)), [['Ana P', '07:00', '15:00']], 'two phones that each typed the same person make one box');
+  assert.match(normReport({ clock: [{ name: 'X' }] }).clock[0].id, /^[\w-]+$/, 'a box from an older or crafted link gets an id');
 });
 
