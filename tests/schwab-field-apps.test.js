@@ -192,7 +192,7 @@ test('Spanish mode has a Spanish version of every on-screen phrase', async () =>
   const ES = (await import('../docs/schwab/es.mjs')).default;
   const dir = path.join(__dirname, '..', 'docs', 'schwab');
   const used = new Set(['Complete', 'Partial', 'Blocked', 'Accepted', 'Follow-up needed', 'Superintendent', 'Project manager', 'Crew lead', '1 person', '{n} people']); // looked up from data, not literals
-  for (const f of ['tasks.html', 'shared.mjs']) {
+  for (const f of ['tasks.html', 'shared.mjs', 'report.mjs']) {
     const src = fs.readFileSync(path.join(dir, f), 'utf8');
     for (const m of src.matchAll(/\b(?:L|x)\(\s*(['"])((?:\\.|(?!\1)[^\\])*)\1/g)) used.add(m[2].replace(/\\(.)/g, '$1'));
   }
@@ -331,4 +331,109 @@ test('a short crafted link cannot expand into a huge list or carry an impossible
   assert.equal(normTask({ items: Array(1e5).fill({}) }).items.length, 500);
   assert.equal(normReport({ date: '2026-02-30' }).date, '', 'the review folder would refuse it forever');
   assert.equal(normReport({ date: '2026-02-28' }).date, '2026-02-28');
+});
+
+test('office passcode: stored hashed, a 12-hour sign-in, a wait after 5 wrong codes, links only fill a missing code', async () => {
+  const { pinHash, tryPin, unlocked, signOut, waitLeft, adoptPin, PIN_FORMAT } = await lib;
+  const store = new Map();
+  Object.defineProperty(globalThis, 'localStorage', { configurable: true, value: { getItem: k => store.get(k) ?? null, setItem: (k, v) => store.set(k, String(v)) } });
+  try {
+    const office = { pin: await pinHash('4821') };
+    assert.match(office.pin, PIN_FORMAT);
+    assert.ok(!office.pin.includes('4821'), 'never kept as typed');
+    assert.notEqual(await pinHash('4821'), office.pin, 'salted, so the same code hashes differently on each phone');
+    const t0 = 1.8e12;
+    assert.equal(await tryPin(office, '4821', t0), 'ok');
+    assert.ok(unlocked(t0 + 11 * 36e5) && !unlocked(t0 + 13 * 36e5), 'signed in for a work shift, then locked again');
+    signOut();
+    assert.equal(unlocked(t0), false);
+    for (let i = 1; i < 5; i++) assert.equal(await tryPin(office, '0000', t0), 'wrong');
+    assert.equal(await tryPin(office, '0000', t0), 'wait', 'the fifth wrong code starts the wait');
+    assert.equal(await tryPin(office, '4821', t0 + 30e3), 'wait', 'even the right code waits it out');
+    assert.equal(waitLeft(t0 + 30e3), 30e3);
+    assert.equal(await tryPin(office, '4821', t0 + 61e3), 'ok');
+    assert.equal(await tryPin({ pin: 'tampered' }, '0000', t0 + 62e3), 'wrong', 'a damaged stored code opens nothing');
+
+    const crew = { pin: '' };
+    assert.equal(adoptPin(crew, 'not-a-code'), false);
+    assert.equal(adoptPin(crew, office.pin), true, 'the first sheet teaches a crew phone the office code');
+    assert.equal(crew.pin, office.pin);
+    assert.equal(adoptPin(crew, await pinHash('1111')), false, 'a later link never replaces it');
+    assert.equal(crew.pin, office.pin);
+  } finally { delete globalThis.localStorage; }
+});
+
+test('time clock: only real shifts are kept, weeks run Monday to Sunday, overnight shifts count', async () => {
+  const { normShift } = await lib;
+  const { shiftMin, monday, byPerson } = await import('../docs/schwab/report.mjs');
+  const ok = { id: 'k1abc', device: 'dev1', who: '  José L ', date: '2026-10-14', in: '07:00', out: '15:45' };
+  assert.deepEqual(normShift(ok), { ...ok, who: 'José L', edited: { who: false, in: false, out: false }, gone: false, at: 0 });
+  for (const bad of [{ ...ok, id: '<b>' }, { ...ok, date: '2026-02-30' }, { ...ok, in: '7:5' }, 'junk', null]) assert.equal(normShift(bad), null, 'not loggable: ' + JSON.stringify(bad));
+  assert.equal(normShift({ ...ok, out: '"><script>' }).out, '', 'a bad clock-out is dropped, the shift stays open');
+  assert.equal(normShift({ ...ok, device: 'x y' }).device, '');
+  assert.equal(shiftMin(normShift(ok)), 525);
+  assert.equal(shiftMin({ date: '2026-10-14', in: '22:00', out: '06:30' }), 510, 'a night shift');
+  assert.equal(shiftMin({ date: '2026-10-14', in: '07:00', out: '' }), 0, 'still on the clock');
+  const tz = process.env.TZ;
+  try {
+    process.env.TZ = 'America/New_York';
+    assert.equal(shiftMin({ date: '2026-10-31', in: '22:00', out: '06:00' }), 540, 'the night clocks fall back: 9 real hours');
+    assert.equal(shiftMin({ date: '2026-03-07', in: '22:00', out: '06:00' }), 420, 'the night clocks spring forward: 7 real hours');
+  } finally { if (tz === undefined) delete process.env.TZ; else process.env.TZ = tz; }
+  assert.deepEqual(['2026-10-12', '2026-10-14', '2026-10-18', '2026-10-19', '2026-03-08'].map(monday), ['2026-10-12', '2026-10-12', '2026-10-12', '2026-10-19', '2026-03-02'], 'Sunday ends the week, across a clock change too');
+  const people = byPerson([normShift(ok), normShift({ ...ok, id: 'k2', who: 'josé l', date: '2026-10-15', in: '06:30', out: '15:00' }), normShift({ ...ok, id: 'k3', who: 'Ana P' })]);
+  assert.deepEqual(people.map(p => [p.who, p.shifts.length, p.hours]), [['Ana P', 1, 875], ['José L', 2, 1725]], 'one timesheet per person, any capitalization, in hundredths of an hour');
+  const thirds = byPerson(['a', 'b', 'c'].map(id => normShift({ ...ok, id, in: '07:00', out: '14:20' })));
+  assert.equal(thirds[0].hours, 3 * 733, 'three 7.33 hr shifts total 21.99, so the rows add up to the total');
+});
+
+test('time clock: worker links add and complete shifts, but never undo the PM', async () => {
+  const { normShift } = await lib;
+  const { importShifts } = await import('../docs/schwab/report.mjs');
+  const shift = (id, set = {}) => normShift({ id, device: 'dana1', who: 'Dana R', date: '2026-10-14', in: '07:00', ...set });
+  const log = [];
+  assert.deepEqual(importShifts(log, [shift('a')], 1), { added: 1, updated: 0, skipped: 0 }, 'clock-in text');
+  const out = [shift('a', { out: '15:30' }), shift('b', { date: '2026-10-15', in: '06:45' })];
+  assert.deepEqual(importShifts(log, out, 2), { added: 1, updated: 1, skipped: 0 }, 'the clock-out text completes it and brings the next day');
+  assert.deepEqual(importShifts(log, out, 2), { added: 0, updated: 0, skipped: 0 }, 'the same text again changes nothing');
+  assert.deepEqual(importShifts(log, [shift('a', { who: 'Dana Typo' })], 1), { added: 0, updated: 0, skipped: 0 }, 'an older text opened late keeps the clock-out and the newer name');
+  importShifts(log, [shift('a', { out: '15:30', who: 'Dana Ruiz' })], 3);
+  assert.equal(log[0].who, 'Dana Ruiz', 'a name fixed in a newer text follows');
+  Object.assign(log[0], { out: '15:00', edited: { who: false, in: false, out: true } }); // the PM fixes the out time
+  log[1].gone = true; // and removes the second shift
+  importShifts(log, [shift('a', { out: '15:30' }), shift('b', { out: '14:00' })], 4);
+  assert.deepEqual(log.map(s => [s.who, s.out, s.gone]), [['Dana R', '15:00', false], ['Dana R', '', true]], "the PM's time and removal stick");
+  log[0].edited.who = true; log[0].who = 'Dana Ruiz'; // the PM renames
+  importShifts(log, [shift('a')], 5);
+  assert.equal(log[0].who, 'Dana Ruiz', "the PM's rename sticks too");
+  assert.deepEqual(importShifts(log, [shift('a', { device: 'other', out: '23:00' }), shift('c', { device: '' })], 6), { added: 0, updated: 0, skipped: 0 }, "a link can't touch another phone's shift or add one with no phone");
+  importShifts(log, [{ ...shift('d'), edited: { who: true, in: true, out: true }, gone: true }], 6);
+  assert.deepEqual([log.at(-1).edited, log.at(-1).gone], [{ who: false, in: false, out: false }, false], 'a link cannot mark its own shifts as the PM\'s');
+  const byHand = [normShift({ id: 'pm1', who: 'ana p', date: '2026-10-12', in: '07:00', out: '15:30', edited: { who: true, in: true, out: true } })];
+  assert.deepEqual(importShifts(byHand, [shift('e', { who: 'Ana P', date: '2026-10-12', out: '15:35' }), shift('f', { who: 'Ana P', date: '2026-10-13', out: '15:00' })], 7), { added: 1, updated: 0, skipped: 1 }, 'a day the PM added by hand is not doubled by the late text');
+  assert.deepEqual(byHand.map(s => [s.date, s.gone]), [['2026-10-12', false], ['2026-10-12', true], ['2026-10-13', false]]);
+});
+
+test('time clock: the accountant spreadsheet totals each week and cannot run formulas', async () => {
+  const { normShift } = await lib;
+  const { byPerson, timesheetCsv } = await import('../docs/schwab/report.mjs');
+  const s = (id, who, date, inn, out, edited) => normShift({ id, device: 'd1', who, date, in: inn, out, edited: { in: false, out: !!edited } });
+  const csv = timesheetCsv(byPerson([s('a', 'Dana R', '2026-10-12', '07:00', '15:45'), s('b', 'Dana R', '2026-10-13', '22:00', '06:30', true), s('c', '=HYPERLINK("x")', '2026-10-13', '07:00', '')]));
+  const rows = csv.trim().split('\r\n');
+  assert.equal(rows[0], 'Name,Date,Day,Clock in,Clock out,Hours,Note');
+  assert.ok(rows.includes('"\'=HYPERLINK(""x"")",2026-10-13,Tue,7:00 AM,,,No clock-out'), 'a typed formula stays text; an open shift is flagged');
+  assert.ok(rows.includes('Dana R,2026-10-12,Mon,7:00 AM,3:45 PM,8.75,') && rows.includes('Dana R,2026-10-13,Tue,10:00 PM,6:30 AM,8.50,Edited by PM'));
+  assert.ok(rows.includes('Dana R,,,,Week total,17.25,') && rows.at(-1) === 'All crew,,,,Week total,17.25,', 'person and crew totals, to two decimals');
+});
+
+test('a tab still on the old version cannot wipe the passcode', async () => {
+  const { KEYS, loadSettings, setPin, pinHash, PIN_FORMAT } = await lib;
+  const store = new Map();
+  Object.defineProperty(globalThis, 'localStorage', { configurable: true, value: { getItem: k => store.get(k) ?? null, setItem: (k, v) => store.set(k, String(v)) } });
+  try {
+    const s = loadSettings();
+    setPin(s, await pinHash('4821'));
+    store.set(KEYS.settings, JSON.stringify({ me: 'Dana', role: 'Superintendent' })); // the old version's save, without the code
+    assert.match(loadSettings().pin, PIN_FORMAT, 'the passcode survives');
+  } finally { delete globalThis.localStorage; }
 });

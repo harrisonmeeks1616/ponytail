@@ -3,30 +3,34 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
-<meta name="theme-color" content="#1F242A">
-<meta name="apple-mobile-web-app-title" content="Task Sheets">
-<title>Electrical Task Sheets</title>
+<meta name="theme-color" content="#1B4332">
+<meta name="apple-mobile-web-app-title" content="H.A. Sack-Electrical">
+<title>H.A. Sack-Electrical · Sack Company-Electrical</title>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@600;700&family=Barlow:wght@400;600&display=swap" media="print" onload="this.media='all'">
 <link rel="stylesheet" href="shared.css">
 </head>
 <body>
 <header class="top"><div class="top-in">
-  <svg viewBox="0 0 24 24" width="28" height="28" aria-hidden="true"><path d="M13 2 4 14h7l-1 8 9-12h-7z" fill="var(--accent)"/></svg>
-  <div class="grow"><h1 id="title">Task <b>Sheets</b></h1><p id="proj"></p></div>
+  <svg class="mark" viewBox="0 0 24 24" width="32" height="32" aria-hidden="true"><rect width="24" height="24" rx="6" fill="var(--accent)"/><path d="M13.6 3.5 6.5 13.4h4.6l-1.2 7.1 7.6-10.4h-4.7z" fill="var(--brand)"/></svg>
+  <div class="grow brand"><h1>H.A. Sack-Electrical</h1><p>Sack Company-Electrical</p></div>
   <button class="icon-btn lang" id="langBtn" data-act="toggleLang" aria-label="Español">ES</button>
-  <a class="icon-btn" id="toReport" href="report.html" aria-label="Open the daily report"><svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><rect x="5" y="3" width="14" height="18" rx="2"/><path d="M9 8h6M9 12h6M9 16h3"/></svg></a>
-  <a class="icon-btn" id="toSettings" href="#settings" aria-label="Settings and crews"><svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M4 6h9M19 6h1M4 12h3M11 12h9M4 18h11M19 18h1"/><circle cx="16" cy="6" r="2.2"/><circle cx="9" cy="12" r="2.2"/><circle cx="17" cy="18" r="2.2"/></svg></a>
-</div></header>
-<main id="app"></main>
+  <button class="icon-btn" id="lockBtn" data-act="lockBtn" aria-label="Office sign-in"></button>
+</div>
+<nav class="office-tabs" id="officeTabs" aria-label="Screens"></nav></header>
+<main><p class="proj" id="proj"></p><div id="app"></div></main>
+<script>setTimeout(() => { const app = document.getElementById('app'); if (!window.appStarted) app.innerHTML = '<div class="empty"><h2>The app didn\u2019t finish loading</h2><p>Get signal, then reload. · La app no termin\u00f3 de cargar. Con se\u00f1al, vuelva a cargar.</p><button class="btn primary" onclick="location.reload()">Reload · Recargar</button></div>'; }, 6000); // a dropped file on the first open after an update</script>
 <nav class="bar" id="bar"></nav>
 <script type="module">
 import {
   KEYS, esc, uid, load, save, loadSettings, roster, normTask, newItem, mergeTask, cloneTask, pack, unpack, linkTo,
   today, addDays, niceDate, nowHM, span, fmtMin, t12, stamp, hrs, timeOf, field, datalist, seg, setPath, getPath, readInput,
   toast, sheet, ask, sendSheet, pasteSheet, makePdf, savePdf, fileAway, retryUploads, settingsView, settingsAct, restore,
-  registerSW, dateBar, crewVar as cv, L, setLang, getLang,
+  registerSW, dateBar, crewVar as cv, L, setLang, getLang, COMPANIES, letterhead,
+  UNLOCK, hasPin, adoptPin, setPin, pinHash, tryPin, unlocked, signIn, signOut,
 } from './shared.mjs';
+import { renderOffice, reportAct, reportInput, openReport, openHours, hoursInput, fileReportIfChanged, reloadReports, sectionToggle, hasReports } from './report.mjs';
 
+window.appStarted = true; // every file loaded (see the fallback above)
 registerSW();
 const app = document.getElementById('app'), bar = document.getElementById('bar');
 let S = loadSettings();
@@ -44,9 +48,11 @@ const floorRank = f => { const i = S.floors.indexOf(f); return i < 0 ? 999 : i; 
 const doneCount = t => t.items.filter(i => i.done).length;
 const worked = t => (t.aStart && t.aStop ? Math.max(0, span(t.aStart, t.aStop) - t.delay) : 0); // same as shared.mjs; kept here so a stale cached shared.mjs can't break this page
 const isOpen = t => t.status !== 'Complete' && t.review !== 'Accepted';
-const prevDay = () => [...new Set(T.map(t => t.date))].filter(d => d < day).sort().at(-1);
-const dayTasks = () => T.filter(t => t.date === day);
-const isCrewPhone = () => S.role === 'Crew lead';
+// Signed out, this is a crew phone: only the sheets sent to it show. The office passcode opens the rest.
+const office = () => unlocked();
+const visible = () => (office() ? T : T.filter(t => t.origin === 'link'));
+const prevDay = () => [...new Set(visible().map(t => t.date))].filter(d => d < day).sort().at(-1);
+const dayTasks = () => visible().filter(t => t.date === day);
 const fromTo = (a, b) => L('{start} to {stop}', { start: t12(a), stop: t12(b) });
 
 function stage(t) {
@@ -74,16 +80,33 @@ function pickCrew(t, name) {
   t.size = t.members.length || t.size;
 }
 
-// ---------- routing: #day/2026-10-03, #task/<uid>/<tab>, #settings, #p=<link code> ----------
+// ---------- routing: #day/2026-10-03, #task/<uid>/<tab>, #clock/<day>, #report/<day>, #settings, #p=<link code> ----------
+
+// The passcode guards the superintendent's parts: the daily report, settings, and making or changing
+// assignments (any sheet this phone didn't receive). On the PM's phone the time clock is the crew
+// timesheet, so it is guarded too. Crew sheets and everyone else's time clock are open.
+const VIEWS = ['clock', 'report', 'settings'];
+const isPM = () => S.role === 'Project manager';
+const needsOffice = vw => ['report', 'settings'].includes(vw.v) || (vw.v === 'clock' && isPM()) || (vw.v === 'task' && find(vw.uid)?.origin !== 'link');
 
 function route() {
+  // The sign-in pad guards one address: a repeat event for it changes nothing, moving on (back button, a link) closes it.
+  const pad = document.querySelector('dialog.pin[open]');
+  if (pad) { if (pad.dataset.want === location.hash) return; pad.close(); }
   fileIfChanged(current());
+  fileReportIfChanged(S, day);
   const h = location.hash.slice(1);
   if (h.startsWith('p=')) return openCode(h.slice(2));
   const [v, a, b] = h.split('/');
-  if (v === 'day' && /^\d{4}-\d{2}-\d{2}$/.test(a) && addDays(a, 0) === a) day = a; // a real day, not 2026-02-30
-  view = v === 'task' && find(a) ? { v: 'task', uid: a, tab: b || 'assign' } : { v: v === 'settings' ? 'settings' : 'board' };
+  if (['day', 'clock', 'report'].includes(v) && /^\d{4}-\d{2}-\d{2}$/.test(a) && addDays(a, 0) === a) day = a; // a real day, not 2026-02-30
+  view = v === 'task' && find(a) ? { v: 'task', uid: a, tab: b || 'assign' } : { v: VIEWS.includes(v) ? v : 'board' };
   if (view.v === 'task') day = find(a).date;
+  if (needsOffice(view) && !office()) { // the crew board stays behind the passcode pad
+    view = { v: 'board' };
+    render();
+    const want = location.hash; // unless the person has moved on: signed in, show it; closed, back to the crew board
+    return passcode().then(ok => location.hash === want && (ok ? route() : location.replace('#day/' + day)));
+  }
   render();
   scrollTo(0, 0);
 }
@@ -91,8 +114,18 @@ function route() {
 async function openCode(code) {
   let data;
   try { data = await unpack(code); } catch { toast(L('That link is damaged or cut off. Ask for it to be sent again.'), 'bad'); return location.replace('#day/' + day); }
-  if (data.kind === 'report') return location.replace(linkTo('report.html', code));
+  // A crew phone (or a new office phone) learns the office's code from its first link. A phone with
+  // office-made sheets of its own never does, so no link can lock it out of its own records.
+  if (['task', 'result', 'day', 'report'].includes(data.kind) && !T.some(x => x.origin === 'mine') && !hasReports()) adoptPin(S, data.pin);
+  if (data.kind === 'hours' && !isPM()) { toast(L("Hours links are logged on the PM's phone.")); return location.replace('#clock/' + day); } // only the PM keeps and changes hours
+  const forOffice = data.kind === 'hours' || data.kind === 'report' || data.kind === 'day' || (data.kind === 'result' && find(data.task?.uid)?.origin !== 'link');
+  if (forOffice && !office()) {
+    const want = location.hash;
+    if (!await passcode()) return location.hash === want && location.replace('#day/' + day);
+  }
+  if (data.kind === 'report') { const d = await openReport(data, S); return location.replace(d ? '#report/' + d : '#day/' + day); }
   if (data.kind === 'day') return importDay(data);
+  if (data.kind === 'hours') { const d = openHours(data); return location.replace('#clock/' + (d || day)); }
   const inc = normTask(data.task);
   let t = find(inc.uid), firstSheet = false;
   if (!inc.uid || !['task', 'result'].includes(data.kind)) { toast(L('That link has no task sheet in it'), 'bad'); return location.replace('#day/' + day); }
@@ -114,9 +147,7 @@ async function openCode(code) {
   if (data.kind === 'result' && t.origin !== 'link') fileTask(t);
   persist();
   location.replace(`#task/${t.uid}/${data.kind === 'result' ? 'review' : 'assign'}`);
-  if (firstSheet) { // first sheet on a new crew phone: it is a crew phone, and ask the language once
-    S.role = 'Crew lead';
-    save(KEYS.settings, S);
+  if (firstSheet) { // first sheet on a new crew phone: ask the language once
     sheet(`<h3>Language · Idioma</h3><div class="btns"><button class="btn big" data-act="lang" data-v="en">English</button><button class="btn big primary" data-act="lang" data-v="es">Español</button></div>`);
   }
 }
@@ -136,19 +167,30 @@ async function importDay(data) {
 
 // ---------- views ----------
 
-function render() {
-  const title = L('Task Sheets'), cut = title.lastIndexOf(' ');
-  document.getElementById('title').innerHTML = `${esc(title.slice(0, cut))} <b>${esc(title.slice(cut + 1))}</b>`;
-  document.title = L('Electrical Task Sheets');
-  const lb = document.getElementById('langBtn');
+const LOCK = { shut: '<rect x="5" y="11" width="14" height="10" rx="2"/><path d="M8 11V7.5a4 4 0 0 1 8 0V11"/>', open: '<rect x="5" y="11" width="14" height="10" rx="2"/><path d="M8 11V7.5a4 4 0 0 1 7.6-1.8"/>' };
+
+function header() {
+  const on = office(), lb = document.getElementById('langBtn'), lock = document.getElementById('lockBtn'), tabs = document.getElementById('officeTabs');
+  document.body.classList.toggle('office', on);
   lb.textContent = getLang() === 'es' ? 'EN' : 'ES';
   lb.setAttribute('aria-label', getLang() === 'es' ? 'English' : 'Español');
-  document.getElementById('toReport').hidden = isCrewPhone();
-  document.getElementById('toReport').setAttribute('aria-label', L('Open the daily report'));
-  document.getElementById('toSettings').setAttribute('aria-label', L('Settings and crews'));
+  lock.innerHTML = `<svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true">${on ? LOCK.open : LOCK.shut}</svg>`;
+  lock.setAttribute('aria-label', on ? L('Lock the office screens') : L('Office sign-in'));
   document.getElementById('proj').textContent = [S.project, S.site].filter(Boolean).join(' · ');
+  tabs.setAttribute('aria-label', L('Screens'));
+  const here = { clock: 'clock', report: 'report', settings: '' }[view.v] ?? 'day';
+  const locked = `<svg class="lock" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" aria-hidden="true">${LOCK.shut}</svg>`;
+  tabs.innerHTML = [['day', L('Tasks')], ['clock', isPM() && on ? L('Crew hours') : L('Time clock')], ['report', L('Daily report')]]
+    .map(([v, label]) => `<a href="#${v}/${day}"${v === here ? ' aria-current="page"' : ''}${(v === 'report' || (v === 'clock' && isPM())) && !on ? ` aria-label="${esc(`${label}, ${L('needs the office passcode')}`)}">${label}${locked}` : `>${label}`}</a>`).join('');
+}
+
+let drawnOn = today(); // the day the screen was last drawn, to notice midnight
+function render() {
+  drawnOn = today();
+  header();
   bar.hidden = view.v === 'settings';
-  if (view.v === 'settings') app.innerHTML = `<button class="link" data-go="day/${day}">‹ ${L('Back to task sheets')}</button>${settingsView(S, { lang: true })}`;
+  if (view.v === 'settings') app.innerHTML = `<button class="link" data-go="day/${day}">‹ ${L('Back to task sheets')}</button>${settingsView(S)}`;
+  else if (view.v === 'clock' || view.v === 'report') renderOffice(view.v, S, day);
   else if (view.v === 'task') renderTask(current());
   else renderBoard();
 }
@@ -185,17 +227,17 @@ function renderBoard() {
     }).join('')}
     ${accepted.length ? `<details class="done-group"><summary class="group-h"><span>${L('Accepted')}</span><span>${accepted.length}</span></summary><div class="stack">${accepted.map(card).join('')}</div></details>` : ''}
     ${list.length ? '' : `<p class="hint">${L('No sheets for this crew on this day.')}</p>`}`
-    : isCrewPhone()
+    : !office()
       ? `<div class="empty"><h2>${L('No task sheets for {date}', { date: niceDate(day) })}</h2>
         <p>${L('Open the link your superintendent texted you, or paste it here.')}</p>
-        <button class="btn primary" data-act="paste">${L('Open a link someone sent you')}</button></div>`
+        <button class="btn primary" data-act="paste">${L('Open a link someone sent you')}</button>
+        <button class="link" data-act="lockBtn">${L('Superintendent or PM? Sign in to the office screens')}</button></div>`
       : `<div class="empty"><h2>${L('No task sheets for {date}', { date: niceDate(day) })}</h2>
         <p>${L("Build the day's assignments here and send each crew its sheet. Crews check off steps on their phones and send results back to you.")}</p>
         <div class="btns"><button class="btn primary" data-act="new">${L('+ New task')}</button>
-        ${prev ? `<button class="btn" data-act="carryDay">${L('Copy unfinished from {date}', { date: niceDate(prev) })}</button>` : ''}</div>
-        <button class="link" data-act="paste">${L('Crew member? Paste the link your superintendent sent')}</button></div>`);
-  bar.innerHTML = `<div class="bar-in">${isCrewPhone()
-    ? `<button class="btn big" data-act="paste">${L('Open a link')}</button>`
+        ${prev ? `<button class="btn" data-act="carryDay">${L('Copy unfinished from {date}', { date: niceDate(prev) })}</button>` : ''}</div></div>`);
+  bar.innerHTML = `<div class="bar-in">${!office()
+    ? `<button class="btn primary big" data-act="paste">${L('Open a link')}</button>`
     : `<button class="btn primary big" data-act="new">${L('+ New task')}</button>`}
     <button class="btn more" data-act="boardMenu" aria-label="${L('More actions')}">⋯</button></div>`;
 }
@@ -354,7 +396,7 @@ function recordRows(t) {
   ];
 }
 
-const record = t => makePdf('Electrical task sheet', `${S.project} · ${S.site}`, recordRows(t), `${S.project} · Task ${t.id}`);
+const record = t => makePdf('Electrical task sheet', letterhead(S), recordRows(t), `${COMPANIES} · Task ${t.id}`);
 const fileName = t => `${t.id} ${t.crew} ${t.floor}`.trim();
 function fileTask(t) {
   if (!S.folderUrl) return;
@@ -365,6 +407,59 @@ function fileTask(t) {
 // A finished sheet edited after it was filed (say, a follow-up note typed after tapping the review
 // button) is filed again when you leave it, so the folder always has the last word.
 const fileIfChanged = t => t && (t.status || t.review) && t.updatedAt > t.filedAt && fileTask(t);
+
+// ---------- office passcode pad: big keys for gloved hands; a keyboard's number keys work too ----------
+
+// Resolves true once signed in (or the code is changed), false if closed.
+function passcode(mode = hasPin(S) ? 'enter' : 'create') {
+  return new Promise(done => {
+    let first = '', code = '', busy = false, checked = mode !== 'change'; // changing the code takes the current one first
+    const d = sheet(`<h3>${{ enter: L('Office sign-in'), create: L('Create the office passcode'), change: L('Change the passcode') }[mode]}</h3>
+      <p class="pin-msg" role="status"></p>
+      <div class="pin-dots" aria-hidden="true">${'<i></i>'.repeat(4)}</div><span class="sr" aria-live="polite"></span>
+      <div class="keypad">${[1, 2, 3, 4, 5, 6, 7, 8, 9].map(n => `<button type="button" data-pin="${n}">${n}</button>`).join('')}
+        <span></span><button type="button" data-pin="0">0</button><button type="button" data-pin="back" aria-label="${L('Delete a digit')}">⌫</button></div>`);
+    d.classList.add('pin');
+    d.dataset.want = location.hash;
+    const msg = d.querySelector('.pin-msg'), dots = d.querySelector('.pin-dots');
+    const say = (text, bad = false) => { msg.textContent = text; msg.classList.toggle('bad', bad); };
+    const draw = () => {
+      dots.querySelectorAll('i').forEach((el, i) => el.classList.toggle('on', i < code.length));
+      d.querySelector('.sr').textContent = L('{n} of 4 digits', { n: code.length });
+    };
+    const ask4 = () => say(!checked ? L('Enter the current passcode.') : mode === 'enter' ? L('Enter the 4-digit passcode.') : first ? L('Enter it again to confirm.')
+      : L("Pick 4 digits. Use the same code on the PM's and the superintendent's phones."));
+    const fail = text => { code = ''; draw(); dots.classList.remove('shake'); void dots.offsetWidth; dots.classList.add('shake'); say(text, true); navigator.vibrate?.(60); };
+    async function full() {
+      if (!checked) {
+        const r = await tryPin(S, code);
+        if (r !== 'ok') return fail(r === 'wait' ? L('Too many wrong codes. Try again in a minute.') : L('Wrong passcode. Try again.'));
+        checked = true; code = ''; draw(); return ask4();
+      }
+      if (mode !== 'enter' && !first) { first = code; code = ''; draw(); return ask4(); }
+      if (mode !== 'enter' && code !== first) { first = ''; return fail(L("The codes didn't match. Start again.")); }
+      const result = mode === 'enter' ? await tryPin(S, code) : setPin(S, await pinHash(code)) && signIn() ? 'ok' : 'unsaved';
+      if (result === 'ok') {
+        if (mode !== 'enter') toast(mode === 'change' ? L('Passcode changed') : L('Office screens unlocked'));
+        done(true);
+        return d.close();
+      }
+      fail(result === 'wait' ? L('Too many wrong codes. Try again in a minute.') : result === 'wrong' ? L('Wrong passcode. Try again.') : L("This phone wouldn't save. Open Settings and download a backup."));
+    }
+    const press = async k => {
+      if (busy) return;
+      code = k === 'back' ? code.slice(0, -1) : (code + k).slice(0, 4);
+      draw();
+      if (code.length < 4) return;
+      busy = true;
+      try { await full(); } catch { fail(L('The passcode needs the secure https:// address of this app.')); } finally { busy = false; } // no crypto.subtle off https
+    };
+    d.addEventListener('click', e => { const b = e.target.closest('[data-pin]'); if (b) press(b.dataset.pin); });
+    d.addEventListener('keydown', e => { if (/^\d$/.test(e.key)) press(e.key); else if (e.key === 'Backspace') press('back'); });
+    d.addEventListener('close', () => done(false));
+    ask4();
+  });
+}
 
 // ---------- actions ----------
 
@@ -387,7 +482,7 @@ function taskMsg(t, l) {
 
 async function send(kind, t) {
   if (kind === 'task') { t.sentAt = Date.now(); persist(); render(); }
-  const payload = kind === 'day' ? { v: 1, kind, date: day, tasks: dayTasks() } : { v: 1, kind, task: t };
+  const payload = kind === 'day' ? { v: 1, kind, pin: S.pin, date: day, tasks: dayTasks() } : { v: 1, kind, pin: S.pin, task: t };
   const url = linkTo('tasks.html', await pack(payload));
   if (kind === 'task') {
     // A crew that has answered in Spanish before gets the message in both languages.
@@ -414,6 +509,10 @@ async function act(a, el) {
       return go(`task/${nt.uid}/assign`);
     }
     case 'toggleLang': return act('lang', { dataset: { v: getLang() === 'es' ? 'en' : 'es' } });
+    case 'lockBtn':
+      if (office()) { signOut(); toast(L('Office screens locked')); return needsOffice(view) ? go('day/' + day) : render(); } // a worker's time clock stays open
+      return (await passcode()) && go('day/' + day);
+    case 'changePin': return passcode('change');
     case 'lang':
       S.lang = v;
       save(KEYS.settings, S);
@@ -469,13 +568,15 @@ async function act(a, el) {
     case 'sendDay': return send('day');
     case 'boardMenu': {
       const prev = prevDay();
-      return menu([!isCrewPhone() && dayTasks().length && ['sendDay', L('Send day plan')], !isCrewPhone() && prev && ['carryDay', L('Copy unfinished work from {date}', { date: niceDate(prev) })], ['paste', L('Open a link someone sent you')],
-        dayTasks().length && ['pdfDay', L("Save this day's sheets as one PDF")], !isCrewPhone() && ['report', L('Open the daily report')], ['settings', L('Settings, crews and backup')]]);
+      return menu(office()
+        ? [dayTasks().length && ['sendDay', L('Send day plan')], prev && ['carryDay', L('Copy unfinished work from {date}', { date: niceDate(prev) })], ['paste', L('Open a link someone sent you')],
+          dayTasks().length && ['pdfDay', L("Save this day's sheets as one PDF")], ['settings', L('Settings, crews and backup')]]
+        : [['paste', L('Open a link someone sent you')], dayTasks().length && ['pdfDay', L("Save this day's sheets as one PDF")], ['lockBtn', L('Office sign-in')]]);
     }
     case 'taskMenu':
       return menu([['dup', L('Duplicate for another crew or floor')], ['carry', L('Carry open work to {date}', { date: niceDate(addDays(t.date, 1)) })],
         ['pdfTask', L('Save this sheet as PDF')], S.folderUrl && ['fileNow', L('Save to the review folder now')], ['del', L('Delete this task sheet'), 'danger']]);
-    case 'crewMenu': return menu([['pdfTask', L('Save this sheet as PDF')], ['paste', L('Open a link someone sent you')], ['settings', L('Settings')], ['del', L('Delete this task sheet'), 'danger']]);
+    case 'crewMenu': return menu([['pdfTask', L('Save this sheet as PDF')], ['paste', L('Open a link someone sent you')], ['del', L('Delete this task sheet'), 'danger']]);
     case 'carryDay': {
       const prev = prevDay();
       const open = T.filter(x => x.date === prev && isOpen(x) && !T.some(y => y.from === x.uid));
@@ -503,10 +604,9 @@ async function act(a, el) {
       persist();
       return go('day/' + t.date);
     case 'pdfTask': return savePdf(`${fileName(t)}.pdf`, record(t));
-    case 'pdfDay': return savePdf(`Task sheets ${day}.pdf`, makePdf(`Electrical task sheets · ${niceDate(day, 'en')}`, `${S.project} · ${S.site}`, dayTasks().flatMap(recordRows), `${S.project} · ${niceDate(day, 'en')}`));
+    case 'pdfDay': return savePdf(`Task sheets ${day}.pdf`, makePdf(`Electrical task sheets · ${niceDate(day, 'en')}`, letterhead(S), dayTasks().flatMap(recordRows), `${COMPANIES} · ${niceDate(day, 'en')}`));
     case 'fileNow': return fileTask(t);
     case 'paste': return pasteSheet(code => go('p=' + code));
-    case 'report': location.href = 'report.html#day/' + day; return;
     case 'settings': return go('settings');
     case 'addCrew': case 'delCrew': case 'backup': case 'testFolder': await settingsAct(a, S, el); break;
   }
@@ -521,13 +621,27 @@ document.addEventListener('click', e => {
   if (!el) return;
   e.preventDefault();
   el.closest('dialog')?.close();
+  if (stale()) return;
   if (el.dataset.go) go(el.dataset.go);
+  else if ((view.v === 'clock' || view.v === 'report') && !SHELL.has(el.dataset.act)) reportAct(el.dataset.act, el, S, day, view.v);
   else act(el.dataset.act, el);
 });
+const SHELL = new Set(['toggleLang', 'lang', 'lockBtn']); // header buttons work on every screen
+
+// The sign-in ran out (or another tab locked) while this screen was up: office screens and the office board
+// go back behind the passcode before anything is saved; a worker's time clock and crew sheets stay and carry on.
+function stale() {
+  if (document.body.classList.contains('office') === office()) return false;
+  if (needsOffice(view) || view.v === 'board') { route(); return true; }
+  header();
+  return false;
+}
 
 document.addEventListener('input', e => {
   const el = e.target, k = el.dataset.k;
-  if (!k) return;
+  if (!k || stale()) return;
+  if (k.startsWith('r.')) return reportInput(el, S, day);
+  if (k.startsWith('h.')) return hoursInput(el, S, day);
   const t = current();
   if (k === 't.date' && !/^\d{4}-\d{2}-\d{2}$/.test(el.value)) return; // every sheet needs a real day; a cleared or half-typed date would hide it
   setPath({ t, s: S }, k, readInput(el));
@@ -542,23 +656,33 @@ document.addEventListener('input', e => {
 });
 
 document.addEventListener('change', e => {
-  if (e.target.matches('[data-pick]') && e.target.value) go('day/' + e.target.value);
+  if (stale()) return;
+  if (e.target.matches('[data-pick]') && e.target.value) go(`${e.target.dataset.pick || 'day'}/${e.target.value}`);
   if (e.target.matches('[data-restore]') && e.target.files[0]) restore(e.target.files[0]);
   if (e.target.dataset.k === 't.date' && /^\d{4}-\d{2}-\d{2}$/.test(e.target.value)) day = e.target.value; // moved to another day
 });
 
 document.addEventListener('keydown', e => {
-  if (e.key === 'Enter' && e.target.dataset.enter) { e.preventDefault(); act(e.target.dataset.enter, e.target); }
+  if (e.key === 'Enter' && e.target.dataset.enter) { e.preventDefault(); if (!stale()) act(e.target.dataset.enter, e.target); }
 });
 
 // The other app (or another tab) changed shared data: reload so a stale copy here never overwrites it.
-const reload = () => { S = loadSettings(); setLang(S.lang); T = loadTasks(); if (view.v === 'task' && !current()) view = { v: 'board' }; render(); };
-addEventListener('storage', e => Object.values(KEYS).includes(e.key) && reload());
+const reload = () => {
+  S = loadSettings(); setLang(S.lang); T = loadTasks(); reloadReports();
+  if (view.v === 'task' && !current()) view = { v: 'board' };
+  if (document.body.classList.contains('office') && !office()) document.querySelectorAll('dialog[open]:not(.pin)').forEach(d => d.close()); // signed out elsewhere: an office question left open can't finish
+  needsOffice(view) && !office() ? route() : render();
+};
+addEventListener('storage', e => [...Object.values(KEYS), UNLOCK].includes(e.key) && reload());
 addEventListener('pageshow', e => e.persisted && reload());
 addEventListener('hashchange', route);
 addEventListener('online', () => retryUploads(S));
-addEventListener('visibilitychange', () => document.hidden && fileIfChanged(current()));
-addEventListener('pagehide', () => fileIfChanged(current())); // queued even if the upload can't finish; retried on next open
+addEventListener('visibilitychange', () => {
+  if (document.hidden) { fileIfChanged(current()); fileReportIfChanged(S, day); }
+  else if (!stale() && drawnOn !== today() && day === drawnOn && ['board', 'clock', 'report'].includes(view.v)) go(`${view.v === 'board' ? 'day' : view.v}/${today()}`); // left open overnight: today's screen
+});
+addEventListener('pagehide', () => { fileIfChanged(current()); fileReportIfChanged(S, day); }); // queued even if the upload can't finish; retried on next open
+app.addEventListener('toggle', sectionToggle, true);
 route();
 retryUploads(S);
 </script>
