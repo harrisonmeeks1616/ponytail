@@ -156,9 +156,10 @@ export function normReport(r) {
   return n;
 }
 
-// One clock-in to clock-out. Only taps on the worker's own phone make one; only the PM changes one.
-// edited marks the times the PM changed, so a worker's later link can't undo them; gone, a shift the PM removed.
-export const SHIFT_TPL = { id: '', device: '', who: '', date: '', in: '', out: '', edited: { in: false, out: false }, gone: false };
+// One clock-in to clock-out, under the name it was clocked in with. Only taps on the worker's own phone make
+// one; only the PM changes one. edited marks what the PM changed, so a worker's later link can't undo it;
+// gone, a shift the PM removed; at, when the newest link that named it was sent.
+export const SHIFT_TPL = { id: '', device: '', who: '', date: '', in: '', out: '', edited: { who: false, in: false, out: false }, gone: false, at: 0 };
 export function normShift(x) {
   const n = shape(SHIFT_TPL, x);
   n.who = n.who.trim().slice(0, 60);

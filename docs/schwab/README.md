@@ -42,13 +42,16 @@ receiver; the static app does not connect it automatically.
   a new shift, and the PM fills in the missing out time.
 - **The PM's phone** (**Settings → Your role → Project manager**, signed in): tapping a worker's link logs it
   into **Crew hours**, a Monday to Sunday timesheet with each person's shifts and week total. Only this
-  screen changes hours: fix an in or out time, **+ Add a shift**, or remove one. Times the PM changes are
-  marked *edited* and stay as set when that worker's next text comes in; a removed shift stays removed.
-  Hours links opened on any other phone change nothing.
+  screen changes hours: fix an in or out time, **+ Add a shift**, remove one, or **Rename** a person (a name
+  typo). What the PM changes is marked *edited* and stays as set when that worker's next text comes in; a
+  removed shift stays removed. A day the PM added by hand stays as entered: a late text for the same person
+  and day is filed as removed, with a warning. Each shift keeps the name it was clocked in with, so a borrowed
+  phone never moves its owner's hours. Hours links opened on any other phone change nothing.
 - **Send to accountant** shares the week as a spreadsheet (CSV: name, date, in, out, hours, week totals) and
   a PDF timesheet, through the phone's share sheet (Mail, Files) or as downloads on a computer. It warns
-  first if a shift has no clock-out. Hours are to two decimals (7h 45m is 7.75); an overnight shift counts on
-  the day it started; unpaid breaks are not taken out, so adjust a time if your payroll needs that.
+  first if a shift has no clock-out. Hours are to two decimals (7h 45m is 7.75), rounded per shift so the rows
+  add up to the totals; an overnight shift counts on the day it started, in real hours across a clock change;
+  lunch is not taken out (hours are clock-in to clock-out), so adjust a time if your payroll needs that.
 
 ## Put it online (one time, about 2 minutes)
 

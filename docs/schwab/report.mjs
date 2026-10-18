@@ -55,12 +55,16 @@ function lateLine(s) {
 // ponytail: times come from the worker's own phone clock, and a link can be hand-made; the PM reviewing
 // the week is the check. A shared server with real sign-ins is the upgrade past that.
 
-export const shiftMin = s => (s.in && s.out ? span(s.in, s.out) : 0); // an out time before the in time is an overnight shift
 export const monday = d => addDays(d, -((new Date(d + 'T12:00').getDay() + 6) % 7)); // weeks run Monday to Sunday
 const started = s => new Date(`${s.date}T${s.in}`).getTime();
 const byTime = (a, b) => started(a) - started(b);
-const h2 = m => (m / 60).toFixed(2); // payroll hours: 7h 45m is 7.75
-const total = ss => ss.reduce((n, s) => n + shiftMin(s), 0);
+// Minutes on the clock, from the real times: an out time before the in time is the next morning, and a night
+// shift across a clock change counts the hour gained or lost.
+export const shiftMin = s => (s.in && s.out ? Math.round((new Date(`${s.out < s.in ? addDays(s.date, 1) : s.date}T${s.out}`) - started(s)) / 6e4) : 0);
+// Payroll hours in hundredths (7h 45m is 775, shown 7.75), rounded per shift so the rows always add up to the totals.
+const cents = s => Math.round(shiftMin(s) * 5 / 3);
+const total = ss => ss.reduce((n, s) => n + cents(s), 0);
+const h2 = c => (c / 100).toFixed(2);
 // The shift this phone is clocked in on. One open longer than any real shift (16 hours) was a missed
 // clock-out: the next tap starts a new shift, and the PM fills in the missing time.
 const onShift = (now = Date.now()) => MY.filter(s => !s.out && now - started(s) < 16 * 36e5).sort(byTime).at(-1);
@@ -70,7 +74,7 @@ function clockView(S) {
   const on = onShift(), mon = monday(today());
   const week = MY.filter(s => s.date >= mon).sort(byTime), last = MY.filter(s => s.date >= addDays(mon, -7) && s.date < mon);
   const missed = MY.filter(s => !s.out && s !== on && s.date >= addDays(mon, -7)).sort(byTime).at(-1);
-  const row = s => `<dt>${esc(niceDate(s.date))}</dt><dd>${s.out ? `${esc(L('{start} to {stop}', { start: t12(s.in), stop: t12(s.out) }))} · ${esc(L('{n} hrs', { n: h2(shiftMin(s)) }))}`
+  const row = s => `<dt>${esc(niceDate(s.date))}</dt><dd>${s.out ? `${esc(L('{start} to {stop}', { start: t12(s.in), stop: t12(s.out) }))} · ${esc(L('{n} hrs', { n: h2(cents(s)) }))}`
     : `${esc(t12(s.in))} · ${s === on ? L('On the clock') : `<span class="pill" data-tone="warn">${L('No clock-out')}</span>`}`}</dd>`;
   $('app').innerHTML = `<section class="card"><h2>${L('Time clock')}</h2>
       ${field(L('Your name'), 's.worker', S.worker, { ph: L('First and last name') })}
@@ -84,41 +88,52 @@ function clockView(S) {
     <button class="btn more" data-act="hMenu" aria-label="${L('More actions')}">⋯</button></div>`;
 }
 
-// The text to the PM: this phone's last two weeks, under the name typed now (a fixed typo follows).
+// The text to the PM: this phone's last two weeks, each shift under the name it was clocked in with, so a
+// borrowed phone never moves its owner's hours to someone else. at orders texts opened out of turn.
 async function sendMine(S, s, what) {
   const who = S.worker.trim(), since = addDays(today(), -13);
-  const url = linkTo('tasks.html', await pack({ v: 1, kind: 'hours', shifts: MY.filter(x => x.date >= since).map(x => ({ ...x, who })) }));
+  const url = linkTo('tasks.html', await pack({ v: 1, kind: 'hours', at: Date.now(), shifts: MY.filter(x => x.date >= since) }));
   const text = what === 'in' ? `${who} clocked in at ${t12(s.in)}, ${dayEn(s.date)}.`
-    : what === 'out' ? `${who} clocked out at ${t12(s.out)}, ${dayEn(s.date)}: ${h2(shiftMin(s))} hrs.` : `${who}: hours for the last two weeks.`;
+    : what === 'out' ? `${who} clocked out at ${t12(s.out)}, ${dayEn(s.date)}: ${h2(cents(s))} hrs.` : `${who}: hours for the last two weeks.`;
   sendSheet({ title: L('Send your hours to the PM'), url, text: `${text} Open the link on the PM's phone to log it.` });
 }
 
-// A worker's link opened on the PM's phone: new shifts are added, and a time the PM hasn't changed follows
-// the worker's phone (a clock-out since, a fixed name). A shift the PM removed stays removed, and a link
-// only speaks for shifts its own phone made. Returns what changed.
-export function importShifts(log, shifts) {
-  let added = 0, updated = 0;
+// A worker's link opened on the PM's phone (at: when it was sent): new shifts are added, and what the PM
+// hasn't changed follows the worker's phone (a clock-out since; a name fixed in a newer text). A shift the PM
+// removed stays removed, and a link only speaks for shifts its own phone made. Returns what changed.
+export function importShifts(log, shifts, at = 0) {
+  let added = 0, updated = 0, skipped = 0;
+  const same = (a, b) => a.who.toLowerCase() === b.who.toLowerCase() && a.date === b.date;
   for (const s of shifts) {
     if (!s.device) continue;
     const m = log.find(x => x.id === s.id);
-    if (!m) { log.push({ ...s, edited: { in: false, out: false }, gone: false }); added++; continue; }
+    if (!m) {
+      // ponytail: the PM already added this person's day by hand (the texts never came), so the PM's entry
+      // stands and this one is filed as removed, never doubling the day. A real second shift that day is
+      // added back by hand; match on overlapping times instead if split shifts become common.
+      const twin = log.some(x => !x.gone && !x.device && same(x, s));
+      log.push({ ...s, at, edited: { who: false, in: false, out: false }, gone: twin });
+      if (twin) skipped++; else added++;
+      continue;
+    }
     if (m.gone || m.device !== s.device) continue;
-    const before = JSON.stringify(m);
-    m.who = s.who;
+    const before = [m.who, m.in, m.out].join();
+    if (!m.edited.who && at > m.at) Object.assign(m, { who: s.who, at }); // an older text opened late keeps the newer name
     if (!m.edited.in) m.in = s.in;
-    if (!m.edited.out && s.out) m.out = s.out; // an older text opened late never undoes a clock-out
-    if (JSON.stringify(m) !== before) updated++;
+    if (!m.edited.out && s.out) m.out = s.out; // and never undoes a clock-out
+    if ([m.who, m.in, m.out].join() !== before) updated++;
   }
-  return { added, updated };
+  return { added, updated, skipped };
 }
 // Returns the latest day in the link, to open that week.
 export function openHours(data) {
   const inc = (Array.isArray(data.shifts) ? data.shifts : []).slice(0, 200).map(normShift).filter(Boolean);
   if (!inc.length) { toast('That link has no hours in it', 'bad'); return ''; }
-  const { added, updated } = importShifts(CREW, inc);
+  const { added, updated, skipped } = importShifts(CREW, inc, Number.isFinite(data.at) ? data.at : 0);
   keep(KEYS.crewHours, CREW);
   const who = inc.at(-1).who || 'the crew';
-  toast(added || updated ? `Hours from ${who}: ${added} new, ${updated} updated` : `Hours from ${who} were already logged`);
+  toast((added || updated ? `Hours from ${who}: ${added} new, ${updated} updated` : `Hours from ${who} were already logged`)
+    + (skipped ? `. ${skipped} skipped: you already added that day by hand` : ''), skipped ? 'bad' : '');
   return inc.map(s => s.date).sort().at(-1);
 }
 
@@ -133,10 +148,10 @@ export function byPerson(shifts) {
     if (!m.has(k)) m.set(k, { who: s.who || 'Name not set', shifts: [] });
     m.get(k).shifts.push(s);
   }
-  return [...m.values()].map(p => ({ ...p, min: total(p.shifts) })).sort((a, b) => a.who.localeCompare(b.who));
+  return [...m.values()].map(p => ({ ...p, hours: total(p.shifts) })).sort((a, b) => a.who.localeCompare(b.who));
 }
 const edited = s => s.edited.in || s.edited.out;
-const shiftLine = s => `${s.out ? `${h2(shiftMin(s))} hrs` : 'No clock-out'}${edited(s) ? ' · edited' : ''}`;
+const shiftLine = s => `${s.out ? `${h2(cents(s))} hrs` : 'No clock-out'}${edited(s) ? ' · edited' : ''}`;
 const crewStats = week => `<div class="stat"><b>${byPerson(week).length}</b><span>People</span></div>
   <div class="stat"><b>${h2(total(week))}</b><span>Hours</span></div>
   <div class="stat"><b class="${week.some(s => !s.out) ? 'warn' : ''}">${week.filter(s => !s.out).length}</b><span>Open shifts</span></div>`;
@@ -153,9 +168,10 @@ function crewView(S, day) {
         <input type="date" value="${mon}" data-pick="clock" aria-label="Pick a week"></label>
       <button class="nav-btn" data-go="clock/${addDays(mon, 7)}" aria-label="Next week">›</button></div>
     <div class="stats three" id="hoursStats">${crewStats(week)}</div>
-    ${people.map((p, i) => `<section class="card person"><div class="row1"><h2>${esc(p.who)}</h2><b class="total" data-out="who" data-i="${i}">${h2(p.min)} hrs</b></div>
+    ${people.map((p, i) => `<section class="card person"><div class="row1"><h2>${esc(p.who)}</h2><b class="total" data-out="who" data-i="${i}">${h2(p.hours)} hrs</b></div>
       ${p.shifts.map(shiftRow).join('')}
-      <button class="link" data-act="hAdd" data-v="${esc(p.who)}">+ Add a shift for ${esc(p.who)}</button></section>`).join('')
+      <div class="row1"><button class="link" data-act="hAdd" data-v="${esc(p.who)}">+ Add a shift for ${esc(p.who)}</button>
+        <button class="link" data-act="hRename" data-v="${esc(p.who)}">Rename</button></div></section>`).join('')
     || `<div class="empty"><h2>No hours logged this week</h2><p>Each worker's Clock in and Clock out texts you a link. Tap it on this phone to log their hours here.</p></div>`}
     <p class="hint">Only this phone changes hours. Times you change are marked edited and stay as you set them when that worker's next text comes in.</p>`;
   $('bar').innerHTML = `<div class="bar-in"><button class="btn primary big" data-act="hSend">Send to accountant</button>
@@ -172,7 +188,7 @@ export function hoursInput(el, S, day) {
   const week = weekOf(day), people = byPerson(week);
   for (const o of $('app').querySelectorAll('[data-out]')) {
     if (o.dataset.out === 'shift') o.textContent = shiftLine(CREW.find(x => x.id === o.dataset.id));
-    if (o.dataset.out === 'who') o.textContent = `${h2(people[o.dataset.i]?.min ?? 0)} hrs`;
+    if (o.dataset.out === 'who') o.textContent = `${h2(people[o.dataset.i]?.hours ?? 0)} hrs`;
   }
   $('hoursStats').innerHTML = crewStats(week);
 }
@@ -187,12 +203,26 @@ function addShift(day, who = '') {
     <div class="btns"><button class="btn primary" data-save>Add the shift</button></div>`);
   d.querySelector('[data-save]').onclick = () => {
     const v = n => d.querySelector(`[name=${n}]`).value;
-    const s = normShift({ id: uid(), who: v('who'), date: v('date'), in: v('in'), out: v('out'), edited: { in: true, out: true } });
+    const s = normShift({ id: uid(), who: v('who'), date: v('date'), in: v('in'), out: v('out'), edited: { who: true, in: true, out: true } });
     if (!s?.who) return toast('Add the name, the date and the clock-in time', 'bad');
     CREW.push(s);
     keep(KEYS.crewHours, CREW);
     d.close();
     go('clock/' + s.date);
+  };
+}
+
+// A name fixed by the PM (a typo, a nickname) on every shift logged under it; the worker's later texts keep it.
+function renameWorker(day, who) {
+  const d = sheet(`<h3>Rename ${esc(who)}</h3><label class="field"><span>Name on the timesheet</span><input name="who" value="${esc(who)}" autocomplete="off"></label>
+    <div class="btns"><button class="btn primary" data-save>Rename</button></div>`);
+  d.querySelector('[data-save]').onclick = () => {
+    const name = d.querySelector('[name=who]').value.trim().slice(0, 60);
+    if (!name) return toast('Type the name', 'bad');
+    for (const s of CREW) if (!s.gone && s.who.toLowerCase() === who.toLowerCase()) Object.assign(s, { who: name, edited: { ...s.edited, who: true } });
+    keep(KEYS.crewHours, CREW);
+    d.close();
+    go('clock/' + day);
   };
 }
 
@@ -203,16 +233,16 @@ const weekday = d => new Date(d + 'T12:00').toLocaleDateString('en-US', { weekda
 export function timesheetCsv(people) {
   const rows = [['Name', 'Date', 'Day', 'Clock in', 'Clock out', 'Hours', 'Note']];
   for (const p of people) {
-    for (const s of p.shifts) rows.push([p.who, s.date, weekday(s.date), t12(s.in), t12(s.out), s.out ? h2(shiftMin(s)) : '', [!s.out && 'No clock-out', edited(s) && 'Edited by PM'].filter(Boolean).join('; ')]);
-    rows.push([p.who, '', '', '', 'Week total', h2(p.min), '']);
+    for (const s of p.shifts) rows.push([p.who, s.date, weekday(s.date), t12(s.in), t12(s.out), s.out ? h2(cents(s)) : '', [!s.out && 'No clock-out', edited(s) && 'Edited by PM'].filter(Boolean).join('; ')]);
+    rows.push([p.who, '', '', '', 'Week total', h2(p.hours), '']);
   }
-  rows.push(['All crew', '', '', '', 'Week total', h2(people.reduce((n, p) => n + p.min, 0)), '']);
+  rows.push(['All crew', '', '', '', 'Week total', h2(people.reduce((n, p) => n + p.hours, 0)), '']);
   return rows.map(r => r.map(cell).join(',')).join('\r\n') + '\r\n';
 }
 const timesheetPdf = (S, mon, people) => makePdf('Weekly timesheet', letterhead(S, `Week of ${dayEn(mon)} to ${dayEn(addDays(mon, 6))}`), [
-  ...people.map(p => [`${p.who} · ${h2(p.min)} hrs`, p.shifts.map(s => [dayEn(s.date),
-    `${t12(s.in)} to ${s.out ? `${t12(s.out)} · ${h2(shiftMin(s))} hrs` : '(no clock-out)'}${edited(s) ? ' · edited by PM' : ''}`])]),
-  ['Week total', [['All crew', `${people.length} ${people.length === 1 ? 'person' : 'people'} · ${h2(people.reduce((n, p) => n + p.min, 0))} hrs`], ['Approved by', S.me || S.pm]]],
+  ...people.map(p => [`${p.who} · ${h2(p.hours)} hrs`, p.shifts.map(s => [dayEn(s.date),
+    `${t12(s.in)} to ${s.out ? `${t12(s.out)} · ${h2(cents(s))} hrs` : '(no clock-out)'}${edited(s) ? ' · edited by PM' : ''}`])]),
+  ['Week total', [['All crew', `${people.length} ${people.length === 1 ? 'person' : 'people'} · ${h2(people.reduce((n, p) => n + p.hours, 0))} hrs`], ['Approved by', S.me || S.pm]]],
 ], `${COMPANIES} · Timesheet week of ${mon}`);
 
 async function toAccountant(S, day) {
@@ -465,7 +495,7 @@ export async function reportAct(a, el, S, day, v) {
     case 'hTap': {
       if (!S.worker.trim()) { toast(L('Type your name first'), 'bad'); return $('app').querySelector('[data-k="s.worker"]')?.focus(); }
       const on = onShift(), s = on || normShift({ id: uid(), device: deviceOf(S), who: S.worker, date: today(), in: nowHM() });
-      if (on) on.out = nowHM(); else MY.push(s);
+      if (on) Object.assign(on, { out: nowHM(), who: S.worker.trim() }); else MY.push(s); // a name fixed while on the clock goes on this shift
       keep(KEYS.hours, MY);
       navigator.vibrate?.(12);
       renderOffice(v, S, day);
@@ -476,6 +506,7 @@ export async function reportAct(a, el, S, day, v) {
     // the PM's crew timesheet
     case 'hSend': return toAccountant(S, day);
     case 'hAdd': return addShift(day, val);
+    case 'hRename': return renameWorker(day, val);
     case 'hDel': {
       const s = CREW.find(x => x.id === el.dataset.id);
       if (!s || !await ask(`Remove ${s.who ? `${s.who}'s` : 'this'} ${dayEn(s.date)} shift? A later text from their phone won't bring it back.`, 'Remove', 'danger')) return;

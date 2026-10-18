@@ -181,7 +181,7 @@ function header() {
   const here = { clock: 'clock', report: 'report', settings: '' }[view.v] ?? 'day';
   const locked = `<svg class="lock" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" aria-hidden="true">${LOCK.shut}</svg>`;
   tabs.innerHTML = [['day', L('Tasks')], ['clock', isPM() && on ? L('Crew hours') : L('Time clock')], ['report', L('Daily report')]]
-    .map(([v, label]) => `<a href="#${v}/${day}"${v === here ? ' aria-current="page"' : ''}${v === 'report' && !on ? ` aria-label="${esc(`${label}, ${L('needs the office passcode')}`)}">${label}${locked}` : `>${label}`}</a>`).join('');
+    .map(([v, label]) => `<a href="#${v}/${day}"${v === here ? ' aria-current="page"' : ''}${(v === 'report' || (v === 'clock' && isPM())) && !on ? ` aria-label="${esc(`${label}, ${L('needs the office passcode')}`)}">${label}${locked}` : `>${label}`}</a>`).join('');
 }
 
 let drawnOn = today(); // the day the screen was last drawn, to notice midnight
