@@ -1,10 +1,14 @@
-// Shared by tasks.html and report.html: storage, link codec, time math, small UI pieces.
+// Shared by the field app (tasks.html) and its daily report and time clock (report.mjs):
+// storage, link codec, time math, the office passcode, small UI pieces.
 // Handoff data rides in the URL fragment after "#", which browsers don't send to the host.
 // An explicitly configured review receiver also receives PDF copies of finished records.
 
 import ES from './es.mjs';
 
 export const KEYS = { settings: 'schwab.settings', tasks: 'schwab.tasks', reports: 'schwab.reports' };
+export const COMPANY = 'H.A. Sack-Electrical', COMPANY_ALT = 'Sack Company-Electrical';
+// The top lines of every PDF: who did the work, then the job.
+export const letterhead = (s, more = '') => `${COMPANY} · ${COMPANY_ALT}\n${[s.project, s.site, more].filter(Boolean).join(' · ')}`;
 
 // ---------- language ----------
 // Spanish mode: every phrase on screen has a Spanish twin in es.mjs, looked up by its English text.
@@ -50,9 +54,9 @@ export function save(key, val) {
   try { localStorage.setItem(key, JSON.stringify(val)); return true; } catch { return false; }
 }
 
-export const SETTINGS_TPL = { lang: '', me: '', role: '', super: '', pm: '', project: '', site: '', floors: [''], crews: [{ name: '', lead: '', members: '' }], checks: [''], folderUrl: '', siteCode: '' };
+export const SETTINGS_TPL = { lang: '', me: '', role: '', super: '', pm: '', project: '', site: '', floors: [''], crews: [{ name: '', lead: '', members: '' }], checks: [''], folderUrl: '', siteCode: '', pin: '' };
 export const DEFAULT_SETTINGS = {
-  lang: '', me: '', role: 'Superintendent', super: '', pm: '', folderUrl: '', siteCode: '',
+  lang: '', me: '', role: 'Superintendent', super: '', pm: '', folderUrl: '', siteCode: '', pin: '',
   project: 'Charles Schwab Building', site: 'Charlotte, NC',
   floors: ['Basement', 'Level 1', 'Level 2', 'Level 3', 'Level 4', 'Level 5', 'Roof'],
   crews: ['A', 'B', 'C', 'D'].map(x => ({ name: 'Crew ' + x, lead: '', members: '' })),
@@ -135,13 +139,15 @@ export const REPORT_TPL = {
   floors: [{ floor: '', crews: [CREW_TPL] }],
   next: [{ step: '', prereq: '', start: '', dur: '', finish: '', deadline: '', lead: '', checkin: '' }],
   risks: [{ risk: '', impact: '', prevent: '', fallback: '', owner: '', by: '' }],
+  clock: [{ name: '', in: '', out: '' }], // the day's time clock: everyone on site, superintendent included
   preparedBy: '', pmReview: '', updatedAt: 0, filedAt: 0,
 };
-const REPORT_STATUS = ['On plan', 'At risk', 'Behind plan', 'No work today']; // same list as STATUS in report.html
+const REPORT_STATUS = ['On plan', 'At risk', 'Behind plan', 'No work today']; // same list as STATUS in report.mjs
 export function normReport(r) {
   const n = shape(REPORT_TPL, r);
   if (!REPORT_STATUS.includes(n.status)) n.status = ''; // one the page doesn't know would break it
   if (!isDay(n.date)) n.date = ''; // an impossible day (2026-02-30) is refused by the review folder forever
+  for (const p of n.clock) for (const k of ['in', 'out']) if (!FORMAT.time.test(p[k])) p[k] = '';
   return n;
 }
 export const blank = list => shape(REPORT_TPL[list][0], {});
@@ -204,6 +210,42 @@ export function fillFromTasks(rep, tasks, crewNames) {
   return groups.size;
 }
 
+// ---------- office passcode ----------
+// The office screens (assigning, the time clock, the daily report, settings) open with a 4-digit code;
+// crews see only the sheets sent to them. The code is kept as a salted SHA-256 hash, never as typed, and
+// rides along in the links an office phone sends, so a crew phone asks for the office's code instead of
+// offering to make its own. A phone keeps the first code it learns; links never replace it.
+// ponytail: a 4-digit code in a phone web app is a door lock, not a vault: 10,000 codes, and anyone holding
+// a link or this phone's storage can try them all offline. It keeps crews on the crew screens and a
+// picked-up phone out of the office records. Sign-ins on a shared server are the upgrade past that.
+export const UNLOCK = 'schwab.unlock';
+export const PIN_FORMAT = /^[0-9a-f]{16}:[0-9a-f]{64}$/;
+export const hasPin = s => PIN_FORMAT.test(s.pin);
+export function adoptPin(s, pin) {
+  if (hasPin(s) || typeof pin !== 'string' || !PIN_FORMAT.test(pin)) return false;
+  s.pin = pin;
+  return save(KEYS.settings, s);
+}
+const hex = buf => [...new Uint8Array(buf)].map(b => b.toString(16).padStart(2, '0')).join('');
+export async function pinHash(pin, salt = hex(crypto.getRandomValues(new Uint8Array(8)))) {
+  return `${salt}:${hex(await crypto.subtle.digest('SHA-256', new TextEncoder().encode(`${salt}:${pin}`)))}`;
+}
+const OPEN_MS = 12 * 36e5, TRIES = 5, WAIT_MS = 60e3; // signed in for a work shift; 5 wrong codes, then a 1 minute wait
+const lockState = () => shape({ until: 0, fails: 0, wait: 0 }, load(UNLOCK, {}));
+export const unlocked = (now = Date.now()) => lockState().until > now;
+export const signIn = (now = Date.now()) => save(UNLOCK, { until: now + OPEN_MS, fails: 0, wait: 0 });
+export const signOut = () => save(UNLOCK, { until: 0, fails: 0, wait: 0 });
+export const waitLeft = (now = Date.now()) => Math.max(0, lockState().wait - now);
+// 'ok' (signed in), 'wrong', or 'wait' (too many wrong codes; waitLeft() says how long).
+export async function tryPin(s, pin, now = Date.now()) {
+  const st = lockState();
+  if (st.wait > now) return 'wait';
+  if (hasPin(s) && await pinHash(pin, s.pin.slice(0, 16)) === s.pin) return signIn(now) ? 'ok' : 'wrong';
+  const fails = st.fails + 1, out = fails >= TRIES;
+  save(UNLOCK, { until: 0, fails: out ? 0 : fails, wait: out ? now + WAIT_MS : 0 });
+  return out ? 'wait' : 'wrong';
+}
+
 // ---------- link codec ----------
 
 export const b64 = bytes => { let s = ''; for (const b of bytes) s += String.fromCharCode(b); return btoa(s); };
@@ -255,11 +297,12 @@ export const hrs = n => (Math.round(n * 10) / 10).toString();
 
 export const crewVar = (s, name) => { const i = s.crews.findIndex(c => c.name === name); return `--crew:var(--c${i < 0 ? 4 : i % 6})`; };
 
-export const dateBar = day => `<div class="datebar">
-  <button class="nav-btn" data-go="day/${addDays(day, -1)}" aria-label="${L('Previous day')}">‹</button>
+// v: the screen the arrows and the date picker stay on (day = task sheets, clock, report).
+export const dateBar = (day, v = 'day') => `<div class="datebar">
+  <button class="nav-btn" data-go="${v}/${addDays(day, -1)}" aria-label="${L('Previous day')}">‹</button>
   <label class="day">${niceDate(day)}<small>${day === today() ? L('Today') : day < today() ? L('Past day') : L('Planning ahead')}</small>
-    <input type="date" value="${day}" data-pick aria-label="${L('Pick a date')}"></label>
-  <button class="nav-btn" data-go="day/${addDays(day, 1)}" aria-label="${L('Next day')}">›</button></div>`;
+    <input type="date" value="${day}" data-pick="${v}" aria-label="${L('Pick a date')}"></label>
+  <button class="nav-btn" data-go="${v}/${addDays(day, 1)}" aria-label="${L('Next day')}">›</button></div>`;
 
 export const attr = (k, v) => v ? ` ${k}="${esc(v)}"` : '';
 
@@ -533,17 +576,18 @@ export function retryUploads(s) {
   if (before && s.folderUrl) flush(s).then(r => r.left < before && toast(L('Uploaded to the review folder: {n}', { n: before - r.left })));
 }
 
-// ---------- settings (same screen in both apps; same phone = same settings) ----------
+// ---------- settings (office only: behind the passcode) ----------
 
-// opts.lang: show the language switch (Task Sheets only; the Daily Report stays in English).
-export function settingsView(s, opts = {}) {
-  const roles = ['Superintendent', 'Project manager', 'Crew lead'];
+export function settingsView(s) {
+  const roles = ['Superintendent', 'Project manager'];
   const n = queued();
   return `<section class="card"><h2>${L('This phone')}</h2><div class="grid">
-      ${opts.lang ? `<label class="field"><span>${L('Language')}</span><select data-k="s.lang">${[['en', 'English'], ['es', 'Español']].map(([v, name]) => `<option value="${v}"${v === getLang() ? ' selected' : ''}>${name}</option>`).join('')}</select></label>` : ''}
+      <label class="field"><span>${L('Language')}</span><select data-k="s.lang">${[['en', 'English'], ['es', 'Español']].map(([v, name]) => `<option value="${v}"${v === getLang() ? ' selected' : ''}>${name}</option>`).join('')}</select></label>
       ${field(L('Your name'), 's.me', s.me, { ph: L('Used for "Assigned by", sign-offs') })}
       <label class="field"><span>${L('Your role')}</span><select data-k="s.role">${roles.map(r => `<option value="${r}"${r === s.role ? ' selected' : ''}>${L(r)}</option>`).join('')}</select></label>
     </div></section>
+    <section class="card"><h2>${L('Office passcode')}</h2><p class="hint">${L("Opens task setup, the time clock, the daily report and settings. Use the same code on the PM's and the superintendent's phones. Crew phones learn it from the first task sheet they open.")}</p>
+      <div class="btns"><button class="btn" data-act="changePin">${L('Change the passcode')}</button></div></section>
     <section class="card"><h2>${L('Project')}</h2><div class="grid">
       ${field(L('Project'), 's.project', s.project)}${field(L('Location'), 's.site', s.site)}
       ${field(L('Superintendent'), 's.super', s.super)}${field(L('Project manager'), 's.pm', s.pm)}

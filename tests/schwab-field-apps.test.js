@@ -192,7 +192,7 @@ test('Spanish mode has a Spanish version of every on-screen phrase', async () =>
   const ES = (await import('../docs/schwab/es.mjs')).default;
   const dir = path.join(__dirname, '..', 'docs', 'schwab');
   const used = new Set(['Complete', 'Partial', 'Blocked', 'Accepted', 'Follow-up needed', 'Superintendent', 'Project manager', 'Crew lead', '1 person', '{n} people']); // looked up from data, not literals
-  for (const f of ['tasks.html', 'shared.mjs']) {
+  for (const f of ['tasks.html', 'shared.mjs', 'report.mjs']) {
     const src = fs.readFileSync(path.join(dir, f), 'utf8');
     for (const m of src.matchAll(/\b(?:L|x)\(\s*(['"])((?:\\.|(?!\1)[^\\])*)\1/g)) used.add(m[2].replace(/\\(.)/g, '$1'));
   }
@@ -332,3 +332,56 @@ test('a short crafted link cannot expand into a huge list or carry an impossible
   assert.equal(normReport({ date: '2026-02-30' }).date, '', 'the review folder would refuse it forever');
   assert.equal(normReport({ date: '2026-02-28' }).date, '2026-02-28');
 });
+
+test('office passcode: stored hashed, a 12-hour sign-in, a wait after 5 wrong codes, links only fill a missing code', async () => {
+  const { pinHash, tryPin, unlocked, signOut, waitLeft, adoptPin, PIN_FORMAT } = await lib;
+  const store = new Map();
+  Object.defineProperty(globalThis, 'localStorage', { configurable: true, value: { getItem: k => store.get(k) ?? null, setItem: (k, v) => store.set(k, String(v)) } });
+  try {
+    const office = { pin: await pinHash('4821') };
+    assert.match(office.pin, PIN_FORMAT);
+    assert.ok(!office.pin.includes('4821'), 'never kept as typed');
+    assert.notEqual(await pinHash('4821'), office.pin, 'salted, so the same code hashes differently on each phone');
+    const t0 = 1.8e12;
+    assert.equal(await tryPin(office, '4821', t0), 'ok');
+    assert.ok(unlocked(t0 + 11 * 36e5) && !unlocked(t0 + 13 * 36e5), 'signed in for a work shift, then locked again');
+    signOut();
+    assert.equal(unlocked(t0), false);
+    for (let i = 1; i < 5; i++) assert.equal(await tryPin(office, '0000', t0), 'wrong');
+    assert.equal(await tryPin(office, '0000', t0), 'wait', 'the fifth wrong code starts the wait');
+    assert.equal(await tryPin(office, '4821', t0 + 30e3), 'wait', 'even the right code waits it out');
+    assert.equal(waitLeft(t0 + 30e3), 30e3);
+    assert.equal(await tryPin(office, '4821', t0 + 61e3), 'ok');
+    assert.equal(await tryPin({ pin: 'tampered' }, '0000', t0 + 62e3), 'wrong', 'a damaged stored code opens nothing');
+
+    const crew = { pin: '' };
+    assert.equal(adoptPin(crew, 'not-a-code'), false);
+    assert.equal(adoptPin(crew, office.pin), true, 'the first sheet teaches a crew phone the office code');
+    assert.equal(crew.pin, office.pin);
+    assert.equal(adoptPin(crew, await pinHash('1111')), false, 'a later link never replaces it');
+    assert.equal(crew.pin, office.pin);
+  } finally { delete globalThis.localStorage; }
+});
+
+test('time clock: at least 2 boxes, one per person typed, nothing with times removed silently', async () => {
+  const { headcount, clockMin, clockRow, MAX_ON_SITE } = await import('../docs/schwab/report.mjs');
+  const { normReport, letterhead, makePdf } = await lib;
+  assert.equal(headcount([], 0).list.length, 2, 'the superintendent and one worker at least');
+  assert.equal(headcount([], 'nine').list.length, 2);
+  const day = headcount([clockRow('Dana Super')], 12);
+  assert.deepEqual([day.list.length, day.list[0].name, day.lost], [12, 'Dana Super', 0], 'a box for each person; typed names stay');
+  day.list[5].in = '07:00';
+  const cut = headcount(day.list, 3);
+  assert.deepEqual([cut.list.length, cut.lost], [3, 1], 'the screen asks before removing a clocked-in person');
+  assert.equal(headcount([], 1e6).list.length, MAX_ON_SITE);
+  assert.equal(clockMin({ in: '06:30', out: '15:00' }), 510);
+  assert.equal(clockMin({ in: '22:00', out: '06:00' }), 480, 'a night shift');
+  assert.equal(clockMin({ in: '07:00', out: '' }), 0, 'still on site');
+  const r = normReport(JSON.parse(JSON.stringify({ date: '2026-10-18', clock: [{ name: 'Dana', in: '07:00', out: '<b>' }, { name: 'Luis', in: '7:5' }] })));
+  assert.deepEqual(r.clock.map(p => [p.name, p.in, p.out]), [['Dana', '07:00', ''], ['Luis', '', '']], 'only real HH:MM times survive a link');
+  assert.deepEqual(normReport({}).clock, [], 'older reports without a clock still load');
+
+  const pdf = Buffer.from(makePdf('Time clock', letterhead({ project: 'Charles Schwab Building', site: 'Charlotte, NC' }), [['Clock', [['Dana', 'in 7:00 AM']]]], 'f')).toString('latin1');
+  assert.match(pdf, /\(H\.A\. Sack-Electrical \\267 Sack Company-Electrical\) Tj/, 'both company names head every PDF');
+});
+
