@@ -363,110 +363,61 @@ test('office passcode: stored hashed, a 12-hour sign-in, a wait after 5 wrong co
   } finally { delete globalThis.localStorage; }
 });
 
-test('time clock: at least 2 boxes, one per person typed, nothing with times removed silently', async () => {
-  const { headcount, clockMin, clockRow, MAX_ON_SITE } = await import('../docs/schwab/report.mjs');
-  const { normReport, letterhead, makePdf } = await lib;
-  assert.equal(headcount([], 0).list.length, 2, 'the superintendent and one worker at least');
-  assert.equal(headcount([], 'nine').list.length, 2);
-  const day = headcount([clockRow('Dana Super')], 12);
-  assert.deepEqual([day.list.length, day.list[0].name, day.lost], [12, 'Dana Super', 0], 'a box for each person; typed names stay');
-  day.list[5].in = '07:00';
-  const cut = headcount(day.list, 3);
-  assert.deepEqual([cut.list.length, cut.lost], [3, 1], 'the screen asks before removing a clocked-in person');
-  assert.equal(headcount([], 1e6).list.length, MAX_ON_SITE);
-  assert.equal(clockMin({ in: '06:30', out: '15:00' }), 510);
-  assert.equal(clockMin({ in: '22:00', out: '06:00' }), 480, 'a night shift');
-  assert.equal(clockMin({ in: '07:00', out: '' }), 0, 'still on site');
-  const r = normReport(JSON.parse(JSON.stringify({ date: '2026-10-18', clock: [{ name: 'Dana', in: '07:00', out: '<b>' }, { name: 'Luis', in: '7:5' }] })));
-  assert.deepEqual(r.clock.map(p => [p.name, p.in, p.out]), [['Dana', '07:00', ''], ['Luis', '', '']], 'only real HH:MM times survive a link');
-  assert.deepEqual(normReport({}).clock, [], 'older reports without a clock still load');
-
-  const pdf = Buffer.from(makePdf('Time clock', letterhead({ project: 'Charles Schwab Building', site: 'Charlotte, NC' }), [['Clock', [['Dana', 'in 7:00 AM']]]], 'f')).toString('latin1');
-  assert.match(pdf, /\(H\.A\. Sack-Electrical \\267 Sack Company-Electrical\) Tj/, 'both company names head every PDF');
+test('time clock: only real shifts are kept, weeks run Monday to Sunday, overnight shifts count', async () => {
+  const { normShift } = await lib;
+  const { shiftMin, monday, byPerson } = await import('../docs/schwab/report.mjs');
+  const ok = { id: 'k1abc', device: 'dev1', who: '  José L ', date: '2026-10-14', in: '07:00', out: '15:45' };
+  assert.deepEqual(normShift(ok), { ...ok, who: 'José L', edited: { in: false, out: false }, gone: false });
+  for (const bad of [{ ...ok, id: '<b>' }, { ...ok, date: '2026-02-30' }, { ...ok, in: '7:5' }, 'junk', null]) assert.equal(normShift(bad), null, 'not loggable: ' + JSON.stringify(bad));
+  assert.equal(normShift({ ...ok, out: '"><script>' }).out, '', 'a bad clock-out is dropped, the shift stays open');
+  assert.equal(normShift({ ...ok, device: 'x y' }).device, '');
+  assert.equal(shiftMin(normShift(ok)), 525);
+  assert.equal(shiftMin({ in: '22:00', out: '06:30' }), 510, 'a night shift');
+  assert.equal(shiftMin({ in: '07:00', out: '' }), 0, 'still on the clock');
+  assert.deepEqual(['2026-10-12', '2026-10-14', '2026-10-18', '2026-10-19', '2026-03-08'].map(monday), ['2026-10-12', '2026-10-12', '2026-10-12', '2026-10-19', '2026-03-02'], 'Sunday ends the week, across a clock change too');
+  const people = byPerson([normShift(ok), normShift({ ...ok, id: 'k2', who: 'josé l', date: '2026-10-15', in: '06:30', out: '15:00' }), normShift({ ...ok, id: 'k3', who: 'Ana P' })]);
+  assert.deepEqual(people.map(p => [p.who, p.shifts.length, p.min]), [['Ana P', 1, 525], ['José L', 2, 1035]], 'one timesheet per person, any capitalization');
 });
 
-test('time clock merges field by field: renames, clock-outs, removals and re-adds all stick on both phones', async () => {
-  const { normReport, mergeAnswers, boxVersion } = await lib;
-  const { clockRow } = await import('../docs/schwab/report.mjs');
-  const copy = r => normReport(JSON.parse(JSON.stringify(r)));
-  const rows = r => r.clock.map(p => [p.name, p.in, p.out]);
-  const box = (name, set = {}) => ({ ...clockRow(name), nameAt: name ? 1 : 0, ...set });
-  const remove = (r, i) => { r.clockGone.push({ id: r.clock[i].id, at: boxVersion(r.clock[i]) }); r.clock.splice(i, 1); };
-  // The superintendent's clock goes to the PM; replies always merge onto the superintendent's copy, as openReport does.
-  const sup = normReport({ clock: [box('Dana Super', { in: '06:30', inAt: 1 }), box('Jose L', { in: '07:00', inAt: 1 }), box('Ray K'), box('')] });
-  const pm = copy(sup);
-  Object.assign(pm.clock[1], { name: 'José L', nameAt: 2 }); // PM fixes a name...
-  Object.assign(sup.clock[1], { out: '15:30', outAt: 3 }); // ...while the superintendent clocks him out
-  remove(pm, 3); // PM trims the empty box...
-  Object.assign(sup.clock[3], { name: 'Eve R', nameAt: 4, in: '09:00', inAt: 4 }); // ...that a late arrival just took
-  remove(sup, 2); // the superintendent removes Ray
-  mergeAnswers(sup, pm); // the PM sends it back
-  assert.deepEqual(rows(sup), [['Dana Super', '06:30', ''], ['José L', '07:00', '15:30'], ['Eve R', '09:00', '']],
-    'the rename and the clock-out both stick, Ray stays removed, and Eve is not wiped by an older removal');
-
-  const atPm = mergeAnswers(copy(sup), pm); // the superintendent sends again
-  assert.deepEqual(rows(atPm), rows(sup), 'both phones end up with the same clock');
-  assert.deepEqual(rows(mergeAnswers(copy(atPm), pm)), rows(atPm), 'an old copy merged again changes nothing');
-
-  const pm2 = copy(atPm);
-  remove(pm2, 0); pm2.clock.push(box('Dana Super', { nameAt: 9, in: '06:35', inAt: 9 })); // PM removes a box and adds the person back
-  assert.deepEqual(rows(mergeAnswers(copy(atPm), pm2)).map(r => r[0]), ['José L', 'Eve R', 'Dana Super'], 'a person removed and added back is kept');
-
-  const two = normReport({ clock: [box('Dana Super'), box('Jose L')] });
-  const own = normReport({ clock: [box('dana super '), box('')] }); // the PM's phone made its own two boxes
-  assert.deepEqual(rows(mergeAnswers(copy(two), own)).map(r => r[0]), ['Dana Super', 'Jose L'], 'no extra boxes from the other phone');
-  const six = n => { const r = copy(two); while (r.clock.length < n) r.clock.push(box('')); return r; };
-  assert.equal(mergeAnswers(six(6), six(6)).clock.length, 6, 'both phones at 6 people stay at 6');
-  assert.equal(mergeAnswers(copy(two), six(5)).clock.length, 5, 'a head count raised on the other phone carries over');
-  assert.match(normReport({ clock: [{ name: 'X' }] }).clock[0].id, /^[\w-]+$/, 'a box from an older or crafted link gets an id');
+test('time clock: worker links add and complete shifts, but never undo the PM', async () => {
+  const { normShift } = await lib;
+  const { importShifts } = await import('../docs/schwab/report.mjs');
+  const shift = (id, set = {}) => normShift({ id, device: 'dana1', who: 'Dana R', date: '2026-10-14', in: '07:00', ...set });
+  const log = [];
+  assert.deepEqual(importShifts(log, [shift('a')]), { added: 1, updated: 0 }, 'clock-in text');
+  const out = [shift('a', { out: '15:30' }), shift('b', { date: '2026-10-15', in: '06:45' })];
+  assert.deepEqual(importShifts(log, out), { added: 1, updated: 1 }, 'the clock-out text completes it and brings the next day');
+  assert.deepEqual(importShifts(log, out), { added: 0, updated: 0 }, 'the same text again changes nothing');
+  assert.deepEqual(importShifts(log, [shift('a')]), { added: 0, updated: 0 }, 'an older text opened late keeps the clock-out');
+  Object.assign(log[0], { out: '15:00', edited: { in: false, out: true } }); // the PM fixes the out time
+  log[1].gone = true; // and removes the second shift
+  importShifts(log, [shift('a', { out: '15:30', who: 'Dana Ruiz' }), shift('b', { out: '14:00' })]);
+  assert.deepEqual(log.map(s => [s.who, s.out, s.gone]), [['Dana Ruiz', '15:00', false], ['Dana R', '', true]], "the PM's time and removal stick; a fixed name follows");
+  assert.deepEqual(importShifts(log, [shift('a', { device: 'other', out: '23:00' }), shift('c', { device: '' })]), { added: 0, updated: 0 }, "a link can't touch another phone's shift or add one with no phone");
+  importShifts(log, [{ ...shift('d'), edited: { in: true, out: true }, gone: true }]);
+  assert.deepEqual([log.at(-1).edited, log.at(-1).gone], [{ in: false, out: false }, false], 'a link cannot mark its own shifts as the PM\'s');
 });
 
-test('time clock: two phones editing at random always end up with the same clock', async () => {
-  const { normReport, mergeAnswers, boxVersion } = await lib;
-  const { clockRow } = await import('../docs/schwab/report.mjs');
-  let seed = 7;
-  const rand = n => { seed = (seed * 1103515245 + 12345) % 2147483648; return seed % n; };
-  const copy = r => normReport(JSON.parse(JSON.stringify(r)));
-  const key = r => r.clock.map(p => [p.id, p.name, p.in, p.out].join('|')).sort().join('\n');
-  let t = 0;
-  const op = r => {
-    const p = r.clock[rand(Math.max(1, r.clock.length))], k = rand(7);
-    if (k === 0 || !p) r.clock.push(clockRow());
-    else if (k === 1) r.clock.push({ ...clockRow(['Ann', 'Bob', 'Cy', 'Di'][rand(4)]), nameAt: ++t });
-    else if (k === 2) Object.assign(p, { name: ['Ann', 'Bob', 'Cy', 'Di', ''][rand(5)], nameAt: ++t });
-    else if (k === 3 || k === 4) { const f = k === 3 ? 'in' : 'out'; Object.assign(p, { [f]: rand(3) ? `0${rand(9)}:00` : '', [f + 'At']: ++t }); }
-    else { r.clockGone.push({ id: p.id, at: boxVersion(p) }); r.clock.splice(r.clock.indexOf(p), 1); }
-  };
-  for (let run = 0; run < 400; run++) {
-    let sup = normReport({ clock: [clockRow('Dana'), clockRow()] }), pm = copy(sup);
-    for (let round = 0; round < 4; round++) {
-      for (let n = rand(4); n--;) op(sup);
-      for (let n = rand(4); n--;) op(pm);
-      pm = mergeAnswers(copy(sup), pm); // Send to PM
-      sup = mergeAnswers(sup, copy(pm)); // Send back to Supt.
-      assert.equal(key(sup), key(pm), `run ${run} round ${round}: the phones disagree`);
-      assert.equal(new Set(sup.clock.map(p => p.id)).size, sup.clock.length, 'no box twice');
-    }
-  }
+test('time clock: the accountant spreadsheet totals each week and cannot run formulas', async () => {
+  const { normShift } = await lib;
+  const { byPerson, timesheetCsv } = await import('../docs/schwab/report.mjs');
+  const s = (id, who, date, inn, out, edited) => normShift({ id, device: 'd1', who, date, in: inn, out, edited: { in: false, out: !!edited } });
+  const csv = timesheetCsv(byPerson([s('a', 'Dana R', '2026-10-12', '07:00', '15:45'), s('b', 'Dana R', '2026-10-13', '22:00', '06:30', true), s('c', '=HYPERLINK("x")', '2026-10-13', '07:00', '')]));
+  const rows = csv.trim().split('\r\n');
+  assert.equal(rows[0], 'Name,Date,Day,Clock in,Clock out,Hours,Note');
+  assert.ok(rows.includes('"\'=HYPERLINK(""x"")",2026-10-13,Tue,7:00 AM,,,No clock-out'), 'a typed formula stays text; an open shift is flagged');
+  assert.ok(rows.includes('Dana R,2026-10-12,Mon,7:00 AM,3:45 PM,8.75,') && rows.includes('Dana R,2026-10-13,Tue,10:00 PM,6:30 AM,8.50,Edited by PM'));
+  assert.ok(rows.includes('Dana R,,,,Week total,17.25,') && rows.at(-1) === 'All crew,,,,Week total,17.25,', 'person and crew totals, to two decimals');
 });
 
-test('a tab still on the old version cannot wipe the passcode or the time clock', async () => {
+test('a tab still on the old version cannot wipe the passcode', async () => {
   const { KEYS, loadSettings, setPin, pinHash, PIN_FORMAT } = await lib;
-  const { loadReports, clockRow } = await import('../docs/schwab/report.mjs');
   const store = new Map();
   Object.defineProperty(globalThis, 'localStorage', { configurable: true, value: { getItem: k => store.get(k) ?? null, setItem: (k, v) => store.set(k, String(v)) } });
   try {
     const s = loadSettings();
     setPin(s, await pinHash('4821'));
-    const clock = [{ ...clockRow('Dana Super'), in: '06:30' }];
-    store.set(KEYS.reports, JSON.stringify({ '2026-10-18': { date: '2026-10-18', status: 'On plan', clock, updatedAt: 5 } }));
-    store.set(KEYS.clocks, JSON.stringify({ '2026-10-18': { clock, clockGone: [], updatedAt: 5 } }));
-    // The old version's save: settings and reports rewritten without the fields it doesn't know.
-    store.set(KEYS.settings, JSON.stringify({ me: 'Dana', role: 'Superintendent' }));
-    store.set(KEYS.reports, JSON.stringify({ '2026-10-18': { date: '2026-10-18', status: 'On plan', results: 'typed in the old tab', updatedAt: 9 } }));
+    store.set(KEYS.settings, JSON.stringify({ me: 'Dana', role: 'Superintendent' })); // the old version's save, without the code
     assert.match(loadSettings().pin, PIN_FORMAT, 'the passcode survives');
-    const r = loadReports()['2026-10-18'];
-    assert.deepEqual([r.results, r.clock.map(p => [p.name, p.in]), r.updatedAt], ['typed in the old tab', [['Dana Super', '06:30']], 9], 'both edits survive');
   } finally { delete globalThis.localStorage; }
 });
-

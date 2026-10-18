@@ -1,39 +1,27 @@
-// Daily report and time clock: the office's record of each day, one per date, kept on this phone.
-// The report is the English office form for the PM. The time clock (everyone on site, superintendent
-// included) is saved with that day's report, so it goes to the PM with it and prints in its PDF.
-// The report sits behind the office passcode; the time clock is open to everyone, so workers can clock
-// themselves in on the superintendent's phone. tasks.html routes here for #report/<day> and #clock/<day>.
+// Daily report and time clock. The report is the office's record of each day, one per date, kept on
+// this phone: the English office form for the PM, behind the office passcode. The time clock is open to
+// everyone on their own phone; the PM's phone keeps the crew timesheet built from it.
+// tasks.html routes here for #report/<day> and #clock/<day>.
 
 import {
-  KEYS, COMPANIES, esc, uid, load, save, normTask, normReport, blank, newFloor, fillFromTasks, mergeAnswers, boxVersion, CREW_TPL, pack, linkTo,
-  today, niceDate, nowHM, span, fmtMin, t12, stamp, hrs, field, datalist, seg, setPath, getPath, readInput, roster,
-  toast, sheet, ask, sendSheet, pasteSheet, makePdf, savePdf, fileAway, dateBar, crewVar, letterhead, L, unlocked,
+  KEYS, COMPANIES, esc, uid, load, save, normTask, normReport, normShift, blank, newFloor, fillFromTasks, mergeAnswers, CREW_TPL, pack, linkTo,
+  today, addDays, niceDate, nowHM, span, fmtMin, t12, stamp, hrs, field, datalist, seg, setPath, getPath, readInput,
+  toast, sheet, ask, sendSheet, pasteSheet, makePdf, savePdf, download, fileAway, dateBar, crewVar, letterhead, L, unlocked,
 } from './shared.mjs';
 
-let R = loadReports();
+const obj = x => (x && typeof x === 'object' && !Array.isArray(x) ? x : {});
+export const loadReports = () => Object.fromEntries(Object.entries(obj(load(KEYS.reports, {}))).map(([d, r]) => [d, normReport(r)]));
+const loadShifts = key => load(key, []).map(normShift).filter(Boolean);
+let R = loadReports(), MY = loadShifts(KEYS.hours), CREW = loadShifts(KEYS.crewHours);
 const open = new Set(['sum']);
-
-// Each day's time clock is also kept under KEYS.clocks (see KEYS), and that copy wins.
-export function loadReports() {
-  const obj = x => (x && typeof x === 'object' && !Array.isArray(x) ? x : {});
-  const reports = obj(load(KEYS.reports, {})), clocks = obj(load(KEYS.clocks, {}));
-  return Object.fromEntries([...new Set([...Object.keys(reports), ...Object.keys(clocks)])].map(d => {
-    const r = obj(reports[d]), c = obj(clocks[d]);
-    return [d, normReport({ ...r, ...c, updatedAt: Math.max(Number(r.updatedAt) || 0, Number(c.updatedAt) || 0) })];
-  }));
-}
-export const reloadReports = () => { R = loadReports(); };
+export const reloadReports = () => { R = loadReports(); MY = loadShifts(KEYS.hours); CREW = loadShifts(KEYS.crewHours); }; // the time clock too
+const unsaved = () => toast(L("This phone wouldn't save. Open Settings and download a backup."), 'bad');
 // Only reports someone has touched get stored; browsing an empty day leaves nothing behind.
-const persist = () => {
-  const kept = Object.entries(R).filter(([, r]) => r.updatedAt);
-  const clocks = kept.filter(([, r]) => r.clock.length || r.clockGone.length).map(([d, r]) => [d, { clock: r.clock, clockGone: r.clockGone, updatedAt: r.updatedAt }]);
-  return (save(KEYS.reports, Object.fromEntries(kept)) && save(KEYS.clocks, Object.fromEntries(clocks)))
-    || toast(L("This phone wouldn't save. Open Settings and download a backup."), 'bad');
-};
+const persist = () => save(KEYS.reports, Object.fromEntries(Object.entries(R).filter(([, r]) => r.updatedAt))) || unsaved();
+const keep = (key, list) => save(key, list) || unsaved();
 const isPM = S => S.role === 'Project manager';
-const written = r => r.status || r.floors.length || r.needs.length || r.next.length || r.risks.length; // more than a time clock
-// Daily reports of its own make this an office phone, whatever the time clock holds.
-export const hasReports = () => Object.values(R).some(r => r.updatedAt && written(r));
+// Daily reports of its own make this an office phone.
+export const hasReports = () => Object.values(R).some(r => r.updatedAt);
 const rep = (S, day) => (R[day] ||= normReport({
   date: day, floors: [],
   super: S.super || (S.role === 'Superintendent' ? S.me : ''),
@@ -60,100 +48,189 @@ function lateLine(s) {
 }
 
 // ---------- time clock ----------
+// Everyone clocks in and out on their own phone, and only there: no typed times. Each tap opens a text to
+// the PM whose link carries this phone's last two weeks, so a text that never went out is caught up by the
+// next one. The PM's phone logs them into the crew timesheet, the one place hours change, and sends each
+// Monday to Sunday week to the accountant.
+// ponytail: times come from the worker's own phone clock, and a link can be hand-made; the PM reviewing
+// the week is the check. A shared server with real sign-ins is the upgrade past that.
 
-// ponytail: 500 is shape()'s cap on every saved list, so a day past 500 people would be cut on reload.
-// Raise both together if a site ever gets that big.
-export const MIN_ON_SITE = 2, MAX_ON_SITE = 500; // at least the superintendent and one worker
-export const clockRow = (name = '') => ({ id: uid(), name, in: '', out: '', nameAt: 0, inAt: 0, outAt: 0 });
-const change = (p, f, v) => Object.assign(p, { [f]: v, [f + 'At']: Date.now() }); // the newer value of each field wins a merge
-const removed = ps => ps.map(p => ({ id: p.id, at: boxVersion(p) })); // a later change on the other phone brings a box back
-const used = p => !!(p.name.trim() || p.in || p.out);
-export const clockMin = p => (p.in && p.out ? span(p.in, p.out) : 0); // an out time before the in time is an overnight shift
-// One box per person: new boxes go on the end, extra ones come off the end.
-// lost counts removed boxes that had something in them, so the screen can ask first.
-export function headcount(list, n) {
-  n = Math.min(MAX_ON_SITE, Math.max(MIN_ON_SITE, Math.floor(n) || MIN_ON_SITE));
-  return { list: n <= list.length ? list.slice(0, n) : [...list, ...Array.from({ length: n - list.length }, () => clockRow())], lost: list.slice(n).filter(used).length };
-}
-// The latest earlier day with names on its clock, for "Same people as".
-const lastClock = day => Object.keys(R).filter(d => d < day && R[d].updatedAt && R[d].clock.some(p => p.name.trim())).sort().at(-1);
+export const shiftMin = s => (s.in && s.out ? span(s.in, s.out) : 0); // an out time before the in time is an overnight shift
+export const monday = d => addDays(d, -((new Date(d + 'T12:00').getDay() + 6) % 7)); // weeks run Monday to Sunday
+const started = s => new Date(`${s.date}T${s.in}`).getTime();
+const byTime = (a, b) => started(a) - started(b);
+const h2 = m => (m / 60).toFixed(2); // payroll hours: 7h 45m is 7.75
+const total = ss => ss.reduce((n, s) => n + shiftMin(s), 0);
+// The shift this phone is clocked in on. One open longer than any real shift (16 hours) was a missed
+// clock-out: the next tap starts a new shift, and the PM fills in the missing time.
+const onShift = (now = Date.now()) => MY.filter(s => !s.out && now - started(s) < 16 * 36e5).sort(byTime).at(-1);
+const deviceOf = S => S.device || ((S.device = uid()), save(KEYS.settings, S), S.device);
 
-function personLine(p) {
-  if (!p) return '';
-  if (p.in && p.out) return L('{w} worked', { w: fmtMin(clockMin(p)) });
-  return p.in ? L('On site since {time}', { time: t12(p.in) }) : L('Not clocked in yet');
-}
-function clockStats(r) {
-  const inn = r.clock.filter(p => p.in), on = inn.filter(p => !p.out).length;
-  return `<div class="stat"><b>${on}</b> <span>${L('On site')}</span></div>
-    <div class="stat"><b>${inn.length}<small> / ${r.clock.length}</small></b> <span>${L('Clocked in')}</span></div>
-    <div class="stat"><b>${hrs(r.clock.reduce((n, p) => n + clockMin(p), 0) / 60)}</b> <span>${L('Hours')}</span></div>`;
-}
-
-function clockView(S, day) {
-  const r = rep(S, day);
-  // Two boxes to start, the first for the superintendent. Not saved until someone types or taps.
-  if (r.clock.length < MIN_ON_SITE) r.clock = headcount(r.clock.length ? r.clock : [clockRow(r.super)], MIN_ON_SITE).list;
-  const names = [r.super, S.super, S.me, ...S.crews.flatMap(c => [c.lead, ...roster(S, c.name)])];
-  const prev = !r.clock.some(p => p.in || p.out) && lastClock(day), now = day === today();
-  $('app').innerHTML = dateBar(day, 'clock') + `
-    <section class="card"><h2>${L('Time clock')}</h2>
-      <label class="field headcount"><span>${L('People on site')}</span>
-        <input type="number" inputmode="numeric" min="${MIN_ON_SITE}" max="${MAX_ON_SITE}" step="1" value="${r.clock.length}" data-headcount></label>
-      <p class="hint">${L('Type how many people are on site, the superintendent included (2 or more). Each person gets a box below.')}</p>
-      <p class="hint warn-note">${L('Signed in: tap the padlock before handing this phone to workers.')}</p>
-      <div class="stats three" id="clockStats">${clockStats(r)}</div>
-      ${now ? `<div class="btns"><button class="btn" data-act="cAll" data-v="in">${L('Everyone in')}</button><button class="btn" data-act="cAll" data-v="out">${L('Everyone out')}</button></div>` : ''}
-      ${prev ? `<button class="link" data-act="cSame">${esc(L('Same people as {date}', { date: niceDate(prev) }))}</button>` : ''}
-    </section>
-    <div id="clockPeople">${r.clock.map((p, i) => personCard(r, p, i, day)).join('')}</div>
-    ${datalist('people', names)}
-    <p class="hint">${esc(L("Times are saved on this phone with the {date} daily report, which goes to the PM. Clock in on the superintendent's phone or the site tablet.", { date: niceDate(day) }))}</p>`;
-  $('bar').innerHTML = `<div class="bar-in"><button class="btn primary big" data-act="cAdd">${L('+ Add a person')}</button>
-    <button class="btn more" data-act="cMenu" aria-label="${L('More actions')}">⋯</button></div>`;
+function clockView(S) {
+  const on = onShift(), mon = monday(today());
+  const week = MY.filter(s => s.date >= mon).sort(byTime), last = MY.filter(s => s.date >= addDays(mon, -7) && s.date < mon);
+  const missed = MY.filter(s => !s.out && s !== on && s.date >= addDays(mon, -7)).sort(byTime).at(-1);
+  const row = s => `<dt>${esc(niceDate(s.date))}</dt><dd>${s.out ? `${esc(L('{start} to {stop}', { start: t12(s.in), stop: t12(s.out) }))} · ${esc(L('{n} hrs', { n: h2(shiftMin(s)) }))}`
+    : `${esc(t12(s.in))} · ${s === on ? L('On the clock') : `<span class="pill" data-tone="warn">${L('No clock-out')}</span>`}`}</dd>`;
+  $('app').innerHTML = `<section class="card"><h2>${L('Time clock')}</h2>
+      ${field(L('Your name'), 's.worker', S.worker, { ph: L('First and last name') })}
+      <p class="clock-now${on ? ' on' : ''}">${esc(on ? L('Clocked in since {time}', { time: t12(on.in) }) : L('Not clocked in'))}</p>
+      ${missed ? `<p class="hint">${esc(L('No clock-out on {date}. The PM will fix that shift.', { date: niceDate(missed.date) }))}</p>` : ''}</section>
+    <section class="card"><h2>${L('This week')}</h2>
+      ${week.length ? `<dl class="kv">${week.map(row).join('')}</dl>` : `<p class="hint">${L('No hours yet this week.')}</p>`}
+      <p class="out">${esc(L('Week total: {n} hrs', { n: h2(total(week)) }))} · ${esc(L('Last week: {n} hrs', { n: h2(total(last)) }))}</p></section>
+    <p class="hint">${L('Each Clock in and Clock out opens a text to the PM. Send it every time: it carries your last two weeks, so a missed text catches up. Only the PM can change hours.')}</p>`;
+  $('bar').innerHTML = `<div class="bar-in"><button class="btn primary big" data-act="hTap">${on ? L('Clock out') : L('Clock in')}</button>
+    <button class="btn more" data-act="hMenu" aria-label="${L('More actions')}">⋯</button></div>`;
 }
 
-function personCard(r, p, i, day) {
-  const now = day === today(); // tap-to-stamp only on today's clock; another day's times are typed
-  const who = L('Person {n}', { n: i + 1 });
-  const stampBtn = (f, label, primary) => p[f] || !now
-    ? `<input type="time" data-k="r.clock.${i}.${f}" value="${esc(p[f])}" aria-label="${esc(`${label} · ${who}`)}">`
-    : `<button class="btn${primary ? ' primary' : ''}" data-act="cStamp" data-i="${i}" data-v="${f}" aria-label="${esc(`${label} · ${who}`)}">${esc(label)}</button>`;
-  return `<section class="card person">
-      <div class="row1"><span class="label">${esc(who)}</span>
-        <button class="link danger" data-act="cDel" data-i="${i}" aria-label="${esc(`${L('Remove')} · ${who}`)}"${r.clock.length > MIN_ON_SITE ? '' : ' hidden'}>${esc(L('Remove'))}</button></div>
-      ${field(L('Name'), `r.clock.${i}.name`, p.name, { list: 'people' })}
-      <div class="grid two"><div class="field"><span>${L('In')}</span>${stampBtn('in', L('Clock in'), true)}</div>
-        <div class="field"><span>${L('Out')}</span>${stampBtn('out', L('Clock out'), !!p.in)}</div></div>
-      <p class="out" data-out="person" data-i="${i}">${esc(personLine(p))}</p></section>`;
+// The text to the PM: this phone's last two weeks, under the name typed now (a fixed typo follows).
+async function sendMine(S, s, what) {
+  const who = S.worker.trim(), since = addDays(today(), -13);
+  const url = linkTo('tasks.html', await pack({ v: 1, kind: 'hours', shifts: MY.filter(x => x.date >= since).map(x => ({ ...x, who })) }));
+  const text = what === 'in' ? `${who} clocked in at ${t12(s.in)}, ${dayEn(s.date)}.`
+    : what === 'out' ? `${who} clocked out at ${t12(s.out)}, ${dayEn(s.date)}: ${h2(shiftMin(s))} hrs.` : `${who}: hours for the last two weeks.`;
+  sendSheet({ title: L('Send your hours to the PM'), url, text: `${text} Open the link on the PM's phone to log it.` });
 }
 
-// The people-on-site box: whatever number is typed, that many boxes (2 at the least). Boxes are added
-// and dropped in place: redrawing the screen here would swallow the tap that moved focus off the box.
-export async function headcountChanged(el, S, day) {
-  const r = rep(S, day), n = el.value.trim(), next = headcount(r.clock, +n);
-  const lost = r.clock.length - next.list.length;
-  if (n && next.list.length !== r.clock.length && (!next.lost || await ask(L('Remove the last {n} people and their times?', { n: lost }), L('Remove'), 'danger'))) {
-    if (+n > MAX_ON_SITE) toast(L('Up to {n} people per day', { n: MAX_ON_SITE }));
-    r.clockGone.push(...removed(r.clock.slice(next.list.length))); // removed here, removed on the other phone too
-    r.clock = next.list;
-    r.updatedAt = Date.now();
-    persist();
-    const list = $('clockPeople'); // gone if the screen changed while the question was open
-    if (list) {
-      while (list.children.length > r.clock.length) list.lastElementChild.remove();
-      list.insertAdjacentHTML('beforeend', r.clock.slice(list.children.length).map((p, k, add) => personCard(r, p, r.clock.length - add.length + k, day)).join(''));
-      for (const b of list.querySelectorAll('[data-act=cDel]')) b.hidden = r.clock.length <= MIN_ON_SITE;
-      $('clockStats').innerHTML = clockStats(r);
-    }
+// A worker's link opened on the PM's phone: new shifts are added, and a time the PM hasn't changed follows
+// the worker's phone (a clock-out since, a fixed name). A shift the PM removed stays removed, and a link
+// only speaks for shifts its own phone made. Returns what changed.
+export function importShifts(log, shifts) {
+  let added = 0, updated = 0;
+  for (const s of shifts) {
+    if (!s.device) continue;
+    const m = log.find(x => x.id === s.id);
+    if (!m) { log.push({ ...s, edited: { in: false, out: false }, gone: false }); added++; continue; }
+    if (m.gone || m.device !== s.device) continue;
+    const before = JSON.stringify(m);
+    m.who = s.who;
+    if (!m.edited.in) m.in = s.in;
+    if (!m.edited.out && s.out) m.out = s.out; // an older text opened late never undoes a clock-out
+    if (JSON.stringify(m) !== before) updated++;
   }
-  el.value = r.clock.length; // a cleared, cancelled or out-of-range entry shows the real count again
+  return { added, updated };
+}
+// Returns the latest day in the link, to open that week.
+export function openHours(data) {
+  const inc = (Array.isArray(data.shifts) ? data.shifts : []).slice(0, 200).map(normShift).filter(Boolean);
+  if (!inc.length) { toast('That link has no hours in it', 'bad'); return ''; }
+  const { added, updated } = importShifts(CREW, inc);
+  keep(KEYS.crewHours, CREW);
+  const who = inc.at(-1).who || 'the crew';
+  toast(added || updated ? `Hours from ${who}: ${added} new, ${updated} updated` : `Hours from ${who} were already logged`);
+  return inc.map(s => s.date).sort().at(-1);
+}
+
+// ---------- crew timesheet (the PM's phone, behind the passcode; the English office record) ----------
+
+const weekOf = day => { const mon = monday(day), sun = addDays(mon, 6); return CREW.filter(s => !s.gone && s.date >= mon && s.date <= sun).sort(byTime); };
+// One timesheet per person, by name as typed (any case), in name order.
+export function byPerson(shifts) {
+  const m = new Map();
+  for (const s of shifts) {
+    const k = s.who.toLowerCase();
+    if (!m.has(k)) m.set(k, { who: s.who || 'Name not set', shifts: [] });
+    m.get(k).shifts.push(s);
+  }
+  return [...m.values()].map(p => ({ ...p, min: total(p.shifts) })).sort((a, b) => a.who.localeCompare(b.who));
+}
+const edited = s => s.edited.in || s.edited.out;
+const shiftLine = s => `${s.out ? `${h2(shiftMin(s))} hrs` : 'No clock-out'}${edited(s) ? ' · edited' : ''}`;
+const crewStats = week => `<div class="stat"><b>${byPerson(week).length}</b><span>People</span></div>
+  <div class="stat"><b>${h2(total(week))}</b><span>Hours</span></div>
+  <div class="stat"><b class="${week.some(s => !s.out) ? 'warn' : ''}">${week.filter(s => !s.out).length}</b><span>Open shifts</span></div>`;
+
+function crewView(S, day) {
+  const mon = monday(day), week = weekOf(day), people = byPerson(week);
+  const shiftRow = s => `<div class="shift"><div class="row1"><b>${esc(dayEn(s.date))}</b><span class="out" data-out="shift" data-id="${s.id}">${shiftLine(s)}</span>
+      <button class="x" data-act="hDel" data-id="${s.id}" aria-label="Remove the ${esc(dayEn(s.date))} shift">✕</button></div>
+    <div class="grid two"><label class="field"><span>In</span><input type="time" data-k="h.${s.id}.in" value="${s.in}"></label>
+      <label class="field"><span>Out</span><input type="time" data-k="h.${s.id}.out" value="${s.out}"></label></div></div>`;
+  $('app').innerHTML = `<div class="datebar">
+      <button class="nav-btn" data-go="clock/${addDays(mon, -7)}" aria-label="Previous week">‹</button>
+      <label class="day">${esc(dayEn(mon))}<small>${mon === monday(today()) ? 'This week' : mon < today() ? 'Past week' : 'Week ahead'} · to ${esc(dayEn(addDays(mon, 6)))}</small>
+        <input type="date" value="${mon}" data-pick="clock" aria-label="Pick a week"></label>
+      <button class="nav-btn" data-go="clock/${addDays(mon, 7)}" aria-label="Next week">›</button></div>
+    <div class="stats three" id="hoursStats">${crewStats(week)}</div>
+    ${people.map((p, i) => `<section class="card person"><div class="row1"><h2>${esc(p.who)}</h2><b class="total" data-out="who" data-i="${i}">${h2(p.min)} hrs</b></div>
+      ${p.shifts.map(shiftRow).join('')}
+      <button class="link" data-act="hAdd" data-v="${esc(p.who)}">+ Add a shift for ${esc(p.who)}</button></section>`).join('')
+    || `<div class="empty"><h2>No hours logged this week</h2><p>Each worker's Clock in and Clock out texts you a link. Tap it on this phone to log their hours here.</p></div>`}
+    <p class="hint">Only this phone changes hours. Times you change are marked edited and stay as you set them when that worker's next text comes in.</p>`;
+  $('bar').innerHTML = `<div class="bar-in"><button class="btn primary big" data-act="hSend">Send to accountant</button>
+    <button class="btn more" data-act="hPmMenu" aria-label="More actions">⋯</button></div>`;
+}
+
+// Typing a time on the timesheet: data-k="h.<shift id>.in|out". A shift keeps its clock-in; remove it instead.
+export function hoursInput(el, S, day) {
+  const [, id, f] = el.dataset.k.split('.'), s = CREW.find(x => x.id === id);
+  if (!s || !['in', 'out'].includes(f) || (f === 'in' && !el.value)) return;
+  s[f] = el.value;
+  s.edited[f] = true;
+  keep(KEYS.crewHours, CREW);
+  const week = weekOf(day), people = byPerson(week);
+  for (const o of $('app').querySelectorAll('[data-out]')) {
+    if (o.dataset.out === 'shift') o.textContent = shiftLine(CREW.find(x => x.id === o.dataset.id));
+    if (o.dataset.out === 'who') o.textContent = `${h2(people[o.dataset.i]?.min ?? 0)} hrs`;
+  }
+  $('hoursStats').innerHTML = crewStats(week);
+}
+
+function addShift(day, who = '') {
+  const mon = monday(day), d0 = today() >= mon && today() <= addDays(mon, 6) ? today() : mon;
+  const d = sheet(`<h3>Add a shift</h3><div class="grid">
+      <label class="field wide"><span>Name</span><input name="who" value="${esc(who)}" list="crewNames" autocomplete="off"></label>
+      <label class="field"><span>Date</span><input type="date" name="date" value="${d0}"></label><span></span>
+      <label class="field"><span>In</span><input type="time" name="in"></label><label class="field"><span>Out</span><input type="time" name="out"></label></div>
+    ${datalist('crewNames', byPerson(CREW.filter(s => !s.gone)).map(p => p.who))}
+    <div class="btns"><button class="btn primary" data-save>Add the shift</button></div>`);
+  d.querySelector('[data-save]').onclick = () => {
+    const v = n => d.querySelector(`[name=${n}]`).value;
+    const s = normShift({ id: uid(), who: v('who'), date: v('date'), in: v('in'), out: v('out'), edited: { in: true, out: true } });
+    if (!s?.who) return toast('Add the name, the date and the clock-in time', 'bad');
+    CREW.push(s);
+    keep(KEYS.crewHours, CREW);
+    d.close();
+    go('clock/' + s.date);
+  };
+}
+
+// Accountant's copy: a spreadsheet and a PDF of the week. A leading = + - @ is quoted so a typed name
+// can't run as a spreadsheet formula.
+const cell = v => { const s = String(v).replace(/^[=+\-@\t\r]/, "'$&"); return /[",\r\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s; };
+const weekday = d => new Date(d + 'T12:00').toLocaleDateString('en-US', { weekday: 'short' });
+export function timesheetCsv(people) {
+  const rows = [['Name', 'Date', 'Day', 'Clock in', 'Clock out', 'Hours', 'Note']];
+  for (const p of people) {
+    for (const s of p.shifts) rows.push([p.who, s.date, weekday(s.date), t12(s.in), t12(s.out), s.out ? h2(shiftMin(s)) : '', [!s.out && 'No clock-out', edited(s) && 'Edited by PM'].filter(Boolean).join('; ')]);
+    rows.push([p.who, '', '', '', 'Week total', h2(p.min), '']);
+  }
+  rows.push(['All crew', '', '', '', 'Week total', h2(people.reduce((n, p) => n + p.min, 0)), '']);
+  return rows.map(r => r.map(cell).join(',')).join('\r\n') + '\r\n';
+}
+const timesheetPdf = (S, mon, people) => makePdf('Weekly timesheet', letterhead(S, `Week of ${dayEn(mon)} to ${dayEn(addDays(mon, 6))}`), [
+  ...people.map(p => [`${p.who} · ${h2(p.min)} hrs`, p.shifts.map(s => [dayEn(s.date),
+    `${t12(s.in)} to ${s.out ? `${t12(s.out)} · ${h2(shiftMin(s))} hrs` : '(no clock-out)'}${edited(s) ? ' · edited by PM' : ''}`])]),
+  ['Week total', [['All crew', `${people.length} ${people.length === 1 ? 'person' : 'people'} · ${h2(people.reduce((n, p) => n + p.min, 0))} hrs`], ['Approved by', S.me || S.pm]]],
+], `${COMPANIES} · Timesheet week of ${mon}`);
+
+async function toAccountant(S, day) {
+  const mon = monday(day), week = weekOf(day), people = byPerson(week), gaps = week.filter(s => !s.out).length;
+  if (!week.length) return toast('No hours logged this week', 'bad');
+  if (gaps && !await ask(`${gaps} shift${gaps === 1 ? ' has' : 's have'} no clock-out and count as 0 hours. Fill in the out times first, or send anyway?`, 'Send anyway')) return;
+  const name = `Timesheet week of ${mon}`;
+  const files = [new File(['﻿' + timesheetCsv(people)], `${name}.csv`, { type: 'text/csv' }), new File([timesheetPdf(S, mon, people)], `${name}.pdf`, { type: 'application/pdf' })];
+  // Phones get the share sheet (Mail to the accountant, Save to Files); computers download both files.
+  if (matchMedia('(pointer: coarse)').matches && navigator.canShare?.({ files })) {
+    try { return await navigator.share({ files, title: name }); } catch (e) { if (e.name === 'AbortError') return; }
+  }
+  for (const f of files) download(f, f.name);
 }
 
 export const OUT = {
   lh: (r, d) => { const c = r.floors[d.f].crews[d.c]; return `Total labor-hours: ${hrs(crewHours(c))}${c.laborFromTasks || c.labor ? ' (from the task sheets)' : c.start && c.stop ? ` (${c.workers} × ${fmtMin(span(c.start, c.stop))})` : ''}`; },
   late: (r, d) => lateLine(r.next[d.i]),
-  person: (r, d) => personLine(r.clock[d.i]),
 };
 
 // ---------- daily report ----------
@@ -162,16 +239,13 @@ const sec = (id, num, title, body, badge = '') => `<details class="card sec" id=
   <summary><h2>${num ? `<span class="num">${num}</span>` : ''}${title}</h2>${badge}</summary><div class="sec-body">${body}</div></details>`;
 const remove = (list, i, label) => `<button class="link danger" data-act="del" data-list="${list}" data-i="${i}">Remove ${label}</button>`;
 const count = (n, label, tone = '') => (n ? `<span class="pill" data-tone="${tone}">${n} ${label}</span>` : '');
-const clocked = r => r.clock.filter(used);
-const clockLine = r => { const ps = clocked(r); return ps.length ? `Time clock: ${ps.length} ${ps.length === 1 ? 'person' : 'people'}, ${hrs(ps.reduce((n, p) => n + clockMin(p), 0) / 60)} hrs` : 'Time clock: nobody clocked in yet'; };
 
 function reportView(S, day) {
   const r = rep(S, day), late = r.next.filter(isLate).length, pend = waiting(r).length;
   $('app').innerHTML = dateBar(day, 'report') + `<div id="summary" class="stack">${summary(r)}</div>
     <section class="card"><div class="grid">
       ${field('Superintendent', 'r.super', r.super)}${field('Shift start', 'r.shiftStart', r.shiftStart, { type: 'time' })}${field('Shift end', 'r.shiftEnd', r.shiftEnd, { type: 'time' })}
-    </div><p class="hint">${r.submittedAt ? `Sent to the PM ${stampEn(r.submittedAt)}` : 'Not sent to the PM yet'}${r.pmReview ? ` · PM reviewed: ${esc(r.pmReview)}` : ''}</p>
-    <p class="hint"><a href="#clock/${day}">${clockLine(r)}</a></p></section>
+    </div><p class="hint">${r.submittedAt ? `Sent to the PM ${stampEn(r.submittedAt)}` : 'Not sent to the PM yet'}${r.pmReview ? ` · PM reviewed: ${esc(r.pmReview)}` : ''}</p></section>
     ${sec('sum', 1, 'Overall status & today’s results', `${seg('r.status', r.status, STATUS)}
       ${field('Most important results today, planned work missed, and effect on the job', 'r.results', r.results, { rows: 4 })}`,
       r.status ? `<span class="pill" data-tone="${STATUS.find(s => s[0] === r.status)?.[1] || ''}">${esc(r.status)}</span>` : '')}
@@ -264,15 +338,9 @@ function crewBlock(S, r, fi, ci, c) {
 
 // ---------- PDF and the review folder ----------
 
-const clockRows = r => clocked(r).map(p => [p.name || `Person ${r.clock.indexOf(p) + 1}`,
-  [p.in && `in ${t12(p.in)}`, p.out && `out ${t12(p.out)}`, clockMin(p) && `${fmtMin(clockMin(p))} on site`].filter(Boolean).join(' · ') || 'no times']);
-const clockTotal = r => hrs(r.clock.reduce((n, p) => n + clockMin(p), 0) / 60);
-
 const recordSecs = r => [
   ['Daily summary & PM actions', [['Report date', dayEn(r.date)], ['Superintendent', r.super],
-    ['Shift / work hours', r.shiftStart && `${t12(r.shiftStart)} to ${t12(r.shiftEnd)}`], ['Submitted at', stampEn(r.submittedAt)], ['Labor-hours', hrs(laborHrs(r))],
-    ['People on site', clocked(r).length], ['Clocked hours', clocked(r).length && clockTotal(r)]]],
-  ['Time clock', clockRows(r)],
+    ['Shift / work hours', r.shiftStart && `${t12(r.shiftStart)} to ${t12(r.shiftEnd)}`], ['Submitted at', stampEn(r.submittedAt)], ['Labor-hours', hrs(laborHrs(r))]]],
   ['1 Overall status & today’s results', [['Status', r.status], ['Results', r.results]]],
   ['2 Good results & lessons to repeat', [['Notes', r.wins]]],
   ['3 Site issues, concerns & coordination', [['Issues', r.issues], ['Who was notified / when', r.notified]]],
@@ -292,10 +360,8 @@ const recordSecs = r => [
 ];
 
 const record = (S, r) => makePdf('Superintendent daily report', letterhead(S, dayEn(r.date)), recordSecs(r), `${COMPANIES} · Daily report ${r.date}`);
-const clockPdf = (S, r) => makePdf('Time clock', letterhead(S, dayEn(r.date)),
-  [[`Clock in / out · ${dayEn(r.date)}`, [...clockRows(r), ['Total', `${clocked(r).length} people · ${clockTotal(r)} hrs`]]]], `${COMPANIES} · Time clock ${r.date}`);
 const fileReport = (S, r) => { if (!S.folderUrl) return; r.filedAt = Date.now(); persist(); return fileAway(S, { date: r.date, name: `Daily Report ${r.date}`, bytes: record(S, r), v: r.updatedAt }); };
-// A sent report edited afterwards (a clock-out after sending, say) is filed again when you leave it.
+// A sent report edited afterwards is filed again when you leave it.
 export const fileReportIfChanged = (S, day) => { const r = R[day]; return r?.submittedAt && r.updatedAt > r.filedAt && fileReport(S, r); };
 
 // ---------- report links ----------
@@ -337,14 +403,15 @@ async function send(S, day) {
   sendSheet(isPM(S)
     ? { title: `PM review · ${dayEn(r.date)}`, url, text: `PM review of the ${dayEn(r.date)} daily report: ${answered} of ${asked} decisions answered.` }
     : { title: `Daily report · ${dayEn(r.date)}`, url,
-      text: `Daily report ${dayEn(r.date)}, ${S.project} (${COMPANIES}): ${r.status}. ${active(r).length} crew sections, ${hrs(laborHrs(r))} labor-hrs, ${clocked(r).length} people on the time clock.`
+      text: `Daily report ${dayEn(r.date)}, ${S.project} (${COMPANIES}): ${r.status}. ${active(r).length} crew sections, ${hrs(laborHrs(r))} labor-hrs.`
         + (asked - answered ? ` ${asked - answered} decision${asked - answered === 1 ? ' needs' : 's need'} you${firstDue ? ' by ' + when(firstDue) : ''}.` : '') });
   fileReport(S, r);
 }
 
 // ---------- screens, actions and typing (the app shell hands these over) ----------
 
-export const renderOffice = (v, S, day) => (v !== 'clock' && !unlocked() ? go('report/' + day) : (v === 'clock' ? clockView : reportView)(S, day));
+// The time clock is the crew timesheet on the PM's phone (tasks.html asks for the passcode first), a worker's own clock anywhere else.
+export const renderOffice = (v, S, day) => (v === 'clock' ? (isPM(S) && unlocked() ? crewView : clockView)(S, day) : !unlocked() ? go('report/' + day) : reportView(S, day));
 
 const menu = items => sheet(`<h3>${L('More')}</h3><div class="menu">${items.filter(Boolean).map(([a, label, cls]) => `<button class="btn ${cls || ''}" data-act="${a}">${esc(label)}</button>`).join('')}</div>`);
 
@@ -368,7 +435,7 @@ export async function reportAct(a, el, S, day, v) {
       break;
     }
     case 'carry': {
-      const prev = Object.keys(R).filter(d => d < day && R[d].updatedAt && written(R[d])).sort().at(-1);
+      const prev = Object.keys(R).filter(d => d < day && R[d].updatedAt).sort().at(-1);
       if (!prev) return toast('No earlier report on this phone to copy from');
       const p = R[prev], copy = x => structuredClone(x);
       Object.assign(r, { super: r.super || p.super, shiftStart: r.shiftStart || p.shiftStart, shiftEnd: r.shiftEnd || p.shiftEnd });
@@ -389,73 +456,44 @@ export async function reportAct(a, el, S, day, v) {
     case 'paste': return pasteSheet(code => go('p=' + code));
     case 'settings': return go('settings');
     case 'clear':
-      if (!await ask(`Clear everything in the ${dayEn(day)} report, time clock included?`, 'Clear', 'danger')) return;
+      if (!await ask(`Clear everything in the ${dayEn(day)} report?`, 'Clear', 'danger')) return;
       delete R[day];
       persist();
       return renderOffice(v, S, day);
 
-    // time clock
-    case 'cStamp': case 'cAll': {
-      if (day !== today()) { toast(L("New day: opening today's time clock")); return go('clock/' + today()); } // a screen left open overnight
-      if (a === 'cAll') return clockAll(r, val, v, S, day);
-      const p = r.clock[i];
-      if (val === 'out' && !p.in) return toast(L('Clock in first'));
-      change(p, val, nowHM());
+    // time clock: a worker's own phone
+    case 'hTap': {
+      if (!S.worker.trim()) { toast(L('Type your name first'), 'bad'); return $('app').querySelector('[data-k="s.worker"]')?.focus(); }
+      const on = onShift(), s = on || normShift({ id: uid(), device: deviceOf(S), who: S.worker, date: today(), in: nowHM() });
+      if (on) on.out = nowHM(); else MY.push(s);
+      keep(KEYS.hours, MY);
       navigator.vibrate?.(12);
-      break;
+      renderOffice(v, S, day);
+      return sendMine(S, s, on ? 'out' : 'in');
     }
-    case 'cAdd':
-      if (r.clock.length >= MAX_ON_SITE) return toast(L('Up to {n} people per day', { n: MAX_ON_SITE }));
-      r.clock.push(clockRow());
-      break;
-    case 'cDel': {
-      const p = r.clock[i];
-      if (r.clock.length <= MIN_ON_SITE) return;
-      if (used(p) && !await ask(L('Remove {name} and their times?', { name: p.name.trim() || L('Person {n}', { n: i + 1 }) }), L('Remove'), 'danger')) return;
-      r.clockGone.push(...removed([p]));
-      r.clock.splice(i, 1);
-      break;
+    case 'hResend': return S.worker.trim() ? sendMine(S, null, 'all') : toast(L('Type your name first'), 'bad');
+    case 'hMenu': return menu([MY.length && ['hResend', L('Send my hours to the PM again')], ['paste', L('Open a link someone sent you')], !unlocked() && ['lockBtn', L('Office sign-in')]]);
+    // the PM's crew timesheet
+    case 'hSend': return toAccountant(S, day);
+    case 'hAdd': return addShift(day, val);
+    case 'hDel': {
+      const s = CREW.find(x => x.id === el.dataset.id);
+      if (!s || !await ask(`Remove ${s.who ? `${s.who}'s` : 'this'} ${dayEn(s.date)} shift? A later text from their phone won't bring it back.`, 'Remove', 'danger')) return;
+      s.gone = true;
+      keep(KEYS.crewHours, CREW);
+      return renderOffice(v, S, day);
     }
-    case 'cSame': { // fills empty boxes and adds who's missing; names already typed today stay
-      const prev = lastClock(day);
-      if (!prev) return;
-      const have = new Set(r.clock.map(p => p.name.trim().toLowerCase()).filter(Boolean));
-      const add = [...new Set(R[prev].clock.map(p => p.name.trim()).filter(n => n && !have.has(n.toLowerCase())))];
-      for (const p of r.clock) if (add.length && !p.name.trim() && !p.in && !p.out) change(p, 'name', add.shift());
-      r.clock.push(...add.slice(0, MAX_ON_SITE - r.clock.length).map(n => clockRow(n)));
-      toast(L('Same people as {date}', { date: niceDate(prev) }));
-      break;
-    }
-    case 'cMenu': {
-      const prev = !r.clock.some(p => p.in || p.out) && lastClock(day);
-      return menu([prev && ['cSame', L('Same people as {date}', { date: niceDate(prev) })], ['cPdf', L('Save the time clock as PDF')],
-        ['paste', L('Open a link someone sent you')], ['settings', L('Settings, crews and backup')]]);
-    }
-    case 'cPdf': return savePdf(`Time clock ${r.date}.pdf`, clockPdf(S, r));
+    case 'hPmMenu': return menu([['hAdd', 'Add a shift'], ['paste', 'Open a link someone sent you'], ['settings', 'Settings, crews and backup']]);
     default: return;
   }
   r.updatedAt = Date.now();
   persist();
   renderOffice(v, S, day);
-  if (a === 'cAdd') [...$('app').querySelectorAll('.person input[data-k$=".name"]')].at(-1)?.focus(); // ready for the new name
 }
 
-function clockAll(r, val, v, S, day) {
-  const named = r.clock.filter(p => p.name.trim());
-  const who = val === 'in' ? named.filter(p => !p.in) : r.clock.filter(p => p.in && !p.out);
-  if (!who.length) return toast(val === 'out' ? L('Nobody on site to clock out') : named.length ? L('Everyone named is already clocked in') : L('Type the names first'));
-  const now = nowHM();
-  for (const p of who) change(p, val, now);
-  toast(val === 'in' ? L('Clocked in: {n}', { n: who.length }) : L('Clocked out: {n}', { n: who.length }));
-  r.updatedAt = Date.now();
-  persist();
-  renderOffice(v, S, day);
-}
-
-// Typing in a report or time clock field: data-k="r.path.to.field".
+// Typing in a report field: data-k="r.path.to.field".
 export function applyInput(r, k, val) {
   setPath({ r }, k, val);
-  if (/^r\.clock\.\d+\.(name|in|out)$/.test(k)) getPath({ r }, k.replace(/\.\w+$/, ''))[k.split('.').at(-1) + 'At'] = Date.now(); // the newer value wins a merge
   if (/^r\.floors\.\d+\.crews\.\d+\.(start|stop|workers)$/.test(k)) { // typed hours take over from the sheets
     const c = getPath({ r }, k.replace(/\.\w+$/, ''));
     c.labor = 0; c.laborFromTasks = false;
@@ -468,7 +506,6 @@ export function reportInput(el, S, day) {
   persist();
   for (const o of $('app').querySelectorAll('[data-out]')) if (OUT[o.dataset.out]) o.textContent = OUT[o.dataset.out](r, o.dataset);
   if ($('summary')) $('summary').innerHTML = summary(r);
-  if ($('clockStats')) $('clockStats').innerHTML = clockStats(r);
 }
 
 // Remember which report sections are open across re-renders.

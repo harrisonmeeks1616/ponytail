@@ -6,7 +6,7 @@ company names (**H.A. Sack-Electrical**, **Sack Company-Electrical**) in its hea
 | Screen | Paper form | Who uses it |
 | --- | --- | --- |
 | Tasks | Electrical Task Sheet (2 pages) | Superintendent or PM assigns; crews check off steps and send results back |
-| Time clock | (new) | Everyone on site clocks in and out; the superintendent or PM sets how many people |
+| Time clock | (new) | Every hourly worker clocks in and out on their own phone; the PM keeps the weekly timesheet |
 | Daily report | Superintendent Daily Report (8 pages) | Superintendent fills it in; PM answers decisions and sends it back |
 
 `tasks.html` is the app; `report.mjs` holds the daily report and time clock; `index.html` and the old `report.html` just open the app.
@@ -16,7 +16,7 @@ receiver; the static app does not connect it automatically.
 ## Office passcode
 
 - The superintendent's parts open with a **4-digit office passcode**: the daily report, settings, and making
-  or changing task assignments. Crew task sheets and the time clock stay open to everyone. Sign in with the
+  or changing task assignments, plus the PM's crew hours. Crew task sheets and the time clock stay open to everyone. Sign in with the
   padlock in the header, the locked **Daily report** tab, or **Superintendent or PM? Sign in**. Signed out, the
   Tasks tab shows only the sheets sent to that phone.
 - The first office phone to sign in creates the code. Use the same code on the PM's and the superintendent's
@@ -33,16 +33,22 @@ receiver; the static app does not connect it automatically.
 
 ## Time clock
 
-- Open to everyone, no code needed. Times stay on the phone they are tapped on, so workers clock in on the
-  superintendent's phone or a site tablet, not their own. Tap the padlock first: a signed-in phone also opens
-  the daily report and settings (the clock screen reminds you while signed in).
-- **People on site:** type the number (2 or more: the superintendent and at least one worker). Each person
-  gets a box with a name, **Clock in** and **Clock out**. **+ Add a person** adds one; **Remove** takes one off.
-  Lowering the number asks first if a removed box has a name or times.
-- **Everyone in** stamps every named person who isn't in yet; **Everyone out** clocks out everyone on site.
-  **Same people as (date)** fills in the names from the last day with a clock.
-- The clock is saved with that day's daily report: it goes to the PM with **Send to PM**, prints in the report
-  PDF, and files with it. **⋯ → Save the time clock as PDF** makes a separate sheet.
+- **Workers (laborers and superintendents), on their own phone, no code:** open the app, tap **Time clock**,
+  type your name once, then tap **Clock in** when you start and **Clock out** when you leave. Times come from
+  the tap; nobody types or changes a time on a worker's phone. Each tap opens a text to the PM: send it
+  every time. The link inside carries that phone's last two weeks, so a text that never went out is caught up
+  by the next one. The screen shows this week's shifts and the Monday to Sunday total.
+- **Forgot to clock out:** a shift open longer than 16 hours counts as a missed clock-out. The next tap starts
+  a new shift, and the PM fills in the missing out time.
+- **The PM's phone** (**Settings → Your role → Project manager**, signed in): tapping a worker's link logs it
+  into **Crew hours**, a Monday to Sunday timesheet with each person's shifts and week total. Only this
+  screen changes hours: fix an in or out time, **+ Add a shift**, or remove one. Times the PM changes are
+  marked *edited* and stay as set when that worker's next text comes in; a removed shift stays removed.
+  Hours links opened on any other phone change nothing.
+- **Send to accountant** shares the week as a spreadsheet (CSV: name, date, in, out, hours, week totals) and
+  a PDF timesheet, through the phone's share sheet (Mail, Files) or as downloads on a computer. It warns
+  first if a shift has no clock-out. Hours are to two decimals (7h 45m is 7.75); an overnight shift counts on
+  the day it started; unpaid breaks are not taken out, so adjust a time if your payroll needs that.
 
 ## Put it online (one time, about 2 minutes)
 
@@ -83,7 +89,7 @@ Schwab Field Records/
 ## Spanish mode (crew screens and the time clock)
 
 - Tap **ES** in the header, or Settings → Language. A crew phone asks "English / Español" the first time it opens a sheet.
-- Every crew label, button and message, the sign-in pad and the time clock switch to Spanish (wording in `es.mjs`; a bilingual foreman can fix any phrase there). The daily report form itself stays in English, the PM's record; only the app around it (tabs, dates, menus) follows the phone's language.
+- Every crew label, button and message, the sign-in pad and the time clock switch to Spanish (wording in `es.mjs`; a bilingual foreman can fix any phrase there). The daily report form and the PM's crew hours stay in English, the office's record; only the app around it (tabs, dates, menus) follows the phone's language.
 - What people type is never translated. Notes show and print exactly as written, so a note typed in Spanish stays in Spanish for whoever reads it.
 - PDFs and review-folder copies are always the English form, with the notes as typed. The text message a Spanish-mode crew sends carries a Spanish line and an English line.
 
@@ -110,4 +116,4 @@ Schwab Field Records/
 
 ## Check
 
-`node --test tests/schwab-field-apps.test.js tests/schwab-review-folder.test.js tests/app-display-regressions.test.js` covers the link codec, merges, report roll-up, office passcode, time clock, PDF writer, upload queue and mocked receiver boundaries. Receiver checks do not exercise Google authorization, folder access or a live deployment.
+`node --test tests/schwab-field-apps.test.js tests/schwab-review-folder.test.js tests/app-display-regressions.test.js` covers the link codec, merges, report roll-up, office passcode, time clock and timesheet, PDF writer, upload queue and mocked receiver boundaries. Receiver checks do not exercise Google authorization, folder access or a live deployment.

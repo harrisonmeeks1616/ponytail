@@ -28,7 +28,7 @@ import {
   registerSW, dateBar, crewVar as cv, L, setLang, getLang, COMPANIES, letterhead,
   UNLOCK, hasPin, adoptPin, setPin, pinHash, tryPin, unlocked, signIn, signOut,
 } from './shared.mjs';
-import { renderOffice, reportAct, reportInput, openReport, fileReportIfChanged, reloadReports, sectionToggle, headcountChanged, hasReports } from './report.mjs';
+import { renderOffice, reportAct, reportInput, openReport, openHours, hoursInput, fileReportIfChanged, reloadReports, sectionToggle, hasReports } from './report.mjs';
 
 window.appStarted = true; // every file loaded (see the fallback above)
 registerSW();
@@ -83,9 +83,11 @@ function pickCrew(t, name) {
 // ---------- routing: #day/2026-10-03, #task/<uid>/<tab>, #clock/<day>, #report/<day>, #settings, #p=<link code> ----------
 
 // The passcode guards the superintendent's parts: the daily report, settings, and making or changing
-// assignments (any sheet this phone didn't receive). Crew sheets and the time clock are open to everyone.
+// assignments (any sheet this phone didn't receive). On the PM's phone the time clock is the crew
+// timesheet, so it is guarded too. Crew sheets and everyone else's time clock are open.
 const VIEWS = ['clock', 'report', 'settings'];
-const needsOffice = vw => ['report', 'settings'].includes(vw.v) || (vw.v === 'task' && find(vw.uid)?.origin !== 'link');
+const isPM = () => S.role === 'Project manager';
+const needsOffice = vw => ['report', 'settings'].includes(vw.v) || (vw.v === 'clock' && isPM()) || (vw.v === 'task' && find(vw.uid)?.origin !== 'link');
 
 function route() {
   // The sign-in pad guards one address: a repeat event for it changes nothing, moving on (back button, a link) closes it.
@@ -115,13 +117,15 @@ async function openCode(code) {
   // A crew phone (or a new office phone) learns the office's code from its first link. A phone with
   // office-made sheets of its own never does, so no link can lock it out of its own records.
   if (['task', 'result', 'day', 'report'].includes(data.kind) && !T.some(x => x.origin === 'mine') && !hasReports()) adoptPin(S, data.pin);
-  const forOffice = data.kind === 'report' || data.kind === 'day' || (data.kind === 'result' && find(data.task?.uid)?.origin !== 'link');
+  if (data.kind === 'hours' && !isPM()) { toast(L("Hours links are logged on the PM's phone.")); return location.replace('#clock/' + day); } // only the PM keeps and changes hours
+  const forOffice = data.kind === 'hours' || data.kind === 'report' || data.kind === 'day' || (data.kind === 'result' && find(data.task?.uid)?.origin !== 'link');
   if (forOffice && !office()) {
     const want = location.hash;
     if (!await passcode()) return location.hash === want && location.replace('#day/' + day);
   }
   if (data.kind === 'report') { const d = await openReport(data, S); return location.replace(d ? '#report/' + d : '#day/' + day); }
   if (data.kind === 'day') return importDay(data);
+  if (data.kind === 'hours') { const d = openHours(data); return location.replace('#clock/' + (d || day)); }
   const inc = normTask(data.task);
   let t = find(inc.uid), firstSheet = false;
   if (!inc.uid || !['task', 'result'].includes(data.kind)) { toast(L('That link has no task sheet in it'), 'bad'); return location.replace('#day/' + day); }
@@ -176,7 +180,7 @@ function header() {
   tabs.setAttribute('aria-label', L('Screens'));
   const here = { clock: 'clock', report: 'report', settings: '' }[view.v] ?? 'day';
   const locked = `<svg class="lock" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" aria-hidden="true">${LOCK.shut}</svg>`;
-  tabs.innerHTML = [['day', L('Tasks')], ['clock', L('Time clock')], ['report', L('Daily report')]]
+  tabs.innerHTML = [['day', L('Tasks')], ['clock', isPM() && on ? L('Crew hours') : L('Time clock')], ['report', L('Daily report')]]
     .map(([v, label]) => `<a href="#${v}/${day}"${v === here ? ' aria-current="page"' : ''}${v === 'report' && !on ? ` aria-label="${esc(`${label}, ${L('needs the office passcode')}`)}">${label}${locked}` : `>${label}`}</a>`).join('');
 }
 
@@ -506,7 +510,7 @@ async function act(a, el) {
     }
     case 'toggleLang': return act('lang', { dataset: { v: getLang() === 'es' ? 'en' : 'es' } });
     case 'lockBtn':
-      if (office()) { signOut(); toast(L('Office screens locked')); return needsOffice(view) ? go('day/' + day) : render(); } // the time clock stays open
+      if (office()) { signOut(); toast(L('Office screens locked')); return needsOffice(view) ? go('day/' + day) : render(); } // a worker's time clock stays open
       return (await passcode()) && go('day/' + day);
     case 'changePin': return passcode('change');
     case 'lang':
@@ -625,7 +629,7 @@ document.addEventListener('click', e => {
 const SHELL = new Set(['toggleLang', 'lang', 'lockBtn']); // header buttons work on every screen
 
 // The sign-in ran out (or another tab locked) while this screen was up: office screens and the office board
-// go back behind the passcode before anything is saved; the time clock and crew sheets stay and carry on.
+// go back behind the passcode before anything is saved; a worker's time clock and crew sheets stay and carry on.
 function stale() {
   if (document.body.classList.contains('office') === office()) return false;
   if (needsOffice(view) || view.v === 'board') { route(); return true; }
@@ -637,6 +641,7 @@ document.addEventListener('input', e => {
   const el = e.target, k = el.dataset.k;
   if (!k || stale()) return;
   if (k.startsWith('r.')) return reportInput(el, S, day);
+  if (k.startsWith('h.')) return hoursInput(el, S, day);
   const t = current();
   if (k === 't.date' && !/^\d{4}-\d{2}-\d{2}$/.test(el.value)) return; // every sheet needs a real day; a cleared or half-typed date would hide it
   setPath({ t, s: S }, k, readInput(el));
@@ -653,7 +658,6 @@ document.addEventListener('input', e => {
 document.addEventListener('change', e => {
   if (stale()) return;
   if (e.target.matches('[data-pick]') && e.target.value) go(`${e.target.dataset.pick || 'day'}/${e.target.value}`);
-  if (e.target.matches('[data-headcount]')) headcountChanged(e.target, S, day);
   if (e.target.matches('[data-restore]') && e.target.files[0]) restore(e.target.files[0]);
   if (e.target.dataset.k === 't.date' && /^\d{4}-\d{2}-\d{2}$/.test(e.target.value)) day = e.target.value; // moved to another day
 });

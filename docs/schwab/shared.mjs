@@ -5,10 +5,10 @@
 
 import ES from './es.mjs';
 
-// The passcode and the time clocks also keep keys of their own: a tab still running the version before
-// them (phones keep old tabs open for days) rewrites settings and reports without those fields, and an
-// old backup has neither. Backups and restores carry every key here.
-export const KEYS = { settings: 'schwab.settings', tasks: 'schwab.tasks', reports: 'schwab.reports', pin: 'schwab.pin', clocks: 'schwab.clocks' };
+// The passcode also keeps a key of its own: a tab still running the version before it (phones keep old
+// tabs open for days) rewrites settings without it, and an old backup has none. hours: this phone's own
+// clock-ins; crewHours: the PM's timesheet of everyone's. Backups and restores carry every key here.
+export const KEYS = { settings: 'schwab.settings', tasks: 'schwab.tasks', reports: 'schwab.reports', pin: 'schwab.pin', hours: 'schwab.hours', crewHours: 'schwab.crewHours' };
 export const COMPANY = 'H.A. Sack-Electrical', COMPANY_ALT = 'Sack Company-Electrical', COMPANIES = `${COMPANY} · ${COMPANY_ALT}`;
 // The top lines of every PDF: who did the work, then the job.
 export const letterhead = (s, more = '') => `${COMPANIES}\n${[s.project, s.site, more].filter(Boolean).join(' · ')}`;
@@ -57,9 +57,9 @@ export function save(key, val) {
   try { localStorage.setItem(key, JSON.stringify(val)); return true; } catch { return false; }
 }
 
-export const SETTINGS_TPL = { lang: '', me: '', role: '', super: '', pm: '', project: '', site: '', floors: [''], crews: [{ name: '', lead: '', members: '' }], checks: [''], folderUrl: '', siteCode: '', pin: '' };
+export const SETTINGS_TPL = { lang: '', me: '', role: '', super: '', pm: '', project: '', site: '', floors: [''], crews: [{ name: '', lead: '', members: '' }], checks: [''], folderUrl: '', siteCode: '', pin: '', worker: '', device: '' };
 export const DEFAULT_SETTINGS = {
-  lang: '', me: '', role: 'Superintendent', super: '', pm: '', folderUrl: '', siteCode: '', pin: '',
+  lang: '', me: '', role: 'Superintendent', super: '', pm: '', folderUrl: '', siteCode: '', pin: '', worker: '', device: '',
   project: 'Charles Schwab Building', site: 'Charlotte, NC',
   floors: ['Basement', 'Level 1', 'Level 2', 'Level 3', 'Level 4', 'Level 5', 'Roof'],
   crews: ['A', 'B', 'C', 'D'].map(x => ({ name: 'Crew ' + x, lead: '', members: '' })),
@@ -117,7 +117,6 @@ export function mergeTask(local, inc, part) {
 
 // The PM owns the decision answers and the review stamp; the superintendent owns everything else.
 // An answer whose question was reworded since is added as its own entry, never dropped.
-// The time clock is everyone's, so it merges box by box (mergeClock).
 export function mergeAnswers(base, answers) {
   for (const d of answers.decisions) {
     if (!d.pm && !d.pmNote) continue;
@@ -126,40 +125,6 @@ export function mergeAnswers(base, answers) {
     else base.decisions.push(d);
   }
   base.pmReview = answers.pmReview || base.pmReview;
-  return mergeClock(base, answers);
-}
-
-// Each time clock box has an id, and its name, clock-in and clock-out each carry the time they were last
-// changed; a removal records the box's version (its newest change) when it was removed. Merging takes the
-// newer value field by field, drops a removed box unless it was changed after the version removed, adds
-// boxes only the other phone has, and folds two boxes made separately for the same name into one. Empty
-// boxes from the other phone only make up its head count. Both phones end up with the same clock.
-const FIELDS = ['name', 'in', 'out'];
-export const boxVersion = p => Math.max(p.nameAt, p.inAt, p.outAt);
-export function mergeClock(base, other) {
-  const gone = new Map();
-  for (const g of [...base.clockGone, ...other.clockGone]) gone.set(g.id, Math.max(gone.get(g.id) ?? 0, g.at));
-  const dead = p => gone.has(p.id) && boxVersion(p) <= gone.get(p.id);
-  const who = p => p.name.trim().toLowerCase();
-  const rows = base.clock.map(p => ({ ...p })), empties = [];
-  for (const p of other.clock) {
-    const same = rows.find(x => x.id === p.id);
-    if (same) {
-      for (const f of FIELDS) if (p[f + 'At'] > same[f + 'At']) Object.assign(same, { [f]: p[f], [f + 'At']: p[f + 'At'] });
-      continue;
-    }
-    if (!who(p) && !p.in && !p.out) { empties.push({ ...p }); continue; }
-    const twin = who(p) && rows.find(x => !dead(x) && who(x) === who(p));
-    if (twin) {
-      for (const f of ['in', 'out']) if (p[f] && !twin[f]) Object.assign(twin, { [f]: p[f], [f + 'At']: p[f + 'At'] });
-      gone.set(p.id, Math.max(gone.get(p.id) ?? 0, boxVersion(p)));
-      continue;
-    }
-    rows.push({ ...p });
-  }
-  const live = rows.filter(p => !dead(p)), wanted = other.clock.filter(p => !dead(p)).length;
-  base.clock = [...live, ...empties.filter(p => !dead(p)).slice(0, Math.max(0, wanted - live.length))].slice(0, 500); // shape()'s list cap
-  base.clockGone = [...gone].filter(([id]) => !base.clock.some(p => p.id === id)).map(([id, at]) => ({ id, at })).slice(-500);
   return base;
 }
 
@@ -181,8 +146,6 @@ export const REPORT_TPL = {
   floors: [{ floor: '', crews: [CREW_TPL] }],
   next: [{ step: '', prereq: '', start: '', dur: '', finish: '', deadline: '', lead: '', checkin: '' }],
   risks: [{ risk: '', impact: '', prevent: '', fallback: '', owner: '', by: '' }],
-  clock: [{ id: '', name: '', in: '', out: '', nameAt: 0, inAt: 0, outAt: 0 }], // the day's time clock: everyone on site, superintendent included
-  clockGone: [{ id: '', at: 0 }], // boxes removed, and the version removed, so a merge doesn't bring them back
   preparedBy: '', pmReview: '', updatedAt: 0, filedAt: 0,
 };
 const REPORT_STATUS = ['On plan', 'At risk', 'Behind plan', 'No work today']; // same list as STATUS in report.mjs
@@ -190,12 +153,18 @@ export function normReport(r) {
   const n = shape(REPORT_TPL, r);
   if (!REPORT_STATUS.includes(n.status)) n.status = ''; // one the page doesn't know would break it
   if (!isDay(n.date)) n.date = ''; // an impossible day (2026-02-30) is refused by the review folder forever
-  for (const p of n.clock) {
-    for (const k of ['in', 'out']) if (!FORMAT.time.test(p[k])) p[k] = '';
-    if (!FORMAT.uid.test(p.id)) p.id = uid();
-  }
-  n.clockGone = n.clockGone.filter(g => FORMAT.uid.test(g.id));
   return n;
+}
+
+// One clock-in to clock-out. Only taps on the worker's own phone make one; only the PM changes one.
+// edited marks the times the PM changed, so a worker's later link can't undo them; gone, a shift the PM removed.
+export const SHIFT_TPL = { id: '', device: '', who: '', date: '', in: '', out: '', edited: { in: false, out: false }, gone: false };
+export function normShift(x) {
+  const n = shape(SHIFT_TPL, x);
+  n.who = n.who.trim().slice(0, 60);
+  for (const k of ['in', 'out']) if (!FORMAT.time.test(n[k])) n[k] = '';
+  if (!FORMAT.uid.test(n.device)) n.device = '';
+  return FORMAT.uid.test(n.id) && isDay(n.date) && n.in ? n : null; // no id, day or clock-in: nothing to log
 }
 export const blank = list => shape(REPORT_TPL[list][0], {});
 export const newFloor = (floor, crewNames) => ({ floor, crews: crewNames.map(name => ({ ...CREW_TPL, name })) });
@@ -258,8 +227,8 @@ export function fillFromTasks(rep, tasks, crewNames) {
 }
 
 // ---------- office passcode ----------
-// The superintendent's screens (making or changing assignments, the daily report, settings) open with a
-// 4-digit code; crew sheets and the time clock are open to everyone. The code is kept as a salted SHA-256 hash, never as typed, and
+// The superintendent's screens (making or changing assignments, the daily report, settings) and the PM's
+// crew hours open with a 4-digit code; crew sheets and the time clock are open to everyone. The code is kept as a salted SHA-256 hash, never as typed, and
 // rides along in the links an office phone sends, so a crew phone asks for the office's code instead of
 // offering to make its own. A phone keeps the first code it learns; links never replace it.
 // ponytail: a 4-digit code in a phone web app is a door lock, not a vault: 10,000 codes, and anyone holding
@@ -344,7 +313,7 @@ export const hrs = n => (Math.round(n * 10) / 10).toString();
 
 export const crewVar = (s, name) => { const i = s.crews.findIndex(c => c.name === name); return `--crew:var(--c${i < 0 ? 4 : i % 6})`; };
 
-// v: the screen the arrows and the date picker stay on (day = task sheets, clock, report).
+// v: the screen the arrows and the date picker stay on (day = task sheets, report).
 export const dateBar = (day, v = 'day') => `<div class="datebar">
   <button class="nav-btn" data-go="${v}/${addDays(day, -1)}" aria-label="${L('Previous day')}">‹</button>
   <label class="day">${niceDate(day)}<small>${day === today() ? L('Today') : day < today() ? L('Past day') : L('Planning ahead')}</small>
@@ -633,7 +602,7 @@ export function settingsView(s) {
       ${field(L('Your name'), 's.me', s.me, { ph: L('Used for "Assigned by", sign-offs') })}
       <label class="field"><span>${L('Your role')}</span><select data-k="s.role">${roles.map(r => `<option value="${r}"${r === s.role ? ' selected' : ''}>${L(r)}</option>`).join('')}</select></label>
     </div></section>
-    <section class="card"><h2>${L('Office passcode')}</h2><p class="hint">${L("Opens task setup, the daily report and settings. Crew sheets and the time clock stay open to everyone. Use the same code on the PM's and the superintendent's phones. Crew phones learn it from the first task sheet they open.")}</p>
+    <section class="card"><h2>${L('Office passcode')}</h2><p class="hint">${L("Opens task setup, the daily report, settings and the PM's crew hours. Crew sheets and the time clock stay open to everyone. Use the same code on the PM's and the superintendent's phones. Crew phones learn it from the first task sheet they open.")}</p>
       <div class="btns"><button class="btn" data-act="changePin">${L('Change the passcode')}</button></div></section>
     <section class="card"><h2>${L('Project')}</h2><div class="grid">
       ${field(L('Project'), 's.project', s.project)}${field(L('Location'), 's.site', s.site)}
