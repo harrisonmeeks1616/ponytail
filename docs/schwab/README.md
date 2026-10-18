@@ -28,7 +28,8 @@ receiver; the static app does not connect it automatically.
 - It is a door lock, not a vault. The code is stored as a salted hash, but there are only 10,000 codes, and
   anyone with a link or the phone's storage can try them all offline. It keeps crews on the crew screens
   and a picked-up phone out of the office records. If everyone forgets the code, the data is still on the
-  phone: someone technical can clear the `pin` field in the browser's stored `schwab.settings`.
+  phone: someone technical can delete the browser's stored `schwab.pin` entry and clear the `pin` field in
+  `schwab.settings` (both), then the next sign-in creates a new code.
 
 ## Time clock
 

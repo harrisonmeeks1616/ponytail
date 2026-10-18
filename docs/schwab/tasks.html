@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
 <meta name="theme-color" content="#1B4332">
 <meta name="apple-mobile-web-app-title" content="H.A. Sack-Electrical">
-<title>H.A. Sack-Electrical · Field App</title>
+<title>H.A. Sack-Electrical · Sack Company-Electrical</title>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@600;700&family=Barlow:wght@400;600&display=swap" media="print" onload="this.media='all'">
 <link rel="stylesheet" href="shared.css">
 </head>
@@ -18,18 +18,19 @@
 </div>
 <nav class="office-tabs" id="officeTabs" aria-label="Screens"></nav></header>
 <main><p class="proj" id="proj"></p><div id="app"></div></main>
-<script>setTimeout(() => { const app = document.getElementById('app'); if (!app.childElementCount) app.innerHTML = '<div class="empty"><h2>The app didn\u2019t finish loading</h2><p>Get signal, then reload. · La app no termin\u00f3 de cargar. Con se\u00f1al, vuelva a cargar.</p><button class="btn primary" onclick="location.reload()">Reload · Recargar</button></div>'; }, 6000); // a dropped file on the first open after an update</script>
+<script>setTimeout(() => { const app = document.getElementById('app'); if (!window.appStarted) app.innerHTML = '<div class="empty"><h2>The app didn\u2019t finish loading</h2><p>Get signal, then reload. · La app no termin\u00f3 de cargar. Con se\u00f1al, vuelva a cargar.</p><button class="btn primary" onclick="location.reload()">Reload · Recargar</button></div>'; }, 6000); // a dropped file on the first open after an update</script>
 <nav class="bar" id="bar"></nav>
 <script type="module">
 import {
   KEYS, esc, uid, load, save, loadSettings, roster, normTask, newItem, mergeTask, cloneTask, pack, unpack, linkTo,
   today, addDays, niceDate, nowHM, span, fmtMin, t12, stamp, hrs, timeOf, field, datalist, seg, setPath, getPath, readInput,
   toast, sheet, ask, sendSheet, pasteSheet, makePdf, savePdf, fileAway, retryUploads, settingsView, settingsAct, restore,
-  registerSW, dateBar, crewVar as cv, L, setLang, getLang, COMPANY, letterhead,
+  registerSW, dateBar, crewVar as cv, L, setLang, getLang, COMPANIES, letterhead,
   UNLOCK, hasPin, adoptPin, setPin, pinHash, tryPin, unlocked, signIn, signOut,
 } from './shared.mjs';
 import { renderOffice, reportAct, reportInput, openReport, fileReportIfChanged, reloadReports, sectionToggle, headcountChanged, hasReports } from './report.mjs';
 
+window.appStarted = true; // every file loaded (see the fallback above)
 registerSW();
 const app = document.getElementById('app'), bar = document.getElementById('bar');
 let S = loadSettings();
@@ -179,7 +180,9 @@ function header() {
     .map(([v, label]) => `<a href="#${v}/${day}"${v === here ? ' aria-current="page"' : ''}${v === 'report' && !on ? ` aria-label="${esc(`${label}, ${L('needs the office passcode')}`)}">${label}${locked}` : `>${label}`}</a>`).join('');
 }
 
+let drawnOn = today(); // the day the screen was last drawn, to notice midnight
 function render() {
+  drawnOn = today();
   header();
   bar.hidden = view.v === 'settings';
   if (view.v === 'settings') app.innerHTML = `<button class="link" data-go="day/${day}">‹ ${L('Back to task sheets')}</button>${settingsView(S)}`;
@@ -389,7 +392,7 @@ function recordRows(t) {
   ];
 }
 
-const record = t => makePdf('Electrical task sheet', letterhead(S), recordRows(t), `${COMPANY} · ${S.project} · Task ${t.id}`);
+const record = t => makePdf('Electrical task sheet', letterhead(S), recordRows(t), `${COMPANIES} · Task ${t.id}`);
 const fileName = t => `${t.id} ${t.crew} ${t.floor}`.trim();
 function fileTask(t) {
   if (!S.folderUrl) return;
@@ -597,7 +600,7 @@ async function act(a, el) {
       persist();
       return go('day/' + t.date);
     case 'pdfTask': return savePdf(`${fileName(t)}.pdf`, record(t));
-    case 'pdfDay': return savePdf(`Task sheets ${day}.pdf`, makePdf(`Electrical task sheets · ${niceDate(day, 'en')}`, letterhead(S), dayTasks().flatMap(recordRows), `${COMPANY} · ${S.project} · ${niceDate(day, 'en')}`));
+    case 'pdfDay': return savePdf(`Task sheets ${day}.pdf`, makePdf(`Electrical task sheets · ${niceDate(day, 'en')}`, letterhead(S), dayTasks().flatMap(recordRows), `${COMPANIES} · ${niceDate(day, 'en')}`));
     case 'fileNow': return fileTask(t);
     case 'paste': return pasteSheet(code => go('p=' + code));
     case 'settings': return go('settings');
@@ -663,7 +666,7 @@ document.addEventListener('keydown', e => {
 const reload = () => {
   S = loadSettings(); setLang(S.lang); T = loadTasks(); reloadReports();
   if (view.v === 'task' && !current()) view = { v: 'board' };
-  if (!office()) document.querySelectorAll('dialog[open]:not(.pin)').forEach(d => d.close()); // an office question left open can't finish signed out
+  if (document.body.classList.contains('office') && !office()) document.querySelectorAll('dialog[open]:not(.pin)').forEach(d => d.close()); // signed out elsewhere: an office question left open can't finish
   needsOffice(view) && !office() ? route() : render();
 };
 addEventListener('storage', e => [...Object.values(KEYS), UNLOCK].includes(e.key) && reload());
@@ -672,7 +675,7 @@ addEventListener('hashchange', route);
 addEventListener('online', () => retryUploads(S));
 addEventListener('visibilitychange', () => {
   if (document.hidden) { fileIfChanged(current()); fileReportIfChanged(S, day); }
-  else stale(); // signed out while away
+  else if (!stale() && drawnOn !== today() && day === drawnOn && ['board', 'clock', 'report'].includes(view.v)) go(`${view.v === 'board' ? 'day' : view.v}/${today()}`); // left open overnight: today's screen
 });
 addEventListener('pagehide', () => { fileIfChanged(current()); fileReportIfChanged(S, day); }); // queued even if the upload can't finish; retried on next open
 app.addEventListener('toggle', sectionToggle, true);

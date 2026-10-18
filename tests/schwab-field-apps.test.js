@@ -385,27 +385,69 @@ test('time clock: at least 2 boxes, one per person typed, nothing with times rem
   assert.match(pdf, /\(H\.A\. Sack-Electrical \\267 Sack Company-Electrical\) Tj/, 'both company names head every PDF');
 });
 
-test('time clock: boxes merge by id, so renames, cleared times and removals stick on both phones', async () => {
-  const { normReport, mergeAnswers } = await lib;
+test('time clock merges field by field: renames, clock-outs, removals and re-adds all stick on both phones', async () => {
+  const { normReport, mergeAnswers, boxVersion } = await lib;
   const { clockRow } = await import('../docs/schwab/report.mjs');
   const copy = r => normReport(JSON.parse(JSON.stringify(r)));
-  const sup = normReport({ clock: [{ ...clockRow('Dana Super'), in: '06:30', out: '15:00', at: 1 }, { ...clockRow('Jose L'), in: '07:00', at: 1 }] });
-  const pm = copy(sup); // the PM opened the superintendent's report
-  Object.assign(pm.clock[1], { name: 'José L', out: '15:30', at: 2 }); // PM fixes the name and clocks him out
-  pm.clock.push({ ...clockRow('Ray K'), in: '08:00', at: 2 }); // and adds a person
-  mergeAnswers(sup, pm); // the PM sends it back
   const rows = r => r.clock.map(p => [p.name, p.in, p.out]);
-  assert.deepEqual(rows(sup), [['Dana Super', '06:30', '15:00'], ['José L', '07:00', '15:30'], ['Ray K', '08:00', '']], 'a renamed person stays one person');
+  const box = (name, set = {}) => ({ ...clockRow(name), nameAt: name ? 1 : 0, ...set });
+  const remove = (r, i) => { r.clockGone.push({ id: r.clock[i].id, at: boxVersion(r.clock[i]) }); r.clock.splice(i, 1); };
+  // The superintendent's clock goes to the PM; replies always merge onto the superintendent's copy, as openReport does.
+  const sup = normReport({ clock: [box('Dana Super', { in: '06:30', inAt: 1 }), box('Jose L', { in: '07:00', inAt: 1 }), box('Ray K'), box('')] });
+  const pm = copy(sup);
+  Object.assign(pm.clock[1], { name: 'José L', nameAt: 2 }); // PM fixes a name...
+  Object.assign(sup.clock[1], { out: '15:30', outAt: 3 }); // ...while the superintendent clocks him out
+  remove(pm, 3); // PM trims the empty box...
+  Object.assign(sup.clock[3], { name: 'Eve R', nameAt: 4, in: '09:00', inAt: 4 }); // ...that a late arrival just took
+  remove(sup, 2); // the superintendent removes Ray
+  mergeAnswers(sup, pm); // the PM sends it back
+  assert.deepEqual(rows(sup), [['Dana Super', '06:30', ''], ['José L', '07:00', '15:30'], ['Eve R', '09:00', '']],
+    'the rename and the clock-out both stick, Ray stays removed, and Eve is not wiped by an older removal');
 
-  sup.clockGone.push(sup.clock[2].id); sup.clock.pop(); // the superintendent removes Ray
-  Object.assign(sup.clock[0], { out: '', at: 3 }); // and clears a wrong clock-out
-  const atPm = mergeAnswers(copy(sup), pm); // he sends it again; the PM's copy is older
-  assert.deepEqual(rows(atPm), [['Dana Super', '06:30', ''], ['José L', '07:00', '15:30']], 'a removal and a cleared time stick');
-  assert.deepEqual(rows(mergeAnswers(copy(atPm), pm)), rows(atPm), 'merging an old copy again changes nothing');
+  const atPm = mergeAnswers(copy(sup), pm); // the superintendent sends again
+  assert.deepEqual(rows(atPm), rows(sup), 'both phones end up with the same clock');
+  assert.deepEqual(rows(mergeAnswers(copy(atPm), pm)), rows(atPm), 'an old copy merged again changes nothing');
 
-  const a = normReport({ clock: [{ ...clockRow('Ana P'), in: '07:00', at: 1 }] }), b = normReport({ clock: [{ ...clockRow(' ana p'), out: '15:00', at: 1 }] });
-  assert.deepEqual(rows(mergeAnswers(a, b)), [['Ana P', '07:00', '15:00']], 'two phones that each typed the same person make one box');
+  const pm2 = copy(atPm);
+  remove(pm2, 0); pm2.clock.push(box('Dana Super', { nameAt: 9, in: '06:35', inAt: 9 })); // PM removes a box and adds the person back
+  assert.deepEqual(rows(mergeAnswers(copy(atPm), pm2)).map(r => r[0]), ['José L', 'Eve R', 'Dana Super'], 'a person removed and added back is kept');
+
+  const two = normReport({ clock: [box('Dana Super'), box('Jose L')] });
+  const own = normReport({ clock: [box('dana super '), box('')] }); // the PM's phone made its own two boxes
+  assert.deepEqual(rows(mergeAnswers(copy(two), own)).map(r => r[0]), ['Dana Super', 'Jose L'], 'no extra boxes from the other phone');
+  const six = n => { const r = copy(two); while (r.clock.length < n) r.clock.push(box('')); return r; };
+  assert.equal(mergeAnswers(six(6), six(6)).clock.length, 6, 'both phones at 6 people stay at 6');
+  assert.equal(mergeAnswers(copy(two), six(5)).clock.length, 5, 'a head count raised on the other phone carries over');
   assert.match(normReport({ clock: [{ name: 'X' }] }).clock[0].id, /^[\w-]+$/, 'a box from an older or crafted link gets an id');
+});
+
+test('time clock: two phones editing at random always end up with the same clock', async () => {
+  const { normReport, mergeAnswers, boxVersion } = await lib;
+  const { clockRow } = await import('../docs/schwab/report.mjs');
+  let seed = 7;
+  const rand = n => { seed = (seed * 1103515245 + 12345) % 2147483648; return seed % n; };
+  const copy = r => normReport(JSON.parse(JSON.stringify(r)));
+  const key = r => r.clock.map(p => [p.id, p.name, p.in, p.out].join('|')).sort().join('\n');
+  let t = 0;
+  const op = r => {
+    const p = r.clock[rand(Math.max(1, r.clock.length))], k = rand(7);
+    if (k === 0 || !p) r.clock.push(clockRow());
+    else if (k === 1) r.clock.push({ ...clockRow(['Ann', 'Bob', 'Cy', 'Di'][rand(4)]), nameAt: ++t });
+    else if (k === 2) Object.assign(p, { name: ['Ann', 'Bob', 'Cy', 'Di', ''][rand(5)], nameAt: ++t });
+    else if (k === 3 || k === 4) { const f = k === 3 ? 'in' : 'out'; Object.assign(p, { [f]: rand(3) ? `0${rand(9)}:00` : '', [f + 'At']: ++t }); }
+    else { r.clockGone.push({ id: p.id, at: boxVersion(p) }); r.clock.splice(r.clock.indexOf(p), 1); }
+  };
+  for (let run = 0; run < 400; run++) {
+    let sup = normReport({ clock: [clockRow('Dana'), clockRow()] }), pm = copy(sup);
+    for (let round = 0; round < 4; round++) {
+      for (let n = rand(4); n--;) op(sup);
+      for (let n = rand(4); n--;) op(pm);
+      pm = mergeAnswers(copy(sup), pm); // Send to PM
+      sup = mergeAnswers(sup, copy(pm)); // Send back to Supt.
+      assert.equal(key(sup), key(pm), `run ${run} round ${round}: the phones disagree`);
+      assert.equal(new Set(sup.clock.map(p => p.id)).size, sup.clock.length, 'no box twice');
+    }
+  }
 });
 
 test('a tab still on the old version cannot wipe the passcode or the time clock', async () => {

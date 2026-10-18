@@ -5,7 +5,7 @@
 // themselves in on the superintendent's phone. tasks.html routes here for #report/<day> and #clock/<day>.
 
 import {
-  KEYS, COMPANY, esc, uid, load, save, normTask, normReport, blank, newFloor, fillFromTasks, mergeAnswers, CREW_TPL, pack, linkTo,
+  KEYS, COMPANIES, esc, uid, load, save, normTask, normReport, blank, newFloor, fillFromTasks, mergeAnswers, boxVersion, CREW_TPL, pack, linkTo,
   today, niceDate, nowHM, span, fmtMin, t12, stamp, hrs, field, datalist, seg, setPath, getPath, readInput, roster,
   toast, sheet, ask, sendSheet, pasteSheet, makePdf, savePdf, fileAway, dateBar, crewVar, letterhead, L, unlocked,
 } from './shared.mjs';
@@ -64,7 +64,9 @@ function lateLine(s) {
 // ponytail: 500 is shape()'s cap on every saved list, so a day past 500 people would be cut on reload.
 // Raise both together if a site ever gets that big.
 export const MIN_ON_SITE = 2, MAX_ON_SITE = 500; // at least the superintendent and one worker
-export const clockRow = (name = '') => ({ id: uid(), name, in: '', out: '', at: 0 });
+export const clockRow = (name = '') => ({ id: uid(), name, in: '', out: '', nameAt: 0, inAt: 0, outAt: 0 });
+const change = (p, f, v) => Object.assign(p, { [f]: v, [f + 'At']: Date.now() }); // the newer value of each field wins a merge
+const removed = ps => ps.map(p => ({ id: p.id, at: boxVersion(p) })); // a later change on the other phone brings a box back
 const used = p => !!(p.name.trim() || p.in || p.out);
 export const clockMin = p => (p.in && p.out ? span(p.in, p.out) : 0); // an out time before the in time is an overnight shift
 // One box per person: new boxes go on the end, extra ones come off the end.
@@ -99,7 +101,7 @@ function clockView(S, day) {
       <label class="field headcount"><span>${L('People on site')}</span>
         <input type="number" inputmode="numeric" min="${MIN_ON_SITE}" max="${MAX_ON_SITE}" step="1" value="${r.clock.length}" data-headcount></label>
       <p class="hint">${L('Type how many people are on site, the superintendent included (2 or more). Each person gets a box below.')}</p>
-      ${unlocked() ? `<p class="hint warn-note">${L('Signed in: tap the padlock before handing this phone to workers.')}</p>` : ''}
+      <p class="hint warn-note">${L('Signed in: tap the padlock before handing this phone to workers.')}</p>
       <div class="stats three" id="clockStats">${clockStats(r)}</div>
       ${now ? `<div class="btns"><button class="btn" data-act="cAll" data-v="in">${L('Everyone in')}</button><button class="btn" data-act="cAll" data-v="out">${L('Everyone out')}</button></div>` : ''}
       ${prev ? `<button class="link" data-act="cSame">${esc(L('Same people as {date}', { date: niceDate(prev) }))}</button>` : ''}
@@ -133,7 +135,7 @@ export async function headcountChanged(el, S, day) {
   const lost = r.clock.length - next.list.length;
   if (n && next.list.length !== r.clock.length && (!next.lost || await ask(L('Remove the last {n} people and their times?', { n: lost }), L('Remove'), 'danger'))) {
     if (+n > MAX_ON_SITE) toast(L('Up to {n} people per day', { n: MAX_ON_SITE }));
-    r.clockGone.push(...r.clock.slice(next.list.length).map(p => p.id)); // removed here, removed on the other phone too
+    r.clockGone.push(...removed(r.clock.slice(next.list.length))); // removed here, removed on the other phone too
     r.clock = next.list;
     r.updatedAt = Date.now();
     persist();
@@ -289,9 +291,9 @@ const recordSecs = r => [
   ['Sign-off', [['Prepared by', r.preparedBy], ['PM review / time', r.pmReview]]],
 ];
 
-const record = (S, r) => makePdf('Superintendent daily report', letterhead(S, dayEn(r.date)), recordSecs(r), `${COMPANY} · ${S.project} · Daily report ${r.date}`);
+const record = (S, r) => makePdf('Superintendent daily report', letterhead(S, dayEn(r.date)), recordSecs(r), `${COMPANIES} · Daily report ${r.date}`);
 const clockPdf = (S, r) => makePdf('Time clock', letterhead(S, dayEn(r.date)),
-  [[`Clock in / out · ${dayEn(r.date)}`, [...clockRows(r), ['Total', `${clocked(r).length} people · ${clockTotal(r)} hrs`]]]], `${COMPANY} · ${S.project} · Time clock ${r.date}`);
+  [[`Clock in / out · ${dayEn(r.date)}`, [...clockRows(r), ['Total', `${clocked(r).length} people · ${clockTotal(r)} hrs`]]]], `${COMPANIES} · Time clock ${r.date}`);
 const fileReport = (S, r) => { if (!S.folderUrl) return; r.filedAt = Date.now(); persist(); return fileAway(S, { date: r.date, name: `Daily Report ${r.date}`, bytes: record(S, r), v: r.updatedAt }); };
 // A sent report edited afterwards (a clock-out after sending, say) is filed again when you leave it.
 export const fileReportIfChanged = (S, day) => { const r = R[day]; return r?.submittedAt && r.updatedAt > r.filedAt && fileReport(S, r); };
@@ -335,7 +337,7 @@ async function send(S, day) {
   sendSheet(isPM(S)
     ? { title: `PM review · ${dayEn(r.date)}`, url, text: `PM review of the ${dayEn(r.date)} daily report: ${answered} of ${asked} decisions answered.` }
     : { title: `Daily report · ${dayEn(r.date)}`, url,
-      text: `${COMPANY} daily report ${dayEn(r.date)}, ${S.project}: ${r.status}. ${active(r).length} crew sections, ${hrs(laborHrs(r))} labor-hrs, ${clocked(r).length} people on the time clock.`
+      text: `Daily report ${dayEn(r.date)}, ${S.project} (${COMPANIES}): ${r.status}. ${active(r).length} crew sections, ${hrs(laborHrs(r))} labor-hrs, ${clocked(r).length} people on the time clock.`
         + (asked - answered ? ` ${asked - answered} decision${asked - answered === 1 ? ' needs' : 's need'} you${firstDue ? ' by ' + when(firstDue) : ''}.` : '') });
   fileReport(S, r);
 }
@@ -393,20 +395,13 @@ export async function reportAct(a, el, S, day, v) {
       return renderOffice(v, S, day);
 
     // time clock
-    case 'cStamp': {
+    case 'cStamp': case 'cAll': {
+      if (day !== today()) { toast(L("New day: opening today's time clock")); return go('clock/' + today()); } // a screen left open overnight
+      if (a === 'cAll') return clockAll(r, val, v, S, day);
       const p = r.clock[i];
       if (val === 'out' && !p.in) return toast(L('Clock in first'));
-      Object.assign(p, { [val]: nowHM(), at: Date.now() });
+      change(p, val, nowHM());
       navigator.vibrate?.(12);
-      break;
-    }
-    case 'cAll': {
-      const named = r.clock.filter(p => p.name.trim());
-      const who = val === 'in' ? named.filter(p => !p.in) : r.clock.filter(p => p.in && !p.out);
-      if (!who.length) return toast(val === 'out' ? L('Nobody on site to clock out') : named.length ? L('Everyone named is already clocked in') : L('Type the names first'));
-      const now = nowHM();
-      for (const p of who) Object.assign(p, { [val]: now, at: Date.now() });
-      toast(val === 'in' ? L('Clocked in: {n}', { n: who.length }) : L('Clocked out: {n}', { n: who.length }));
       break;
     }
     case 'cAdd':
@@ -417,7 +412,7 @@ export async function reportAct(a, el, S, day, v) {
       const p = r.clock[i];
       if (r.clock.length <= MIN_ON_SITE) return;
       if (used(p) && !await ask(L('Remove {name} and their times?', { name: p.name.trim() || L('Person {n}', { n: i + 1 }) }), L('Remove'), 'danger')) return;
-      r.clockGone.push(p.id);
+      r.clockGone.push(...removed([p]));
       r.clock.splice(i, 1);
       break;
     }
@@ -426,7 +421,7 @@ export async function reportAct(a, el, S, day, v) {
       if (!prev) return;
       const have = new Set(r.clock.map(p => p.name.trim().toLowerCase()).filter(Boolean));
       const add = [...new Set(R[prev].clock.map(p => p.name.trim()).filter(n => n && !have.has(n.toLowerCase())))];
-      for (const p of r.clock) if (add.length && !p.name.trim() && !p.in && !p.out) Object.assign(p, { name: add.shift(), at: Date.now() });
+      for (const p of r.clock) if (add.length && !p.name.trim() && !p.in && !p.out) change(p, 'name', add.shift());
       r.clock.push(...add.slice(0, MAX_ON_SITE - r.clock.length).map(n => clockRow(n)));
       toast(L('Same people as {date}', { date: niceDate(prev) }));
       break;
@@ -445,10 +440,22 @@ export async function reportAct(a, el, S, day, v) {
   if (a === 'cAdd') [...$('app').querySelectorAll('.person input[data-k$=".name"]')].at(-1)?.focus(); // ready for the new name
 }
 
+function clockAll(r, val, v, S, day) {
+  const named = r.clock.filter(p => p.name.trim());
+  const who = val === 'in' ? named.filter(p => !p.in) : r.clock.filter(p => p.in && !p.out);
+  if (!who.length) return toast(val === 'out' ? L('Nobody on site to clock out') : named.length ? L('Everyone named is already clocked in') : L('Type the names first'));
+  const now = nowHM();
+  for (const p of who) change(p, val, now);
+  toast(val === 'in' ? L('Clocked in: {n}', { n: who.length }) : L('Clocked out: {n}', { n: who.length }));
+  r.updatedAt = Date.now();
+  persist();
+  renderOffice(v, S, day);
+}
+
 // Typing in a report or time clock field: data-k="r.path.to.field".
 export function applyInput(r, k, val) {
   setPath({ r }, k, val);
-  if (/^r\.clock\.\d+\.(name|in|out)$/.test(k)) getPath({ r }, k.replace(/\.\w+$/, '')).at = Date.now(); // the newer copy of a box wins a merge
+  if (/^r\.clock\.\d+\.(name|in|out)$/.test(k)) getPath({ r }, k.replace(/\.\w+$/, ''))[k.split('.').at(-1) + 'At'] = Date.now(); // the newer value wins a merge
   if (/^r\.floors\.\d+\.crews\.\d+\.(start|stop|workers)$/.test(k)) { // typed hours take over from the sheets
     const c = getPath({ r }, k.replace(/\.\w+$/, ''));
     c.labor = 0; c.laborFromTasks = false;

@@ -298,6 +298,7 @@ export default {
   'Remove the last {n} people and their times?': '¿Quitar a las últimas {n} personas y sus horas?',
   'Remove {name} and their times?': '¿Quitar a {name} y sus horas?',
   'Clock in first': 'Primero marque la entrada',
+  "New day: opening today's time clock": 'Día nuevo: se abre la asistencia de hoy',
   'Type the names first': 'Primero escriba los nombres',
   'Everyone named is already clocked in': 'Todos los nombrados ya marcaron entrada',
   'Nobody on site to clock out': 'No hay nadie en la obra para marcar salida',

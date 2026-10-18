@@ -9,9 +9,9 @@ import ES from './es.mjs';
 // them (phones keep old tabs open for days) rewrites settings and reports without those fields, and an
 // old backup has neither. Backups and restores carry every key here.
 export const KEYS = { settings: 'schwab.settings', tasks: 'schwab.tasks', reports: 'schwab.reports', pin: 'schwab.pin', clocks: 'schwab.clocks' };
-export const COMPANY = 'H.A. Sack-Electrical', COMPANY_ALT = 'Sack Company-Electrical';
+export const COMPANY = 'H.A. Sack-Electrical', COMPANY_ALT = 'Sack Company-Electrical', COMPANIES = `${COMPANY} · ${COMPANY_ALT}`;
 // The top lines of every PDF: who did the work, then the job.
-export const letterhead = (s, more = '') => `${COMPANY} · ${COMPANY_ALT}\n${[s.project, s.site, more].filter(Boolean).join(' · ')}`;
+export const letterhead = (s, more = '') => `${COMPANIES}\n${[s.project, s.site, more].filter(Boolean).join(' · ')}`;
 
 // ---------- language ----------
 // Spanish mode: every phrase on screen has a Spanish twin in es.mjs, looked up by its English text.
@@ -129,23 +129,37 @@ export function mergeAnswers(base, answers) {
   return mergeClock(base, answers);
 }
 
-// Every time clock box has an id and the time it last changed; a removed box leaves its id in clockGone.
-// Merging keeps the newer copy of each box, adds boxes only the other phone has, and drops removed ones,
-// so a renamed person, a cleared time or a removal sticks on both phones. Two boxes made separately for
-// the same name become one.
+// Each time clock box has an id, and its name, clock-in and clock-out each carry the time they were last
+// changed; a removal records the box's version (its newest change) when it was removed. Merging takes the
+// newer value field by field, drops a removed box unless it was changed after the version removed, adds
+// boxes only the other phone has, and folds two boxes made separately for the same name into one. Empty
+// boxes from the other phone only make up its head count. Both phones end up with the same clock.
+const FIELDS = ['name', 'in', 'out'];
+export const boxVersion = p => Math.max(p.nameAt, p.inAt, p.outAt);
 export function mergeClock(base, other) {
-  const gone = new Set([...base.clockGone, ...other.clockGone]);
+  const gone = new Map();
+  for (const g of [...base.clockGone, ...other.clockGone]) gone.set(g.id, Math.max(gone.get(g.id) ?? 0, g.at));
+  const dead = p => gone.has(p.id) && boxVersion(p) <= gone.get(p.id);
   const who = p => p.name.trim().toLowerCase();
-  const rows = base.clock.map(p => ({ ...p }));
+  const rows = base.clock.map(p => ({ ...p })), empties = [];
   for (const p of other.clock) {
     const same = rows.find(x => x.id === p.id);
-    if (same) { if (p.at > same.at) Object.assign(same, p); continue; }
-    const twin = who(p) && rows.find(x => who(x) === who(p));
-    if (twin) { twin.in ||= p.in; twin.out ||= p.out; gone.add(p.id); continue; }
+    if (same) {
+      for (const f of FIELDS) if (p[f + 'At'] > same[f + 'At']) Object.assign(same, { [f]: p[f], [f + 'At']: p[f + 'At'] });
+      continue;
+    }
+    if (!who(p) && !p.in && !p.out) { empties.push({ ...p }); continue; }
+    const twin = who(p) && rows.find(x => !dead(x) && who(x) === who(p));
+    if (twin) {
+      for (const f of ['in', 'out']) if (p[f] && !twin[f]) Object.assign(twin, { [f]: p[f], [f + 'At']: p[f + 'At'] });
+      gone.set(p.id, Math.max(gone.get(p.id) ?? 0, boxVersion(p)));
+      continue;
+    }
     rows.push({ ...p });
   }
-  base.clock = rows.filter(p => !gone.has(p.id)).slice(0, 500); // shape()'s list cap
-  base.clockGone = [...gone].slice(-500);
+  const live = rows.filter(p => !dead(p)), wanted = other.clock.filter(p => !dead(p)).length;
+  base.clock = [...live, ...empties.filter(p => !dead(p)).slice(0, Math.max(0, wanted - live.length))].slice(0, 500); // shape()'s list cap
+  base.clockGone = [...gone].filter(([id]) => !base.clock.some(p => p.id === id)).map(([id, at]) => ({ id, at })).slice(-500);
   return base;
 }
 
@@ -167,8 +181,8 @@ export const REPORT_TPL = {
   floors: [{ floor: '', crews: [CREW_TPL] }],
   next: [{ step: '', prereq: '', start: '', dur: '', finish: '', deadline: '', lead: '', checkin: '' }],
   risks: [{ risk: '', impact: '', prevent: '', fallback: '', owner: '', by: '' }],
-  clock: [{ id: '', name: '', in: '', out: '', at: 0 }], // the day's time clock: everyone on site, superintendent included
-  clockGone: [''], // ids of boxes removed, so a merge doesn't bring them back
+  clock: [{ id: '', name: '', in: '', out: '', nameAt: 0, inAt: 0, outAt: 0 }], // the day's time clock: everyone on site, superintendent included
+  clockGone: [{ id: '', at: 0 }], // boxes removed, and the version removed, so a merge doesn't bring them back
   preparedBy: '', pmReview: '', updatedAt: 0, filedAt: 0,
 };
 const REPORT_STATUS = ['On plan', 'At risk', 'Behind plan', 'No work today']; // same list as STATUS in report.mjs
@@ -180,7 +194,7 @@ export function normReport(r) {
     for (const k of ['in', 'out']) if (!FORMAT.time.test(p[k])) p[k] = '';
     if (!FORMAT.uid.test(p.id)) p.id = uid();
   }
-  n.clockGone = n.clockGone.filter(id => FORMAT.uid.test(id));
+  n.clockGone = n.clockGone.filter(g => FORMAT.uid.test(g.id));
   return n;
 }
 export const blank = list => shape(REPORT_TPL[list][0], {});
@@ -275,7 +289,7 @@ export async function tryPin(s, pin, now = Date.now()) {
   if (st.wait > now) return 'wait';
   if (hasPin(s) && await pinHash(pin, s.pin.slice(0, 16)) === s.pin) return signIn(now) ? 'ok' : 'wrong';
   const fails = st.fails + 1, out = fails >= TRIES;
-  save(UNLOCK, { until: 0, fails: out ? 0 : fails, wait: out ? now + WAIT_MS : 0 });
+  save(UNLOCK, { until: st.until, fails: out ? 0 : fails, wait: out ? now + WAIT_MS : 0 }); // a wrong code never signs anyone out
   return out ? 'wait' : 'wrong';
 }
 

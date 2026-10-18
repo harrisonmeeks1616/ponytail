@@ -244,6 +244,7 @@ dialog.sheet::backdrop { background: rgb(0 0 0 / .45); }
 .person input[type=time] { padding-inline: 8px; min-width: 0; }
 .person { border-left: 6px solid var(--accent); gap: 10px; }
 .warn-note { color: var(--warn); font-weight: 600; }
+body:not(.office) .warn-note { display: none; } /* follows the sign-in without a redraw */
 .person .row1 .label { font: 700 1rem var(--display); letter-spacing: .06em; color: var(--ink); }
 .person .row1 .link { min-height: 44px; padding: 0 8px; margin: -10px -8px; } /* a full-size target in a small space */
 .sr { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
