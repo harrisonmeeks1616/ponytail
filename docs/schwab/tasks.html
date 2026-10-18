@@ -18,6 +18,7 @@
 </div>
 <nav class="office-tabs" id="officeTabs" aria-label="Screens"></nav></header>
 <main><p class="proj" id="proj"></p><div id="app"></div></main>
+<script>setTimeout(() => { const app = document.getElementById('app'); if (!app.childElementCount) app.innerHTML = '<div class="empty"><h2>The app didn\u2019t finish loading</h2><p>Get signal, then reload. · La app no termin\u00f3 de cargar. Con se\u00f1al, vuelva a cargar.</p><button class="btn primary" onclick="location.reload()">Reload · Recargar</button></div>'; }, 6000); // a dropped file on the first open after an update</script>
 <nav class="bar" id="bar"></nav>
 <script type="module">
 import {
@@ -25,7 +26,7 @@ import {
   today, addDays, niceDate, nowHM, span, fmtMin, t12, stamp, hrs, timeOf, field, datalist, seg, setPath, getPath, readInput,
   toast, sheet, ask, sendSheet, pasteSheet, makePdf, savePdf, fileAway, retryUploads, settingsView, settingsAct, restore,
   registerSW, dateBar, crewVar as cv, L, setLang, getLang, COMPANY, letterhead,
-  UNLOCK, hasPin, adoptPin, pinHash, tryPin, unlocked, signIn, signOut,
+  UNLOCK, hasPin, adoptPin, setPin, pinHash, tryPin, unlocked, signIn, signOut,
 } from './shared.mjs';
 import { renderOffice, reportAct, reportInput, openReport, fileReportIfChanged, reloadReports, sectionToggle, headcountChanged, hasReports } from './report.mjs';
 
@@ -430,7 +431,7 @@ function passcode(mode = hasPin(S) ? 'enter' : 'create') {
       }
       if (mode !== 'enter' && !first) { first = code; code = ''; draw(); return ask4(); }
       if (mode !== 'enter' && code !== first) { first = ''; return fail(L("The codes didn't match. Start again.")); }
-      const result = mode === 'enter' ? await tryPin(S, code) : (S.pin = await pinHash(code), save(KEYS.settings, S) && signIn() ? 'ok' : 'unsaved');
+      const result = mode === 'enter' ? await tryPin(S, code) : setPin(S, await pinHash(code)) && signIn() ? 'ok' : 'unsaved';
       if (result === 'ok') {
         if (mode !== 'enter') toast(mode === 'change' ? L('Passcode changed') : L('Office screens unlocked'));
         done(true);

@@ -13,14 +13,23 @@ import {
 let R = loadReports();
 const open = new Set(['sum']);
 
-function loadReports() {
-  const raw = load(KEYS.reports, {});
-  return Object.fromEntries(Object.entries(raw && typeof raw === 'object' ? raw : {}).map(([d, r]) => [d, normReport(r)]));
+// Each day's time clock is also kept under KEYS.clocks (see KEYS), and that copy wins.
+export function loadReports() {
+  const obj = x => (x && typeof x === 'object' && !Array.isArray(x) ? x : {});
+  const reports = obj(load(KEYS.reports, {})), clocks = obj(load(KEYS.clocks, {}));
+  return Object.fromEntries([...new Set([...Object.keys(reports), ...Object.keys(clocks)])].map(d => {
+    const r = obj(reports[d]), c = obj(clocks[d]);
+    return [d, normReport({ ...r, ...c, updatedAt: Math.max(Number(r.updatedAt) || 0, Number(c.updatedAt) || 0) })];
+  }));
 }
 export const reloadReports = () => { R = loadReports(); };
 // Only reports someone has touched get stored; browsing an empty day leaves nothing behind.
-const persist = () => save(KEYS.reports, Object.fromEntries(Object.entries(R).filter(([, r]) => r.updatedAt)))
-  || toast(L("This phone wouldn't save. Open Settings and download a backup."), 'bad');
+const persist = () => {
+  const kept = Object.entries(R).filter(([, r]) => r.updatedAt);
+  const clocks = kept.filter(([, r]) => r.clock.length || r.clockGone.length).map(([d, r]) => [d, { clock: r.clock, clockGone: r.clockGone, updatedAt: r.updatedAt }]);
+  return (save(KEYS.reports, Object.fromEntries(kept)) && save(KEYS.clocks, Object.fromEntries(clocks)))
+    || toast(L("This phone wouldn't save. Open Settings and download a backup."), 'bad');
+};
 const isPM = S => S.role === 'Project manager';
 const written = r => r.status || r.floors.length || r.needs.length || r.next.length || r.risks.length; // more than a time clock
 // Daily reports of its own make this an office phone, whatever the time clock holds.

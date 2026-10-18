@@ -408,3 +408,23 @@ test('time clock: boxes merge by id, so renames, cleared times and removals stic
   assert.match(normReport({ clock: [{ name: 'X' }] }).clock[0].id, /^[\w-]+$/, 'a box from an older or crafted link gets an id');
 });
 
+test('a tab still on the old version cannot wipe the passcode or the time clock', async () => {
+  const { KEYS, loadSettings, setPin, pinHash, PIN_FORMAT } = await lib;
+  const { loadReports, clockRow } = await import('../docs/schwab/report.mjs');
+  const store = new Map();
+  Object.defineProperty(globalThis, 'localStorage', { configurable: true, value: { getItem: k => store.get(k) ?? null, setItem: (k, v) => store.set(k, String(v)) } });
+  try {
+    const s = loadSettings();
+    setPin(s, await pinHash('4821'));
+    const clock = [{ ...clockRow('Dana Super'), in: '06:30' }];
+    store.set(KEYS.reports, JSON.stringify({ '2026-10-18': { date: '2026-10-18', status: 'On plan', clock, updatedAt: 5 } }));
+    store.set(KEYS.clocks, JSON.stringify({ '2026-10-18': { clock, clockGone: [], updatedAt: 5 } }));
+    // The old version's save: settings and reports rewritten without the fields it doesn't know.
+    store.set(KEYS.settings, JSON.stringify({ me: 'Dana', role: 'Superintendent' }));
+    store.set(KEYS.reports, JSON.stringify({ '2026-10-18': { date: '2026-10-18', status: 'On plan', results: 'typed in the old tab', updatedAt: 9 } }));
+    assert.match(loadSettings().pin, PIN_FORMAT, 'the passcode survives');
+    const r = loadReports()['2026-10-18'];
+    assert.deepEqual([r.results, r.clock.map(p => [p.name, p.in]), r.updatedAt], ['typed in the old tab', [['Dana Super', '06:30']], 9], 'both edits survive');
+  } finally { delete globalThis.localStorage; }
+});
+

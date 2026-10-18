@@ -5,7 +5,10 @@
 
 import ES from './es.mjs';
 
-export const KEYS = { settings: 'schwab.settings', tasks: 'schwab.tasks', reports: 'schwab.reports' };
+// The passcode and the time clocks also keep keys of their own: a tab still running the version before
+// them (phones keep old tabs open for days) rewrites settings and reports without those fields, and an
+// old backup has neither. Backups and restores carry every key here.
+export const KEYS = { settings: 'schwab.settings', tasks: 'schwab.tasks', reports: 'schwab.reports', pin: 'schwab.pin', clocks: 'schwab.clocks' };
 export const COMPANY = 'H.A. Sack-Electrical', COMPANY_ALT = 'Sack Company-Electrical';
 // The top lines of every PDF: who did the work, then the job.
 export const letterhead = (s, more = '') => `${COMPANY} · ${COMPANY_ALT}\n${[s.project, s.site, more].filter(Boolean).join(' · ')}`;
@@ -62,7 +65,11 @@ export const DEFAULT_SETTINGS = {
   crews: ['A', 'B', 'C', 'D'].map(x => ({ name: 'Crew ' + x, lead: '', members: '' })),
   checks: ['Supports / strapping', 'Labeling', 'Terminations / torque', 'Testing', 'Covers / plates', 'Cleanup'],
 };
-export const loadSettings = () => { const s = load(KEYS.settings, null); return s ? shape(SETTINGS_TPL, s) : structuredClone(DEFAULT_SETTINGS); };
+export function loadSettings() {
+  const raw = load(KEYS.settings, null), s = raw ? shape(SETTINGS_TPL, raw) : structuredClone(DEFAULT_SETTINGS), pin = load(KEYS.pin, '');
+  if (PIN_FORMAT.test(pin)) s.pin = pin;
+  return s;
+}
 export const roster = (s, crew) => (s.crews.find(c => c.name === crew)?.members || '').split(',').map(x => x.trim()).filter(Boolean);
 
 const ITEM = { id: '', text: '', done: false, at: 0 };
@@ -247,10 +254,10 @@ export function fillFromTasks(rep, tasks, crewNames) {
 export const UNLOCK = 'schwab.unlock';
 export const PIN_FORMAT = /^[0-9a-f]{16}:[0-9a-f]{64}$/;
 export const hasPin = s => PIN_FORMAT.test(s.pin);
+export const setPin = (s, pin) => { s.pin = pin; return save(KEYS.pin, pin) && save(KEYS.settings, s); };
 export function adoptPin(s, pin) {
   if (hasPin(s) || typeof pin !== 'string' || !PIN_FORMAT.test(pin)) return false;
-  s.pin = pin;
-  return save(KEYS.settings, s);
+  return setPin(s, pin);
 }
 const hex = buf => [...new Uint8Array(buf)].map(b => b.toString(16).padStart(2, '0')).join('');
 export async function pinHash(pin, salt = hex(crypto.getRandomValues(new Uint8Array(8)))) {
