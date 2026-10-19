@@ -22,13 +22,13 @@
 <nav class="bar" id="bar"></nav>
 <script type="module">
 import {
-  KEYS, esc, uid, load, save, loadSettings, roster, normTask, newItem, mergeTask, cloneTask, pack, unpack, linkTo,
+  KEYS, esc, uid, load, save, loadSettings, roster, nameKey, findPerson, addToCrew, normTask, newItem, mergeTask, cloneTask, pack, unpack, linkTo,
   today, addDays, niceDate, nowHM, span, fmtMin, t12, stamp, hrs, timeOf, field, datalist, seg, setPath, getPath, readInput,
   toast, sheet, ask, sendSheet, pasteSheet, makePdf, savePdf, fileAway, retryUploads, settingsView, settingsAct, restore,
   registerSW, dateBar, crewVar as cv, L, setLang, getLang, COMPANIES, letterhead,
   UNLOCK, hasPin, adoptPin, setPin, pinHash, tryPin, unlocked, signIn, signOut,
 } from './shared.mjs';
-import { renderOffice, reportAct, reportInput, openReport, openHours, hoursInput, fileReportIfChanged, reloadReports, sectionToggle, hasReports } from './report.mjs';
+import { renderOffice, reportAct, reportInput, openReport, openHours, hoursInput, workerChange, fileReportIfChanged, reloadReports, sectionToggle, hasReports } from './report.mjs';
 
 window.appStarted = true; // every file loaded (see the fallback above)
 registerSW();
@@ -74,10 +74,21 @@ function nextId(date) {
 
 function pickCrew(t, name) {
   if (t.crew === name) return;
+  const typed = t.crew ? [] : t.members.filter(m => !findPerson(S, m)); // names typed before a crew was picked stay, and join it
   t.crew = name;
   t.lead = S.crews.find(c => c.name === name)?.lead || '';
-  t.members = roster(S, name);
+  t.members = [...roster(S, name), ...typed];
   t.size = t.members.length || t.size;
+  enlist(t, typed);
+}
+
+// A name put on a sheet joins the sheet's crew in Settings when it is on no crew yet: one list of people for the
+// sheets, the time clock and the crew hours. Nobody is taken off a crew from here.
+function enlist(t, names) {
+  const added = names.filter(n => addToCrew(S, t.crew, n));
+  if (!added.length) return;
+  save(KEYS.settings, S);
+  toast(added.length === 1 ? L('{name} added to {crew}', { name: added[0], crew: t.crew }) : L('{names} added to {crew}', { names: added.join(', '), crew: t.crew }));
 }
 
 // ---------- routing: #day/2026-10-03, #task/<uid>/<tab>, #clock/<day>, #report/<day>, #settings, #p=<link code> ----------
@@ -275,7 +286,8 @@ const crewHrsLine = t => L('Crew of {size}: {allot} crew-hrs allotted, {est} est
 const addRow = (id, ph, a) => `<div class="edit-row"><input id="${id}" placeholder="${esc(ph)}" enterkeyhint="done" data-enter="${a}"><button class="x add" data-act="${a}" aria-label="${esc(ph)}">+</button></div>`;
 
 function assign(t) {
-  const people = [...new Set([...roster(S, t.crew), ...t.members])];
+  const people = [...new Map([...roster(S, t.crew), ...t.members].map(p => [nameKey(p), p])).values()]; // one chip a person, however spelled
+  const on = p => t.members.some(m => nameKey(m) === nameKey(p));
   const checks = [...new Set([...S.checks, ...t.checks.map(c => c.text)])];
   return `<section class="card"><h2>${L('Assignment')}</h2><div class="grid">
       ${field(L('Date'), 't.date', t.date, { type: 'date' })}${field(L('Assigned by'), 't.by', t.by)}
@@ -284,7 +296,7 @@ function assign(t) {
     </div>
     <div class="field"><span>${L('Crew')}</span><div class="chips">${S.crews.map(c => `<button class="chip" data-act="crew" data-v="${esc(c.name)}" aria-pressed="${t.crew === c.name}" style="${crewVar(c.name)}"><i class="dot"></i>${esc(c.name)}</button>`).join('')}</div></div>
     <div class="field"><span>${L('Crew members on this task')}</span>
-      ${people.length ? `<div class="chips">${people.map(p => `<button class="chip" data-act="member" data-v="${esc(p)}" aria-pressed="${t.members.includes(p)}">${esc(p)}</button>`).join('')}</div>` : ''}
+      ${people.length ? `<div class="chips">${people.map(p => `<button class="chip" data-act="member" data-v="${esc(p)}" aria-pressed="${on(p)}">${esc(p)}</button>`).join('')}</div>` : ''}
       ${addRow('newMember', L('Add a name'), 'addMember')}</div>
     <div class="grid">${field(L('Crew lead'), 't.lead', t.lead)}${field(L('Crew size'), 't.size', t.size, { type: 'number', mode: 'numeric' })}</div>
     ${datalist('floors', S.floors)}${datalist('areas', T.map(x => x.area))}
@@ -320,7 +332,7 @@ function brief(t) {
     ${t.scope ? `<p class="scope-text">${esc(t.scope)}</p>` : ''}
     <dl class="kv">${row(L('Drawings'), esc(t.refs))}${row(L('Planned'), t.pStart && esc(fromTo(t.pStart, t.pStop)))}${row(L('Check in at'), esc(t12(t.checkIn)))}
       ${row(L('Allotted'), t.allot && esc(L('{n} hrs', { n: t.allot })) + note(t.allotNote))}${row(L('Estimate'), t.est && esc(L('{n} hrs', { n: t.est })) + note(t.estNote))}
-      ${row(L('Crew'), esc(t.members.join(', ')))}${row(L('Assigned'), esc(niceDate(t.date) + (t.by ? ' · ' + L('by {name}', { name: t.by }) : '')))}</dl></section>`;
+      ${row(L('Crew'), t.members.map(m => esc(m) + (nameKey(m) && nameKey(m) === nameKey(S.worker) ? ` (${esc(L('you'))})` : '')).join(', '))}${row(L('Assigned'), esc(niceDate(t.date) + (t.by ? ' · ' + L('by {name}', { name: t.by }) : '')))}</dl></section>`;
 }
 
 function workedLine(t) {
@@ -530,12 +542,22 @@ async function act(a, el) {
       break;
     }
     case 'crew': pickCrew(t, v); break;
-    case 'member': t.members = t.members.includes(v) ? t.members.filter(m => m !== v) : [...t.members, v]; t.size = t.members.length; break;
+    case 'member': {
+      const same = m => nameKey(m) === nameKey(v);
+      t.members = t.members.some(same) ? t.members.filter(m => !same(m)) : [...t.members, v];
+      t.size = t.members.length;
+      break;
+    }
     case 'addMember': case 'addItem': case 'addCheck': {
       const input = document.getElementById({ addMember: 'newMember', addItem: 'newItem', addCheck: 'newCheck' }[a]);
       const text = input.value.trim();
       if (!text) return input.focus();
-      if (a === 'addMember') { if (!t.members.includes(text)) t.members.push(text); t.size = t.members.length; }
+      if (a === 'addMember') {
+        const name = findPerson(S, text)?.name || text.replace(/[\s,]+/g, ' ').trim().slice(0, 60); // a crew list's spelling, else as the list will save it
+        if (nameKey(name) && !t.members.some(m => nameKey(m) === nameKey(name))) t.members.push(name); // ',,,' adds nobody
+        t.size = t.members.length;
+        enlist(t, [name]);
+      }
       if (a === 'addItem') t.items.push(newItem(text));
       if (a === 'addCheck' && !t.checks.some(c => c.text === text)) t.checks.push(newItem(text));
       t.updatedAt = Date.now();
@@ -661,6 +683,7 @@ document.addEventListener('change', e => {
   if (e.target.matches('[data-pick]') && e.target.value) go(`${e.target.dataset.pick || 'day'}/${e.target.value}`);
   if (e.target.matches('[data-restore]') && e.target.files[0]) restore(e.target.files[0]);
   if (e.target.dataset.k === 't.date' && /^\d{4}-\d{2}-\d{2}$/.test(e.target.value)) day = e.target.value; // moved to another day
+  if (e.target.dataset.k === 's.worker') workerChange(S);
 });
 
 document.addEventListener('keydown', e => {

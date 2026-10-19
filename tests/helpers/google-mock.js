@@ -194,7 +194,7 @@ function readCells(sheet, rg, how) {
     out.push(row);
   }
   while (out.length && !out[out.length - 1].length) out.pop();
-  return { r1: rg.r1 ?? Math.max(r1, rg.r0), c1, values: out };
+  return { values: out };
 }
 function applyMask(obj, tree) {
   if (Array.isArray(obj)) return obj.map(x => applyMask(x, tree));
@@ -324,7 +324,8 @@ function makeSheets(hub) {
       capCells(m, work);
       return {};
     });
-    Object.assign(ss, { sheets: work.sheets, seq: work.seq });
+    const was = new Map(ss.sheets.map(x => [x.sheetId, x])); // keep each sheet object, so a test holding one still sees the live grid
+    Object.assign(ss, { sheets: work.sheets.map(w => (was.has(w.sheetId) ? Object.assign(was.get(w.sheetId), w) : w)), seq: work.seq });
     return { spreadsheetId: ss.id, replies };
   }
 
@@ -441,6 +442,8 @@ function translateWords(text, dict) {
     return t === undefined ? w : (w[0] === w[0].toUpperCase() && w[0] !== w[0].toLowerCase() ? t[0].toUpperCase() + t.slice(1) : t);
   });
 }
+// What an unprotected identifier can suffer: "E-301" loses its hyphen, "150 ft" becomes Spanish.
+const damage = s => s.replace(/\b([A-Z]{1,4})-(\d+)/g, '$1 $2').replace(/\b(\d+) ?ft\b/g, '$1 pies');
 const unescapeHtml = s => s.replace(/&(amp|lt|gt|quot|#39);/g, (m, g) => ({ amp: '&', lt: '<', gt: '>', quot: '"', '#39': "'" })[g]);
 // Google returns HTML-escaped text, apostrophes included.
 const escapeHtml = s => s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;').replace(/'/g, '&#39;');
@@ -453,7 +456,7 @@ function fakeTranslate(hub, text, from, to, opts) {
   if (hub.translateQuota !== Infinity && hub.translateLog.length > hub.translateQuota) throw new Error('Exception: Service invoked too many times for one day: LanguageApp.');
   if (hub.translateFail) throw new Error(hub.translateFail);
   const dict = from === 'en' ? EN_ES : ES_EN;
-  if (!opts || opts.contentType !== 'html') return translateWords(text, dict); // plain text: tags are just characters
+  if (!opts || opts.contentType !== 'html') return damage(translateWords(text, dict)); // plain text: tags are just characters, identifiers are fair game
   let depth = 0;
   return text.split(/(<[^>]+>)/).map(piece => {
     if (/^<[^>]+>$/.test(piece)) {
@@ -462,7 +465,7 @@ function fakeTranslate(hub, text, from, to, opts) {
       else if (/^<\/span>/.test(piece) && depth) depth--;
       return piece;
     }
-    return depth ? piece : escapeHtml(translateWords(unescapeHtml(piece), dict));
+    return depth ? piece : escapeHtml(damage(translateWords(unescapeHtml(piece), dict)));
   }).join('');
 }
 
@@ -482,7 +485,7 @@ function createHub(opts = {}) {
   const source = opts.source || fs.readFileSync(CODE_PATH, 'utf8');
   const hub = {
     calls: [], logs: [], spreadsheets: new Map(), props: {}, cache: new Map(), translateLog: [],
-    translateQuota: Infinity, translateFail: '', locked: false, contended: false, allowUnlockedWrites: false, failures: [],
+    translateQuota: Infinity, translateFail: '', cacheBroken: false, locked: false, contended: false, allowUnlockedWrites: false, failures: [],
     clockOffset: 0, fixedNow: opts.now === undefined ? null : opts.now,
   };
   hub.now = () => (hub.fixedNow === null ? Date.now() + hub.clockOffset : hub.fixedNow);
@@ -500,12 +503,19 @@ function createHub(opts = {}) {
     if (!Number.isInteger(ttl) || ttl < 1 || ttl > 21600) throw new Error('Exception: Invalid argument: expirationInSeconds');
     hub.cache.set(k, { v, until: hub.now() + ttl * 1000 });
   };
+  const alive = fn => (...a) => { if (hub.cacheBroken) throw new Error('Exception: Service error: Cache'); return fn(...a); };
   const cache = {
-    get: k => cacheGet(k),
-    getAll: keys => { const o = {}; for (const k of keys) { const v = cacheGet(k); if (v !== null) o[k] = v; } return o; },
-    put: cachePut,
-    putAll: (o, ttl) => { for (const k of Object.keys(o)) cachePut(k, o[k], ttl); },
-    remove: k => { hub.cache.delete(k); },
+    get: alive(k => cacheGet(k)),
+    getAll: alive(keys => {
+      if (!Array.isArray(keys) || keys.length > 100) throw new Error('Exception: Argument too large: keys (at most 100 per call)');
+      const o = {}; for (const k of keys) { const v = cacheGet(k); if (v !== null) o[k] = v; } return o;
+    }),
+    put: alive(cachePut),
+    putAll: alive((o, ttl) => {
+      if (Object.keys(o).length > 100) throw new Error('Exception: Argument too large: values (at most 100 per call)');
+      for (const k of Object.keys(o)) cachePut(k, o[k], ttl);
+    }),
+    remove: alive(k => { hub.cache.delete(k); }),
   };
   const setProp = (k, v) => {
     hub.assertLocked('PropertiesService write');

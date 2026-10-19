@@ -439,6 +439,7 @@ test('hours: workers push their own shifts, only the PM phone pushes the timeshe
   w.save('schwab.crewHours', [bogus]); sp.save('schwab.crewHours', [bogus]);
   await w.cycle(); await sp.cycle();
   assert.equal(hub.shifts.has('bogus1'), false);
+  assert.ok(hub.calls.every(c => !c.init.body.includes('bogus1')), 'the timesheet is not even offered by a phone that is not the PM');
   // a shift the PM adds by hand is pushed as sent; a later phone shift for that person and day is filed as gone and never shows on the worker's clock
   const manual = shared.normShift({ id: 'pmadd1', device: '', who: 'Tre W', date: DAY, in: '08:00', out: '16:00', edited: { who: true, in: true, out: true } });
   pm.save('schwab.crewHours', [...pm.crewHours(), manual]);
@@ -1410,4 +1411,48 @@ test('against the real hub/Code.gs (through the Google mock): a crew, a superint
   assert.equal(pushes, before);
   assert.deepEqual([sp.toasts, pm.toasts, cp.toasts], [[], [], []]);
   for (const p of [sp, pm, cp]) assert.equal(p.sync.hubStatus().pending, 0);
+});
+
+test('edits tapped while a pull is in flight are kept: a clock-out over a PM edit, a settings change over a hub one', async () => {
+  const hub = fresh(), pm = await makePhone(hub, 'pm'), w = await makePhone(hub, 'crew', { crew: 'Crew A', worker: 'Jose L' });
+  const a = await makePhone(hub, 'super'), b = await makePhone(hub, 'super');
+  const id = w.clockIn('Jose L', { crew: 'Crew A', tasks: ['T1'] });
+  await stable(w, pm, a, b);
+  tick(60e3);
+  pm.editCrewHours(id, s => { s.in = '07:30'; s.edited.in = true; s.crew = 'Crew B'; });
+  await pm.cycle();
+  a.save('schwab.settings', { ...a.settings(), floors: ['from the other office phone'] });
+  await a.cycle();
+  tick(60e3);
+  // while the worker's and b's pulls are on the wire, each person taps something
+  hub.before = async req => {
+    if (req.action !== 'pull') return;
+    if (req.dev === w.settings().device) { hub.before = null; w.editHours(id, s => { s.out = '15:30'; s.crew = 'Crew A'; }); }
+  };
+  await w.cycle();
+  assert.deepEqual([w.hours()[0].in, w.hours()[0].out], ['07:30', '15:30'], "the PM's fix and the clock-out both stand");
+  assert.equal(w.hours()[0].crew, 'Crew B', "the PM touched the shift: its crew is the PM's");
+  await stable(w, pm);
+  assert.deepEqual([hub.shifts.get(id).in, hub.shifts.get(id).out, hub.shifts.get(id).crew], ['07:30', '15:30', 'Crew B']);
+  hub.before = async req => { if (req.action === 'pull' && req.dev === b.settings().device) { hub.before = null; b.save('schwab.settings', { ...b.settings(), floors: ['typed on b meanwhile'] }); } };
+  tick(10e3);
+  await b.cycle();
+  assert.deepEqual(b.settings().floors, ['typed on b meanwhile'], 'a newer unsynced edit is not replaced by the hub copy');
+  await stable(b, a);
+  assert.deepEqual([hub.config.floors, a.settings().floors], [['typed on b meanwhile'], ['typed on b meanwhile']]);
+});
+
+test('the field lists here are the lists in hub/Code.gs, so the two cannot drift apart unnoticed', () => {
+  const dir = path.join(__dirname, '..', 'docs', 'schwab'), mine = fs.readFileSync(path.join(dir, 'sync.mjs'), 'utf8'), hubSrc = fs.readFileSync(path.join(dir, 'hub', 'Code.gs'), 'utf8');
+  const list = (src, name) => { const m = new RegExp(`const ${name} = (\\[[^\\]]*\\])`).exec(src); assert.ok(m, `${name} found`); return JSON.parse(m[1].replace(/'/g, '"')); };
+  assert.deepEqual(list(mine, 'A_KEYS'), [...list(hubSrc, 'ASSIGN'), ...list(hubSrc, 'OFFICE_EXTRA')], 'office part');
+  assert.deepEqual(list(mine, 'C_KEYS'), list(hubSrc, 'CREW'), 'crew part');
+  const keysOf = (src, name) => { const m = new RegExp(`const ${name} = \\{([^}]*)\\}`).exec(src); assert.ok(m, `${name} found`); return [...m[1].matchAll(/(\w+):/g)].map(x => x[1]); };
+  assert.deepEqual(keysOf(mine, 'X_TASK').sort(), ['aLang', 'assignAt', 'crewAt', 'reply', 'replyAt', 'replyBy'], 'the task fields shared.mjs still has to learn');
+  const hubTask = new Set(keysOf(hubSrc.slice(hubSrc.indexOf('const TASK =')), 'TASK'));
+  for (const k of [...list(mine, 'A_KEYS'), ...list(mine, 'C_KEYS'), ...keysOf(mine, 'X_TASK')]) assert.ok(hubTask.has(k), `the hub stores task field ${k}`);
+  const cfgMine = keysOf(mine, 'CFG_TPL'), cfgHub = keysOf(hubSrc, 'CONFIG');
+  assert.deepEqual(cfgMine.sort(), cfgHub.filter(k => k !== 'at').sort(), 'settings the hub shares');
+  assert.deepEqual(keysOf(mine, 'X_REPORT').sort(), ['lang', 'pmAt']);
+  assert.ok(/lang: 's', pmAt: 0/.test(hubSrc), 'the hub stores report lang and pmAt');
 });

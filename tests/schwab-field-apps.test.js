@@ -367,7 +367,7 @@ test('time clock: only real shifts are kept, weeks run Monday to Sunday, overnig
   const { normShift } = await lib;
   const { shiftMin, monday, byPerson } = await import('../docs/schwab/report.mjs');
   const ok = { id: 'k1abc', device: 'dev1', who: '  José L ', date: '2026-10-14', in: '07:00', out: '15:45' };
-  assert.deepEqual(normShift(ok), { ...ok, who: 'José L', edited: { who: false, in: false, out: false }, gone: false, at: 0 });
+  assert.deepEqual(normShift(ok), { ...ok, who: 'José L', crew: '', tasks: [], edited: { who: false, in: false, out: false }, gone: false, at: 0 });
   for (const bad of [{ ...ok, id: '<b>' }, { ...ok, date: '2026-02-30' }, { ...ok, in: '7:5' }, 'junk', null]) assert.equal(normShift(bad), null, 'not loggable: ' + JSON.stringify(bad));
   assert.equal(normShift({ ...ok, out: '"><script>' }).out, '', 'a bad clock-out is dropped, the shift stays open');
   assert.equal(normShift({ ...ok, device: 'x y' }).device, '');
@@ -417,13 +417,100 @@ test('time clock: worker links add and complete shifts, but never undo the PM', 
 test('time clock: the accountant spreadsheet totals each week and cannot run formulas', async () => {
   const { normShift } = await lib;
   const { byPerson, timesheetCsv } = await import('../docs/schwab/report.mjs');
-  const s = (id, who, date, inn, out, edited) => normShift({ id, device: 'd1', who, date, in: inn, out, edited: { in: false, out: !!edited } });
-  const csv = timesheetCsv(byPerson([s('a', 'Dana R', '2026-10-12', '07:00', '15:45'), s('b', 'Dana R', '2026-10-13', '22:00', '06:30', true), s('c', '=HYPERLINK("x")', '2026-10-13', '07:00', '')]));
+  const s = (id, who, date, inn, out, edited, more) => normShift({ id, device: 'd1', who, date, in: inn, out, edited: { in: false, out: !!edited }, ...more });
+  const csv = timesheetCsv(byPerson([s('a', 'Dana R', '2026-10-12', '07:00', '15:45', false, { crew: 'Crew A', tasks: ['T1012-01', 'T1012-02'] }), s('b', 'Dana R', '2026-10-13', '22:00', '06:30', true),
+    s('c', '=HYPERLINK("x")', '2026-10-13', '07:00', '', false, { crew: '@SUM(A1)', tasks: ['-1'] })]));
   const rows = csv.trim().split('\r\n');
-  assert.equal(rows[0], 'Name,Date,Day,Clock in,Clock out,Hours,Note');
-  assert.ok(rows.includes('"\'=HYPERLINK(""x"")",2026-10-13,Tue,7:00 AM,,,No clock-out'), 'a typed formula stays text; an open shift is flagged');
-  assert.ok(rows.includes('Dana R,2026-10-12,Mon,7:00 AM,3:45 PM,8.75,') && rows.includes('Dana R,2026-10-13,Tue,10:00 PM,6:30 AM,8.50,Edited by PM'));
-  assert.ok(rows.includes('Dana R,,,,Week total,17.25,') && rows.at(-1) === 'All crew,,,,Week total,17.25,', 'person and crew totals, to two decimals');
+  assert.equal(rows[0], 'Name,Crew,Date,Day,Clock in,Clock out,Hours,Tasks,Note');
+  assert.ok(rows.includes('"\'=HYPERLINK(""x"")",\'@SUM(A1),2026-10-13,Tue,7:00 AM,,,\'-1,No clock-out'), 'a typed formula stays text in the name, the crew and the tasks; an open shift is flagged');
+  assert.ok(rows.includes('Dana R,Crew A,2026-10-12,Mon,7:00 AM,3:45 PM,8.75,T1012-01; T1012-02,') && rows.includes('Dana R,Crew A,2026-10-13,Tue,10:00 PM,6:30 AM,8.50,,Edited by PM'),
+    "each shift's crew (the person's when the shift names none) and task ids");
+  assert.ok(rows.includes('Dana R,Crew A,,,,Week total,17.25,,') && rows.at(-1) === 'All crew,,,,,Week total,17.25,,', 'person and crew totals, to two decimals');
+});
+
+test('people: one roster in Settings, names matched however typed, a name added once', async () => {
+  const { nameKey, people, findPerson, addToCrew, roster } = await lib;
+  assert.equal(nameKey('  José   L '), 'jose l');
+  assert.equal(nameKey('JOSÉ L'), nameKey('jose\tl'), 'case, accents and any spacing');
+  assert.equal(nameKey('Zoë Ñúñez'), 'zoe nunez');
+  assert.equal(nameKey('Lopez, Jose'), 'lopez jose', 'a comma counts as a space');
+  assert.equal(nameKey('Mike O’Neil'), nameKey("Mike O'Neil"), "an iPhone's curly apostrophe is an Android's straight one");
+  assert.equal(nameKey('José L.'), nameKey('Jose L'), 'so is a period');
+  assert.equal(nameKey('Hernández-Ruiz'), nameKey('hernandez ruiz'), 'and a hyphen');
+  for (const empty of ['', '   ', null, undefined, '\u0301']) assert.equal(nameKey(empty), '');
+  const S = { crews: [{ name: 'Crew A', lead: '', members: 'José L, Luis M' }, { name: 'Crew B', lead: '', members: 'Ana P,  jose l ,' }, { name: 'Crew C', lead: '', members: '' }] };
+  assert.deepEqual(people(S), [{ name: 'José L', crew: 'Crew A' }, { name: 'Luis M', crew: 'Crew A' }, { name: 'Ana P', crew: 'Crew B' }, { name: 'jose l', crew: 'Crew B' }]);
+  assert.deepEqual(findPerson(S, 'JOSE  l'), { name: 'José L', crew: 'Crew A' }, 'the same name on two crews: the first in Settings order');
+  for (const nobody of ['', '  ', null, 'Ray K', 'José', '.,']) assert.equal(findPerson(S, nobody), undefined, 'no match for ' + nobody);
+  assert.deepEqual(findPerson(S, 'José L.'), { name: 'José L', crew: 'Crew A' }, 'punctuation does not make a second person');
+  assert.equal(addToCrew(S, 'Crew C', 'jose L'), false, 'already on a crew: never added twice');
+  assert.equal(addToCrew(S, 'Crew C', '  '), false, 'no name');
+  assert.equal(addToCrew(S, 'Crew Z', 'Ray K'), false, 'no such crew');
+  assert.equal(addToCrew(S, '', 'Ray K'), false, 'a sheet with no crew adds nobody');
+  assert.equal(addToCrew(S, 'Crew C', '  Ray   K '), true);
+  assert.equal(S.crews[2].members, 'Ray K');
+  assert.equal(addToCrew(S, 'Crew A', 'Kim, T'), true);
+  assert.equal(S.crews[0].members, 'José L, Luis M, Kim T', 'the list keeps its "A, B" form; a comma cannot split a name in two');
+  assert.deepEqual(roster(S, 'Crew A'), ['José L', 'Luis M', 'Kim T']);
+  assert.equal(addToCrew(S, 'Crew B', 'ray k'), false, 'Ray is on Crew C now');
+  assert.equal(addToCrew(S, 'Crew C', 'x'.repeat(200)), true);
+  assert.equal(roster(S, 'Crew C')[1].length, 60, 'a name is kept to 60 characters, like the time clock');
+});
+
+test('time clock: a shift carries its crew and task ids, in a safe shape', async () => {
+  const { normShift } = await lib;
+  const ok = { id: 'k1', device: 'd1', who: 'Jose L', date: '2026-10-14', in: '07:00' };
+  const n = normShift({ ...ok, crew: '  Crew A ', tasks: ['T1014-01', 'T1014-01', 'T1014-02'] });
+  assert.deepEqual([n.crew, n.tasks], ['Crew A', ['T1014-01', 'T1014-02']], 'trimmed; each id once');
+  const hostile = normShift({ ...ok, crew: '<b>' + 'x'.repeat(5000), tasks: ['<img src=x onerror=alert(1)>', 'a b', '', 'x'.repeat(21), 42, null, { id: 'T1' }, ['T1'], '../etc', '"><', 'T1014-03', ...Array.from({ length: 20 }, (_, i) => 'T' + i)] });
+  assert.equal(hostile.crew.length, 60, 'a crew name is kept to 60 characters (and shown escaped)');
+  assert.deepEqual(hostile.tasks, ['a b', '../etc', 'T1014-03', 'T0', 'T1', 'T2', 'T3', 'T4', 'T5', 'T6'], 'only plain text ids of up to 20 characters, at most 10 (no markup or quotes)');
+  assert.deepEqual(normShift({ ...ok, tasks: ['L3 East-14', 'T1014.02', 'Baño-2', 'E-301/4', ' T7 ', '#12', '=1+1', '@SUM', '+1', "O'1", '   '] }).tasks,
+    ['L3 East-14', 'T1014.02', 'Baño-2', 'E-301/4', 'T7', '#12'], 'an id typed on the sheet with a space, dot, accent or slash goes with the hours; = + @ and quotes do not');
+  const wrongTypes = normShift({ ...ok, crew: { evil: 1 }, tasks: 'T1' });
+  assert.deepEqual([wrongTypes.crew, wrongTypes.tasks], ['', []]);
+  assert.deepEqual(normShift({ ...ok, tasks: Array(5000).fill('T1') }).tasks, ['T1']);
+});
+
+test('time clock: the sheets that list a worker that day give the crew and task ids', async () => {
+  const { normTask, assignmentFor } = await lib;
+  const t = (id, date, crew, members) => normTask({ uid: 'u' + id, id, date, crew, members });
+  const tasks = [t('T2', '2026-10-14', '', ['jose  l']), t('T1', '2026-10-14', 'Crew A', ['José L', 'Luis M']), t('T3', '2026-10-14', 'Crew B', ['JOSE L']),
+    t('T4', '2026-10-15', 'Crew C', ['Jose L']), t('T5', '2026-10-14', 'Crew D', ['Ana P', '']), t('T1', '2026-10-14', 'Crew A', ['Jose L']), t('', '2026-10-14', 'Crew E', ['Jose L'])];
+  const a = assignmentFor(tasks, 'Jose L', '2026-10-14');
+  assert.deepEqual([a.crew, a.tasks], ['Crew A', ['T2', 'T1', 'T3']], "every sheet that day, whatever the case, accents or spacing; the first sheet's crew that names one; each id once");
+  assert.equal(a.sheets.length, 5, 'the sheets themselves, for the Today card');
+  assert.deepEqual(assignmentFor(tasks, 'jose l', '2026-10-15'), { crew: 'Crew C', tasks: ['T4'], sheets: [tasks[3]] }, 'another day, its own sheet');
+  assert.deepEqual(assignmentFor(tasks, 'Jose L', '2026-10-16'), { crew: '', tasks: [], sheets: [] }, 'a day with no sheets');
+  assert.deepEqual(assignmentFor(tasks, 'Ray K', '2026-10-14'), { crew: '', tasks: [], sheets: [] }, 'a name on no sheet');
+  for (const blank of ['', '  ', null]) assert.deepEqual(assignmentFor(tasks, blank, '2026-10-14').tasks, [], 'no name matches nothing, not even an empty member');
+});
+
+test("time clock: crew and task ids follow the worker's texts and never undo the PM", async () => {
+  const { normShift } = await lib;
+  const { importShifts, byPerson } = await import('../docs/schwab/report.mjs');
+  const shift = (set = {}) => normShift({ id: 'a', device: 'dana1', who: 'Dana R', date: '2026-10-14', in: '07:00', ...set });
+  const log = [];
+  importShifts(log, [shift({ tasks: ['T1'] })], 1);
+  assert.deepEqual([log[0].crew, log[0].tasks], ['', ['T1']], 'the clock-in text: on one sheet, no crew yet');
+  Object.assign(log[0], { out: '15:00', who: 'Dana Ruiz', edited: { who: true, in: false, out: true } }); // the PM fixes the out time and the name
+  assert.deepEqual(importShifts(log, [shift({ out: '15:30', crew: 'Crew A', tasks: ['T1', 'T2'] })], 2), { added: 0, updated: 1, skipped: 0 }, 'the clock-out text brings the crew and a sheet assigned since');
+  assert.deepEqual([log[0].who, log[0].out, log[0].crew, log[0].tasks], ['Dana Ruiz', '15:00', 'Crew A', ['T1', 'T2']], "and the PM's name and out time stay");
+  assert.deepEqual(importShifts(log, [shift({ tasks: ['T1'] })], 1), { added: 0, updated: 0, skipped: 0 }, 'the clock-in text opened late takes nothing away');
+  assert.deepEqual([log[0].crew, log[0].tasks], ['Crew A', ['T1', 'T2']]);
+  importShifts(log, [shift({ device: 'other', crew: 'Crew Z', tasks: ['T9'] })], 3);
+  log[0].gone = true;
+  importShifts(log, [shift({ crew: 'Crew Z', tasks: ['T9'] })], 4);
+  assert.deepEqual([log[0].crew, log[0].tasks], ['Crew A', ['T1', 'T2']], "another phone's link, or one for a shift the PM removed, changes nothing");
+  const byHand = [normShift({ id: 'pm1', who: 'Ana P', date: '2026-10-12', in: '07:00', edited: { who: true, in: true, out: true } })];
+  importShifts(byHand, [shift({ id: 'e', who: 'ána p', date: '2026-10-12', crew: 'Crew B' })], 5);
+  assert.deepEqual(byHand.map(s => s.gone), [false, true], 'a day the PM added by hand matches the late text whatever its accents');
+
+  const S = { crews: [{ name: 'Crew B', lead: '', members: 'Ana P' }] };
+  const ps = byPerson([shift({ id: 'p1', who: 'José L', date: '2026-10-12', crew: 'Crew A' }), shift({ id: 'p2', who: 'jose l', date: '2026-10-14', crew: 'Crew C' }), shift({ id: 'p3', who: 'Jose  L', date: '2026-10-15' }),
+    shift({ id: 'p4', who: 'ana p', date: '2026-10-13' }), shift({ id: 'p5', who: 'Ray K', date: '2026-10-13' })], 'en', S);
+  assert.deepEqual(ps.map(p => [p.who, p.shifts.length, p.crew]), [['Ana P', 1, 'Crew B'], ['José L', 3, 'Crew C'], ['Ray K', 1, '']],
+    "one timesheet per person however typed, under the crew list's spelling when it has one; the week's latest crew, else the crew lists, else none");
 });
 
 test('a tab still on the old version cannot wipe the passcode', async () => {

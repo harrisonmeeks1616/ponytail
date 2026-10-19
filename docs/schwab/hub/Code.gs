@@ -19,6 +19,20 @@
 //   4. In the app: Settings > Hub: paste the /exec URL and the PM key, Test the hub, then Invite crew.
 // The Sheet is the database. The last column of each tab (data, JSON) is the truth; the readable columns are
 // rewritten from it. Edit through the app, not in the Sheet.
+// Google lets one user make only a few dozen Sheets requests a minute, and every request here runs as the owner. So a
+// pull reads the Sheet once per revision and every other phone is answered from CacheService (see "the pull cache").
+//
+// DETAILS BEYOND HUB.md (the contract says the rest):
+//   - purge sends the record's key as `target`: `key` is already the request's own credential. A push can also carry deleted:[{kind,key}].
+//   - kinds are 'tasks' | 'shifts' | 'reports' (records also 'events'); the singular is accepted on input.
+//   - every push result carries `i`, its index in the request; `key` is '' when the sent key had an unsafe shape. A refusal
+//     has status 'rejected' and a reason: forbidden | invalid | too_large | device | deleted | archived. Config answers with
+//     configStatus / configReason. Both limits of 200 entities apply per kind.
+//   - a pull cuts each list at 500 and then lowers `rev` to what it really sent and adds more:true; call again from that rev.
+//   - a part whose stamp is 0 was not sent: it never replaces an existing one. A key may write the other role's part
+//     only with a strictly newer stamp (a tie never wipes someone else's work).
+//   - archive moves rows older than `before` (not in the future); hours move in whole Monday-to-Sunday weeks. A later push
+//     of an archived record is refused with 'archived'.
 
 const HUB_VERSION = '1.0.0';
 const HUB_TZ = 'America/New_York'; // the job's time zone; appsscript.json sets the same, and the hours math depends on it
@@ -33,25 +47,24 @@ const FORMAT = {
 };
 
 // ---------- the sheet layout ----------
-// Readable columns first, then key, rev, data. date: the column that places a row in time (windows, archive).
-// Weekly totals, Deleted have no data column: the first is derived, the second is only keys.
+// Readable columns first, then key, rev, data. Weekly totals and Deleted have no data column: the first is derived
+// from Hours, the second is only keys. (Which columns a pull reads to find rows is TABS[x].idx, below.)
 const HEAD_TASKS = ['Date', 'Task ID', 'Crew', 'Floor', 'Area', 'Status', 'Steps done', 'Minutes worked', 'Scope', 'Completed', 'Remaining', 'Crew comments', 'Review', 'Follow-up', 'Reply', 'Updated', 'key', 'rev', 'data'];
 const HEAD_HOURS = ['Name', 'Week of', 'Date', 'Day', 'Clock in', 'Clock out', 'Hours', 'Edited by PM', 'Note', 'Crew', 'Tasks', 'key', 'rev', 'data'];
 const TABS = {
-  tasks: { title: 'Tasks', head: HEAD_TASKS, date: 0, crew: 2, width: [85, 85, 80, 85, 110, 80, 70, 80, 260, 220, 220, 220, 110, 200, 220, 120, 90, 50, 60] },
-  shifts: { title: 'Hours', head: HEAD_HOURS, date: 2, width: [140, 85, 85, 50, 70, 70, 60, 80, 100, 90, 140, 90, 50, 60] },
+  tasks: { title: 'Tasks', head: HEAD_TASKS, width: [85, 85, 80, 85, 110, 80, 70, 80, 260, 220, 220, 220, 110, 200, 220, 120, 90, 50, 60] },
+  shifts: { title: 'Hours', head: HEAD_HOURS, width: [140, 85, 85, 50, 70, 70, 60, 80, 100, 90, 140, 90, 50, 60] },
   weekly: { title: 'Weekly totals', head: ['Name', 'Week of', 'Hours', 'Shifts', 'Open shifts'], width: [160, 90, 70, 70, 90] },
-  reports: { title: 'Reports', head: ['Date', 'Superintendent', 'Status', 'Results', 'Wins', 'Issues', 'Decisions waiting', 'PM review', 'key', 'rev', 'data'], date: 0, width: [85, 140, 100, 300, 220, 220, 100, 220, 90, 50, 60] },
-  events: { title: 'Activity', head: ['When', 'Who', 'What', 'Ref', 'key', 'rev', 'data'], date: 0, width: [130, 120, 380, 110, 70, 50, 60] },
+  reports: { title: 'Reports', head: ['Date', 'Superintendent', 'Status', 'Results', 'Wins', 'Issues', 'Decisions waiting', 'PM review', 'key', 'rev', 'data'], width: [85, 140, 100, 300, 220, 220, 100, 220, 90, 50, 60] },
+  events: { title: 'Activity', head: ['When', 'Who', 'What', 'Ref', 'key', 'rev', 'data'], width: [130, 120, 380, 110, 70, 50, 60] },
   deleted: { title: 'Deleted', head: ['key', 'kind', 'rev', 'when'], width: [120, 70, 60, 130] },
   config: { title: 'Config', head: ['Project', 'Site', 'Superintendent', 'Project manager', 'Updated', 'key', 'rev', 'data'], width: [180, 140, 140, 140, 120, 70, 50, 60] },
 };
 Object.keys(TABS).forEach(function (n) {
   const t = TABS[n];
-  t.name = n; t.key = t.head.indexOf('key'); t.rev = t.head.indexOf('rev'); t.data = t.head.indexOf('data');
+  t.key = t.head.indexOf('key'); t.rev = t.head.indexOf('rev'); t.data = t.head.indexOf('data');
   if (n === 'deleted') { t.key = 0; t.rev = 2; }
 });
-const ENTITY_TABS = ['tasks', 'shifts', 'reports', 'events', 'config'];
 const KINDS = { task: 'tasks', tasks: 'tasks', shift: 'shifts', shifts: 'shifts', report: 'reports', reports: 'reports' };
 
 // ---------- entity templates (what a stored entity looks like) ----------
@@ -83,7 +96,8 @@ const CONFIG = { project: 's', site: 's', super: 's', pm: 's', floors: ['s'], cr
 const REPORT_STATUS = ['On plan', 'At risk', 'Behind plan', 'No work today'];
 
 // ---------- small helpers ----------
-function HubError_(code) { this.code = code; }
+function HubError_(code) { this.name = 'HubError'; this.code = code; this.message = MESSAGES[code]; } // an Error, so the editor shows the message
+HubError_.prototype = Object.create(Error.prototype);
 function fail_(code) { throw new HubError_(code); }
 const MESSAGES = {
   bad_request: 'Bad request', unauthorized: 'Wrong key', forbidden: 'Not allowed for this key', busy: 'Busy, try again shortly',
@@ -166,8 +180,6 @@ function apiBatch_(id, requests) { return Sheets.Spreadsheets.batchUpdate({ requ
 function apiValuesGet_(id, range) { return Sheets.Spreadsheets.Values.get(id, range, { valueRenderOption: 'UNFORMATTED_VALUE' }); }
 // spreadsheets.values.batchGet
 function apiValuesBatchGet_(id, ranges) { return Sheets.Spreadsheets.Values.batchGet(id, { ranges: ranges, valueRenderOption: 'UNFORMATTED_VALUE' }).valueRanges; }
-// spreadsheets.values.update
-function apiValuesUpdate_(id, range, values) { return Sheets.Spreadsheets.Values.update({ range: range, majorDimension: 'ROWS', values: values }, id, range, { valueInputOption: 'RAW' }); }
 // spreadsheets.values.batchUpdate
 function apiValuesBatchUpdate_(id, data) { return Sheets.Spreadsheets.Values.batchUpdate({ valueInputOption: 'RAW', data: data }, id); }
 // spreadsheets.values.append
@@ -305,18 +317,23 @@ function roleOf_(key, P) { // all three comparisons always run; the PM key is on
 
 // ponytail: cache counters are not atomic across parallel executions, so the limits are approximate.
 // Fine for a throttle; move the counters under the script lock if exact counts ever matter.
+// A broken cache fails open (no throttle) rather than taking every request down with it.
 function bump_(cache, name, now) {
-  const parts = String(cache.get(name) || '').split(':');
-  let start = Number(parts[0]), n = Number(parts[1]);
-  if (!(now - start < WINDOW_S * 1000)) { start = now; n = 0; }
-  n++;
-  cache.put(name, start + ':' + n, WINDOW_S);
-  return n;
+  try {
+    const parts = String(cache.get(name) || '').split(':');
+    let start = Number(parts[0]), n = Number(parts[1]);
+    if (!(now - start < WINDOW_S * 1000)) { start = now; n = 0; }
+    n++;
+    cache.put(name, start + ':' + n, WINDOW_S);
+    return n;
+  } catch (e) { return 0; }
 }
+function trip_(cache) { try { cache.put('busy', '1', WINDOW_S); cache.remove('badkeys'); } catch (e) { /* fail open */ } }
+function isBusy_(cache) { try { return !!cache.get('busy'); } catch (e) { return false; } }
 
 function handle_(e) {
   const cache = CacheService.getScriptCache(), now = Date.now();
-  if (cache.get('busy')) fail_('busy');
+  if (isBusy_(cache)) fail_('busy');
   const body = e && e.postData && e.postData.contents;
   if (typeof body !== 'string') fail_('bad_request');
   if (body.length > MAX_BODY) fail_('too_large');
@@ -326,7 +343,7 @@ function handle_(e) {
   const P = PropertiesService.getScriptProperties().getProperties(); // one read: keys, rev, sheet id
   const role = roleOf_(req.key, P);
   if (!role) {
-    if (bump_(cache, 'badkeys', now) >= BAD_KEY_LIMIT) { cache.put('busy', '1', WINDOW_S); cache.remove('badkeys'); }
+    if (bump_(cache, 'badkeys', now) >= BAD_KEY_LIMIT) trip_(cache);
     fail_('unauthorized');
   }
   if (!own_(ACTIONS, req.action)) fail_('bad_request');
@@ -342,6 +359,7 @@ function handle_(e) {
 }
 
 // Every write runs under the script lock, on fresh properties; rev is saved last, even after a failure part way.
+// ponytail: one script lock serializes all writes. Fine for one crew; the real ceiling is Google's own request quota.
 function locked_(ctx, key, run) {
   return withScriptLock_(20000, function () {
     const props = PropertiesService.getScriptProperties();
@@ -369,9 +387,9 @@ TABS.events.idx = { key: TABS.events.key, rev: TABS.events.rev, date: 0 };
 TABS.config.idx = { key: TABS.config.key, rev: TABS.config.rev };
 TABS.deleted.idx = { key: 0, kind: 1, rev: 2 };
 
-function readIndex_(ctx, name) { // [{row, key, rev, date?, crew?, kind?}] in sheet order
+function indexRanges_(name) { const t = TABS[name]; return Object.keys(t.idx).map(function (n) { return a1_(t, t.idx[n], 2, t.idx[n]); }); }
+function parseIndex_(name, cols) { // [{row, key, rev, date?, crew?, kind?}] in sheet order, from this tab's index columns
   const t = TABS[name], names = Object.keys(t.idx);
-  const cols = apiValuesBatchGet_(ctx.id, names.map(function (n) { return a1_(t, t.idx[n], 2, t.idx[n]); }));
   const vals = names.map(function (n, i) { return cols[i].values || []; });
   const count = Math.max.apply(null, vals.map(function (v) { return v.length; }).concat([0]));
   const rows = [];
@@ -385,6 +403,68 @@ function readIndex_(ctx, name) { // [{row, key, rev, date?, crew?, kind?}] in sh
   }
   return rows;
 }
+// A writer always reads the Sheet itself (it must see exact row numbers). A pull primes ctx.memo.ixAll first.
+function readIndex_(ctx, name) {
+  if (ctx.memo.ixAll) return ctx.memo.ixAll[name];
+  return parseIndex_(name, apiValuesBatchGet_(ctx.id, indexRanges_(name)));
+}
+// ponytail: one pass over every index column per revision, O(rows); archive keeps the Sheet small.
+// Upgrade: keep the index in the cache and patch it from each write.
+function readAllIndex_(ctx) { // every tab's index columns in ONE request: Google allows few requests a minute per user
+  const names = Object.keys(TABS).filter(function (n) { return TABS[n].idx; }), ranges = [];
+  names.forEach(function (n) { indexRanges_(n).forEach(function (r) { ranges.push(r); }); });
+  const vr = apiValuesBatchGet_(ctx.id, ranges), all = {};
+  let at = 0;
+  names.forEach(function (n) { const k = Object.keys(TABS[n].idx).length; all[n] = parseIndex_(n, vr.slice(at, at + k)); at += k; });
+  return all;
+}
+
+// ---------- the pull cache ----------
+// Every phone pulls after every change, but the answer for one revision is the same for all of them. The first
+// pull after a change reads the index (one request) and the changed rows (one request); the rest are served from
+// CacheService. Keys carry the revision (index) or the row's own revision (entity), so an entry can never be
+// out of date; the cache is only ever a speed-up and any miss or failure falls back to the Sheet.
+const IX_CHUNK = 90000, CACHE_BATCH = 50, CACHE_TTL = 21600;
+function cacheGetAll_(cache, keys) {
+  const out = {};
+  try { for (let i = 0; i < keys.length; i += CACHE_BATCH) Object.assign(out, cache.getAll(keys.slice(i, i + CACHE_BATCH))); } catch (e) { /* a miss */ }
+  return out;
+}
+function cachePutAll_(cache, obj, ttl) {
+  const keys = Object.keys(obj);
+  try {
+    for (let i = 0; i < keys.length; i += CACHE_BATCH) {
+      const part = {};
+      keys.slice(i, i + CACHE_BATCH).forEach(function (k) { part[k] = obj[k]; });
+      cache.putAll(part, ttl);
+    }
+  } catch (e) { /* too big or full: the next reader reads the Sheet */ }
+}
+function loadAllIndex_(ctx) {
+  const base = 'ix:' + ctx.state.rev;
+  if (!ctx.memo.noCache) {
+    const n = Number(cacheGetAll_(ctx.cache, [base + ':n'])[base + ':n']);
+    if (n > 0 && n < 50) {
+      const keys = [];
+      for (let i = 0; i < n; i++) keys.push(base + ':' + i);
+      const got = cacheGetAll_(ctx.cache, keys);
+      if (keys.every(function (k) { return typeof got[k] === 'string'; })) {
+        try { ctx.memo.ixAll = JSON.parse(keys.map(function (k) { return got[k]; }).join('')); return; } catch (e) { /* rebuild */ }
+      }
+    }
+  }
+  const all = readAllIndex_(ctx), json = JSON.stringify(all), put = {};
+  let n = 0;
+  for (let i = 0; i < json.length; i += IX_CHUNK) put[base + ':' + n++] = json.slice(i, i + IX_CHUNK);
+  put[base + ':n'] = String(n);
+  if (n < 50) cachePutAll_(ctx.cache, put, 900); // a bigger index is rebuilt each time; archive keeps the Sheet small
+  ctx.memo.ixAll = all;
+}
+// Forget what this request read and read the Sheet itself (rows moved under us: a purge, or someone sorted the tab).
+function dropReads_(ctx) {
+  Object.keys(ctx.memo).forEach(function (k) { if (k === 'ixAll' || k.indexOf('raw:') === 0) delete ctx.memo[k]; });
+  ctx.memo.noCache = true;
+}
 function runs_(rows) { // row numbers -> [[first, last], ...] of consecutive rows
   const out = [];
   rows.slice().sort(function (a, b) { return a - b; }).forEach(function (r) {
@@ -393,22 +473,59 @@ function runs_(rows) { // row numbers -> [[first, last], ...] of consecutive row
   });
   return out;
 }
-function readData_(ctx, name, rows) { // {row: parsed data object} for the rows that hold valid JSON
-  const t = TABS[name], out = {}, rs = runs_(rows);
-  for (let i = 0; i < rs.length; i += 40) {
-    const part = rs.slice(i, i + 40);
-    const vr = apiValuesBatchGet_(ctx.id, part.map(function (r) { return a1_(t, t.data, r[0], t.data, r[1]); }));
-    part.forEach(function (r, j) {
-      const vals = vr[j].values || [];
-      for (let row = r[0]; row <= r[1]; row++) {
-        const c = vals[row - r[0]];
-        let obj = null;
-        try { obj = JSON.parse(cellText_(c && c[0])); } catch (x) { obj = null; }
-        if (isObj_(obj)) out[row] = obj;
-      }
+function parseCell_(text) { let o = null; try { o = JSON.parse(text); } catch (x) { o = null; } return isObj_(o) ? o : null; }
+// Read the data cells of these rows from the Sheet: {name: {row: cell text}} for several tabs in as few requests as possible.
+function readCells_(ctx, wants) {
+  const jobs = [], out = {};
+  Object.keys(wants).forEach(function (name) {
+    out[name] = {};
+    runs_(wants[name]).forEach(function (r) { jobs.push({ name: name, r: r }); });
+  });
+  for (let i = 0; i < jobs.length; i += 40) {
+    const part = jobs.slice(i, i + 40);
+    const vr = apiValuesBatchGet_(ctx.id, part.map(function (j) { const t = TABS[j.name]; return a1_(t, t.data, j.r[0], t.data, j.r[1]); }));
+    part.forEach(function (j, k) {
+      const vals = vr[k].values || [];
+      for (let row = j.r[0]; row <= j.r[1]; row++) { const c = vals[row - j.r[0]]; out[j.name][row] = cellText_(c && c[0]); }
     });
   }
   return out;
+}
+function readData_(ctx, name, rows) { // {row: parsed data object} for the rows that hold valid JSON
+  const memo = ctx.memo['raw:' + name] || {}, out = {}, miss = [];
+  rows.forEach(function (r) { if (memo[r]) out[r] = memo[r]; else miss.push(r); });
+  if (miss.length) {
+    const w = {};
+    w[name] = miss;
+    const cells = readCells_(ctx, w)[name];
+    Object.keys(cells).forEach(function (r) { const o = parseCell_(cells[r]); if (o) out[r] = o; });
+  }
+  return out;
+}
+// A pull knows every row it needs up front: serve them from the cache, and fetch what is missing in ONE request.
+function prefetch_(ctx, wants) { // wants: {name: [index entries]}; fills ctx.memo['raw:' + name]
+  const ek = function (name, x) { return 'en:' + name + ':' + x.key + ':' + x.rev; };
+  const need = [];
+  Object.keys(wants).forEach(function (name) {
+    const memo = ctx.memo['raw:' + name] || (ctx.memo['raw:' + name] = {}), seen = {};
+    wants[name].forEach(function (x) { if (!memo[x.row] && !seen[x.row]) { seen[x.row] = true; need.push({ name: name, x: x }); } });
+  });
+  const got = ctx.memo.noCache ? {} : cacheGetAll_(ctx.cache, need.map(function (n) { return ek(n.name, n.x); })), miss = {};
+  need.forEach(function (n) {
+    const o = typeof got[ek(n.name, n.x)] === 'string' ? parseCell_(got[ek(n.name, n.x)]) : null;
+    if (o) ctx.memo['raw:' + n.name][n.x.row] = o; else (miss[n.name] = miss[n.name] || []).push(n.x);
+  });
+  if (!Object.keys(miss).length) return;
+  const wantRows = {};
+  Object.keys(miss).forEach(function (name) { wantRows[name] = miss[name].map(function (x) { return x.row; }); });
+  const cells = readCells_(ctx, wantRows), put = {};
+  Object.keys(miss).forEach(function (name) {
+    miss[name].forEach(function (x) {
+      const text = cells[name][x.row], o = parseCell_(text);
+      if (o) { ctx.memo['raw:' + name][x.row] = o; put[ek(name, x)] = text; }
+    });
+  });
+  cachePutAll_(ctx.cache, put, CACHE_TTL);
 }
 
 function newBatch_() { return { upd: [], add: {}, del: {}, hours: false }; }
@@ -428,6 +545,7 @@ function flush_(ctx, b) {
   Object.keys(b.add).forEach(function (n) {
     for (let i = 0; i < b.add[n].length; i += 100) apiValuesAppend_(ctx.id, rowRange_(n, 1), b.add[n].slice(i, i + 100));
   });
+  if (b.warm) cachePutAll_(ctx.cache, b.warm, CACHE_TTL);
 }
 
 // An entry is one stored row: {row (0 = new), obj, rev, json, item}. save_ writes a changed entity once, even
@@ -448,6 +566,7 @@ function save_(ctx, b, name, entry, obj, rowFn) {
     (b.add[name] = b.add[name] || []).push(values);
   }
   entry.obj = obj; entry.json = json;
+  (b.warm || (b.warm = {}))['en:' + name + ':' + values[TABS[name].key] + ':' + entry.rev] = json; // what the cell now holds, for the first pull
   return true;
 }
 function appendRow_(ctx, b, name, values) { (b.add[name] = b.add[name] || []).push(values); }
@@ -474,7 +593,9 @@ function configRow_(c, rev, now, json) { return rowBase_(TABS.config, [c.project
 function addEvent_(ctx, b, kind, who, text, ref) { // server-written, append only
   if (ctx.system) return; // the selftest leaves no trace in the feed
   const rev = nextRev_(ctx), ev = { rev: rev, ts: ctx.now, who: clip_(who || ctx.role, 100), role: ctx.role, kind: kind, text: clip_(text, 300), ref: clip_(ref, 60) };
-  appendRow_(ctx, b, 'events', [stampText_(ev.ts), ev.who, ev.text, ev.ref, String(rev), rev, JSON.stringify(ev)]);
+  const json = JSON.stringify(ev);
+  appendRow_(ctx, b, 'events', [stampText_(ev.ts), ev.who, ev.text, ev.ref, String(rev), rev, json]);
+  (b.warm || (b.warm = {}))['en:events:' + rev + ':' + rev] = json;
 }
 
 // Load the stored rows for these keys (and every row on these dates, for the twin check) as entries.
@@ -552,6 +673,8 @@ function structure_(incoming, stored) { // the office decides which items exist;
     return { id: i.id, text: i.text, done: s ? s.done : false, at: s ? s.at : 0 };
   });
 }
+// ponytail: the crew part is replaced whole by the newest stamp, so two crew phones ticking different steps while
+// offline keep only the newer phone's ticks. Upgrade: a stamp per step (untick must carry one too: it sets at to 0).
 function ticks_(stored, incoming) { // the crew ticks items that exist; it cannot add, remove or reword one
   return stored.map(function (s) {
     const i = incoming.find(function (x) { return x.id === s.id; });
@@ -561,16 +684,17 @@ function ticks_(stored, incoming) { // the crew ticks items that exist; it canno
 
 // Task. A crew key only ever reaches the crew part. An office key writes both parts, but a part belonging to
 // the other role needs a strictly newer stamp, so a tie can never wipe results typed on a crew phone.
+// A phone sends only the part it changed, so a part with stamp 0 was not sent: it never replaces an existing one.
 function mergeTask_(ctx, stored, inc) {
   const office = ctx.role !== 'crew';
   if (!stored && !office) return { reason: 'forbidden' }; // only the office creates a task
   const t = stored ? clone_(stored) : shape_(TASK, { uid: inc.uid }), was = stored ? clone_(stored) : null;
-  if (office && (!stored || inc.assignAt >= t.assignAt)) {
+  if (office && (!stored || (inc.assignAt > 0 && inc.assignAt >= t.assignAt))) {
     ASSIGN.concat(OFFICE_EXTRA).forEach(function (k) { t[k] = inc[k]; });
     t.items = structure_(inc.items, t.items); t.checks = structure_(inc.checks, t.checks);
     t.assignAt = inc.assignAt;
   }
-  if (ctx.role === 'crew' ? inc.crewAt >= t.crewAt : inc.crewAt > t.crewAt) {
+  if (ctx.role === 'crew' ? inc.crewAt > 0 && inc.crewAt >= t.crewAt : inc.crewAt > t.crewAt) {
     CREW.forEach(function (k) { t[k] = inc[k]; });
     t.items = ticks_(t.items, inc.items); t.checks = ticks_(t.checks, inc.checks);
     t.crewAt = inc.crewAt;
@@ -587,6 +711,7 @@ function mergeTask_(ctx, stored, inc) {
 // Shift. Worker rules for a phone's own plain shift (any key); PM rules for everything the PM touches.
 const noEdits_ = { who: false, in: false, out: false };
 function edited_(s) { return s.edited.who || s.edited.in || s.edited.out; }
+// ponytail: ctx.dev is whatever the phone says it is: a device id is a name that keeps honest phones apart, not a secret.
 function mergeShift_(ctx, stored, inc, state) {
   const plain = inc.device !== '' && inc.device === ctx.dev && !inc.gone && !edited_(inc);
   const ev = [], line = function (verb, s) { return verb + ' ' + (s.who || 'a worker') + ', ' + s.date; };
@@ -630,7 +755,7 @@ function mergeShift_(ctx, stored, inc, state) {
 function mergeReport_(ctx, stored, inc) {
   if (ctx.role === 'crew') return { reason: 'forbidden' };
   const r = stored ? clone_(stored) : shape_(REPORT, { date: inc.date }), was = stored ? clone_(stored) : null, pm = ctx.role === 'pm';
-  if (!stored || (pm ? inc.updatedAt > r.updatedAt : inc.updatedAt >= r.updatedAt)) {
+  if (!stored || (pm ? inc.updatedAt > r.updatedAt : inc.updatedAt > 0 && inc.updatedAt >= r.updatedAt)) {
     const answers = r.decisions;
     Object.keys(REPORT).forEach(function (k) { if (k !== 'decisions' && k !== 'pmReview' && k !== 'pmAt') r[k] = inc[k]; });
     const kept = inc.decisions.map(function (d) {
@@ -640,7 +765,7 @@ function mergeReport_(ctx, stored, inc) {
     answers.forEach(function (a) { if ((a.pm || a.pmNote) && !kept.some(function (k) { return k.q === a.q; })) kept.push(a); }); // an answer is never dropped
     r.decisions = kept;
   }
-  if (pm && inc.pmAt >= r.pmAt) {
+  if (pm && (inc.pmAt > 0 || !stored) && inc.pmAt >= r.pmAt) {
     inc.decisions.forEach(function (d) {
       const m = d.q ? r.decisions.find(function (x) { return x.q === d.q; }) : null;
       if (m) { m.pm = d.pm; m.pmNote = d.pmNote; } else if (d.pm || d.pmNote) r.decisions.push({ q: d.q, rec: d.rec, by: d.by, pm: d.pm, pmNote: d.pmNote });
@@ -770,6 +895,8 @@ function weeklyRows_(hours) { // Hours rows (columns A..I) -> Weekly totals rows
     return a.week < b.week ? 1 : a.week > b.week ? -1 : x < y ? -1 : x > y ? 1 : 0;
   }).map(function (g) { return [g.who, g.week, g.cents / 100, g.n, g.open]; });
 }
+// ponytail: reads the whole Hours tab on every shift write, O(shifts); archive keeps it small.
+// Upgrade: recompute only the person-weeks that changed.
 function rewriteWeekly_(ctx) {
   const rows = weeklyRows_(apiValuesGet_(ctx.id, a1_(TABS.shifts, 0, 2, 8)).values || []);
   apiValuesClear_(ctx.id, a1_(TABS.weekly, 0, 2, 4));
@@ -783,8 +910,12 @@ function pull_(ctx) {
   let since = Math.floor(Number(ctx.req.since)) || 0;
   if (since < 0 || since > rev) since = 0; // a phone ahead of the hub (a reset hub) takes everything again
   if (since && since === rev) return { rev: rev, now: ctx.now, same: true }; // the cheap path: nothing was written
-  for (let tries = 0; tries < 3; tries++) {
-    try { return pullOnce_(ctx, since); } catch (e) { if (e !== STALE_) throw e; } // rows moved under the read (a purge): read again
+  return retry_(function () { return pullOnce_(ctx, since); }, ctx);
+}
+function retry_(fn, ctx) { // rows moved under a read (a purge, an archive, a sorted tab): read the Sheet itself and go again
+  for (let i = 0; i < 3; i++) {
+    ctx.memo.last = i === 2; // the last try skips a row that still does not match, so one damaged row cannot take the hub down
+    try { return fn(); } catch (e) { if (e !== STALE_) throw e; dropReads_(ctx); }
   }
   return fail_('busy');
 }
@@ -793,7 +924,7 @@ function fetchEntities_(ctx, name, rows, norm, keyOf, keep) {
   rows.forEach(function (x) {
     const raw = data[x.row], o = raw ? norm(raw, ctx.now) : null;
     if (!o) return;
-    if (keyOf(o) !== x.key) throw STALE_;
+    if (keyOf(o) !== x.key) { if (ctx.memo.last) return; throw STALE_; }
     if (keep && !keep(o)) return;
     o.rev = x.rev; list.push(o);
   });
@@ -812,23 +943,27 @@ function pullOnce_(ctx, since) {
   };
   const fresh = function (rows) { return rows.filter(function (x) { return x.rev > since && x.date >= cutoff; }); };
 
-  out.tasks = cut(fetchEntities_(ctx, 'tasks', fresh(readIndex_(ctx, 'tasks')).filter(function (x) { return !crews || crews.indexOf(x.crew) >= 0; }),
-    normTask_, function (o) { return o.uid; }));
-  const hoursIdx = readIndex_(ctx, 'shifts');
+  loadAllIndex_(ctx); // from the cache when another phone already pulled this revision
+  const taskRows = fresh(readIndex_(ctx, 'tasks')).filter(function (x) { return !crews || crews.indexOf(x.crew) >= 0; });
+  const hoursIdx = readIndex_(ctx, 'shifts'), shiftRows = fresh(hoursIdx);
+  const reportRows = office ? fresh(readIndex_(ctx, 'reports')) : [];
+  const eventRows = office ? readIndex_(ctx, 'events').filter(function (x) { return x.rev > since; }).slice(since ? -100 : -50) : [];
+  const openRows = office ? hoursIdx.filter(function (x) { return x.date >= addDays_(today, -1) && x.date <= today; }) : []; // who is on site now
+  const cfgRows = readIndex_(ctx, 'config').filter(function (x) { return x.rev > since; });
+  prefetch_(ctx, { tasks: taskRows, shifts: shiftRows.concat(openRows), reports: reportRows, events: eventRows, config: cfgRows });
+
+  out.tasks = cut(fetchEntities_(ctx, 'tasks', taskRows, normTask_, function (o) { return o.uid; }));
   const mine = function (o) { return pm || (ctx.dev !== '' && o.device === ctx.dev); }; // crew and super see their own phone's hours only
-  out.shifts = cut(fetchEntities_(ctx, 'shifts', fresh(hoursIdx), normShift_, function (o) { return o.id; }, mine));
+  out.shifts = cut(fetchEntities_(ctx, 'shifts', shiftRows, normShift_, function (o) { return o.id; }, mine));
   if (office) {
-    out.reports = cut(fetchEntities_(ctx, 'reports', fresh(readIndex_(ctx, 'reports')), normReport_, function (o) { return o.date; }));
-    const ev = readIndex_(ctx, 'events').filter(function (x) { return x.rev > since; }).slice(since ? -100 : -50);
-    out.events = fetchEntities_(ctx, 'events', ev, function (o) { return shape_({ rev: 0, ts: 0, who: 's', role: 's', kind: 's', text: 't', ref: 's' }, o); }, function (o) { return String(o.rev); });
-    const open = hoursIdx.filter(function (x) { return x.date >= addDays_(today, -1) && x.date <= today; }); // who is on site now
-    out.onsite = fetchEntities_(ctx, 'shifts', open, normShift_, function (o) { return o.id; }, function (o) {
+    out.reports = cut(fetchEntities_(ctx, 'reports', reportRows, normReport_, function (o) { return o.date; }));
+    out.events = fetchEntities_(ctx, 'events', eventRows, normEvent_, function (o) { return String(o.rev); });
+    out.onsite = fetchEntities_(ctx, 'shifts', openRows, normShift_, function (o) { return o.id; }, function (o) {
       const st = startedMs_(o);
       return !o.gone && !o.out && ctx.now - st < OPEN_SHIFT_MS && st <= ctx.now + SKEW_MS;
     }).sort(function (a, b) { return startedMs_(a) - startedMs_(b); }).map(function (o) { return { who: o.who, in: o.in, date: o.date }; });
   }
-  const cfg = readIndex_(ctx, 'config').filter(function (x) { return x.rev > since; });
-  if (cfg.length) { const c = fetchEntities_(ctx, 'config', cfg, normConfig_, function () { return 'config'; }); if (c.length) out.config = c[0]; }
+  if (cfgRows.length) { const c = fetchEntities_(ctx, 'config', cfgRows, normConfig_, function () { return 'config'; }); if (c.length) out.config = c[0]; }
   out.deleted = readIndex_(ctx, 'deleted').filter(function (x) { return x.rev > since && (office || x.kind !== 'reports'); })
     .map(function (x) { return { kind: x.kind, key: x.key, rev: x.rev }; });
   if (limit < rev) { out.rev = limit; out.more = true; }
@@ -899,7 +1034,7 @@ function translate_(ctx) {
   });
   const same = r.from === r.to, key = function (t) { return 'tr:' + r.from + r.to + ':' + digestHex_(t); };
   const need = items.filter(function (t, i) { return !same && t.trim() !== '' && items.indexOf(t) === i; }); // each distinct text once
-  const found = need.length ? ctx.cache.getAll(need.map(key)) : {}, done = Object.create(null);
+  const found = need.length ? cacheGetAll_(ctx.cache, need.map(key)) : {}, done = Object.create(null);
   let hits = 0;
   need.forEach(function (t) { const c = found[key(t)]; if (typeof c === 'string') done[t] = c; });
   const miss = need.filter(function (t) { return !(t in done); });
@@ -907,7 +1042,7 @@ function translate_(ctx) {
     withScriptLock_(20000, function () { reserveTranslations_(miss.length); }); // lock only for the counter, not for the slow calls
     const puts = {};
     miss.forEach(function (t) { done[t] = translateText_(t, r.from, r.to); puts[key(t)] = done[t]; });
-    ctx.cache.putAll(puts, TR_CACHE_S);
+    cachePutAll_(ctx.cache, puts, TR_CACHE_S);
   }
   const missed = dict_();
   miss.forEach(function (t) { missed[t] = true; });
@@ -930,10 +1065,6 @@ const RECORD_FIELDS = {
   reports: { norm: normReport_, key: function (o) { return o.date; }, who: function (o) { return o.super + ' ' + o.preparedBy; } },
   events: { norm: normEvent_, key: function (o) { return String(o.rev); }, who: function (o) { return o.who; } },
 };
-function retry_(fn) { // rows moved under a read (a purge or archive ran): read again
-  for (let i = 0; i < 3; i++) { try { return fn(); } catch (e) { if (e !== STALE_) throw e; } }
-  return fail_('busy');
-}
 function records_(ctx) {
   const r = ctx.req, name = typeof r.kind === 'string' && own_(RECORD_KINDS, r.kind) ? RECORD_KINDS[r.kind] : '';
   if (!name) fail_('bad_request');
@@ -954,7 +1085,7 @@ function records_(ctx) {
     const out = { items: items };
     if (pos < rows.length) out.cursor = String(rows[pos].row);
     return out;
-  });
+  }, ctx);
 }
 
 // ---------- the PM's housekeeping actions ----------
@@ -1075,6 +1206,7 @@ function selftest_(ctx) {
     const b = newBatch_();
     deleteEntity_(ctx, b, 'tasks', uid, true);
     flush_(ctx, b);
+    nextRev_(ctx); // rows moved up: a cached index of the old revision must not be used again
     forget();
     return read() === null;
   });

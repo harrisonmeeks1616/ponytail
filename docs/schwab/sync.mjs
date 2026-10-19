@@ -50,7 +50,7 @@ const str = (x, n) => String(x ?? '').slice(0, n);
 const num = x => (Number.isFinite(+x) ? +x : 0);
 const arr = x => (Array.isArray(x) ? x : []);
 const isObj = x => !!x && typeof x === 'object' && !Array.isArray(x);
-const obj = x => (x && typeof x === 'object' && !Array.isArray(x) ? x : {});
+const obj = x => (isObj(x) ? x : {});
 const dict = x => Object.assign(Object.create(null), obj(x)); // keys come from the hub: "__proto__" must be an ordinary key
 const pick = (o, ks) => { const r = {}; for (const k of ks) r[k] = o[k]; return r; };
 const withX = (n, raw, tpl) => { for (const k in tpl) if (!(k in n)) n[k] = shape(tpl[k], obj(raw)[k]); return n; };
@@ -101,8 +101,8 @@ export function makeSync(o = {}) {
     for (const k of ['t', 'h', 'm', 'r', 'g', 'told']) st[k] = dict(s[k]);
     return st;
   }
-  let meta = { rev: 0, ok: 0 }; // what hubStatus shows, so a screen can ask on every draw without reading the whole state
-  const saveState = st => { meta = { rev: st.rev, ok: st.ok }; return store.set(ST, st); };
+  let meta = null; // what hubStatus shows, so a screen can ask on every draw without reading the whole state
+  const saveState = st => { meta = pick(st, ['rev', 'ok']); return store.set(ST, st); };
   const inT = raw => {
     const t = withX(norm.task(raw), raw, X_TASK);
     for (const l of ['items', 'checks']) { const seen = new Set(); t[l] = t[l].filter(i => i.id && !seen.has(i.id) && seen.add(i.id)); }
@@ -156,7 +156,8 @@ export function makeSync(o = {}) {
     if (!c) return { state: 'off', message: '', at: 0, pending: 0, role: '', crew: '', rev: 0 };
     let { state, message } = cur;
     if (state === 'live' && now() - cur.at >= LIVE_MS) { state = 'offline'; message = say('offline'); }
-    return { state, message, at: cur.at || meta.ok, pending, role: c.role, crew: c.crew, rev: meta.rev };
+    const m = meta ||= pick(loadState(), ['rev', 'ok']);
+    return { state, message, at: cur.at || m.ok, pending, role: c.role, crew: c.crew, rev: m.rev };
   }
   const notify = kinds => { if (kinds.size) try { o.onChange?.([...kinds]); } catch (e) { queueMicrotask(() => { throw e; }); } };
 
@@ -352,9 +353,10 @@ export function makeSync(o = {}) {
     for (const [p, fn, at] of TPARTS) if (took[p]) {
       Object.assign(ent(rec, p), { s: hs(fn(out)), v: num(inc[at]), vh: hs(fn(inc)) });
       delete rec[p].p; delete rec[p].at;
-      out.updatedAt = Math.max(out.updatedAt, num(inc[at]));
     }
-    return loc && sameDoc(loc, out) ? loc : out;
+    if (loc && sameDoc(loc, out)) return loc;
+    out.updatedAt = ts; // edited, as far as this phone is concerned: the app files a finished sheet again when it changes
+    return out;
   }
   function mergeReport(loc, inc, rec, writes) {
     const took = {};
@@ -553,6 +555,7 @@ export function makeSync(o = {}) {
         } catch (e) {
           if (e.code === 'aborted' || ep !== epoch) return void (hub() && schedule(POKE_MS)); // the settings changed under this cycle: start over with the new ones
           const code = e.code || 'server';
+          if (!e.code) console.error(e); // not a hub answer: a bug worth seeing in the console (the screen only says the hub had a problem)
           fails++;
           delay = BACKOFF[Math.min(fails, BACKOFF.length) - 1] * 1000;
           if (code === 'busy') delay = Math.max(delay, 60e3);
@@ -561,7 +564,7 @@ export function makeSync(o = {}) {
           nextAllowed = now() + delay;
           setStatus(['offline', 'busy', 'quota'].includes(code) ? 'offline' : 'error', e.code ? e.message : say('server'));
         }
-        if (ep === epoch) schedule(again ? POKE_MS : delay);
+        if (ep === epoch) schedule(again && delay === TICK_MS ? POKE_MS : delay); // a poke during the cycle gets its follow-up, but never inside a backoff
       })().finally(() => { running = null; again = false; });
     }
     return running.then(hubStatus);

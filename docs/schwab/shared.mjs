@@ -70,7 +70,27 @@ export function loadSettings() {
   if (PIN_FORMAT.test(pin)) s.pin = pin;
   return s;
 }
-export const roster = (s, crew) => (s.crews.find(c => c.name === crew)?.members || '').split(',').map(x => x.trim()).filter(Boolean);
+const split = members => (members || '').split(',').map(x => x.trim()).filter(Boolean);
+export const roster = (s, crew) => split(s.crews.find(c => c.name === crew)?.members);
+
+// One list of people: the crew member lists in Settings. A name matches however it was typed, so 'José  L'
+// on a sheet is 'jose l' on the time clock. Only letters and digits count: a comma (the lists are comma separated),
+// a period or an iPhone's curly apostrophe is a space, so 'Mike O’Neil' is "Mike O'Neil" and 'José L.' is 'Jose L'.
+export const nameKey = name => String(name ?? '').normalize('NFD').replace(/[\u0300-\u036f]/g, '').replace(/[^\p{L}\p{N}]+/gu, ' ').trim().toLowerCase();
+export const people = s => s.crews.flatMap(c => split(c.members).map(name => ({ name, crew: c.name })));
+export const findPerson = (s, name) => { const k = nameKey(name); return k ? people(s).find(p => nameKey(p.name) === k) : undefined; };
+// Adds a name to a crew only if it is on no crew yet; true when it did. Nobody is ever taken off a crew from here.
+export function addToCrew(s, crew, name) {
+  const c = crew && s.crews.find(x => x.name === crew), n = String(name ?? '').replace(/,/g, ' ').trim().replace(/\s+/g, ' ').slice(0, 60);
+  if (!c || !nameKey(n) || findPerson(s, n)) return false;
+  c.members = [...split(c.members), n].join(', ');
+  return true;
+}
+// The sheets of that day that list the person: their crew (the first sheet that names one) and task ids.
+export function assignmentFor(tasks, name, day) {
+  const k = nameKey(name), sheets = k ? tasks.filter(t => t.date === day && t.members.some(m => nameKey(m) === k)) : [];
+  return { crew: sheets.find(t => t.crew)?.crew || '', tasks: [...new Set(sheets.map(t => t.id).filter(Boolean))], sheets };
+}
 
 const ITEM = { id: '', text: '', done: false, at: 0 };
 export const TASK_TPL = {
@@ -158,11 +178,15 @@ export function normReport(r) {
 
 // One clock-in to clock-out, under the name it was clocked in with. Only taps on the worker's own phone make
 // one; only the PM changes one. edited marks what the PM changed, so a worker's later link can't undo it;
-// gone, a shift the PM removed; at, when the newest link that named it was sent.
-export const SHIFT_TPL = { id: '', device: '', who: '', date: '', in: '', out: '', edited: { who: false, in: false, out: false }, gone: false, at: 0 };
+// gone, a shift the PM removed; at, when the newest link that named it was sent. crew and tasks: the crew and
+// the task sheet ids the worker's phone had them on that day. The Task ID is typed on the sheet ('L3 East-14',
+// 'Baño-2', 'E-301/4'), so an id keeps letters, digits, spaces and . _ # / -; it is shown escaped and quoted in the CSV.
+export const SHIFT_TPL = { id: '', device: '', who: '', crew: '', tasks: [''], date: '', in: '', out: '', edited: { who: false, in: false, out: false }, gone: false, at: 0 };
 export function normShift(x) {
   const n = shape(SHIFT_TPL, x);
   n.who = n.who.trim().slice(0, 60);
+  n.crew = n.crew.trim().slice(0, 60);
+  n.tasks = [...new Set(n.tasks.map(id => id.trim()).filter(id => /^[\p{L}\p{M}\p{N}_ .#\/-]{1,20}$/u.test(id)))].slice(0, 10);
   for (const k of ['in', 'out']) if (!FORMAT.time.test(n[k])) n[k] = '';
   if (!FORMAT.uid.test(n.device)) n.device = '';
   return FORMAT.uid.test(n.id) && isDay(n.date) && n.in ? n : null; // no id, day or clock-in: nothing to log

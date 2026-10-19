@@ -47,7 +47,18 @@ receiver; the static app does not connect it automatically.
   removed shift stays removed. A day the PM added by hand stays as entered: a late text for the same person
   and day is filed as removed, with a warning. Each shift keeps the name it was clocked in with, so a borrowed
   phone never moves its owner's hours. Hours links opened on any other phone change nothing.
-- **Send to accountant** shares the week as a spreadsheet (CSV: name, date, in, out, hours, week totals) and
+- **One list of people:** the crew member lists in **Settings → Crews** are the app's list of people, and names
+  match whatever the capitals, accents, spacing or punctuation ("José  L." is "jose l", "O’Neil" is "O'Neil"). A name added on a task sheet that has a
+  crew is saved on that crew if it is on no crew yet; nobody is ever taken off a crew automatically. On the time
+  clock the name box offers the names the phone knows (its crew lists and its task sheets) and takes their
+  spelling; a name no list knows gets a hint to check the spelling. A **Today** card lists that day's sheets on
+  the phone that name the worker, each opening its sheet, and the crew view marks the worker "(you)". Each clock-in
+  and clock-out records the worker's crew and task IDs from those sheets (else the crew from the crew lists), and
+  they ride to the PM with the hours. On **Crew hours** each person shows under their crew list spelling, with a
+  crew, and each shift its tasks; a name on none of the PM phone's crew lists is marked **Not on a crew list**,
+  and **Add to a crew** puts it on one (one tap when the worker's sheets named a crew this phone has). A
+  **Rename** also renames the person on their crew list, so they keep their crew.
+- **Send to accountant** shares the week as a spreadsheet (CSV: name, crew, date, in, out, hours, tasks, week totals) and
   a PDF timesheet, through the phone's share sheet (Mail, Files) or as downloads on a computer. It warns
   first if a shift has no clock-out. Hours are to two decimals (7h 45m is 7.75), rounded per shift so the rows
   add up to the totals; an overnight shift counts on the day it started, in real hours across a clock change;

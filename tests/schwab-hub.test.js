@@ -101,6 +101,13 @@ test('setupHub is idempotent: same sheet, same keys, nothing re-logged, a missin
 
 test('resetPmKey: a new PM key shown once, the old one dead, crew and super untouched', () => {
   const { hub, k } = setup();
+  hub.contended = true; // another run holds the lock: the editor shows a readable message and nothing changed
+  assert.throws(() => hub.run('resetPmKey'), /Busy, try again shortly/);
+  const first = createHub({ now: T0 });
+  first.contended = true;
+  assert.throws(() => first.run('setupHub'), /Busy, try again shortly/);
+  assert.equal(first.spreadsheets.size, 0, 'and no Sheet was made');
+  hub.contended = false;
   hub.logs.length = 0;
   hub.run('resetPmKey');
   const fresh = hub.logs.map(l => /: ([A-Za-z0-9]{32})$/.exec(l)).find(Boolean)[1];
@@ -176,7 +183,7 @@ test('bad requests: size, JSON, version, action; errors carry a fixed message an
     assert.deepEqual(r, { ok: false, error, message: msg[error] });
     assert.ok(!raw.includes(SECRET), 'no echo');
   }
-  assert.equal(hub.raw(undefined === 1 ? '' : JSON.stringify({ v: 1, key: k.pm, action: 'whoami' })).includes(k.pm), false);
+  assert.ok(!hub.raw(JSON.stringify({ v: 1, key: k.pm, action: 'whoami' })).includes(k.pm), 'a reply never echoes the key');
 });
 
 test('an unusual id like "__proto__" is an ordinary key', () => {
@@ -214,6 +221,76 @@ test('permission matrix: every action by every role, allowed or forbidden exactl
     }
   }
   assert.equal(Object.keys(MINIMAL).length, 11, 'every action in the contract is covered');
+});
+
+// The HUB.md role table, row by row. Each probe does the thing as that role and reports whether it took effect.
+test('the HUB.md role table, cell by cell: what each key can actually do, judged by the effect', () => {
+  const base = () => {
+    const env = setup(), sup = office(env), pm = phone(env, 'pm', 'pm-dev');
+    ok(sup.push({ tasks: [task()], reports: [report()], config: { project: 'P', floors: ['L1'] } }));
+    ok(pm.push({ shifts: [shift({ id: 'by-pm', device: '', who: 'Ana P' })] }));
+    for (const [role, dev] of [['crew', 'crew-dev'], ['super', 'super-dev'], ['pm', 'pm-dev']]) ok(env.hub.call(env.k[role], 'push', { dev, shifts: [shift({ id: 'own-' + role, device: dev, who: role + ' person' })] }));
+    ok(env.hub.call(env.k.crew, 'push', { dev: 'other-dev', shifts: [shift({ id: 'other', device: 'other-dev', who: 'Someone Else' })] }));
+    return env;
+  };
+  const at = (env, role) => phone(env, role, role + '-dev');
+  const stored1 = env => env.hub.entities('Tasks').find(t => t.uid === 'u1');
+  const PROBES = {
+    'whoami': (env, role) => at(env, role).call('whoami').ok === true,
+    'translate': (env, role) => at(env, role).call('translate', { items: ['hello'], from: 'en', to: 'es' }).ok === true,
+    'pull tasks': (env, role) => at(env, role).pull().tasks.length === 1,
+    'pull config': (env, role) => !!at(env, role).pull().config,
+    'pull reports': (env, role) => at(env, role).pull().reports.length === 1,
+    'pull events': (env, role) => at(env, role).pull().events.length > 0,
+    'pull all hours': (env, role) => at(env, role).pull().shifts.length === 5,
+    'pull own hours': (env, role) => at(env, role).pull().shifts.some(s => s.id === 'own-' + role),
+    'pull no one else\'s hours': (env, role) => at(env, role).pull().shifts.every(s => s.device === role + '-dev') && at(env, role).pull().shifts.length === 1,
+    'pull who is on site': (env, role) => (at(env, role).pull().onsite || []).length === 5,
+    'push crew part of a task': (env, role) => { at(env, role).push({ tasks: [task({ status: 'Partial', crewAt: T0 - 5 })] }); return stored1(env).status === 'Partial'; },
+    'push assign part': (env, role) => { at(env, role).push({ tasks: [task({ scope: 'by ' + role, assignAt: T0 - 5 })] }); return stored1(env).scope === 'by ' + role; },
+    'push review': (env, role) => { at(env, role).push({ tasks: [task({ review: 'by ' + role, assignAt: T0 - 5 })] }); return stored1(env).review === 'by ' + role; },
+    'push reply': (env, role) => { at(env, role).push({ tasks: [task({ reply: 'by ' + role, replyAt: T0 - 5, assignAt: T0 - 5 })] }); return stored1(env).reply === 'by ' + role; },
+    'create a task': (env, role) => { at(env, role).push({ tasks: [task({ uid: 'brand-new' })] }); return env.hub.entities('Tasks').some(t => t.uid === 'brand-new'); },
+    'push config': (env, role) => { at(env, role).push({ config: { project: 'by ' + role } }); return env.hub.entities('Config')[0].project === 'by ' + role; },
+    'push own shifts': (env, role) => { at(env, role).push({ shifts: [shift({ id: 'fresh', device: role + '-dev', who: 'Fresh' })] }); return !!stored(env.hub, 'fresh'); },
+    'PM rules: edit': (env, role) => { at(env, role).push({ shifts: [{ ...stored(env.hub, 'other'), out: '11:00', edited: { who: false, in: false, out: true } }] }); return stored(env.hub, 'other').out === '11:00'; },
+    'PM rules: add': (env, role) => { at(env, role).push({ shifts: [shift({ id: 'added', device: '', who: 'Hand' })] }); return !!stored(env.hub, 'added'); },
+    'PM rules: rename': (env, role) => { at(env, role).push({ shifts: [{ ...stored(env.hub, 'other'), who: 'Renamed', edited: { who: true, in: false, out: false } }] }); return stored(env.hub, 'other').who === 'Renamed'; },
+    'PM rules: remove': (env, role) => { at(env, role).push({ shifts: [{ ...stored(env.hub, 'other'), gone: true }] }); return stored(env.hub, 'other').gone === true; },
+    'push report super part': (env, role) => { at(env, role).push({ reports: [report({ results: 'by ' + role, updatedAt: T0 - 5 })] }); return env.hub.entities('Reports')[0].results === 'by ' + role; },
+    'push report PM part': (env, role) => { at(env, role).push({ reports: [report({ updatedAt: T0 - 3000, pmReview: 'by ' + role, pmAt: T0 - 5 })] }); return env.hub.entities('Reports')[0].pmReview === 'by ' + role; },
+    'records tasks': (env, role) => at(env, role).call('records', { kind: 'tasks', from: '2026-10-01', to: '2026-10-31' }).ok === true,
+    'records reports': (env, role) => at(env, role).call('records', { kind: 'reports', from: '2026-10-01', to: '2026-10-31' }).ok === true,
+    'records hours': (env, role) => at(env, role).call('records', { kind: 'shifts', from: '2026-10-01', to: '2026-10-31' }).ok === true,
+    'purge': (env, role) => { at(env, role).call('purge', { kind: 'tasks', target: 'u1' }); return !stored1(env); },
+    'stats': (env, role) => at(env, role).call('stats').ok === true,
+    'keys': (env, role) => at(env, role).call('keys').ok === true,
+    'rotate': (env, role) => { const k = env.hub.props.CREW_KEY; at(env, role).call('rotate', { role: 'crew' }); return env.hub.props.CREW_KEY !== k; },
+    'archive': (env, role) => at(env, role).call('archive', { before: '2026-10-19' }).ok === true,
+    'selftest': (env, role) => at(env, role).call('selftest').ok === true,
+  };
+  // Who may, per row of the HUB.md table (a row of several actions is one entry per action).
+  const ALLOW = {
+    'whoami': ROLES, 'translate': ROLES, 'pull tasks': ROLES, 'pull config': ROLES,
+    'pull all hours': ['pm'], 'pull own hours': ROLES, 'pull no one else\'s hours': ['crew', 'super'], 'pull who is on site': ['super', 'pm'],
+    'pull reports': ['super', 'pm'], 'pull events': ['super', 'pm'],
+    'push crew part of a task': ROLES, 'push assign part': ['super', 'pm'], 'push review': ['super', 'pm'], 'push reply': ['super', 'pm'], 'create a task': ['super', 'pm'],
+    'push config': ['super', 'pm'], 'push own shifts': ROLES,
+    'PM rules: edit': ['pm'], 'PM rules: add': ['pm'], 'PM rules: rename': ['pm'], 'PM rules: remove': ['pm'],
+    'push report super part': ['super', 'pm'], 'push report PM part': ['pm'],
+    'records tasks': ['super', 'pm'], 'records reports': ['super', 'pm'], 'records hours': ['pm'],
+    'purge': ['pm'], 'stats': ['pm'], 'keys': ['pm'], 'rotate': ['pm'], 'archive': ['pm'], 'selftest': ['pm'],
+  };
+  let denied = 0, allowed = 0;
+  for (const [row, probe] of Object.entries(PROBES)) {
+    for (const role of ROLES) {
+      const yes = !!probe(base(), role), want = ALLOW[row].includes(role);
+      assert.equal(yes, want, `${role} ${want ? 'can' : 'cannot'}: ${row}`);
+      if (want) allowed++; else denied++;
+    }
+  }
+  assert.deepEqual(Object.keys(PROBES).sort(), Object.keys(ALLOW).sort(), 'every row has a probe and a rule');
+  assert.ok(denied >= 30 && allowed >= 40, `${denied} denied and ${allowed} allowed cells checked`);
 });
 
 test('a forbidden action writes nothing and costs no Sheets call', () => {
@@ -303,6 +380,42 @@ test('task stamps: older loses, equal wins for the part owner, the future is cla
   assert.deepEqual([t.assignAt, t.sentAt, t.replyAt], [0, 0, 0]);
 });
 
+test('partial pushes, as the app sends them (only the part that changed): the other part is never blanked', () => {
+  const env = setup(), sup = office(env), pm = phone(env, 'pm', 'pm-dev'), crew = phone(env, 'crew', 'crew-dev');
+  const full = task({ scope: 'The real scope', review: 'Accepted', reply: 'Hello', assignAt: T0 - 9000 });
+  ok(sup.push({ tasks: [full] }));
+  // crew phone: ticks and results only, no assignment fields at all, no text on the items
+  let t = ok(crew.push({ tasks: [{ uid: 'u1', date: '2026-10-19', status: 'Partial', doneText: 'half', crewAt: T0 - 800, items: [{ id: 'i1', done: true, at: T0 - 800 }, { id: 'i2', done: false, at: 0 }], checks: [] }] })).tasks[0].task;
+  assert.deepEqual([t.scope, t.review, t.reply, t.items.map(i => [i.text, i.done])], ['The real scope', 'Accepted', 'Hello', [['Pull', true], ['Terminate', false]]]);
+  // super phone: assignment only, no crew fields, no ticks on the items
+  t = ok(sup.push({ tasks: [{ uid: 'u1', date: '2026-10-19', id: 'T1019-01', scope: 'Reworded scope', assignAt: T0 - 500, items: [{ id: 'i1', text: 'Pull it' }, { id: 'i2', text: 'Terminate it' }], checks: [] }] })).tasks[0].task;
+  assert.deepEqual([t.scope, t.status, t.doneText, t.items.map(i => [i.text, i.done])], ['Reworded scope', 'Partial', 'half', [['Pull it', true], ['Terminate it', false]]]);
+  assert.equal(t.crew, '', 'the fields that were not sent are the defaults of the part that was sent: it is the whole office part');
+  // PM phone fixing a result remotely: a crew part only (assignAt 0). It must not blank the assignment, even where the stored stamp is also 0.
+  ok(sup.push({ tasks: [task({ uid: 'u0', scope: 'Never stamped', assignAt: 'x' })] }));
+  for (const uid of ['u1', 'u0']) {
+    const before = env.hub.entities('Tasks').find(x => x.uid === uid);
+    t = ok(pm.push({ tasks: [{ uid, date: '2026-10-19', status: 'Complete', crewAt: T0 - 100, items: [], checks: [] }] })).tasks[0].task;
+    assert.deepEqual([t.scope, t.status, t.assignAt], [before.scope, 'Complete', before.assignAt], uid);
+  }
+  // and a push that says nothing at all about either part changes nothing
+  const keep = JSON.stringify(env.hub.entities('Tasks'));
+  ok(pm.push({ tasks: [{ uid: 'u1', date: '2026-10-19' }, { uid: 'u0', date: '2026-10-19' }] }));
+  ok(crew.push({ tasks: [{ uid: 'u1', date: '2026-10-19' }] }));
+  assert.equal(JSON.stringify(env.hub.entities('Tasks')), keep);
+  // reports: the PM sends the answers only, the superintendent sends the report with the PM fields blank
+  ok(sup.push({ reports: [report()] }));
+  let r = ok(pm.push({ reports: [{ date: '2026-10-19', decisions: [{ q: 'Which panel?', pm: 'LP-2', pmNote: 'ok' }, { q: 'Fire stop?', pm: '', pmNote: '' }], pmReview: 'Seen', pmAt: T0 - 400, updatedAt: 0 }] })).reports[0].report;
+  assert.deepEqual([r.results, r.decisions.map(d => [d.rec, d.pm]), r.pmReview], ['Good day', [['LP-1', 'LP-2'], ['Yes', '']], 'Seen']);
+  r = ok(sup.push({ reports: [report({ results: 'Evening', updatedAt: T0 - 300, decisions: report().decisions.map(d => ({ ...d, pm: '', pmNote: '' })), pmReview: '', pmAt: 0 })] })).reports[0].report;
+  assert.deepEqual([r.results, r.decisions.map(d => d.pm), r.pmReview, r.pmAt], ['Evening', ['LP-2', ''], 'Seen', T0 - 400], 'the PM answers survive the superintendent\'s next edit');
+  // a PM-only report for a day nobody wrote yet makes the report; the superintendent then fills it in
+  r = ok(pm.push({ reports: [{ date: '2026-10-20', decisions: [{ q: 'Q', pm: 'A', pmNote: '' }], pmReview: '', pmAt: T0 - 50, updatedAt: 0 }] })).reports[0].report;
+  assert.deepEqual([r.decisions.map(d => [d.q, d.pm]), r.results], [[['Q', 'A']], '']);
+  r = ok(sup.push({ reports: [report({ date: '2026-10-20', results: 'Filled in', updatedAt: T0 - 40, decisions: [{ q: 'Q', rec: 'r' }] })] })).reports[0].report;
+  assert.deepEqual([r.results, r.decisions.map(d => [d.q, d.rec, d.pm])], ['Filled in', [['Q', 'r', 'A']]]);
+});
+
 test('task checklist: the office decides which items exist, the crew keeps its ticks, a new item starts not done', () => {
   const env = setup(), sup = office(env), crew = phone(env, 'crew', 'crew-dev');
   ok(sup.push({ tasks: [task()] }));
@@ -384,6 +497,9 @@ test('push is capped: 200 entities per kind, 45,000 characters per entity, and a
   const r = ok(sup.push({ tasks: [task({ uid: 'fine', scope: 'ok' }), huge] }));
   assert.deepEqual(r.tasks.map(x => [x.status, x.reason || '']), [['ok', ''], ['rejected', 'too_large']]);
   assert.equal(r.tasks[1].key, 'huge');
+  const hostile = ok(sup.push({ tasks: [{ ...huge, uid: '<img src=x onerror=alert(1)>' }], shifts: [{ id: 'x'.repeat(41), members: 'm'.repeat(50000) }], reports: [{ date: '<b>', pad: 'z'.repeat(50000) }] }));
+  assert.deepEqual([hostile.tasks[0].key, hostile.shifts[0].key, hostile.reports[0].key], ['', '', ''], 'an unsafe key is never echoed back');
+  assert.ok(!JSON.stringify(hostile).includes('onerror'));
   // Each part fits on its own (40,000 and 24,000 characters) but the merged task would not fit a cell: refused, never truncated.
   const text = n => 'x'.repeat(n);
   ok(sup.push({ tasks: [task({ uid: 'big', scope: text(8000), refs: text(8000), allotNote: text(8000), estNote: text(8000), followUp: text(8000) })] }));
@@ -433,7 +549,10 @@ test('pull: window days, crews filter, cheap same-rev answer, a phone ahead of t
   assert.deepEqual(crew.pull().tasks.map(t => t.uid).sort(), ['b', 'new'], 'default window 14 days');
   assert.deepEqual(crew.pull({ days: 30 }).tasks.map(t => t.uid).sort(), ['b', 'new', 'old20']);
   assert.deepEqual(crew.pull({ days: 90 }).tasks.length, 4);
-  assert.deepEqual(crew.pull({ days: 9999 }).tasks.length, 4, 'capped at 90');
+  ok(sup.push({ tasks: [task({ uid: 'old120', date: day(120) })] }));
+  assert.deepEqual(crew.pull({ days: 90 }).tasks.map(t => t.uid).includes('old120'), false);
+  assert.deepEqual(crew.pull({ days: 9999 }).tasks.map(t => t.uid).includes('old120'), false, 'capped at 90');
+  assert.deepEqual(crew.pull({ days: 9999 }).tasks.length, 4);
   assert.deepEqual(crew.pull({ days: 0 }).tasks.map(t => t.uid).sort(), ['b', 'new'], 'at least a day, junk falls back');
   assert.deepEqual(crew.pull({ crews: ['Crew B'] }).tasks.map(t => t.uid), ['b']);
   assert.deepEqual(crew.pull({ crews: ['Crew A', 'Crew B'] }).tasks.length, 2);
@@ -476,7 +595,7 @@ test('config: office phones write it, crew cannot; secrets and personal settings
 // ---------- shifts ----------
 const stored = (hub, id) => hub.entities('Hours').find(s => s.id === id);
 test('shift, worker rules: add, complete, never undo a clock-out, own phone only, flags are the server\'s', () => {
-  const env = setup(), crew = phone(env, 'crew', 'crew-dev'), other = phone(env, 'crew', 'other-dev'), pm = phone(env, 'pm', 'pm-dev');
+  const env = setup(), crew = phone(env, 'crew', 'crew-dev'), pm = phone(env, 'pm', 'pm-dev');
   let r = ok(crew.push({ shifts: [shift({ id: 'a', edited: { who: true, in: true, out: true }, gone: true })] }));
   assert.deepEqual([r.shifts[0].status, r.shifts[0].shift.edited, r.shifts[0].shift.gone], ['ok', { who: false, in: false, out: false }, false], 'the client cannot set edited or gone for itself');
   r = ok(crew.push({ shifts: [shift({ id: 'a', out: '15:30', at: T0 - 3000 })] }));
@@ -499,7 +618,6 @@ test('shift, worker rules: add, complete, never undo a clock-out, own phone only
   ok(pm.push({ shifts: [{ ...stored(env.hub, 'a'), gone: true }] }));
   r = ok(crew.push({ shifts: [shift({ id: 'a', out: '16:00', at: T0 })] }));
   assert.deepEqual([r.shifts[0].status, r.shifts[0].shift.gone, r.shifts[0].shift.out], ['ok', true, '15:30']);
-  void other;
 });
 
 test('shift, PM rules: edits, renames and removals stick; stored as sent; the clock-out is not erased by a stale PM phone', () => {
@@ -553,7 +671,7 @@ test('shift: a day the PM added by hand is not doubled by a late text', () => {
   const r = ok(crew.push({ shifts: [shift({ id: 'e', who: 'Ana P', date: '2026-10-12', out: '15:35' }), shift({ id: 'f', who: 'Ana P', date: '2026-10-13', out: '15:00' })] }));
   assert.deepEqual([r.shifts[0].shift.gone, r.shifts[1].shift.gone], [true, false]);
   const w = rowsOf(env.hub, 'Weekly totals');
-  assert.deepEqual(w.map(x => [x.Name, x['Week of'], x.Hours, x.Shifts]), [['ana p', '2026-10-12', 8.5 + 8, 2]].map(([n, wk, h, c]) => [n, wk, h, c]).map(([n, wk, , c]) => [n, wk, 16.5, c]));
+  assert.deepEqual(w.map(x => [x.Name, x['Week of'], x.Hours, x.Shifts]), [['ana p', '2026-10-12', 16.5, 2]]);
   // A removed twin does not count: the PM's later removal frees the day.
   ok(pm.push({ shifts: [{ ...stored(env.hub, 'pm1'), gone: true }] }));
   const r2 = ok(crew.push({ shifts: [shift({ id: 'g', who: 'ANA P', date: '2026-10-12', out: '15:35' })] }));
@@ -689,7 +807,8 @@ test('ASSIGN and CREW equal the lists in shared.mjs; entity templates cover the 
   const server = { TASK: get('TASK'), SHIFT: get('SHIFT'), REPORT: get('REPORT'), CONFIG: get('CONFIG') };
   const clientTask = Object.keys(shared.TASK_TPL).filter(k => !LOCAL.includes(k));
   for (const k of clientTask) assert.ok(k in server.TASK, 'task field ' + k);
-  assert.deepEqual(Object.keys(server.TASK).filter(k => !clientTask.includes(k)).sort(), ['aLang', 'assignAt', 'crewAt', 'reply', 'replyAt', 'replyBy'].filter(k => !(k in shared.TASK_TPL) || true).sort().filter(k => !clientTask.includes(k)), 'only the documented new task fields');
+  const NEW_TASK_FIELDS = ['aLang', 'assignAt', 'crewAt', 'reply', 'replyAt', 'replyBy']; // HUB.md: new or server-side
+  assert.deepEqual(Object.keys(server.TASK).filter(k => !clientTask.includes(k)).sort(), NEW_TASK_FIELDS.filter(k => !clientTask.includes(k)).sort(), 'only the documented new task fields');
   assert.deepEqual(Object.keys(get('ITEM')).sort(), Object.keys(shared.TASK_TPL.items[0]).sort());
   for (const k of Object.keys(shared.SHIFT_TPL)) assert.ok(k in server.SHIFT, 'shift field ' + k);
   assert.deepEqual(Object.keys(server.SHIFT).filter(k => !(k in shared.SHIFT_TPL)).sort(), ['crew', 'tasks'].filter(k => !(k in shared.SHIFT_TPL)).sort());
@@ -858,13 +977,13 @@ test('translate: HTML mode, identifiers wrapped, newlines as breaks, text escape
   const sent = env.hub.translateLog[0];
   assert.deepEqual(sent.opts, { contentType: 'html' });
   assert.deepEqual([sent.from, sent.to], ['en', 'es']);
-  for (const token of ['LP-1A', 'E-301', 'T1019-02', '12 AWG', 'THHN', '3/4&"'.replace('&', ''), 'EMT', '150 ft', '480V', '20 A', 'GFCI', 'MC', '2.5 kVA']) {
+  for (const token of ['LP-1A', 'E-301', 'T1019-02', '12 AWG', 'THHN', '3/4"', 'EMT', '150 ft', '480V', '20 A', 'GFCI', 'MC', '2.5 kVA']) {
     assert.ok(sent.text.includes(`<span translate="no">${token}</span>`), 'protected: ' + token);
   }
   for (const word of ['Pull', 'panel', 'Run', 'cable', 'and']) assert.ok(!new RegExp(`<span translate="no">[^<]*${word}`).test(sent.text), 'plain word left alone: ' + word);
   assert.ok(sent.text.includes('<br>') && !sent.text.includes('\n'), 'newlines become <br>');
   // The result: dictionary words translated, identifiers intact, tags gone, newline back.
-  assert.equal(r.items[0], 'Jale 12 AWG THHN a tablero LP-1A, see E-301 y T1019-02.\nRun 3/4" EMT para 150 ft en 480V y 20 A; GFCI MC cable, 2.5 kVA.'.replace('see', 'see').replace('Run', 'Run').replace('cable,', 'cable,'));
+  assert.equal(r.items[0], 'Jale 12 AWG THHN a tablero LP-1A, see E-301 y T1019-02.\nRun 3/4" EMT para 150 ft en 480V y 20 A; GFCI MC cable, 2.5 kVA.', 'words translated, every identifier and quantity intact, the line break back');
 });
 
 test('translate: typed markup stays plain text both ways, entities are decoded once, quotes and ampersands survive', () => {
@@ -1087,14 +1206,145 @@ test('a pull never claims more than it returned: lists are cut at 500 and the ne
   assert.equal(ok(crew.call('pull', { since: b.rev })).same, true);
 });
 
+// ---------- Google's request quota: the pull cache ----------
+// Every request runs as the one deploying user, and the Sheets API allows only a few dozen requests a minute per
+// user. So a pull reads the Sheet once per revision (index, then changed rows) and every other phone is served from
+// CacheService; writers still read the Sheet themselves. The cache is keyed by revision, so it cannot be stale.
+const sheetCalls = (hub, from) => hub.calls.slice(from).filter(c => c.startsWith('sheets.')).length;
+test('pull cache: the first phone after a change costs one or two Sheets requests, every other phone none', () => {
+  const env = setup(), sup = office(env), pm = phone(env, 'pm', 'pm-dev'), a = phone(env, 'crew', 'a'), b = phone(env, 'crew', 'b');
+  seed(sup, 'tasks', Array.from({ length: 12 }, (_, i) => task({ uid: 'k' + i, id: 'K' + i })));
+  ok(sup.push({ reports: [report()] }));
+  ok(a.push({ shifts: [shift({ id: 'sa', device: 'a' })] }));
+  let n = env.hub.calls.length;
+  const first = a.pull();
+  assert.ok(sheetCalls(env.hub, n) <= 2, 'cold, even for 12 tasks plus hours: ' + sheetCalls(env.hub, n));
+  n = env.hub.calls.length;
+  assert.deepEqual(b.pull().tasks, first.tasks, 'the same answer for the next phone');
+  assert.equal(sheetCalls(env.hub, n), 0, 'and not one Sheets request for it');
+  n = env.hub.calls.length;
+  assert.equal(pm.pull().reports.length, 1);
+  assert.ok(sheetCalls(env.hub, n) <= 1, 'the PM also wants reports and the feed: those rows were warmed by the writers');
+  n = env.hub.calls.length;
+  assert.equal(pm.pull().events.length, 13);
+  assert.equal(sheetCalls(env.hub, n), 0);
+  // After a change: one index read for the first phone, nothing for the rest.
+  ok(sup.push({ tasks: [task({ uid: 'k0', id: 'K0', scope: 'edited', assignAt: T0 - 1 })] }));
+  n = env.hub.calls.length;
+  const inc = a.call('pull', { since: first.rev });
+  assert.deepEqual(inc.tasks.map(t => [t.uid, t.scope]), [['k0', 'edited']]);
+  assert.ok(sheetCalls(env.hub, n) <= 1);
+  n = env.hub.calls.length;
+  assert.deepEqual(b.call('pull', { since: first.rev }).tasks, inc.tasks);
+  assert.equal(sheetCalls(env.hub, n), 0);
+  // The old revision's entry is still right for an older phone, and the new one is not mixed up with it.
+  assert.equal(a.pull().tasks.find(t => t.uid === 'k0').scope, 'edited');
+  assert.equal(b.call('pull', { since: 0 }).tasks.find(t => t.uid === 'k1').scope, 'Pull 12 AWG');
+  // Nothing is lost when the cache is: same answers from the Sheet, at the cost of two requests.
+  const want = JSON.stringify(a.pull());
+  env.hub.cache.clear();
+  n = env.hub.calls.length;
+  assert.equal(JSON.stringify(a.pull()), want);
+  assert.ok(sheetCalls(env.hub, n) <= 2);
+  n = env.hub.calls.length;
+  assert.equal(JSON.stringify(b.pull()), JSON.stringify(b.pull()));
+  assert.equal(sheetCalls(env.hub, n), 0, 'what the cold pull read is cached for the next phone');
+  // Or when it is broken.
+  env.hub.cacheBroken = true;
+  assert.equal(JSON.stringify(a.pull()), want);
+  assert.equal(ok(sup.push({ tasks: [task({ uid: 'k1', id: 'K1', scope: 'while the cache is down', assignAt: T0 - 1 })] })).tasks[0].status, 'ok');
+  assert.equal(a.pull().tasks.find(t => t.uid === 'k1').scope, 'while the cache is down');
+  env.hub.cacheBroken = false;
+  assert.equal(a.pull().tasks.find(t => t.uid === 'k1').scope, 'while the cache is down', 'and it comes back right');
+});
+
+test('request budget: a tick is two reads and one write; a clock-in a handful; a no-change pull none', () => {
+  const env = setup(), sup = office(env), crew = phone(env, 'crew', 'crew-dev');
+  ok(sup.push({ tasks: [task()] }));
+  let n = env.hub.calls.length;
+  ok(crew.push({ tasks: [task({ crewAt: T0 - 5, items: [{ id: 'i1', done: true, at: T0 - 5 }] })] }));
+  const tick = env.hub.calls.slice(n);
+  assert.ok(tick.length <= 3, 'a tick: ' + tick.join(', '));
+  assert.equal(tick.filter(c => /values\.(batchUpdate|append|clear)|spreadsheets\.(batchUpdate|create)/.test(c)).length, 1, 'one write');
+  n = env.hub.calls.length;
+  ok(crew.push({ shifts: [shift()] }));
+  assert.ok(env.hub.calls.length - n <= 9, 'a clock-in: ' + env.hub.calls.slice(n).join(', '));
+  n = env.hub.calls.length;
+  const head = crew.pull();
+  crew.call('pull', { since: head.rev });
+  assert.ok(sheetCalls(env.hub, n) <= 2, 'one cold pull, then the cheap path');
+  // The cache never makes a writer trust a stale row number: a writer reads the Sheet itself.
+  const sheet = env.hub.workbook().sheets.find(x => x.title === 'Tasks');
+  ok(sup.push({ tasks: [task({ uid: 'u2', id: 'T2' })] }));
+  crew.pull(); // warm the cache
+  sheet.rows.splice(1, 2, sheet.rows[2], sheet.rows[1]); // the owner sorted the tab by hand
+  ok(sup.push({ tasks: [task({ uid: 'u1', scope: 'after the sort', assignAt: T0 - 1 }), task({ uid: 'u2', id: 'T2', scope: 'also', assignAt: T0 - 1 })] }));
+  assert.deepEqual(env.hub.entities('Tasks').map(t => [t.uid, t.scope]).sort(), [['u1', 'after the sort'], ['u2', 'also']]);
+  assert.deepEqual(rowsOf(env.hub, 'Tasks').map(r => [r.key, r.Scope]).sort(), [['u1', 'after the sort'], ['u2', 'also']], 'readable cells and data stayed together');
+});
+
+test('pull cache: rows moved by hand or by a purge are noticed, the Sheet is read again, a damaged row is skipped', () => {
+  const env = setup(), sup = office(env), pm = phone(env, 'pm', 'pm-dev'), crew = phone(env, 'crew', 'crew-dev');
+  ok(sup.push({ tasks: [task({ uid: 'a1', id: 'A1' }), task({ uid: 'a2', id: 'A2' }), task({ uid: 'a3', id: 'A3' })] }));
+  const before = crew.pull().tasks;
+  assert.equal(before.length, 3);
+  const sheet = env.hub.workbook().sheets.find(x => x.title === 'Tasks');
+  const [r1, r2, r3] = [sheet.rows[1], sheet.rows[2], sheet.rows[3]];
+  sheet.rows[1] = r3; sheet.rows[2] = r1; sheet.rows[3] = r2; // the owner sorted the tab: the cached row numbers are now wrong
+  const after = crew.pull();
+  assert.deepEqual(after.tasks.map(t => [t.uid, t.id]).sort(), before.map(t => [t.uid, t.id]).sort(), 'right answer, from a fresh read');
+  const n = env.hub.calls.length;
+  assert.deepEqual(crew.pull().tasks.map(t => t.uid).sort(), ['a1', 'a2', 'a3']);
+  assert.equal(sheetCalls(env.hub, n), 0, 'and the corrected index is what the next phone is served');
+  // A purge on another phone shifts rows under a cached index.
+  ok(pm.call('purge', { kind: 'tasks', target: 'a2' }));
+  assert.deepEqual(crew.pull().tasks.map(t => t.uid).sort(), ['a1', 'a3']);
+  // A row whose key cell no longer matches its data: skipped, and the rest of the hub carries on.
+  const row = sheet.rows.findIndex(r => r && r[16] === 'a3');
+  sheet.rows[row][16] = 'zzz';
+  assert.equal(crew.pull().tasks.length, 2, 'a hand edit does not change the revision, so what was cached is still served');
+  env.hub.cache.clear();
+  const hurt = ok(crew.pull());
+  assert.deepEqual(hurt.tasks.map(t => t.uid), ['a1']);
+  assert.equal(phone(env, 'crew', 'crew-dev').call('whoami').ok, true);
+  sheet.rows[row][16] = 'a3';
+  assert.deepEqual(crew.pull().tasks.map(t => t.uid).sort(), ['a1', 'a3']);
+  // Unreadable data is skipped the same way.
+  sheet.rows[row][18] = '{not json';
+  env.hub.cache.clear();
+  assert.deepEqual(crew.pull().tasks.map(t => t.uid), ['a1']);
+});
+
+test('pull cache: a large index is stored in chunks under the 100 KB value limit and served whole', () => {
+  const env = setup(), sup = office(env), crew = phone(env, 'crew', 'crew-dev');
+  seed(sup, 'tasks', Array.from({ length: 900 }, (_, i) => task({ uid: 'long-uid-number-' + i, id: 'T' + i, crew: 'Crew ' + (i % 7) })));
+  const first = crew.pull({ days: 30 });
+  assert.equal(first.tasks.length, 500);
+  assert.equal(first.more, true);
+  const rev = env.hub.props.REV;
+  assert.ok(env.hub.cache.has(`ix:${rev}:1`) && Number(env.hub.cache.get(`ix:${rev}:n`).v) >= 2, 'the index spans several cache values');
+  for (const [k, e] of env.hub.cache) assert.ok(e.v.length <= 100 * 1024, k + ' fits a cache value');
+  const n = env.hub.calls.length;
+  const again = crew.pull({ days: 30 });
+  assert.equal(JSON.stringify(again.tasks), JSON.stringify(first.tasks));
+  assert.equal(sheetCalls(env.hub, n), 0, 'and 500 rows came from the cache in batches the fake would refuse if they were over 100 keys');
+  const rest = crew.call('pull', { since: first.rev, days: 30 });
+  assert.equal(rest.tasks.length, 400);
+  assert.equal(first.tasks.concat(rest.tasks).map(t => t.uid).filter((u, i, a) => a.indexOf(u) === i).length, 900);
+});
+
 // ---------- selftest ----------
 test('selftest: write, read, merge rules, a translated drawing number, delete; leaves nothing behind', () => {
-  const env = setup(), pm = phone(env, 'pm', 'pm-dev');
+  const env = setup(), pm = phone(env, 'pm', 'pm-dev'), crew = phone(env, 'crew', 'crew-dev');
+  ok(office(env).push({ tasks: [task({ uid: 'real1' }), task({ uid: 'real2' })] }));
+  const seen = crew.pull(); // fills the pull cache
   const before = { events: env.hub.table('Activity').length, tasks: env.hub.table('Tasks').length, dead: env.hub.table('Deleted').length };
   const r = ok(pm.call('selftest'));
   assert.deepEqual(r.checks.map(c => [c.name, c.ok]), [['write', true], ['read', true], ['merge rules', true], ['translate', true], ['delete', true]]);
   assert.ok(r.checks.every(c => c.detail === 'ok'));
   assert.deepEqual({ events: env.hub.table('Activity').length, tasks: env.hub.table('Tasks').length, dead: env.hub.table('Deleted').length }, before);
+  assert.deepEqual(crew.pull().tasks.map(t => t.uid), ['real1', 'real2'], 'a pull after the self-test is not served a cached index of the old rows');
+  assert.ok(crew.pull().rev > seen.rev);
   const sent = env.hub.translateLog.at(-1);
   assert.ok(sent.text.includes('<span translate="no">E-301</span>') && sent.opts.contentType === 'html');
   // The test task is outside every window while it exists, and it is cleaned up even when a step fails.
@@ -1102,10 +1352,25 @@ test('selftest: write, read, merge rules, a translated drawing number, delete; l
   const bad = ok(pm.call('selftest'));
   assert.deepEqual(bad.checks.map(c => c.ok), [true, true, true, false, true]);
   assert.deepEqual(bad.checks[3], { name: 'translate', ok: false, detail: 'quota' });
-  assert.equal(env.hub.table('Tasks').length, 0);
+  assert.equal(env.hub.table('Tasks').length, 2, 'only the real tasks are left');
   // And it can be run as often as wanted.
   env.hub.translateQuota = Infinity;
   assert.ok(ok(pm.call('selftest')).checks.every(c => c.ok));
+});
+
+test('selftest notices a server that stopped following the rules (so a green result means something)', () => {
+  const broken = (find, repl) => { assert.ok(CODE.includes(find), find); return createHub({ now: T0, source: CODE.replace(find, repl) }); };
+  const run = hub => { const k = hub.setup(); return Object.fromEntries(hub.call(k.pm, 'selftest').checks.map(c => [c.name, c.ok])); };
+  // a crew key may now rewrite the assignment
+  assert.equal(run(broken("const office = ctx.role !== 'crew';\n  if (!stored", "const office = true;\n  if (!stored"))['merge rules'], false);
+  // an office push may now erase crew results
+  assert.equal(run(broken("if (ctx.role === 'crew' ? inc.crewAt > 0 && inc.crewAt >= t.crewAt : inc.crewAt > t.crewAt)", "if (true)"))['merge rules'], false);
+  // drawing numbers are no longer protected: the translator damages E-301
+  assert.equal(run(broken("'\\\\b[A-Z]{1,4}-?\\\\d+(?:[-.]\\\\d+)*[A-Z]?\\\\b',", "'(?!)',"))['translate'], false);
+  // the test row is not cleaned up
+  assert.equal(run(broken("deleteEntity_(ctx, b, 'tasks', uid, true);\n    flush_(ctx, b);", "flush_(ctx, b);"))['delete'], false);
+  // the healthy server passes all of it
+  assert.ok(Object.values(run(createHub({ now: T0 }))).every(Boolean));
 });
 
 // ---------- archive ----------
@@ -1128,7 +1393,6 @@ test('archive: copies old rows into a new spreadsheet, then deletes them here; h
   assert.deepEqual(env2.hub.table('Tasks', arch.id).map(x => x[1]).sort(), ['S1', 'S2'], 'old tasks copied with their readable cells');
   assert.deepEqual(env2.hub.entities('Tasks', arch.id).map(t => t.uid).sort(), ['old2', 'sep'], 'and their data');
   assert.deepEqual(env2.hub.table('Hours', arch.id).map(x => [x[0], x[2], x[6]]), [['Dana R', '2026-09-30', 8], ['Dana R', '2026-10-04', 8.5]]);
-  assert.deepEqual(rowsOf(env2.hub, 'Weekly totals').length >= 0, true);
   assert.deepEqual(env2.hub.table('Weekly totals', arch.id).map(x => [x[1], x[2]]), [['2026-09-28', 16.5]], 'the archived week is whole in the archive');
   assert.deepEqual(env2.hub.table('Reports', arch.id).map(x => x[0]), ['2026-09-30']);
   // Live: only what is newer remains, week totals included.
@@ -1161,9 +1425,7 @@ test('archive: copies old rows into a new spreadsheet, then deletes them here; h
 test('archive: a failure while deleting leaves the rows in both places, never in neither', () => {
   const env = setup(), pm = phone(env, 'pm', 'pm-dev'), sup = office(env);
   ok(sup.push({ tasks: [task({ uid: 'old', date: '2026-09-10' })] }));
-  env.hub.failNext('sheets.spreadsheets.batchUpdate', 1, 'quota blip');
-  // setup already ran its batchUpdates; the next batchUpdate is archive's own formatting of the new sheet, so fail the delete instead:
-  env.hub.failures.length = 0;
+  // archive makes two spreadsheets.batchUpdate calls (formatting the new sheet, then deleting here): fail the second
   let seen = 0;
   const real = env.hub.maybeFail;
   env.hub.maybeFail = m => { if (m === 'sheets.spreadsheets.batchUpdate' && ++seen === 2) throw new Error('Exception: Service error: Spreadsheets'); return real(m); };
@@ -1241,6 +1503,27 @@ test('keys, rotate: the PM sees crew and super keys; a rotated key stops working
   assert.throws(() => c.locked_({ role: 'crew', state: { rev: 0 } }, env.k.crew, () => 'ran'), e => e.code === 'unauthorized');
   assert.equal(env.hub.locked, false, 'and the lock is let go');
   assert.equal(c.locked_({ role: 'crew', state: { rev: 0 } }, r.key, () => 'ran'), 'ran');
+});
+
+test('key checks: an unset key matches nothing, not even an empty or short one; comparisons are constant time', () => {
+  const env = setup();
+  delete env.hub.props.CREW_KEY; // a half-finished setup, or an owner who cleared a property
+  delete env.hub.props.SUPER_KEY;
+  for (const key of ['', 'x', 'a'.repeat(31), 'a'.repeat(33), undefined, null, 0, [], {}]) {
+    assert.equal(env.hub.send({ v: 1, key, action: 'whoami' }).error, 'unauthorized', JSON.stringify(key));
+  }
+  delete env.hub.props.PM_KEY_SHA256;
+  assert.equal(env.hub.call(env.k.pm, 'whoami').error, 'unauthorized', 'with no PM hash stored, no key is the PM');
+  // sameStr_ answers like ===, for equal and unequal lengths, and every key comparison goes through it
+  const same = (a, b) => env.hub.eval(`sameStr_(${JSON.stringify(a)}, ${JSON.stringify(b)})`);
+  for (const [a, b] of [['abc', 'abc'], ['abc', 'abd'], ['abc', 'ab'], ['ab', 'abc'], ['', ''], ['', 'a'], ['a', ''], ['x'.repeat(32), 'x'.repeat(32)], ['x'.repeat(32), 'x'.repeat(31) + 'y']]) {
+    assert.equal(same(a, b), a === b, `${a} vs ${b}`);
+  }
+  const sameStr = CODE.slice(CODE.indexOf('function sameStr_'), CODE.indexOf('function newKey_'));
+  assert.ok(/d \|= a\.charCodeAt\(i\) \^/.test(sameStr) && !/===\s*b\b|a\s*===/.test(sameStr.replace('d === 0', '')), 'sameStr_ XORs every character instead of stopping at the first difference');
+  const roleOf = CODE.slice(CODE.indexOf('function roleOf_'), CODE.indexOf('// ponytail: cache counters'));
+  assert.equal((roleOf.match(/sameStr_\(/g) || []).length, 3, 'all three keys are compared with sameStr_');
+  assert.ok(!/===|!==|==/.test(roleOf.replace(/typeof key !== 'string'/, '').replace(/\? 'pm' : su/, '')), 'and never with ===');
 });
 
 test('keys never reach the Sheet, an error, or a log; the PM key is only ever a hash', () => {
@@ -1377,6 +1660,47 @@ test('stats: rows per tab, cells against the 10 million limit, the Sheet link', 
   assert.equal(r.sheetUrl, env.k.sheetUrl);
 });
 
+// ---------- fuzz: garbage in, a clean refusal out ----------
+test('fuzz: corrupted and garbage requests never cause a server error, a stuck lock, a formula or an unreadable row', () => {
+  const env = setup();
+  const rand = rng(777), pick = a => a[Math.floor(rand() * a.length)];
+  const pool = [null, true, false, 0, -1, 1e308, 2 ** 53, 'x', '', ' ', 'a'.repeat(300), '=1+1', '__proto__', 'constructor', '2026-13-45', '25:61', [], {}, [null], [[]], { a: 1 }, { __proto__: null }, [{}], 'é', '\u0000', '\ud800', { uid: 'u9' }, [1, 2, 3], -0, 1.5];
+  const seedTask = task({ uid: 'seed1' }), seedShift = shift({ id: 'seed-s', device: 'pm-dev' }), seedReport = report();
+  ok(phone(env, 'super', 'sup-dev').push({ tasks: [seedTask], reports: [seedReport], config: { project: 'P', floors: ['L1'] } }));
+  ok(phone(env, 'pm', 'pm-dev').push({ shifts: [seedShift, shift({ id: 'seed-h', device: '' })] }));
+  const corrupt = (o, n = 3) => { const c = JSON.parse(JSON.stringify(o)); const ks = Object.keys(c); for (let i = 0; i < n; i++) c[pick(ks)] = pick(pool); return c; };
+  const garbageList = () => Array.from({ length: Math.floor(rand() * 4) }, () => (rand() < 0.5 ? pick(pool) : corrupt(pick([seedTask, seedShift, seedReport, { uid: 'f1', date: '2026-10-19' }]), 1 + Math.floor(rand() * 6))));
+  const bodies = [
+    () => ({ action: 'push', tasks: garbageList(), shifts: garbageList(), reports: garbageList(), config: pick([undefined, null, {}, corrupt({ project: 'x', floors: ['a'], crews: [{ name: 'n' }], checks: ['c'], pin: '', at: 1 }, 2), pick(pool)]), deleted: pick([undefined, [], [{ kind: 'tasks', key: 'seed1' }], [{ kind: pick(pool), key: pick(pool) }], pick(pool)]) }),
+    () => ({ action: 'pull', since: pick(pool), days: pick(pool), crews: pick(pool) }),
+    () => ({ action: 'translate', items: pick([['hello'], [pick(pool)], pick(pool), ['x'.repeat(2500)]]), from: pick(['en', 'es', pick(pool)]), to: pick(['en', 'es', pick(pool)]) }),
+    () => ({ action: 'records', kind: pick(['tasks', 'shifts', 'reports', 'events', pick(pool)]), from: pick(['2026-10-01', pick(pool)]), to: pick(['2026-10-31', pick(pool)]), who: pick(pool), q: pick(pool), cursor: pick(pool) }),
+    () => ({ action: 'purge', kind: pick(['tasks', 'shifts', 'reports', pick(pool)]), target: pick(['seed1', 'seed-s', '2026-10-19', pick(pool)]) }),
+    () => ({ action: 'archive', before: pick(['2026-09-01', pick(pool)]) }),
+    () => ({ action: pick(['whoami', 'stats', 'keys', 'selftest', pick(pool)]) }),
+  ];
+  const allowed = new Set(['bad_request', 'too_large', 'forbidden', 'busy', 'quota']);
+  const seen = new Set();
+  for (let i = 0; i < 700; i++) {
+    const role = pick(ROLES), dev = pick([role + '-dev', 'pm-dev', 'sup-dev', 'crew-dev', '', 'bad dev', pick(pool)]);
+    const body = { v: 1, key: env.k[role], dev, ...pick(bodies)() };
+    const raw = JSON.stringify(body);
+    const r = JSON.parse(env.hub.raw(raw));
+    assert.ok(r.ok === true || allowed.has(r.error), `request ${i} (${role}): ${JSON.stringify(r).slice(0, 200)} <- ${raw.slice(0, 300)}`);
+    assert.equal(env.hub.locked, false);
+    seen.add(JSON.stringify(body.action).slice(0, 20) + ':' + (r.ok ? 'ok' : r.error));
+    if (i % 25 === 24) env.hub.advance(61e3); // stay under the per-minute caps
+  }
+  assert.ok(seen.size > 12, 'a spread of outcomes: ' + [...seen].join(' '));
+  assert.deepEqual(env.hub.formulaCells(), []);
+  for (const title of ['Tasks', 'Hours', 'Reports', 'Activity', 'Config']) {
+    const di = env.hub.header(title).indexOf('data');
+    for (const row of env.hub.table(title)) assert.doesNotThrow(() => JSON.parse(row[di]), title + ' row holds readable data');
+    for (const row of env.hub.table(title)) assert.ok(String(row[di]).length <= 49000);
+  }
+  assert.equal(phone(env, 'pm', 'pm-dev').call('whoami').ok, true);
+});
+
 // ---------- convergence: many random histories ----------
 // Reference phones keep their own copy of what they may see, edit it offline with real stamps, and sync as the contract
 // says (push what changed, then pull). A ledger of every edit and its stamp is the oracle: the final state of each
@@ -1471,8 +1795,7 @@ function convergence(seed, steps) {
     tick();
     const c = pickOf(clients), stamp = now();
     const op = rand();
-    if (c.role === 'crew' || (c.role !== 'crew' && op < 0.12)) {
-      // clock in/out on this phone
+    if (c.role === 'crew' || op < 0.12) { // clock in or out on this phone (the office phones are workers too)
       const open = Object.values(c.shifts).filter(s => s.device === c.dev && !s.out && !s.gone);
       if (open.length && chance(0.6)) { const s = pickOf(open); s.out = hm(); led.workerOut[s.id] = s.out; }
       else if (!open.length || chance(0.3)) {
@@ -1480,8 +1803,6 @@ function convergence(seed, steps) {
         c.shifts[id] = { id, device: c.dev, who: pickOf(['Dana R', 'dana r', 'Eli T']), date: today, in: hm(), out: '', crew: pickOf(['Crew A', 'Crew B']), tasks: [], edited: { who: false, in: false, out: false }, gone: false, at: stamp };
         led.device[id] = c.dev;
       }
-    } else if (c.role === 'crew') {
-      // unreachable: crew phones are handled above
     }
     if (c.role === 'crew' && chance(0.7)) {
       const mine = Object.values(c.tasks);
@@ -1596,7 +1917,6 @@ function convergence(seed, steps) {
     if (led.pmWho[s.id]) assert.equal(s.who, led.pmWho[s.id], `seed ${seed}: PM rename sticks`);
     if (led.removed[s.id]) assert.equal(s.gone, true, `seed ${seed}: removed stays removed`);
   }
-  // 4. weekly totals equal the per-shift sum
   return { env, server };
 }
 
@@ -1626,6 +1946,6 @@ test('convergence: crew, super and PM phones with random offline gaps end equal 
       assert.deepEqual([Math.round(r.Hours * 100), r.Shifts, r['Open shifts']], [w.cents, w.n, w.open], `seed ${seed}: ${r.Name} ${r['Week of']}`);
     }
   }
-  assert.ok(tasks > 150 && shifts > 150, `histories made real data (${tasks} tasks, ${shifts} shifts)`);
+  assert.ok(tasks > HISTORIES / 2 && shifts > HISTORIES / 2, `histories made real data (${tasks} tasks, ${shifts} shifts)`);
   console.log(`# convergence: ${HISTORIES} histories, ${tasks} tasks, ${shifts} shifts, ${syncs} Sheets calls, ${Date.now() - started} ms`);
 });
