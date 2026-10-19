@@ -384,7 +384,8 @@ function locked_(ctx, key, run) {
 function nextRev_(ctx) { return ++ctx.state.rev; } // one revision per row written, so paging by rev is exact
 
 function whoami_(ctx) {
-  const out = { role: ctx.role, rev: ctx.state.rev, now: ctx.now, tz: HUB_TZ, version: HUB_VERSION };
+  // dev: the device id this request's devSecret proves ('' without a valid one), so a phone can check it is the one it labels its shifts with
+  const out = { role: ctx.role, rev: ctx.state.rev, now: ctx.now, tz: HUB_TZ, version: HUB_VERSION, dev: ctx.dev };
   if (ctx.role === 'pm' && ctx.id) out.sheetUrl = sheetUrl_(ctx.id);
   return out;
 }
@@ -601,11 +602,12 @@ function reportRow_(r, rev, now, json) {
 }
 function configRow_(c, rev, now, json) { return rowBase_(TABS.config, [c.project, c.site, c.super, c.pm, stampText_(now)], 'config', rev, json); }
 
-function addEvent_(ctx, b, kind, who, text, ref) { // server-written, append only
+// Server-written, append only. label: what the readable Ref cell shows when the ref is not for people (a task's uid).
+function addEvent_(ctx, b, kind, who, text, ref, label) {
   if (ctx.system) return; // the selftest leaves no trace in the feed
   const rev = nextRev_(ctx), ev = { rev: rev, ts: ctx.now, who: clip_(who || ctx.role, 100), role: ctx.role, kind: kind, text: clip_(text, 300), ref: clip_(ref, 60) };
   const json = JSON.stringify(ev);
-  appendRow_(ctx, b, 'events', [stampText_(ev.ts), ev.who, ev.text, ev.ref, String(rev), rev, json]);
+  appendRow_(ctx, b, 'events', [stampText_(ev.ts), ev.who, ev.text, label ? clip_(label, 60) : ev.ref, String(rev), rev, json]);
   (b.warm || (b.warm = {}))['en:events:' + rev + ':' + rev] = json;
 }
 
@@ -735,12 +737,14 @@ function mergeTask_(ctx, stored, inc) {
     t.items = ticks_(t.items, inc.items); t.checks = ticks_(t.checks, inc.checks);
     t.crewAt = inc.crewAt;
   }
-  const ref = t.id || t.uid, ev = [];
-  if (!was) ev.push(['task.created', t.by, 'New task ' + ref + (t.crew ? ' for ' + t.crew : '') + (t.floor ? ', ' + t.floor : ''), ref]);
-  if (t.aStart && !(was && was.aStart)) ev.push(['task.started', t.lead || t.crew, (t.crew || 'Crew') + ' started ' + ref + ' at ' + t12_(t.aStart), ref]);
-  if (['Complete', 'Partial', 'Blocked'].indexOf(t.status) >= 0 && !(was && was.status === t.status)) ev.push(['task.status', t.lead || t.crew, ref + ' marked ' + t.status, ref]);
-  if (t.review && !(was && was.review === t.review)) ev.push(['task.reviewed', t.reviewer, ref + ' reviewed: ' + t.review, ref]);
-  if (t.reply && !(was && was.reply === t.reply && was.replyAt === t.replyAt)) ev.push(['task.replied', t.replyBy, 'Message sent on ' + ref, ref]);
+  // An event points at the sheet by uid (short ids can collide); its text names the short id people read.
+  const name = t.id || t.uid, ref = t.uid, ev = [];
+  if (!was) ev.push(['task.created', t.by, 'New task ' + name + (t.crew ? ' for ' + t.crew : '') + (t.floor ? ', ' + t.floor : ''), ref]);
+  if (t.aStart && !(was && was.aStart)) ev.push(['task.started', t.lead || t.crew, (t.crew || 'Crew') + ' started ' + name + ' at ' + t12_(t.aStart), ref]);
+  if (['Complete', 'Partial', 'Blocked'].indexOf(t.status) >= 0 && !(was && was.status === t.status)) ev.push(['task.status', t.lead || t.crew, name + ' marked ' + t.status, ref]);
+  if (t.review && !(was && was.review === t.review)) ev.push(['task.reviewed', t.reviewer, name + ' reviewed: ' + t.review, ref]);
+  if (t.reply && !(was && was.reply === t.reply && was.replyAt === t.replyAt)) ev.push(['task.replied', t.replyBy, 'Message sent on ' + name, ref]);
+  ev.forEach(function (e) { e.push(name); }); // the Activity tab's Ref cell shows the short id
   return { obj: t, events: ev };
 }
 
@@ -846,7 +850,7 @@ function pushKind_(ctx, b, name, list) {
     if (r.reason) return rej(r.reason);
     if (JSON.stringify(r.obj).length > MAX_CELL) return rej('too_large');
     if (save_(ctx, b, name, entry, r.obj, K.row)) {
-      r.events.forEach(function (e) { addEvent_(ctx, b, e[0], e[1], e[2], e[3]); });
+      r.events.forEach(function (e) { addEvent_(ctx, b, e[0], e[1], e[2], e[3], e[4]); });
       if (name === 'shifts') b.hours = true;
     }
     const o = clone_(entry.obj), item = { i: p.i, key: p.key, status: 'ok' };
@@ -863,11 +867,27 @@ function pushConfig_(ctx, b, raw) {
   // Config has no stamp in the contract: an optional `at` orders two office phones, otherwise the last push wins.
   n.at = n.at || ctx.now;
   const entry = loadEntries_(ctx, 'config', normConfig_, ['config'], null).config || { row: 0, rev: 0, obj: null, json: '' };
+  if (entry.obj) keepRoster_(n, entry.obj, raw);
   const roster = function (c) { return JSON.stringify(c ? [c.people, c.crews] : [[], []]); }, was = roster(entry.obj);
   if ((!entry.obj || n.at >= entry.obj.at) && save_(ctx, b, 'config', entry, n, configRow_) && roster(n) !== was) b.hours = true; // Weekly totals show the roster's names
   const c = clone_(entry.obj);
   c.rev = entry.rev;
   return { config: c, configStatus: 'ok' };
+}
+
+// A phone on an older version knows no roster and no crew ids. Its config never wipes them: with no people list the
+// stored people stay, and a crew that arrives without an id takes the stored id of the crew with that name (unless
+// another crew in the push already has it). Its other edits (project, floors, leads, a new crew) still apply.
+function keepRoster_(n, stored, raw) {
+  if (!Array.isArray(raw.people)) n.people = clone_(stored.people);
+  const taken = dict_();
+  n.crews.forEach(function (c) { if (c.id) taken[c.id] = true; });
+  n.crews.forEach(function (c) {
+    const k = nameKey_(c.name);
+    if (c.id || !k) return;
+    const s = stored.crews.filter(function (x) { return x.id && !taken[x.id] && nameKey_(x.name) === k; })[0];
+    if (s) { c.id = s.id; taken[s.id] = true; }
+  });
 }
 
 function push_(ctx) {
@@ -985,6 +1005,20 @@ function fetchEntities_(ctx, name, rows, norm, keyOf, keep) {
   });
   return list;
 }
+// Which sheets a pull for these crew names gets. The names are looked up in the stored roster: a sheet whose crew id is
+// a roster crew goes by that id, so a renamed crew keeps the sheets made under its old name and a new crew that took
+// the old name does not get them. By name only where the id cannot tell: a sheet with no crew id or one the roster no
+// longer has, or a name the roster does not know (a phone that has not heard of a rename yet).
+function crewSheets_(names, cfg) {
+  const ids = dict_(), known = dict_();
+  let byId = false;
+  (cfg ? cfg.crews : []).forEach(function (c) {
+    if (!c.id) return;
+    known[c.id] = true;
+    if (names.indexOf(c.name) >= 0) { ids[c.id] = true; byId = true; }
+  });
+  return function (t) { return byId && t.crewId && known[t.crewId] ? !!ids[t.crewId] : names.indexOf(t.crew) >= 0; };
+}
 function pullOnce_(ctx, since) {
   const r = ctx.req, role = ctx.role, rev = ctx.state.rev, office = role !== 'crew', pm = role === 'pm';
   const days = Math.min(90, Math.max(1, Math.floor(Number(r.days)) || 14)), today = today_(), cutoff = addDays_(today, -days);
@@ -999,15 +1033,18 @@ function pullOnce_(ctx, since) {
   const fresh = function (rows) { return rows.filter(function (x) { return x.rev > since && x.date >= cutoff; }); };
 
   loadAllIndex_(ctx); // from the cache when another phone already pulled this revision
-  const taskRows = fresh(readIndex_(ctx, 'tasks')).filter(function (x) { return !crews || crews.indexOf(x.crew) >= 0; });
+  // ponytail: with a crews filter every sheet in the window is read, because a sheet's crew id is only in its data
+  // (the cache serves the rows after the first reader). Upgrade: a crew id column in the Tasks index.
+  const taskRows = fresh(readIndex_(ctx, 'tasks'));
   const hoursIdx = readIndex_(ctx, 'shifts'), shiftRows = fresh(hoursIdx);
   const reportRows = office ? fresh(readIndex_(ctx, 'reports')) : [];
   const eventRows = office ? readIndex_(ctx, 'events').filter(function (x) { return x.rev > since; }).slice(since ? -100 : -50) : [];
   const openRows = office ? hoursIdx.filter(function (x) { return x.date >= addDays_(today, -1) && x.date <= today; }) : []; // who is on site now
-  const cfgRows = readIndex_(ctx, 'config').filter(function (x) { return x.rev > since; });
-  prefetch_(ctx, { tasks: taskRows, shifts: shiftRows.concat(openRows), reports: reportRows, events: eventRows, config: cfgRows });
+  const cfgAll = readIndex_(ctx, 'config'), cfgRows = cfgAll.filter(function (x) { return x.rev > since; });
+  prefetch_(ctx, { tasks: taskRows, shifts: shiftRows.concat(openRows), reports: reportRows, events: eventRows, config: crews ? cfgAll : cfgRows });
+  const cfgOf = function (rows) { return fetchEntities_(ctx, 'config', rows, normConfig_, function () { return 'config'; })[0]; };
 
-  out.tasks = cut(fetchEntities_(ctx, 'tasks', taskRows, normTask_, function (o) { return o.uid; }));
+  out.tasks = cut(fetchEntities_(ctx, 'tasks', taskRows, normTask_, function (o) { return o.uid; }, crews && crewSheets_(crews, cfgOf(cfgAll))));
   const mine = function (o) { return pm || (ctx.dev !== '' && o.device === ctx.dev); }; // crew and super see their own phone's hours only
   out.shifts = cut(fetchEntities_(ctx, 'shifts', shiftRows, normShift_, function (o) { return o.id; }, mine));
   if (office) {
@@ -1016,9 +1053,12 @@ function pullOnce_(ctx, since) {
     out.onsite = fetchEntities_(ctx, 'shifts', openRows, normShift_, function (o) { return o.id; }, function (o) {
       const st = startedMs_(o);
       return !o.gone && !o.out && ctx.now - st < OPEN_SHIFT_MS && st <= ctx.now + SKEW_MS;
-    }).sort(function (a, b) { return startedMs_(a) - startedMs_(b); }).map(function (o) { return { who: o.who, in: o.in, date: o.date }; });
+    }).sort(function (a, b) { return startedMs_(a) - startedMs_(b); }).map(function (o) { // the person and crew by id, so two people with one name stay apart
+      return { who: o.who, in: o.in, date: o.date, pid: o.pid, crewId: o.crewId, crew: o.crew };
+    });
   }
-  if (cfgRows.length) { const c = fetchEntities_(ctx, 'config', cfgRows, normConfig_, function () { return 'config'; }); if (c.length) out.config = c[0]; }
+  const cfg = cfgOf(cfgRows);
+  if (cfg) out.config = cfg;
   out.deleted = readIndex_(ctx, 'deleted').filter(function (x) { return x.rev > since && (office || x.kind !== 'reports'); })
     .map(function (x) { return { kind: x.kind, key: x.key, rev: x.rev }; });
   if (limit < rev) { out.rev = limit; out.more = true; }

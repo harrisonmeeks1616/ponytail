@@ -489,7 +489,7 @@ test('push: one rev per row written, entity rows carry theirs, events only for r
   assert.deepEqual(env.hub.entities('Activity').map(e => e.kind), ['task.created', 'task.started', 'task.status', 'task.reviewed', 'task.replied']);
   const ev = env.hub.entities('Activity')[0];
   assert.deepEqual(Object.keys(ev), ['rev', 'ts', 'who', 'role', 'kind', 'text', 'ref']);
-  assert.deepEqual([ev.role, ev.who, ev.ref, ev.ts], ['super', 'Sam', 'T1019-01', T0]);
+  assert.deepEqual([ev.role, ev.who, ev.ref, ev.ts], ['super', 'Sam', 'u1', T0], 'a task event points at the uid');
   assert.match(ev.text, /^New task T1019-01 for Crew A, Level 3$/);
 });
 
@@ -545,7 +545,8 @@ test('pull: super reads reports, events, its own hours and who is on site; the P
   const s = sup.pull();
   assert.deepEqual([s.reports.length, s.events.length > 0], [1, true]);
   assert.deepEqual(s.shifts.map(x => x.id), ['mine'], 'its own hours only');
-  assert.deepEqual(s.onsite, [{ who: 'Dana R', in: '06:30', date: '2026-10-19' }, { who: 'Sam S', in: '07:00', date: '2026-10-19' }], 'open shifts of the last 16 hours, earliest first, with no ids or devices');
+  const on = (who, at) => ({ who, in: at, date: '2026-10-19', pid: '', crewId: '', crew: '' });
+  assert.deepEqual(s.onsite, [on('Dana R', '06:30'), on('Sam S', '07:00')], 'open shifts of the last 16 hours, earliest first, with no shift ids or devices');
   const p = pm.pull();
   assert.deepEqual(p.shifts.map(x => x.id).sort(), ['done1', 'mine', 'open1']);
   assert.deepEqual(p.onsite.length, 2);
@@ -1824,7 +1825,7 @@ test('events: newest 50 on a first pull, what is new since after that, none for 
   seed(sup, 'tasks', Array.from({ length: 70 }, (_, i) => task({ uid: 'e' + i, id: 'E' + i })));
   const first = ok(pm.pull());
   assert.equal(first.events.length, 50);
-  assert.deepEqual(first.events.map(e => e.ref), Array.from({ length: 50 }, (_, i) => 'E' + (20 + i)), 'the latest 50, oldest first');
+  assert.deepEqual(first.events.map(e => e.ref), Array.from({ length: 50 }, (_, i) => 'e' + (20 + i)), 'the latest 50, oldest first');
   assert.ok(first.events.every(e => Object.keys(e).join() === 'rev,ts,who,role,kind,text,ref'));
   ok(sup.push({ tasks: [task({ uid: 'e0', id: 'E0', assignAt: T0 - 1, review: 'Accepted', reviewer: 'Sam' })] }));
   const next = ok(pm.call('pull', { since: first.rev }));
@@ -1846,8 +1847,8 @@ test('pull windows apply to reports and hours too', () => {
 test('whoami: role, rev, time, zone, version; the Sheet link only for the PM; no key echoed', () => {
   const env = setup();
   const r = phone(env, 'pm').call('whoami');
-  assert.deepEqual(Object.keys(r).sort(), ['now', 'ok', 'rev', 'role', 'sheetUrl', 'tz', 'version']);
-  assert.deepEqual([r.role, r.rev, r.now, r.tz, r.version, r.sheetUrl], ['pm', 0, T0, 'America/New_York', '1.0.0', env.k.sheetUrl]);
+  assert.deepEqual(Object.keys(r).sort(), ['dev', 'now', 'ok', 'rev', 'role', 'sheetUrl', 'tz', 'version']);
+  assert.deepEqual([r.role, r.rev, r.now, r.tz, r.version, r.sheetUrl, r.dev], ['pm', 0, T0, 'America/New_York', '1.0.0', env.k.sheetUrl, ID('pm-dev')]);
   for (const role of ['crew', 'super']) assert.ok(!('sheetUrl' in phone(env, role).call('whoami')));
   ok(office(env).push({ tasks: [task()] }));
   assert.equal(phone(env, 'crew').call('whoami').rev, 2);
