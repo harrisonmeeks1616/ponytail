@@ -184,7 +184,8 @@ main:has(.fab) { padding-bottom: calc(var(--tabbar-h) + env(safe-area-inset-bott
   color: var(--tint); font: 600 1.0625rem/1.25 var(--font); text-align: left; text-decoration: none; cursor: pointer;
 }
 .link.danger { color: var(--bad); }
-.x { width: 44px; height: 44px; flex: none; display: grid; place-items: center; padding: 0; border: 0; border-radius: 50%; background: var(--fill); color: var(--bad); font-size: 1.1rem; cursor: pointer; }
+.x { width: 44px; height: 44px; flex: none; display: grid; place-items: center; padding: 0; border: 0; border-radius: 50%; background: var(--fill); color: var(--tint); font-size: 1.1rem; cursor: pointer; }
+.x[data-act^=del], .x[data-act$=Del] { color: var(--bad); } /* a remove button is red; a step up or down is not */
 .x.add { background: var(--accent); color: var(--on-accent); font-size: 1.5rem; }
 
 /* ---- lists: rows on the page, or grouped inset on a gray block ---- */
@@ -274,7 +275,8 @@ textarea { resize: vertical; min-height: 88px; field-sizing: content; max-height
 .seg [data-tone=warn][aria-pressed=true] { background: var(--warn-bg); color: var(--warn); }
 .seg [data-tone=bad][aria-pressed=true] { background: var(--bad-bg); color: var(--bad); }
 .seg [data-tone=info][aria-pressed=true] { background: var(--info-bg); color: var(--info); }
-.seg button.just[aria-pressed=true] { animation: pop .25s var(--spring); }
+.seg button.just[aria-pressed=true] { animation: seg-in .22s var(--ease); }
+@keyframes seg-in { from { transform: scale(.94); opacity: .5; } }
 @media (max-width: 520px) { .seg:has(> :nth-child(4)) { grid-auto-flow: row; grid-template-columns: 1fr 1fr; } }
 .chips { display: flex; flex-wrap: wrap; gap: 8px; }
 .chip {
@@ -379,6 +381,7 @@ dialog.sheet::backdrop { background: var(--scrim); animation: fade .28s ease-out
 @keyframes sheet-up { from { transform: translateY(100%); } }
 @keyframes fade { from { opacity: 0; } }
 @media (min-width: 600px) { dialog.sheet { margin: auto; border-radius: 16px; } dialog.sheet[open] { animation: fade .2s ease-out; } }
+.sheet-in:focus { outline: none; } /* where focus starts when a sheet opens; Tab goes on to its buttons */
 .sheet-in { position: relative; display: flex; flex-direction: column; gap: 14px; padding: 8px 16px calc(env(safe-area-inset-bottom, 0px) + 20px); }
 .grabber { width: 36px; height: 5px; border-radius: 3px; background: var(--fill-2); margin: 0 auto 4px; flex: none; }
 .sheet-x { position: absolute; top: 6px; right: 6px; width: 44px; height: 44px; padding: 7px; border: 0; border-radius: 50%; background: var(--fill) content-box; color: var(--muted); display: grid; place-items: center; cursor: pointer; }

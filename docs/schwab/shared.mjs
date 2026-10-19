@@ -628,6 +628,9 @@ export function sheet(html) {
   swipeDown(d);
   document.body.append(d);
   d.showModal();
+  const box = d.firstElementChild; // focus starts on the sheet itself, not its ✕ (no ring flashing on the close button)
+  box.tabIndex = -1;
+  box.focus({ preventScroll: true });
   return d;
 }
 // The sheet follows a finger pulling down while it is scrolled to its top (never from a text box); let go past 80 px
@@ -929,11 +932,11 @@ export function settingsView(s) {
 }
 
 // A crew's people as chips (c null: the people on no crew): tap a name to rename or move the person, ✕ to take them
-// off the list, and a box to add people (several at once with commas). Big targets: a chip is a 40 px row, the add button 44 px.
+// off the list, and a box to add people (several at once with commas). Big targets: a chip is a 44 px row, each of its buttons at least 44 px wide.
 function peopleEditor(s, c, ph = '') {
-  const ps = people(s).filter(p => (c ? p.crewId === c.id : !p.crew)), plain = 'background:none;border:0;font:inherit;color:inherit;cursor:pointer;min-height:40px';
+  const ps = people(s).filter(p => (c ? p.crewId === c.id : !p.crew)), plain = 'background:none;border:0;font:inherit;color:inherit;cursor:pointer;min-height:44px';
   return `<div class="field"><span>${c ? L('People') : L('Not on a crew')}</span>
-    ${ps.length ? `<div class="chips">${ps.map(p => `<span class="chip" style="padding:0 0 0 14px;gap:0"><button type="button" data-act="pEdit" data-pid="${esc(p.id)}" style="${plain};padding:0;text-align:left">${esc(p.name)}</button><button type="button" data-act="pDel" data-pid="${esc(p.id)}" aria-label="${esc(L('Remove {name}', { name: p.name }))}" style="${plain};min-width:40px;padding:0 4px;color:var(--bad)">✕</button></span>`).join('')}</div>`
+    ${ps.length ? `<div class="chips">${ps.map(p => `<span class="chip" style="padding:0 0 0 14px;gap:0"><button type="button" data-act="pEdit" data-pid="${esc(p.id)}" style="${plain};min-width:44px;padding:0;text-align:left">${esc(p.name)}</button><button type="button" data-act="pDel" data-pid="${esc(p.id)}" aria-label="${esc(L('Remove {name}', { name: p.name }))}" style="${plain};min-width:44px;padding:0 4px;color:var(--bad)">✕</button></span>`).join('')}</div>`
       : c ? `<p class="hint">${L('No one on this crew yet.')}</p>` : ''}
     </div>${c ? `<div class="field"><span>${L('Add people')}</span><div class="edit-row"><input placeholder="${esc(ph)}" aria-label="${esc(L('Add people to {crew}', { crew: c.name || L('crew') }))}" enterkeyhint="done" autocomplete="off" data-enter="pAdd" data-crew="${esc(c.id)}">
       <button class="x add" data-act="pAdd" data-crew="${esc(c.id)}" aria-label="${esc(L('Add to {crew}', { crew: c.name || L('crew') }))}">+</button></div></div>` : ''}`;
