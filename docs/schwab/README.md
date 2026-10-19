@@ -55,8 +55,9 @@ screens") until someone signs in and changes the role in **Settings → This pho
   into **Crew hours**, a Monday to Sunday timesheet with each person's shifts and week total. Only this
   screen changes hours: fix an in or out time, **+ Add a shift**, remove one, or **Rename** a person (a name
   typo). What the PM changes is marked *edited* and stays as set when that worker's next text comes in; a
-  removed shift stays removed. A whole day the PM added by hand (with a clock-out) stays as entered: a late text or
-  tap for the same person and day is filed as removed, with a warning (on the worker's phone too). A day added with
+  removed shift stays removed. A whole day the PM added by hand (with a clock-out) stays as entered: a late text
+  for the same person and day is filed as removed, with a warning. With a hub, the worker's own taps for that day are
+  kept as a second row under that person (they are the real punches), for the PM to settle. A day added with
   no clock-out yet takes the worker's own Clock in and Clock out as a second row under that person, for the PM to
   settle. Each shift keeps the name it was clocked in with, so a borrowed phone never moves its owner's hours. Hours links opened on any other phone change nothing.
 - **One list of people:** **Settings → People and crews** holds the app's list of people. Each crew is one group with its people as

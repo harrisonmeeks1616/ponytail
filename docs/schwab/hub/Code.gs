@@ -43,7 +43,7 @@ const HUB_TZ = 'America/New_York'; // the job's time zone; appsscript.json sets 
 const MAX_BODY = 1000000, MAX_PER_KIND = 200, MAX_ENTITY = 45000, MAX_CELL = 49000, MAX_LIST = 500;
 const MAX_TR_ITEMS = 25, MAX_TR_CHARS = 2000, TR_CACHE_S = 21600, TR_CAP_DEFAULT = 1500;
 const SKEW_MS = 5 * 60 * 1000, TOMBSTONE_DAYS = 90, OPEN_SHIFT_MS = 16 * 36e5;
-const BAD_KEY_LIMIT = 30, WINDOW_S = 60, PUSH_CAP_KEY = 300, PUSH_CAP_DEV = 40; // per minute
+const WINDOW_S = 60, PUSH_CAP_KEY = 300, PUSH_CAP_DEV = 40; // per minute
 const CELL_LIMIT = 10000000, SELFTEST_DAY = '2000-01-01';
 const FORMAT = {
   uid: /^[\w-]{1,40}$/, date: /^\d{4}-\d{2}-\d{2}$/, time: /^([01]\d|2[0-3]):[0-5]\d(?::[0-5]\d)?$/,
@@ -346,12 +346,13 @@ function bump_(cache, name, now) {
     return n;
   } catch (e) { return 0; }
 }
-function trip_(cache) { try { cache.put('busy', '1', WINDOW_S); cache.remove('badkeys'); } catch (e) { /* fail open */ } }
-function isBusy_(cache) { try { return !!cache.get('busy'); } catch (e) { return false; } }
 
+// ponytail: wrong keys are not throttled. Apps Script gives no caller address, so a breaker can only be global, and a global
+// one let anyone with the link stop every phone with 30 junk requests a minute. A 32-character key cannot be guessed online;
+// junk still costs one execution and one properties read, so a big enough flood can use up the daily Properties quota.
+// Caching the key hashes in CacheService would make a wrong key cost no properties read.
 function handle_(e) {
   const cache = CacheService.getScriptCache(), now = Date.now();
-  if (isBusy_(cache)) fail_('busy');
   const body = e && e.postData && e.postData.contents;
   if (typeof body !== 'string') fail_('bad_request');
   if (body.length > MAX_BODY) fail_('too_large');
@@ -360,10 +361,7 @@ function handle_(e) {
   if (!isObj_(req) || req.v !== 1 || typeof req.action !== 'string') fail_('bad_request');
   const P = PropertiesService.getScriptProperties().getProperties(); // one read: keys, rev, sheet id
   const role = roleOf_(req.key, P);
-  if (!role) {
-    if (bump_(cache, 'badkeys', now) >= BAD_KEY_LIMIT) trip_(cache);
-    fail_('unauthorized');
-  }
+  if (!role) fail_('unauthorized');
   if (!own_(ACTIONS, req.action)) fail_('bad_request');
   const rule = ACTIONS[req.action];
   if (rule.roles.indexOf(role) < 0) fail_('forbidden');
@@ -619,11 +617,11 @@ function addEvent_(ctx, b, kind, who, text, ref, label) {
   (b.warm || (b.warm = {}))['en:events:' + rev + ':' + rev] = json;
 }
 
-// Load the stored rows for these keys (and every row on these dates, for the twin check) as entries.
-function loadEntries_(ctx, name, norm, keys, dates) {
+// Load the stored rows for these keys as entries.
+function loadEntries_(ctx, name, norm, keys) {
   const idx = readIndex_(ctx, name), want = dict_(), byKey = dict_();
   keys.forEach(function (k) { want[k] = true; });
-  const rows = idx.filter(function (r) { return want[r.key] || (dates && dates[r.date]); });
+  const rows = idx.filter(function (r) { return want[r.key]; });
   const data = readData_(ctx, name, rows.map(function (r) { return r.row; }));
   rows.forEach(function (r) {
     const raw = data[r.row], obj = raw ? norm(raw, ctx.now) : null;
@@ -687,6 +685,8 @@ function normShift_(raw, now) {
   }).slice(0, 50);
   ['in', 'out'].forEach(function (k) { if (!FORMAT.time.test(s[k])) s[k] = ''; });
   s.at = clampStamp_(s.at, now);
+  s.pmAt = clampStamp_(raw.pmAt, now); // the hub's own merge stamp for PM edits (mergeShift_); phones do not keep it
+  if (isObj_(raw.base)) s.base = normShift_(Object.assign({}, raw.base, { id: s.id, base: null }), now); // a PM push's base: read like a shift, never stored
   return FORMAT.uid.test(s.id) && isDay_(s.date) && s.in ? s : null; // no id, day or clock-in: nothing to log
 }
 function normReport_(raw, now) {
@@ -696,6 +696,8 @@ function normReport_(raw, now) {
   if (REPORT_STATUS.indexOf(r.status) < 0) r.status = '';
   ['lang', 'pmLang'].forEach(function (k) { if (r[k] !== 'en' && r[k] !== 'es') r[k] = ''; });
   ['submittedAt', 'updatedAt', 'pmAt'].forEach(function (k) { r[k] = clampStamp_(r[k], now); });
+  // supBase: the superintendent part as the phone last had it from the hub, read like a report and never stored; null: it never had one
+  if (isObj_(raw.supBase)) r.supBase = normReport_(Object.assign({}, raw.supBase, { date: r.date, supBase: undefined }), now); else if (raw.supBase === null) r.supBase = null;
   return r;
 }
 function normConfig_(raw, now) {
@@ -799,22 +801,18 @@ function mergeTask_(ctx, stored, inc) {
 // The phone is ctx.dev, proven by its devSecret: the device a request or a shift claims never picks whose shifts it writes.
 const noEdits_ = { who: false, in: false, out: false };
 function edited_(s) { return s.edited.who || s.edited.in || s.edited.out; }
-function samePerson_(a, b) { return a.pid && b.pid ? a.pid === b.pid : nameKey_(a.who) === nameKey_(b.who); } // two people may share a name
-function mergeShift_(ctx, stored, inc, state) {
-  const plain = ctx.dev !== '' && inc.device === ctx.dev && !inc.gone && !edited_(inc);
+function mergeShift_(ctx, stored, inc) {
+  const plain = ctx.dev !== '' && inc.device === ctx.dev && !inc.gone && !edited_(inc), base = stored && inc.base;
+  delete inc.base; // read, never stored
   const ev = [], line = function (verb, s) { return verb + ' ' + (s.who || 'a worker') + ', ' + s.date; };
   let s;
   if (ctx.role !== 'pm' || plain) { // worker rules
     if (ctx.dev === '') return { reason: 'device' };                       // no device secret: no phone to speak for
     if (inc.device === '') return { reason: 'forbidden' };                 // a PM-added shift is the PM's alone
     if (stored && stored.device !== ctx.dev) return { reason: 'device' };  // a key only speaks for the phone it came from
-    if (!stored) {
-      const twin = Object.keys(state.byKey).some(function (k) { // the PM already added this person's whole day by hand: it stands, this one is filed removed
-        const x = state.byKey[k].obj; // one with no clock-out yet is waiting for this phone's taps: they stay, for the PM to see
-        return x && x.date === inc.date && !x.gone && !x.device && x.out && samePerson_(x, inc);
-      });
-      s = Object.assign({}, inc, { device: ctx.dev, edited: clone_(noEdits_), gone: twin }); // the client never sets edited or gone for itself
-      if (!twin) ev.push([inc.out ? 'clock.out' : 'clock.in', s.who, s.who + (inc.out ? ' clocked out at ' + t12_(s.out) : ' clocked in at ' + t12_(s.in)) + ', ' + s.date, s.id]);
+    if (!stored) { // added even when the PM has entered that day by hand: these are the real punches, for the PM to see and settle
+      s = Object.assign({}, inc, { device: ctx.dev, edited: clone_(noEdits_), gone: false, pmAt: 0 }); // the client never sets edited, gone or pmAt for itself
+      ev.push([inc.out ? 'clock.out' : 'clock.in', s.who, s.who + (inc.out ? ' clocked out at ' + t12_(s.out) : ' clocked in at ' + t12_(s.in)) + ', ' + s.date, s.id]);
     } else {
       s = clone_(stored);
       if (!s.gone) { // a removed shift is never revived
@@ -825,28 +823,70 @@ function mergeShift_(ctx, stored, inc, state) {
         if (s.out && !stored.out) ev.push(['clock.out', s.who, s.who + ' clocked out at ' + t12_(s.out) + ', ' + s.date, s.id]);
       }
     }
-  } else { // PM rules: stored as sent, with two guards
-    s = clone_(inc);
-    if (stored) {
-      s.device = stored.device;                                    // a shift never changes phones
-      if (!s.out && !s.edited.out && stored.out) s.out = stored.out; // a PM phone that has not pulled the clock-out yet must not erase it
-      if (!s.edited.who && stored.at > inc.at) s.who = stored.who;   // nor undo a newer name from the worker's phone
-      s.at = Math.max(stored.at, inc.at);
-    }
+  } else { // PM rules
+    // pmAt orders two PM devices (the PM phone's edit stamp). base: the shift as that PM phone last had it from the hub. With
+    // it only what the phone changed since goes in, a time with its edited flag, as with a sheet's assignBase: a fix on the
+    // laptop and one on the phone both stand, a value both changed goes to the newer pmAt, and a phone that has not pulled a
+    // clock-out or a newer name yet changes neither. Without one the newer pmAt takes the whole shift, with two guards.
+    const newer = !stored || inc.pmAt >= stored.pmAt;
+    if (base) {
+      s = clone_(stored);
+      ['who', 'in', 'out'].forEach(function (f) { if (takes_(base, newer, [inc[f], inc.edited[f]], [base[f], base.edited[f]], [s[f], s.edited[f]])) { s[f] = inc[f]; s.edited[f] = inc.edited[f]; } });
+      ['pid', 'crew', 'crewId', 'tasks', 'date', 'gone'].forEach(function (k) { if (takes_(base, newer, inc[k], base[k], s[k])) s[k] = inc[k]; });
+    } else if (newer) {
+      s = clone_(inc);
+      if (stored) {
+        s.device = stored.device;                                    // a shift never changes phones
+        if (!s.out && !s.edited.out && stored.out) s.out = stored.out; // a PM phone that has not pulled the clock-out yet must not erase it
+        if (!s.edited.who && stored.at > inc.at) s.who = stored.who;   // nor undo a newer name from the worker's phone
+      }
+    } else s = clone_(stored);
+    if (stored) { s.at = Math.max(stored.at, inc.at); s.pmAt = Math.max(stored.pmAt, inc.pmAt); }
     ev.push([stored ? (s.gone && !stored.gone ? 'pm.remove' : 'pm.edit') : 'pm.add', 'PM',
       line(!stored ? 'PM added a shift for' : s.gone && !stored.gone ? 'PM removed a shift for' : 'PM edited', s), s.id]);
   }
   return { obj: s, events: ev };
 }
 
+// A report's superintendent part three ways (supBase), as takes_ and list3_ do a sheet's assignBase: a value this phone
+// changed since its base goes over the stored one; list entries match by their first field (needs by item, decisions by
+// question, floors by floor and a floor's crews by name, next steps by step, risks by risk; the nth of a repeated one to the
+// nth) and merge the same way; another phone's added entries stay, and so does an entry one phone took out and the other
+// changed. ponytail: an entry renamed on one phone and edited on another becomes two entries; nothing typed is lost.
+const SUPER_PART = (function () { const t = clone_(REPORT); ['date', 'updatedAt', 'pmReview', 'pmLang', 'pmAt'].forEach(function (k) { delete t[k]; }); t.decisions = [{ q: 't', rec: 't', by: 's' }]; return t; })();
+function merge3_(tpl, s, m, b, newer) {
+  if (!isObj_(tpl) && !Array.isArray(tpl)) return takes_(true, newer, m, b, s) ? m : s;
+  const o = {}, j = JSON.stringify;
+  if (!Array.isArray(tpl)) { Object.keys(tpl).forEach(function (k) { o[k] = merge3_(tpl[k], s[k], m[k], b[k], newer); }); return o; }
+  const f = Object.keys(tpl[0])[0], keys = function (l) { const n = dict_(); return l.map(function (x) { const t = String(x[f]); n[t] = (n[t] || 0) + 1; return t + '\n' + n[t]; }); };
+  const ks = keys(s), kb = keys(b), out = [], put = dict_();
+  keys(m).forEach(function (k, i) {
+    const si = ks.indexOf(k), bi = kb.indexOf(k);
+    if (si < 0 && bi >= 0 && j(m[i]) === j(b[bi])) return; // another phone took it out, and this one did not change it
+    out.push(put[k] = si < 0 ? m[i] : merge3_(tpl[0], s[si], m[i], bi < 0 ? shape_(tpl[0], {}) : b[bi], newer));
+  });
+  let at = 0;
+  s.forEach(function (x, i) { // another phone's entries, each after the one it followed; one this phone took out stays out unless the other changed it
+    const k = ks[i], bi = kb.indexOf(k);
+    if (put[k]) at = out.indexOf(put[k]) + 1; else if (bi < 0 || j(x) !== j(b[bi])) out.splice(at++, 0, x);
+  });
+  return out;
+}
+
 // Report. The superintendent owns everything except the PM's decision answers and review.
+// supBase (HUB.md, Report): with it only what this phone changed since goes in (merge3_), so the PM typing one line never
+// wipes the superintendent's report; null is a phone that never had the hub's copy, so everything it has, it added.
+// Without it the newer stamp takes the whole part.
 function mergeReport_(ctx, stored, inc) {
   if (ctx.role === 'crew') return { reason: 'forbidden' };
   const r = stored ? clone_(stored) : shape_(REPORT, { date: inc.date }), was = stored ? clone_(stored) : null, pm = ctx.role === 'pm';
-  if (!stored || (pm ? inc.updatedAt > r.updatedAt : inc.updatedAt > 0 && inc.updatedAt >= r.updatedAt)) {
-    const answers = r.decisions;
-    Object.keys(REPORT).forEach(function (k) { if (k !== 'decisions' && k !== 'pmReview' && k !== 'pmLang' && k !== 'pmAt') r[k] = inc[k]; });
-    const kept = inc.decisions.map(function (d) {
+  const newer = pm ? inc.updatedAt > r.updatedAt : inc.updatedAt > 0 && inc.updatedAt >= r.updatedAt;
+  const base = stored && inc.updatedAt > 0 && inc.supBase !== undefined ? inc.supBase || shape_(REPORT, { date: inc.date }) : null;
+  if (!stored || newer || base) {
+    const answers = r.decisions, sup = base ? merge3_(SUPER_PART, r, inc, base, newer) : inc;
+    Object.keys(SUPER_PART).forEach(function (k) { if (k !== 'decisions') r[k] = sup[k]; });
+    r.updatedAt = Math.max(r.updatedAt, inc.updatedAt);
+    const kept = sup.decisions.map(function (d) {
       const a = d.q ? answers.find(function (x) { return x.q === d.q; }) : null;
       return { q: d.q, rec: d.rec, by: d.by, pm: a ? a.pm : '', pmNote: a ? a.pmNote : '' };
     });
@@ -882,20 +922,23 @@ function pushKind_(ctx, b, name, list) {
     const n = K.norm(raw, ctx.now);
     return n ? { i: i, n: n, key: K.key(n) } : { i: i, key: '', reason: 'invalid' };
   });
-  const good = prep.filter(function (p) { return p.n; }), dates = dict_();
-  good.forEach(function (p) { dates[p.n.date] = true; });
-  const byKey = good.length ? loadEntries_(ctx, name, K.norm, good.map(function (p) { return p.key; }), name === 'shifts' ? dates : null) : dict_();
-  const state = { byKey: byKey };
+  const good = prep.filter(function (p) { return p.n; });
+  const byKey = good.length ? loadEntries_(ctx, name, K.norm, good.map(function (p) { return p.key; })) : dict_();
   prep.forEach(function (p) {
     const rej = function (reason) { res.push({ i: p.i, key: p.key, status: 'rejected', reason: reason }); };
     if (!p.n) return rej(p.reason);
     const entry = byKey[p.key] || (byKey[p.key] = { row: 0, rev: 0, obj: null, json: '' });
-    if ((!entry.obj || ctx.memo.tombs) && tombstones_(ctx)[name + '|' + p.key]) return rej('deleted'); // a purged record is never revived by a stale phone
+    // A purged record is never revived by a stale phone. A report is its day: one sent by a phone that never had the cleared
+    // copy (supBase null) is that day's new report, and its tombstone goes, so a phone that missed the clear does not remove it.
+    const tk = name + '|' + p.key, tomb = (!entry.obj || ctx.memo.tombs) && tombstones_(ctx)[tk];
+    const fresh = tomb && tomb !== true && name === 'reports' && p.n.supBase === null && p.n.updatedAt > 0;
+    if (tomb && !fresh) return rej('deleted');
     const horizon = ctx.system ? '' : ctx.P[K.horizon] || '';
     if (horizon && [p.n.date, entry.obj && entry.obj.date].some(function (d) { return d && d < horizon; })) return rej('archived');
-    const r = K.merge(ctx, entry.obj, p.n, state);
+    const r = K.merge(ctx, entry.obj, p.n);
     if (r.reason) return rej(r.reason);
     if (JSON.stringify(r.obj).length > MAX_CELL) return rej('too_large');
+    if (fresh) { delRow_(b, 'deleted', tomb); delete tombstones_(ctx)[tk]; }
     if (save_(ctx, b, name, entry, r.obj, K.row)) {
       r.events.forEach(function (e) { addEvent_(ctx, b, e[0], e[1], e[2], e[3], e[4]); });
       if (name === 'shifts') b.hours = true;
@@ -913,7 +956,7 @@ function pushConfig_(ctx, b, raw) {
   if (!n) return { configStatus: 'rejected', configReason: 'invalid' };
   // Config has no stamp in the contract: an optional `at` orders two office phones, otherwise the last push wins.
   n.at = n.at || ctx.now;
-  const entry = loadEntries_(ctx, 'config', normConfig_, ['config'], null).config || { row: 0, rev: 0, obj: null, json: '' };
+  const entry = loadEntries_(ctx, 'config', normConfig_, ['config']).config || { row: 0, rev: 0, obj: null, json: '' };
   if (entry.obj) keepRoster_(n, entry.obj, raw);
   // base: the settings as this phone last had them from the hub. With it only what the phone changed since goes in, as with
   // a sheet's assignBase: two office phones adding people at once both keep theirs.

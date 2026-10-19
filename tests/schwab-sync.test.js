@@ -131,14 +131,12 @@ class FakeHub {
     if (!/^[\w-]{1,40}$/.test(w.id || '') || !/^\d{4}-\d{2}-\d{2}$/.test(w.date || '') || !/^\d\d:\d\d/.test(w.in || '')) return { key: w.id, status: 'rejected', reason: 'invalid' };
     if (this.tomb.some(t => t.kind === 'shifts' && t.key === w.id)) return { key: w.id, status: 'rejected', reason: 'deleted' };
     const cur = this.shifts.get(w.id), plain = dev && w.device === dev && !w.gone && !(w.edited && (w.edited.who || w.edited.in || w.edited.out));
-    const same = (a, b) => a.date === b.date && (a.pid && b.pid ? a.pid === b.pid : a.who.toLowerCase() === b.who.toLowerCase());
     if (role !== 'pm' || plain) {
       if (!dev) return { key: w.id, status: 'rejected', reason: 'device' };
       if (!w.device) return { key: w.id, status: 'rejected', reason: 'forbidden' };
       if (cur && cur.device !== dev) return { key: w.id, status: 'rejected', reason: 'device' };
       if (!cur) {
-        const twin = [...this.shifts.values()].some(s => !s.gone && !s.device && s.out && same(s, w)); // a whole day the PM added by hand
-        this.shifts.set(w.id, { ...w, device: dev, edited: { who: false, in: false, out: false }, gone: twin, rev: this.bump() });
+        this.shifts.set(w.id, { ...w, device: dev, edited: { who: false, in: false, out: false }, gone: false, rev: this.bump() }); // kept even over a day the PM added by hand
       } else if (!cur.gone) {
         const before = JSON.stringify(cur);
         if (num(w.at) > num(cur.at) && !cur.edited.who) { cur.who = w.who; cur.at = w.at; }
@@ -463,17 +461,15 @@ test('hours: workers push their own shifts, only the PM phone pushes the timeshe
   await w.cycle(); await sp.cycle();
   assert.equal(hub.shifts.has('bogus1'), false);
   assert.ok(hub.calls.every(c => !c.init.body.includes('bogus1')), 'the timesheet is not even offered by a phone that is not the PM');
-  // a shift the PM adds by hand is pushed as sent; a later phone shift for that person and day is filed as gone and never shows on the worker's clock
+  // a shift the PM adds by hand is pushed as sent; the worker's own punches for that day stay on the worker's clock, and reach the PM as a second row (DATA2-03)
   const manual = shared.normShift({ id: 'pmadd1', device: '', who: 'Tre W', date: DAY, in: '08:00', out: '16:00', edited: { who: true, in: true, out: true } });
   pm.save('schwab.crewHours', [...pm.crewHours(), manual]);
   await pm.cycle();
   assert.deepEqual([hub.shifts.get('pmadd1').device, hub.shifts.get('pmadd1').edited.out], ['', true]);
   const tre = await makePhone(hub, 'crew', { crew: 'Crew A', worker: 'tre w' });
-  tre.clockIn('tre w');
-  await tre.cycle();
-  assert.equal([...hub.shifts.values()].find(s => s.device === tre.dev).gone, true);
-  await tre.cycle();
-  assert.equal(tre.hours().length, 0, 'the PM entry stands: the twin leaves the worker phone');
+  const treId = tre.clockIn('tre w');
+  await tre.cycle(); await tre.cycle(); await pm.cycle();
+  assert.deepEqual([hub.shifts.get(treId).gone, tre.hours().map(s => s.id), pm.crewHours().filter(s => s.date === DAY && /tre w/i.test(s.who)).map(s => s.id).sort()], [false, [treId], ['pmadd1', treId].sort()]);
   // the PM removes a shift: it leaves the worker's phone too
   pm.editCrewHours(id, s => { s.gone = true; });
   await pm.cycle(); await w.cycle();
@@ -767,7 +763,7 @@ test('joining: an invite link sets a phone up only when the hub agrees, never re
   p = lost; p.changes.length = 0;
   p.sync.disconnect();
   assert.equal(p.sync.hubStatus().state, 'off');
-  assert.deepEqual([p.settings().hubUrl, p.settings().hubKey, p.settings().hubRole, p.hubSync()], ['', '', '', null]);
+  assert.deepEqual([p.settings().hubUrl, p.settings().hubKey, p.settings().hubRole, p.hubSync().url, p.hubSync().away], ['', '', '', URL_A, true], 'what it had of that hub stays, for a rejoin (DATA2-04)');
   assert.deepEqual(p.changes.at(-1).kinds, ['settings']);
   p.sync.poke(); await settle();
   assert.equal(p.timers.pending().length, 0);
@@ -1317,7 +1313,7 @@ test('a disconnect during a cycle: the reply that arrives afterwards is ignored'
   hub.before = async req => { if (req.action === 'pull') { hub.before = null; cp.sync.disconnect(); } };
   await cp.cycle();
   assert.equal(cp.task(uid), undefined);
-  assert.equal(cp.hubSync(), null, 'no state is written for a hub the phone has left');
+  assert.deepEqual([cp.hubSync().rev, cp.hubSync().sig, cp.hubSync().t], [0, '', {}], 'the late reply writes nothing for a hub the phone has left');
   assert.equal(cp.sync.hubStatus().state, 'off');
   assert.equal(cp.settings().hubUrl, '');
 });
@@ -2050,6 +2046,127 @@ test('against the real hub/Code.gs: two office phones adding people at once both
   const want = 'Carlos T, Luis M, Maria G, Rosa P';
   assert.deepEqual([names(mock.entities('Config')[0]), names(pm.settings()), names(sp.settings())], [want, want, want], 'every addition stands, and a removal too');
   assert.deepEqual([pm.settings().floors.includes('Level 4'), sp.toasts, pm.toasts], [true, [], []]);
+});
+
+test('against the real hub/Code.gs: a passcode the PM changes holds, even when the superintendent, who kept the old one, saves settings (DATA2-09)', async () => {
+  const { mock, k, real } = realHub(), pinA = '0123456789abcdef:' + 'a'.repeat(64), pinB = 'fedcba9876543210:' + 'b'.repeat(64);
+  const pm = await makePhone(real, 'pm', { key: k.pm }), sp = await makePhone(real, 'super', { key: k.super });
+  const step = async (...ps) => { for (const p of ps) { mock.advance(5e3); await p.cycle(); } };
+  pm.save('schwab.settings', { ...pm.settings(), pin: pinA }); pm.save('schwab.pin', pinA);
+  await step(pm, sp);
+  assert.equal(sp.settings().pin, pinA, 'the superintendent learns the first code');
+  pm.save('schwab.settings', { ...pm.settings(), pin: pinB }); pm.save('schwab.pin', pinB); // Change the passcode
+  await step(pm, sp);
+  assert.deepEqual([mock.entities('Config')[0].pin, sp.settings().pin], [pinB, pinA], 'the hub has the new code; the superintendent keeps the one it learned');
+  sp.save('schwab.settings', { ...sp.settings(), floors: [...sp.settings().floors, 'Level 6'] });
+  await step(sp, pm);
+  assert.deepEqual([mock.entities('Config')[0].pin, mock.entities('Config')[0].floors.includes('Level 6')], [pinB, true], 'the floor goes up, the old code does not');
+  const cp = await makePhone(real, 'crew', { key: k.crew, crew: 'Crew A' });
+  await step(cp);
+  assert.equal(cp.settings().pin, pinB, 'a phone set up afterwards learns the new code');
+  // a deliberate change on the superintendent's phone still goes up
+  const pinC = '00112233445566ff:' + 'c'.repeat(64);
+  sp.save('schwab.settings', { ...sp.settings(), pin: pinC }); sp.save('schwab.pin', pinC);
+  await step(sp);
+  assert.equal(mock.entities('Config')[0].pin, pinC);
+});
+
+test('against the real hub/Code.gs: a phone that taps Disconnect and joins the same hub again keeps the work it had not sent (DATA2-04)', async () => {
+  const { mock, k, real } = realHub(), { unpack } = await lib;
+  const sp = await makePhone(real, 'super', { key: k.super }), pm = await makePhone(real, 'pm', { key: k.pm });
+  const ana = await makePhone(real, 'crew', { key: k.crew, crew: 'Crew A', worker: 'Ana R' }), jose = await makePhone(real, 'crew', { key: k.crew, crew: 'Crew A', worker: 'Jose L' });
+  const step = async (...ps) => { for (const p of ps) { mock.advance(5e3); await p.cycle(); } };
+  sp.save('schwab.settings', { ...sp.settings(), crews: [{ name: 'Crew A', lead: '', members: 'Ana R, Jose L' }] });
+  const uid = sp.addTask({ sentAt: sp.now(), items: [{ id: 'i1', text: 'Pull wire' }, { id: 'i2', text: 'Install box' }, { id: 'i3', text: 'Label' }] });
+  await step(sp, pm, ana, jose);
+  assert.equal((await pm.sync.rotate('crew')).ok, true); // the PM replaces the crew key; both crew phones are refused and keep ticking
+  ana.tick(uid, 'i1'); await step(ana);
+  mock.advance(5 * 60e3); jose.tick(uid, 'i2'); await step(jose);
+  const join = async p => (await p.sync.joinFrom(await unpack((await pm.sync.invite('crew', 'Crew A')).url.split('#p=')[1]))).ok;
+  assert.equal(await join(jose), true); await step(jose);
+  ana.sync.disconnect(); // "Your work stays on this phone"
+  assert.equal(ana.task(uid).items[0].done, true);
+  assert.equal(await join(ana), true); await step(ana, jose, ana);
+  const done = t => t.items.map(i => i.done), want = [true, true, false];
+  assert.deepEqual([done(mock.entities('Tasks').find(t => t.uid === uid)), done(ana.task(uid)), done(jose.task(uid))], [want, want, want], 'both ticks, everywhere');
+});
+
+test('against the real hub/Code.gs: two PM devices fixing one shift keep both fixes, and a time both changed goes to the newer fix (DATA2-05)', async () => {
+  const { mock, k, real } = realHub();
+  const w = await makePhone(real, 'crew', { key: k.crew, crew: 'Crew A', worker: 'Ana R' }), ph = await makePhone(real, 'pm', { key: k.pm }), lap = await makePhone(real, 'pm', { key: k.pm });
+  const step = async (...ps) => { for (const p of ps) { mock.advance(5e3); await p.cycle(); } };
+  const id = w.clockIn('Ana R', { in: '06:45' }); w.editHours(id, s => { s.out = '14:45'; });
+  await step(w, ph, lap);
+  const fix = (p, f, v) => p.editCrewHours(id, s => { s[f] = v; s.edited[f] = true; });
+  const hubS = () => mock.entities('Hours').find(s => s.id === id), view = s => [s.in, s.out, s.edited.in, s.edited.out];
+  lap.net.down = true; fix(lap, 'in', '06:30'); await step(lap); // the laptop, offline, fixes the clock-in
+  fix(ph, 'out', '15:45'); await step(ph); // later the phone, online, fixes the clock-out
+  lap.net.down = false; await step(lap, ph, w, lap);
+  const want = ['06:30', '15:45', true, true];
+  assert.deepEqual([view(hubS()), view(ph.crewHours()[0]), view(lap.crewHours()[0])], [want, want, want], 'both fixes stand');
+  assert.deepEqual([w.hours()[0].in, w.hours()[0].out, rowsOfTotals(mock)], ['06:30', '15:45', 9.25]);
+  // both fix the clock-out: the newer fix wins, everywhere
+  lap.net.down = true; fix(lap, 'out', '15:00'); await step(lap);
+  mock.advance(60e3); fix(ph, 'out', '16:00'); await step(ph);
+  lap.net.down = false; await step(lap, ph, lap);
+  assert.deepEqual([hubS().out, ph.crewHours()[0].out, lap.crewHours()[0].out], ['16:00', '16:00', '16:00']);
+  assert.deepEqual([w.toasts, ph.toasts, lap.toasts], [[], [], []]);
+});
+const rowsOfTotals = mock => { const head = mock.header('Weekly totals'); return mock.table('Weekly totals').map(r => r[head.indexOf('Hours')])[0]; };
+
+test('against the real hub/Code.gs: the PM typing in a daily report keeps the superintendent\'s words, offline or within one sync (supBase, DATA2-01)', async () => {
+  const { mock, k, real } = realHub();
+  const sp = await makePhone(real, 'super', { key: k.super }), pm = await makePhone(real, 'pm', { key: k.pm });
+  const step = async (...ps) => { for (const p of ps) { mock.advance(5e3); await p.cycle(); } };
+  await step(sp, pm);
+  const view = r => r && [r.status, r.results, r.wins, r.issues], all = () => [view(mock.entities('Reports').find(r => r.date === DAY)), view(sp.reports()[DAY]), view(pm.reports()[DAY])];
+  // the superintendent writes the day with no signal; the PM, online, types one line into the same day
+  sp.net.down = true;
+  sp.editReport(DAY, r => Object.assign(r, { status: 'At risk', results: 'Crew A pulled wire on level 3', wins: 'Level 3 east a day early' }));
+  await step(sp);
+  pm.editReport(DAY, r => { r.issues = 'Inspector coming Tuesday 2 pm'; }); await step(pm);
+  sp.net.down = false;
+  await step(sp, pm, sp);
+  const one = ['At risk', 'Crew A pulled wire on level 3', 'Level 3 east a day early', 'Inspector coming Tuesday 2 pm'];
+  assert.deepEqual(all(), [one, one, one], 'the hub, the superintendent and the PM all keep both');
+  // online: the superintendent corrects the results; the PM, whose phone has not pulled that yet, edits Site issues
+  sp.editReport(DAY, r => { r.results += '. CORRECTION: only half of level 3'; }); await step(sp);
+  pm.editReport(DAY, r => { r.issues = 'Inspector moved to Wednesday'; }); await step(pm);
+  await step(sp, pm, sp);
+  const two = ['At risk', 'Crew A pulled wire on level 3. CORRECTION: only half of level 3', 'Level 3 east a day early', 'Inspector moved to Wednesday'];
+  assert.deepEqual(all(), [two, two, two]);
+  assert.deepEqual([sp.toasts, pm.toasts, sp.sync.hubStatus().pending, pm.sync.hubStatus().pending], [[], [], 0, 0]);
+});
+
+test('against the real hub/Code.gs: after the PM clears a day\'s report the real one still reaches everyone, and a record the hub calls deleted leaves the phone (DATA2-02)', async () => {
+  const { mock, k, real } = realHub();
+  const sp = await makePhone(real, 'super', { key: k.super }), pm = await makePhone(real, 'pm', { key: k.pm });
+  const step = async (...ps) => { for (const p of ps) { mock.advance(5e3); await p.cycle(); } };
+  const onHub = () => mock.entities('Reports').find(r => r.date === DAY), view = r => r && [r.status, r.results, r.issues];
+  sp.editReport(DAY, r => Object.assign(r, { status: 'On plan', results: 'Typed on the wrong day by mistake' }));
+  await step(sp, pm);
+  assert.equal(onHub()?.results, 'Typed on the wrong day by mistake');
+  assert.equal((await pm.sync.purge('report', DAY)).ok, true);
+  await step(sp, pm);
+  assert.deepEqual([onHub(), sp.reports()[DAY], pm.reports()[DAY]], [undefined, undefined, undefined]);
+  // the superintendent writes the day's real report, then the PM types on that day too
+  sp.editReport(DAY, r => Object.assign(r, { status: 'At risk', results: 'The real report: inspection failed on level 2' }));
+  await step(sp, pm);
+  pm.editReport(DAY, r => { r.issues = 'Inspection again Thursday'; });
+  await step(pm, sp);
+  const want = ['At risk', 'The real report: inspection failed on level 2', 'Inspection again Thursday'];
+  assert.deepEqual([view(onHub()), view(sp.reports()[DAY]), view(pm.reports()[DAY])], [want, want, want]);
+  // a sheet the PM deleted, back on the PM phone from a crew's results text: the hub refuses it as deleted, and it leaves the
+  // phone (no pull would remove it: this phone is past the tombstone) instead of staying there unsent for good
+  const uid = sp.addTask({ sentAt: sp.now() });
+  await step(sp, pm);
+  const copy = clone(pm.task(uid));
+  assert.equal((await pm.sync.purge('task', uid)).ok, true);
+  await step(pm, sp);
+  pm.save('schwab.tasks', [...pm.tasks(), { ...copy, status: 'Complete', crewAt: pm.now() }]);
+  await step(pm, pm);
+  assert.deepEqual([pm.task(uid), mock.entities('Tasks').some(t => t.uid === uid), pm.sync.hubStatus().pending], [undefined, false, 0]);
+  assert.deepEqual([sp.toasts, pm.toasts], [[], []]);
 });
 
 test('against the real hub/Code.gs: a crew phone keeps a sheet texted to it for another crew, and work on a sheet that left its crew until that work went up', async () => {
