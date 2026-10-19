@@ -482,6 +482,38 @@ test('people: settings from before ids migrate the same way on every phone, on r
   assert.equal(new Set(bad.people.map(p => p.id)).size, 3);
 });
 
+test('people: a tab still on the old version saving settings keeps every person id, even two people with one name', async () => {
+  const { KEYS, normSettings, loadSettings, save, addPerson, people, backupData, restoreData } = await lib;
+  const store = new Map();
+  Object.defineProperty(globalThis, 'localStorage', { configurable: true, value: { getItem: k => store.get(k) ?? null, setItem: (k, v) => store.set(k, String(v)) } });
+  try {
+    const S = normSettings({ crews: [{ name: 'Crew A', members: 'Jose L, Ana P' }, { name: 'Crew B', members: '' }] });
+    addPerson(S, 'Ray K', S.crews[0].id); // a random id, not one a migration from the names would make
+    addPerson(S, 'Jose L', S.crews[1].id); // a second Jose L, on Crew B
+    save(KEYS.settings, S);
+    const before = people(loadSettings());
+    assert.equal(before.length, 4);
+    // The old version's save: no people, no crew ids, member lists only; that tab also typed a new name onto Crew B.
+    const oldTab = JSON.parse(store.get(KEYS.settings));
+    delete oldTab.people; oldTab.crews = oldTab.crews.map(({ id, ...c }) => c); oldTab.crews[1].members += ', Lee W';
+    store.set(KEYS.settings, JSON.stringify(oldTab));
+    const after = loadSettings();
+    assert.deepEqual(people(after).slice(0, 4), before, 'every person keeps their id, name and crew, both Jose L included');
+    assert.deepEqual(after.crews.map(c => c.id), S.crews.map(c => c.id), 'each crew keeps its id');
+    const lee = people(after)[4];
+    assert.deepEqual([lee.name, lee.crew, people(after).length], ['Lee W', 'Crew B', 5], 'a name typed in the old tab joins its crew');
+    assert.equal(people(loadSettings())[4].id, lee.id, 'with the same id on every reload');
+    store.set(KEYS.settings, JSON.stringify(oldTab)); // and a second old-tab save after this version saved again
+    save(KEYS.settings, after);
+    store.set(KEYS.settings, JSON.stringify(oldTab));
+    assert.deepEqual(people(loadSettings()).map(p => p.id), people(after).map(p => p.id));
+    // A backup made before people had ids brings its own lists, never this phone's roster.
+    const file = { ...backupData(), [KEYS.settings]: { crews: [{ name: 'Crew Z', members: 'Zed Q' }] }, [KEYS.roster]: null };
+    assert.ok(restoreData(file));
+    assert.deepEqual(people(loadSettings()).map(p => [p.name, p.crew]), [['Zed Q', 'Crew Z']]);
+  } finally { delete globalThis.localStorage; }
+});
+
 test('people: two people with one name stay two on sheets, the time clock and the timesheet', async () => {
   const { normSettings, addPerson, findPerson, people, normTask, normShift, assignmentFor } = await lib;
   const { byPerson, importShifts } = await import('../docs/schwab/report.mjs');

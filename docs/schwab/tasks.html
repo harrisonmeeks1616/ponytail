@@ -3,30 +3,35 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
-<meta name="theme-color" content="#1B4332">
+<meta name="theme-color" content="#FAFAFC" media="(prefers-color-scheme: light)">
+<meta name="theme-color" content="#121214" media="(prefers-color-scheme: dark)">
 <meta name="apple-mobile-web-app-title" content="H.A. Sack-Electrical">
 <title>H.A. Sack-Electrical · Sack Company-Electrical</title>
-<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@600;700&family=Barlow:wght@400;600&display=swap" media="print" onload="this.media='all'">
 <link rel="stylesheet" href="shared.css">
 </head>
 <body>
 <header class="top"><div class="top-in">
-  <svg class="mark" viewBox="0 0 24 24" width="32" height="32" aria-hidden="true"><rect width="24" height="24" rx="6" fill="var(--accent)"/><path d="M13.6 3.5 6.5 13.4h4.6l-1.2 7.1 7.6-10.4h-4.7z" fill="var(--brand)"/></svg>
-  <div class="grow brand"><h1>H.A. Sack-Electrical</h1><p>Sack Company-Electrical</p></div>
+  <svg class="mark" viewBox="0 0 24 24" width="30" height="30" aria-hidden="true"><rect width="24" height="24" rx="6.5"/><path d="M13.6 3.5 6.5 13.4h4.6l-1.2 7.1 7.6-10.4h-4.7z"/></svg>
+  <div class="brand"><b>H.A. Sack-Electrical</b><span>Sack Company-Electrical</span></div>
   <button class="icon-btn lang" id="langBtn" data-act="toggleLang" aria-label="Español">ES</button>
+  <button class="icon-btn" id="gearBtn" data-go="settings" hidden></button>
   <button class="icon-btn" id="lockBtn" data-act="lockBtn" aria-label="Office sign-in"></button>
-</div>
-<nav class="office-tabs" id="officeTabs" aria-label="Screens"></nav></header>
-<main><p class="proj" id="proj"></p><div id="app"></div></main>
+</div></header>
+<main>
+  <div class="screen-head" id="head"><span id="headBack"></span><p class="proj" id="proj"></p>
+    <div class="title-row"><h1 class="large-title" id="title"></h1><span id="titleMore"></span></div><p class="subtitle" id="subtitle"></p></div>
+  <div id="app"></div>
+  <div class="bar" id="bar"></div>
+</main>
+<nav class="tabbar" id="officeTabs" aria-label="Screens"></nav>
 <script>setTimeout(() => { const app = document.getElementById('app'); if (window.appStarted) return; let es = false; try { es = JSON.parse(localStorage.getItem('schwab.settings')).lang === 'es'; } catch {} app.innerHTML = es ? '<div class="empty"><h2>La app no termin\u00f3 de cargar</h2><p>Con se\u00f1al, vuelva a cargar.</p><button class="btn primary" onclick="location.reload()">Recargar</button></div>' : '<div class="empty"><h2>The app didn\u2019t finish loading</h2><p>Get signal, then reload. · La app no termin\u00f3 de cargar. Con se\u00f1al, vuelva a cargar.</p><button class="btn primary" onclick="location.reload()">Reload · Recargar</button></div>'; }, 6000); // a dropped file on the first open after an update; a Spanish phone gets Spanish only</script>
-<nav class="bar" id="bar"></nav>
 <script type="module">
 import {
   KEYS, esc, uid, load, save, loadSettings, nameKey, cleanName, people, findPerson, crewById, addPerson, normTask, newItem, mergeTask, cloneTask, pack, unpack, linkTo,
   nextId, renumberClashes, sameNumber, ensureDevice,
   today, addDays, niceDate, nowHM, span, fmtMin, t12, stamp, hrs, timeOf, field, datalist, seg, setPath, getPath, readInput,
   toast, sheet, ask, sendSheet, pasteSheet, makePdf, savePdf, fileAway, retryUploads, settingsView, settingsAct, restore,
-  registerSW, dateBar, crewVar as cv, L, setLang, getLang, COMPANIES, letterhead,
+  registerSW, dateBar, crewVar as cv, L, setLang, getLang, COMPANIES, letterhead, icon, screenHead, busy,
   UNLOCK, hasPin, adoptPin, setPin, pinHash, tryPin, unlocked, signIn, signOut,
 } from './shared.mjs';
 import { renderOffice, reportAct, reportInput, openReport, openHours, hoursInput, workerChange, fileReportIfChanged, reloadReports, sectionToggle, hasReports, attachShifts } from './report.mjs';
@@ -189,29 +194,37 @@ const renumbered = moved => moved.map(([t, old]) => ' ' + L('Your sheet {old} is
 
 // ---------- views ----------
 
-const LOCK = { shut: '<rect x="5" y="11" width="14" height="10" rx="2"/><path d="M8 11V7.5a4 4 0 0 1 8 0V11"/>', open: '<rect x="5" y="11" width="14" height="10" rx="2"/><path d="M8 11V7.5a4 4 0 0 1 7.6-1.8"/>' };
-
+// The tab bar: a crew phone (or any phone signed out) has Today and its time clock; signed in, the office screens.
+// Live and Records join here when the hub is wired: [view, label] in the list, an icon name in TAB_ICON.
+const TAB_ICON = { day: 'today', clock: 'clock', report: 'report' };
 function header() {
-  const on = office(), lb = document.getElementById('langBtn'), lock = document.getElementById('lockBtn'), tabs = document.getElementById('officeTabs');
+  const on = office(), lb = document.getElementById('langBtn'), lock = document.getElementById('lockBtn'), gear = document.getElementById('gearBtn'), tabs = document.getElementById('officeTabs');
   document.body.classList.toggle('office', on);
   lb.textContent = getLang() === 'es' ? 'EN' : 'ES';
   lb.setAttribute('aria-label', getLang() === 'es' ? 'English' : 'Español');
-  lock.innerHTML = `<svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true">${on ? LOCK.open : LOCK.shut}</svg>`;
+  lock.innerHTML = icon(on ? 'unlock' : 'lock');
   lock.setAttribute('aria-label', on ? L('Lock the office screens') : L('Office sign-in'));
+  gear.hidden = !on;
+  gear.innerHTML = icon('gear');
+  gear.setAttribute('aria-label', L('Settings'));
   document.getElementById('proj').textContent = [S.project, S.site].filter(Boolean).join(' · ');
   tabs.setAttribute('aria-label', L('Screens'));
   const here = { clock: 'clock', report: 'report', settings: '' }[view.v] ?? 'day';
-  const locked = `<svg class="lock" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" aria-hidden="true">${LOCK.shut}</svg>`;
-  tabs.innerHTML = [['day', L('Tasks')], ['clock', isPM() && on ? L('Crew hours') : L('Time clock')], ['report', L('Daily report')]]
-    .map(([v, label]) => `<a href="#${v}/${day}"${v === here ? ' aria-current="page"' : ''}${(v === 'report' || (v === 'clock' && isPM())) && !on ? ` aria-label="${esc(`${label}, ${L('needs the office passcode')}`)}">${label}${locked}` : `>${label}`}</a>`).join('');
+  const list = on ? [['day', L('Tasks')], ['clock', L('Hours')], ['report', L('Report')]] : [['day', L('Today')], ['clock', L('Time clock')]];
+  tabs.innerHTML = list.map(([v, label]) => {
+    const locked = v === 'clock' && isPM() && !on; // the PM's time clock is the crew timesheet, behind the passcode
+    return `<a href="#${v}/${day}"${v === here ? ' aria-current="page"' : ''}${locked ? ` aria-label="${esc(`${label}, ${L('needs the office passcode')}`)}"` : ''}>${icon(TAB_ICON[v])}<span>${label}${locked ? icon('lock', 'lock') : ''}</span></a>`;
+  }).join('');
 }
 
 let drawnOn = today(); // the day the screen was last drawn, to notice midnight
 function render() {
   drawnOn = today();
   header();
+  screenHead(''); // each screen sets its own title
   bar.hidden = view.v === 'settings';
-  if (view.v === 'settings') app.innerHTML = `<button class="link" data-go="day/${day}">‹ ${L('Back to task sheets')}</button>${settingsView(S)}`;
+  bar.innerHTML = ''; // and puts its one primary action here
+  if (view.v === 'settings') { screenHead(L('Settings'), { back: { go: `day/${day}`, label: L('Back to task sheets') } }); app.innerHTML = settingsView(S); }
   else if (view.v === 'clock' || view.v === 'report') renderOffice(view.v, S, day);
   else if (view.v === 'task') renderTask(current());
   else renderBoard();
@@ -231,6 +244,7 @@ function renderBoard() {
   const done = all.filter(t => !isOpen(t)).length, blocked = all.filter(t => t.status === 'Blocked').length;
   const crews = [...new Set([...S.crews.map(c => c.name), ...all.map(t => t.crew)].filter(Boolean))];
   const prev = prevDay();
+  screenHead(day === today() ? L('Today') : niceDate(day), { more: 'boardMenu' });
   app.innerHTML = dateBar(day) + (all.length ? `
     <div class="stats">
       <div class="stat"><b>${all.length}</b><span>${L('Task sheets')}</span></div>
@@ -258,10 +272,8 @@ function renderBoard() {
         <p>${L("Build the day's assignments here and send each crew its sheet. Crews check off steps on their phones and send results back to you.")}</p>
         <div class="btns"><button class="btn primary" data-act="new">${L('+ New task')}</button>
         ${prev ? `<button class="btn" data-act="carryDay">${L('Copy unfinished from {date}', { date: niceDate(prev) })}</button>` : ''}</div></div>`);
-  bar.innerHTML = `<div class="bar-in">${!office()
-    ? `<button class="btn primary big" data-act="paste">${L('Open a link')}</button>`
-    : `<button class="btn primary big" data-act="new">${L('+ New task')}</button>`}
-    <button class="btn more" data-act="boardMenu" aria-label="${L('More actions')}">⋯</button></div>`;
+  bar.innerHTML = office() ? `<button class="fab" data-act="new" aria-label="${L('New task')}">${icon('plus')}</button>` // the + floats over the list
+    : all.length ? `<div class="bar-in"><button class="btn primary big" data-act="paste">${L('Open a link')}</button></div>` : ''; // the empty board has its own
 }
 
 function card(t) {
@@ -282,17 +294,18 @@ const clash = (t, more = '') => (sameNumber(T, t) ? `<p class="hint"><span class
 function renderTask(t) {
   const crewSide = t.origin === 'link';
   const tabs = [['assign', L('Assign')], ['results', L('Crew results')], ['review', L('Review')]];
-  app.innerHTML = `<button class="link" data-go="day/${esc(t.date)}">‹ ${esc(L('{date} task sheets', { date: niceDate(t.date) }))}</button>`
-    + clash(t, crewSide ? '' : ' ' + L('Change the Task ID on one of them.')) + (crewSide
+  screenHead(t.area || (t.id ? L('Task {id}', { id: t.id }) : L('New task')), {
+    sub: [t.floor, t.area && t.id && L('Task {id}', { id: t.id })].filter(Boolean).join(' · '), more: crewSide ? 'crewMenu' : 'taskMenu',
+    back: { go: `day/${t.date}`, label: L('{date} task sheets', { date: niceDate(t.date) }) },
+  });
+  app.innerHTML = clash(t, crewSide ? '' : ' ' + L('Change the Task ID on one of them.')) + (crewSide
     ? brief(t) + results(t)
     : `<nav class="tabs">${tabs.map(([k, l]) => `<a href="#task/${esc(t.uid)}/${k}" data-act="tab" data-v="${k}"${k === view.tab ? ' aria-current="page"' : ''}>${l}</a>`).join('')}</nav>`
       + (view.tab === 'results' ? brief(t) + results(t) : view.tab === 'review' ? review(t) : assign(t)))
     + `<p class="hint">${L('Changes save on this phone as you type.')}</p>`;
   bar.innerHTML = `<div class="bar-in">${crewSide
-    ? `<button class="btn primary big" data-act="sendResults">${L('Send results')}</button>
-       <button class="btn more" data-act="crewMenu" aria-label="${L('More actions')}">⋯</button>`
-    : `<button class="btn primary big" data-act="sendTask">${t.sentAt ? L('Resend to crew') : L('Send to crew')}</button>
-       <button class="btn more" data-act="taskMenu" aria-label="${L('More actions')}">⋯</button>`}</div>`;
+    ? `<button class="btn primary big" data-act="sendResults">${L('Send results')}</button>`
+    : `<button class="btn primary big" data-act="sendTask">${t.sentAt ? L('Resend to crew') : L('Send to crew')}</button>`}</div>`;
 }
 
 const crewHrsLine = t => L('Crew of {size}: {allot} crew-hrs allotted, {est} estimated.', { size: t.size || 1, allot: hrs(t.allot * (t.size || 1)), est: hrs(t.est * (t.size || 1)) })
@@ -671,10 +684,14 @@ document.addEventListener('click', e => {
   e.preventDefault();
   el.closest('dialog')?.close();
   if (stale()) return;
-  if (el.dataset.go) go(el.dataset.go);
-  else if ((view.v === 'clock' || view.v === 'report') && !SHELL.has(el.dataset.act)) reportAct(el.dataset.act, el, S, day, view.v);
-  else act(el.dataset.act, el);
+  if (el.dataset.go) return go(el.dataset.go);
+  const a = el.dataset.act;
+  // A second tap on an action still running (sending, sharing, saving) does nothing; then the redrawn control plays its animation.
+  busy(el, () => ((view.v === 'clock' || view.v === 'report') && !SHELL.has(a) ? reportAct(a, el, S, day, view.v) : act(a, el)))
+    .then(() => twin(el)?.classList.add('just'));
 });
+// The control as drawn again after a tap (a checkbox, a segment), found by its data attributes.
+const twin = el => (el.isConnected ? el : app.querySelector(['act', 'v', 'i', 'list', 'k'].filter(k => el.dataset[k] != null).map(k => `[data-${k}="${CSS.escape(el.dataset[k])}"]`).join('')));
 const SHELL = new Set(['toggleLang', 'lang', 'lockBtn']); // header buttons work on every screen
 
 // The sign-in ran out (or another tab locked) while this screen was up: office screens and the office board

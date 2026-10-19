@@ -705,4 +705,9 @@ export default {
 
   // identity: people, devices, duplicate numbers (hub screens)
 
+
+  // shell: tab bar, settings button, toast Undo
+  'Report': 'Reporte',
+  'Settings': 'Ajustes',
+  'Undo': 'Deshacer',
 };

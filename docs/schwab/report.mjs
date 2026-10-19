@@ -8,7 +8,7 @@ import {
   KEYS, COMPANIES, esc, uid, load, save, normTask, normReport, normShift, blank, newFloor, fillFromTasks, mergeAnswers, CREW_TPL, pack, linkTo,
   today, addDays, niceDate, nowHM, span, fmtMin, t12, stamp, hrs, field, datalist, seg, setPath, getPath, readInput,
   toast, sheet, ask, sendSheet, pasteSheet, makePdf, savePdf, download, fileAway, dateBar, crewVar, letterhead, L, getLang, unlocked,
-  nameKey, cleanName, people, findPerson, personById, crewById, addPerson, renamePerson, assignmentFor, taskLinks, deviceId, choose,
+  nameKey, cleanName, people, findPerson, personById, crewById, addPerson, renamePerson, assignmentFor, taskLinks, deviceId, choose, screenHead,
 } from './shared.mjs';
 
 const obj = x => (x && typeof x === 'object' && !Array.isArray(x) ? x : {});
@@ -119,6 +119,7 @@ function clockView(S) {
   const missed = MY.filter(s => !s.out && s !== on && s.date >= addDays(mon, -7)).sort(byTime).at(-1);
   const row = s => `<dt>${esc(niceDate(s.date))}</dt><dd>${s.out ? `${esc(L('{start} to {stop}', { start: t12(s.in), stop: t12(s.out) }))} · ${esc(L('{n} hrs', { n: h2(cents(s)) }))}`
     : `${esc(t12(s.in))} · ${s === on ? L('On the clock') : `<span class="pill" data-tone="warn">${L('No clock-out')}</span>`}`}</dd>`;
+  screenHead(L('Time clock'), { more: 'hMenu' });
   $('app').innerHTML = `<section class="card"><h2>${L('Time clock')}</h2>
       ${field(L('Your name'), 's.worker', S.worker, { ph: L('First and last name'), list: 'knownNames' })}${datalist('knownNames', known)}
       <div id="nameHint" role="status">${nameHint(S, known)}</div>
@@ -131,8 +132,7 @@ function clockView(S) {
     <p class="hint">${L('Each Clock in and Clock out opens a text to the PM. Send it every time: it carries your last two weeks, so a missed text catches up. Only the PM can change hours.')}</p>`;
   // The button carries what it shows, so a tap on a screen gone stale (past the 16 hour cutoff while the phone
   // slept, or clocked in from another tab) is refused instead of doing the other thing.
-  $('bar').innerHTML = `<div class="bar-in"><button class="btn primary big" data-act="hTap" data-v="${on ? `out:${on.id}` : 'in'}">${on ? L('Clock out') : L('Clock in')}</button>
-    <button class="btn more" data-act="hMenu" aria-label="${L('More actions')}">⋯</button></div>`;
+  $('bar').innerHTML = `<div class="bar-in"><button class="btn primary big" data-act="hTap" data-v="${on ? `out:${on.id}` : 'in'}">${on ? L('Clock out') : L('Clock in')}</button></div>`;
   clearTimeout(cutoff); // redraw the moment the open shift turns into a missed clock-out
   if (on) cutoff = setTimeout(() => location.hash.startsWith('#clock') && go(location.hash.slice(1)), started(on) + 16 * 36e5 - Date.now() + 1000);
 }
@@ -245,6 +245,7 @@ function crewView(S, day) {
     ${taskIds(s).length ? `<p class="hint">${esc(taskIds(s).length === 1 ? L('Task {id}', { id: taskIds(s)[0] }) : L('Tasks {ids}', { ids: taskIds(s).join(', ') }))}</p>` : ''}
     <div class="grid two"><label class="field"><span>${L('In')}</span><input type="time" data-k="h.${s.id}.in" value="${s.in}"></label>
       <label class="field"><span>${L('Out')}</span><input type="time" data-k="h.${s.id}.out" value="${s.out}"></label></div></div>`;
+  screenHead(L('Crew hours'), { more: 'hPmMenu' });
   $('app').innerHTML = `<div class="datebar">
       <button class="nav-btn" data-go="clock/${addDays(mon, -7)}" aria-label="${L('Previous week')}">‹</button>
       <label class="day">${esc(niceDate(mon))}<small>${mon === monday(today()) ? L('This week') : mon < today() ? L('Past week') : L('Week ahead')} · ${esc(L('to {date}', { date: niceDate(addDays(mon, 6)) }))}</small>
@@ -258,8 +259,7 @@ function crewView(S, day) {
         <button class="link" data-act="hRename" data-v="${esc(p.key)}">${L('Rename')}</button></div></section>`).join('')
     || `<div class="empty"><h2>${L('No hours logged this week')}</h2><p>${L("Each worker's Clock in and Clock out texts you a link. Tap it on this phone to log their hours here.")}</p></div>`}
     <p class="hint">${L("Only this phone changes hours. Times you change are marked edited and stay as you set them when that worker's next text comes in.")}</p>`;
-  $('bar').innerHTML = `<div class="bar-in"><button class="btn primary big" data-act="hSend">${L('Send to accountant')}</button>
-    <button class="btn more" data-act="hPmMenu" aria-label="${L('More actions')}">⋯</button></div>`;
+  $('bar').innerHTML = `<div class="bar-in"><button class="btn primary big" data-act="hSend">${L('Send to accountant')}</button></div>`;
 }
 
 // Under the name: the person's crew, so two people with one name are told apart, and for a name on no crew list
@@ -419,6 +419,7 @@ function reportView(S, day) {
   const r = rep(S, day), late = r.next.filter(isLate).length, pend = waiting(r).length;
   const unconfirmed = r.needs.filter(n => n.item && !n.confirmed).length, bare = active(r).filter(c => !c.done).length;
   const cur = STATUS().find(s => s[0] === r.status);
+  screenHead(L('Daily report'), { more: 'menu' });
   $('app').innerHTML = dateBar(day, 'report') + `<div id="summary" class="stack">${summary(r)}</div>
     <section class="card"><div class="grid">
       ${field(L('Superintendent'), 'r.super', r.super)}${field(L('Shift start'), 'r.shiftStart', r.shiftStart, { type: 'time' })}${field(L('Shift end'), 'r.shiftEnd', r.shiftEnd, { type: 'time' })}
@@ -473,8 +474,7 @@ function reportView(S, day) {
     ${sec('sign', '', L('Sign-off'), `<div class="grid">${field(L('Prepared by'), 'r.preparedBy', r.preparedBy)}${field(L('PM review / time'), 'r.pmReview', r.pmReview)}</div>
       ${isPM(S) ? `<button class="btn" data-act="stampPM">${L('Stamp my review now')}</button>` : ''}`)}
     <p class="hint">${L('Changes save on this phone as you type.')}${S.folderUrl ? ` ${L('Sending the report also files a PDF in the review folder.')}` : ''}</p>`;
-  $('bar').innerHTML = `<div class="bar-in"><button class="btn primary big" data-act="send">${isPM(S) ? L('Send back to Supt.') : L('Send to PM')}</button>
-    <button class="btn more" data-act="menu" aria-label="${L('More actions')}">⋯</button></div>`;
+  $('bar').innerHTML = `<div class="bar-in"><button class="btn primary big" data-act="send">${isPM(S) ? L('Send back to Supt.') : L('Send to PM')}</button></div>`;
 }
 
 // Totals and section check marks, redrawn as the superintendent types.

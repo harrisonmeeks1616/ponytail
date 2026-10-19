@@ -8,8 +8,9 @@ import ES from './es.mjs';
 // The passcode also keeps a key of its own: a tab still running the version before it (phones keep old
 // tabs open for days) rewrites settings without it, and an old backup has none. hours: this phone's own
 // clock-ins; crewHours: the PM's timesheet of everyone's; device: this phone's hub secret, in a key of its own for the
-// same reason as the passcode. Backups and restores carry every key here (a backup leaves out the hub key).
-export const KEYS = { settings: 'schwab.settings', tasks: 'schwab.tasks', reports: 'schwab.reports', pin: 'schwab.pin', hours: 'schwab.hours', crewHours: 'schwab.crewHours', device: 'schwab.device' };
+// same reason as the passcode. roster: the people and crews with their ids, kept apart for the same reason (see
+// loadSettings). Backups and restores carry every key here (a backup leaves out the hub key).
+export const KEYS = { settings: 'schwab.settings', tasks: 'schwab.tasks', reports: 'schwab.reports', pin: 'schwab.pin', hours: 'schwab.hours', crewHours: 'schwab.crewHours', device: 'schwab.device', roster: 'schwab.roster' };
 export const COMPANY = 'H.A. Sack-Electrical', COMPANY_ALT = 'Sack Company-Electrical', COMPANIES = `${COMPANY} · ${COMPANY_ALT}`;
 // The top lines of every PDF: who did the work, then the job.
 export const letterhead = (s, more = '') => `${COMPANIES}\n${[s.project, s.site, more].filter(Boolean).join(' · ')}`;
@@ -54,8 +55,13 @@ export function load(key, fallback) {
 }
 // ponytail: everything lives in localStorage (~5 MB per site), roughly a year of daily sheets.
 // Past that, move to IndexedDB or a shared backend; Backup keeps a copy until then.
+// Settings with a roster also write it to its own key, wherever they are saved from.
 export function save(key, val) {
-  try { localStorage.setItem(key, JSON.stringify(val)); return true; } catch { return false; }
+  try {
+    localStorage.setItem(key, JSON.stringify(val));
+    if (key === KEYS.settings && Array.isArray(val?.people) && Array.isArray(val.crews)) localStorage.setItem(KEYS.roster, JSON.stringify(rosterOf(val)));
+    return true;
+  } catch { return false; }
 }
 
 // hubKey is a secret: never in a backup, a link or the hub's config. hubRole and hubCrew are set by the sync engine.
@@ -79,10 +85,28 @@ export function normSettings(raw) {
   fixRoster(s, Array.isArray(raw?.people));
   return s;
 }
+// A tab still running the version before people had ids (phones keep old tabs open for days) saves settings with no
+// people and no crew ids. Rebuilt from the crews' member lists, people added since would get new ids (cut off from their
+// sheets and hours) and a second person with someone else's name would be dropped, so those settings take this
+// phone's roster back instead: every person keeps their id, each crew its id by name. A name the old tab typed into a
+// crew's list that the roster lacks joins that crew (with the id a migration gives it, so every reload agrees).
+// ponytail: a crew renamed in the old tab matches no name, so it gets a new id and its people show under "Not on a
+// crew" (ids kept). Match by members too if old tabs ever rename crews.
 export function loadSettings() {
-  const s = normSettings(load(KEYS.settings, null)), pin = load(KEYS.pin, '');
+  const raw = load(KEYS.settings, null), roster = load(KEYS.roster, null), pin = load(KEYS.pin, '');
+  const old = raw && typeof raw === 'object' && !Array.isArray(raw.people) && Array.isArray(roster?.people);
+  const s = normSettings(old ? withRoster(raw, shape(ROSTER_TPL, roster)) : raw);
+  if (raw && Array.isArray(raw.people)) save(KEYS.roster, rosterOf(s)); // kept current from the first open of this version
   if (PIN_FORMAT.test(pin)) s.pin = pin;
   return s;
+}
+const ROSTER_TPL = { crews: [{ id: '', name: '' }], people: [{ id: '', name: '', crewId: '' }] };
+const rosterOf = s => ({ crews: s.crews.map(c => ({ id: c.id, name: c.name })), people: s.people });
+function withRoster(raw, r) {
+  const crews = shape(SETTINGS_TPL.crews, raw.crews), ids = crews.map(c => r.crews.find(x => x.name === c.name)?.id || 'c' + hash('crew|' + nameKey(c.name)));
+  const known = new Set(r.people.map(p => nameKey(p.name)));
+  const typed = crews.flatMap((c, i) => split(c.members).filter(n => !known.has(nameKey(n)) && known.add(nameKey(n))).map(name => ({ id: '', name, crewId: ids[i] })));
+  return { ...raw, crews: crews.map((c, i) => ({ ...c, id: ids[i] })), people: [...r.people, ...typed] };
 }
 
 // ---------- people and crews ----------
@@ -514,32 +538,126 @@ export function readInput(el) {
   return el.value;
 }
 
-export function toast(msg, tone = '') {
+// Line icons, 24 x 24 in the text color. An icon is never the only label: its button carries aria-label (or text).
+const ICONS = {
+  today: '<path d="M10 6h10M10 12h10M10 18h10"/><path d="m3.5 6 1.6 1.6L8 4.7M3.5 12l1.6 1.6L8 10.7M3.5 18l1.6 1.6L8 16.7"/>',
+  clock: '<circle cx="12" cy="12" r="9"/><path d="M12 7v5.2l3.2 2"/>',
+  report: '<path d="M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8z"/><path d="M14 3v5h5M9 13h6M9 17h6"/>',
+  live: '<path d="M3 12h4l3-7 4 14 3-7h4"/>',
+  records: '<rect x="3" y="4" width="18" height="5" rx="1.5"/><path d="M5 9v9a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V9M10 13h4"/>',
+  gear: '<circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.8-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1.1-1.5 1.7 1.7 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.8 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.5-1.1 1.7 1.7 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.8.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.8V9a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z"/>',
+  lock: '<rect x="5" y="11" width="14" height="10" rx="2"/><path d="M8 11V7.5a4 4 0 0 1 8 0V11"/>',
+  unlock: '<rect x="5" y="11" width="14" height="10" rx="2"/><path d="M8 11V7.5a4 4 0 0 1 7.6-1.8"/>',
+  plus: '<path d="M12 5v14M5 12h14"/>',
+  more: '<circle cx="5" cy="12" r="1.7" fill="currentColor" stroke="none"/><circle cx="12" cy="12" r="1.7" fill="currentColor" stroke="none"/><circle cx="19" cy="12" r="1.7" fill="currentColor" stroke="none"/>',
+  close: '<path d="M6 6l12 12M18 6 6 18"/>',
+  chev: '<path d="m9 5 7 7-7 7"/>',
+  back: '<path d="m15 5-7 7 7 7"/>',
+  check: '<path d="m5 12.5 4.5 4.5L19 7.5"/>',
+};
+export const icon = (name, cls = '') => `<svg class="i${cls ? ' ' + cls : ''}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${ICONS[name] || ''}</svg>`;
+
+// The large title each screen opens with: the title, a quiet line under it (sub), the screen's ⋯ menu (more: the
+// data-act it opens) and, on a drill-in screen, the way back (back: { go, label }, a data-go address). render() clears
+// it, so a screen that doesn't call it shows no stale title.
+export function screenHead(title, { sub = '', more = '', back = null } = {}) {
+  const $ = id => globalThis.document?.getElementById(id);
+  if (!$('title')) return;
+  $('title').textContent = title;
+  $('subtitle').textContent = sub;
+  $('titleMore').innerHTML = more ? `<button class="icon-btn more" data-act="${esc(more)}" aria-label="${L('More actions')}">${icon('more')}</button>` : '';
+  $('headBack').innerHTML = back ? `<button class="link back" data-go="${esc(back.go)}">${icon('back')}<span>${esc(back.label)}</span></button>` : '';
+}
+
+// An Undo offer that lasts ms. tap() runs undo once, if the offer is still open; it ends by itself after ms, or when
+// end() is called (another message took its place). done(undone) runs once when it ends, either way: after an Undo, or
+// the moment a removal becomes final (then, and only then, send a hub purge). Timers are passed in so tests need no page.
+export const UNDO_MS = 6000, TOAST_MS = 3200;
+export function undoOffer(undo, { ms = UNDO_MS, done, set = setTimeout, clear = clearTimeout } = {}) {
+  let open = true;
+  const end = undone => { if (!open) return false; open = false; clear(timer); done?.(undone); return true; };
+  const timer = set(() => end(false), ms);
+  return {
+    tap() { if (!open) return false; try { undo(); } finally { end(true); } return true; },
+    end: () => end(false),
+    get open() { return open; },
+  };
+}
+
+// A short message above the tab bar. tone 'bad' for something that went wrong. With undo, the message carries an Undo
+// button for 6 seconds (see undoOffer; done is passed on).
+export function toast(msg, tone = '', { undo, done } = {}) {
   let el = document.getElementById('toast');
   if (!el) { el = Object.assign(document.createElement('div'), { id: 'toast' }); el.setAttribute('role', 'status'); }
   (document.querySelector('dialog[open] .sheet-in') || document.body).append(el); // an open sheet would cover it otherwise
-  el.textContent = msg;
+  el.offer?.end(); // a new message ends the last one's Undo: that removal is final now
+  el.offer = undo ? undoOffer(undo, { done }) : null;
+  el.innerHTML = `<span>${esc(msg)}</span>${undo ? `<button type="button" class="toast-undo">${L('Undo')}</button>` : ''}`;
+  if (undo) el.querySelector('.toast-undo').onclick = () => { el.offer?.tap(); el.classList.remove('show'); };
   el.dataset.tone = tone;
   el.classList.add('show');
   clearTimeout(el.timer);
-  el.timer = setTimeout(() => el.classList.remove('show'), 3200);
+  el.timer = setTimeout(() => el.classList.remove('show'), undo ? UNDO_MS : TOAST_MS);
 }
 
+// A button whose work sends, shares, downloads or saves: while the work runs the button is off and shows a spinner, and
+// another tap on it (or on its redrawn twin with the same data-act) does nothing, so a double tap can't send twice.
+// work: a function (it never starts on a refused tap) or a promise. Resolves to the work's result; undefined if refused.
+const running = new Set();
+export async function busy(btn, work) {
+  const key = btn?.dataset?.act || btn;
+  if (running.has(key)) return undefined;
+  running.add(key);
+  const was = btn.disabled;
+  btn.disabled = true;
+  btn.setAttribute?.('aria-busy', 'true');
+  try { return await (typeof work === 'function' ? work() : work); } finally {
+    running.delete(key);
+    btn.disabled = was;
+    btn.removeAttribute?.('aria-busy');
+  }
+}
+
+// A sheet slides up from the bottom. It closes with its ✕, a tap outside it, Escape, or a swipe down from its top.
 export function sheet(html) {
   const d = document.createElement('dialog');
   d.className = 'sheet';
-  d.innerHTML = `<div class="sheet-in"><form method="dialog"><button class="sheet-x" aria-label="${L('Close')}">✕</button></form>${html}</div>`;
+  d.innerHTML = `<div class="sheet-in"><div class="grabber" aria-hidden="true"></div><form method="dialog"><button class="sheet-x" aria-label="${L('Close')}">${icon('close')}</button></form>${html}</div>`;
   d.addEventListener('close', () => { const t = d.querySelector('#toast'); if (t) document.body.append(t); d.remove(); }); // a toast shown in the sheet outlives it
   d.addEventListener('click', e => { if (e.target === d) d.close(); }); // tap outside
+  swipeDown(d);
   document.body.append(d);
   d.showModal();
   return d;
 }
+// The sheet follows a finger pulling down while it is scrolled to its top (never from a text box); let go past 80 px
+// and it closes, short of that it springs back.
+function swipeDown(d) {
+  let y0 = null, dy = 0;
+  d.addEventListener('touchstart', e => { dy = 0; y0 = d.scrollTop <= 0 && e.touches.length === 1 && !e.target.closest('input, textarea, select') ? e.touches[0].clientY : null; }, { passive: true });
+  d.addEventListener('touchmove', e => {
+    if (y0 == null) return;
+    dy = e.touches[0].clientY - y0;
+    if (dy < 0 && !d.style.transform) { y0 = null; return; } // scrolling the sheet up: not a swipe
+    e.preventDefault();
+    d.style.transition = 'none';
+    d.style.transform = `translateY(${Math.max(0, dy)}px)`;
+  }, { passive: false });
+  const end = () => {
+    if (y0 == null) return;
+    y0 = null;
+    d.style.transition = d.style.transform = '';
+    if (dy > 80) d.close();
+  };
+  d.addEventListener('touchend', end);
+  d.addEventListener('touchcancel', end);
+}
 
-// In-page question: bigger targets than the browser's, and the buttons say what they do. opts: [[value, label, tone]];
-// resolves to the value tapped, or null for Cancel or closing it.
+// In-page question as an action sheet: bigger targets than the browser's, and the buttons say what they do.
+// opts: [[value, label, tone]] (tone 'danger' or 'primary'); resolves to the value tapped, or null for Cancel or closing it.
 export const choose = (msg, opts) => new Promise(res => {
-  const d = sheet(`<p class="ask">${esc(msg)}</p><div class="btns">${opts.map(([, label, tone], i) => `<button class="btn ${tone || ''}" data-a="${i + 1}">${esc(label)}</button>`).join('')}<button class="btn" data-a="0">${L('Cancel')}</button></div>`);
+  const d = sheet(`<p class="ask">${esc(msg)}</p><div class="acts">${opts.map(([, label, tone], i) => `<button class="btn ${tone || ''}" data-a="${i + 1}">${esc(label)}</button>`).join('')}</div><button class="btn cancel" data-a="0">${L('Cancel')}</button>`);
+  d.classList.add('action');
   d.addEventListener('click', e => { const b = e.target.closest('[data-a]'); if (b) { res(+b.dataset.a ? opts[b.dataset.a - 1][0] : null); d.close(); } });
   d.addEventListener('close', () => res(null));
 });
@@ -733,9 +851,9 @@ async function post(s, body) {
   if (!reply.ok) throw new Error(reply.error || L('the folder answered with error {status}', { status: res.status }));
 }
 
-let busy = null;
+let flushing = null;
 // Resolves to { left, error }. error stays empty for "no signal", which simply waits for the next try.
-export const flush = s => (busy ||= (async () => {
+export const flush = s => (flushing ||= (async () => {
   let error = '';
   for (const item of s.folderUrl ? box() : []) {
     if (!box().some(x => sameCopy(x, item))) continue; // replaced by a newer copy while this ran; that one goes next time
@@ -751,7 +869,7 @@ export const flush = s => (busy ||= (async () => {
     }
   }
   return { left: queued(), error };
-})().finally(() => { busy = null; }));
+})().finally(() => { flushing = null; }));
 
 // file: { date, name, bytes, v }. v is the record's last edit time, preserved in the receiver's
 // metadata so an older offline edit can be distinguished without deleting newer records.
@@ -888,8 +1006,9 @@ export function backupData() {
   return data;
 }
 export const isBackup = data => !!data && typeof data === 'object' && Object.values(KEYS).some(k => k in data);
-// Writes every key the backup has; false if the phone ran out of space part way.
-export const restoreData = data => Object.values(KEYS).every(k => data[k] == null || save(k, data[k]));
+// Writes every key the backup has; false if the phone ran out of space part way. A backup's settings bring their own
+// roster (or, from before people had ids, none), never this phone's old one.
+export const restoreData = data => (data[KEYS.settings] == null || save(KEYS.roster, null)) && Object.values(KEYS).every(k => data[k] == null || save(k, data[k]));
 
 export async function restore(file) {
   let data;
