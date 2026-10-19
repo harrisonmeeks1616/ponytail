@@ -390,7 +390,7 @@ function recordRows(t) {
     ['2 Assigned work time & estimate', [['Allotted', t.allot && `${t.allot} hrs ${t.allotNote}`], ['Estimate', t.est && `${t.est} hrs ${t.estNote}`],
       ['Planned', t.pStart && `${t12(t.pStart)} to ${t12(t.pStop)}`], ['Check-in at', t12(t.checkIn)]]],
     ['3 Actual time & progress', [['Actual start', t12(t.aStart)], ['Actual stop', t12(t.aStop)], ['Delay', t.delay && `${t.delay} min`],
-      ['Time worked', worked(t) && fmtMin(worked(t))], ['Status', t.status], ['Completed', t.doneText], ['Remaining', t.remain]]],
+      ['Time worked', worked(t) && fmtMin(worked(t), 'en')], ['Status', t.status], ['Completed', t.doneText], ['Remaining', t.remain]]],
     ['4 Crew comments / concerns', [['Comments', t.comments]]],
     ['5 Review', [['Result', t.review], ['Reviewed by', t.reviewer], ['Follow-up', t.followUp]]],
   ];
@@ -470,7 +470,7 @@ function menu(items) {
 function resultMsg(t, l) {
   const x = (en, v) => L(en, v, l), w = worked(t);
   return x('{crew} results for task {id} ({floor}): {status}. {d} of {n} steps done.', { crew: t.crew, id: t.id, floor: t.floor, status: x(t.status), d: doneCount(t), n: t.items.length })
-    + (w ? ' ' + x('Worked {time}.', { time: fmtMin(w) }) : '')
+    + (w ? ' ' + x('Worked {time}.', { time: fmtMin(w, l) }) : '')
     + (t.status === 'Blocked' && t.comments ? ' ' + t.comments.slice(0, 140) : '');
 }
 function taskMsg(t, l) {

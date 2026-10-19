@@ -304,7 +304,7 @@ export const toMin = t => { const m = /^(\d{1,2}):(\d{2})/.exec(t || ''); return
 // Minutes from start to stop; a stop earlier than the start is an overnight shift.
 export const span = (start, stop) => { const a = toMin(start), b = toMin(stop); return a == null || b == null ? 0 : (b - a + 1440) % 1440; };
 export const worked = t => (t.aStart && t.aStop ? Math.max(0, span(t.aStart, t.aStop) - t.delay) : 0); // a sheet's minutes on task, less delays
-export const fmtMin = m => m >= 60 ? `${Math.floor(m / 60)}h ${m % 60}m` : `${m}m`;
+export const fmtMin = (m, l = lang) => m >= 60 ? L('{h}h {m}m', { h: Math.floor(m / 60), m: m % 60 }, l) : L('{m}m', { m }, l); // PDFs and English message lines pass 'en'
 export const t12 = t => { const m = toMin(t); return m == null ? '' : `${(Math.floor(m / 60) + 11) % 12 + 1}:${pad(m % 60)} ${m < 720 ? 'AM' : 'PM'}`; };
 export const stamp = (ts, l = lang) => ts ? new Date(ts).toLocaleString(locale(l), { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' }) : '';
 export const timeOf = ts => new Date(ts).toLocaleTimeString(locale(lang), { hour: 'numeric', minute: '2-digit' });
@@ -544,13 +544,28 @@ const sameCopy = (a, b) => same(a, b) && a.pdf === b.pdf && a.v === b.v;
 export const queue = item => save(OUTBOX, [...box().filter(x => !same(x, item)), item]);
 export const queued = () => box().length;
 
+// review-folder.gs answers in English. These are its replies, so Spanish mode can show them in Spanish; any other text stays as it came.
+const folderSays = e => {
+  const known = {
+    'Invalid request': L('Invalid request'),
+    'Upload integration not configured': L('Upload integration not configured'),
+    'Wrong site code': L('Wrong site code'),
+    'Invalid date or PDF': L('Invalid date or PDF'),
+    'Invalid record version': L('Invalid record version'),
+    'Busy; try again shortly': L('Busy; try again shortly'),
+    'Daily upload limit reached; ask the owner': L('Daily upload limit reached; ask the owner'),
+    'Upload failed; owner must review Drive setup': L('Upload failed; owner must review Drive setup'),
+  };
+  return Object.hasOwn(known, e) ? known[e] : e;
+};
+
 async function post(s, body) {
   const url = String(s.folderUrl || '').trim();
   if (!/^https:\/\/script\.google\.com\/macros\/s\/[\w-]+\/exec$/.test(url)) throw new Error(L('Use the Apps Script upload link ending in /exec'));
   // A plain-text body keeps this a "simple" request, which Apps Script answers without a CORS preflight.
   const res = await fetch(url, { method: 'POST', body: JSON.stringify({ ...body, code: s.siteCode }) });
   const reply = await res.json().catch(() => ({}));
-  if (!reply.ok) throw new Error(reply.error || `the folder answered with error ${res.status}`);
+  if (!reply.ok) throw new Error(reply.error || L('the folder answered with error {status}', { status: res.status }));
 }
 
 let busy = null;
@@ -584,7 +599,7 @@ export async function fileAway(s, f) {
   let r = await flush(s);
   if (waiting()) r = await flush(s); // another upload was mid-way, or a refused record went first; go again for this one
   // Report on this record only; another record's refusal is not this one's failure.
-  toast(!waiting() ? L('Saved to the review folder') : r.error ? L('Review folder said: {error}. Kept on this phone; check Settings.', { error: r.error })
+  toast(!waiting() ? L('Saved to the review folder') : r.error ? L('Review folder said: {error}. Kept on this phone; check Settings.', { error: folderSays(r.error) })
     : L('Saved on this phone. It goes to the review folder when there is signal.'), waiting() && r.error ? 'bad' : '');
 }
 
@@ -642,7 +657,7 @@ export async function settingsAct(act, s, el) {
       toast(L('Connected. Finished sheets and reports will save to the review folder.'));
       retryUploads(s);
     } catch (e) {
-      toast(e instanceof TypeError ? L("Couldn't reach the review folder. Check the link and your signal.") : L('Review folder said: {error}', { error: e.message }), 'bad');
+      toast(e instanceof TypeError ? L("Couldn't reach the review folder. Check the link and your signal.") : L('Review folder said: {error}', { error: folderSays(e.message) }), 'bad');
     }
   }
   save(KEYS.settings, s);
