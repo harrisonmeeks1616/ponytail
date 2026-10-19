@@ -13,12 +13,23 @@ company names (**H.A. Sack-Electrical**, **Sack Company-Electrical**) in its hea
 No build step and no accounts. Optional Drive filing needs a separately authorized and deployed Apps Script
 receiver; the static app does not connect it automatically.
 
+## First open
+
+A new phone asks three things, one per screen, before anything else: the language; who is using the phone
+(**Crew member**, **Superintendent** or **Project manager**); and the name (picked from the names it already knows,
+such as the people on the sheet it was opened from, or typed). A crew member's name goes on the time clock. A
+superintendent or PM then creates the office passcode, or enters it when the link that opened the phone carried
+one. Nothing is saved until the last answer, and there is no way past it except answering. A phone that already has
+settings, sheets, reports or hours never sees it. A crew phone shows no office words (no "Sign in to the office
+screens") until someone signs in and changes the role in **Settings → This phone**.
+
 ## Office passcode
 
 - The superintendent's parts open with a **4-digit office passcode**: the daily report, settings, and making
   or changing task assignments, plus the PM's crew hours. Crew task sheets and the time clock stay open to everyone. Sign in with the
-  padlock in the header, the locked **Daily report** tab, or **Superintendent or PM? Sign in**. Signed out, the
-  Tasks tab shows only the sheets sent to that phone.
+  padlock at the top, or **Superintendent or PM? Sign in**. Signed out, the tabs at the bottom are **Today** and
+  **Time clock**, and Today shows only the sheets sent to that phone. Signed in, they are **Tasks**, **Time clock** (the PM's says **Hours**: the crew timesheet) and
+  **Report**, the **+** button makes a task sheet, and the gear opens Settings.
 - The first office phone to sign in creates the code. Use the same code on the PM's and the superintendent's
   phones. A phone that has no code yet learns it from the first task sheet or report link it opens, so a crew
   phone asks for the office code instead of offering to make one. A link never replaces a code a phone has.
@@ -47,8 +58,8 @@ receiver; the static app does not connect it automatically.
   removed shift stays removed. A day the PM added by hand stays as entered: a late text for the same person
   and day is filed as removed, with a warning. Each shift keeps the name it was clocked in with, so a borrowed
   phone never moves its owner's hours. Hours links opened on any other phone change nothing.
-- **One list of people:** **Settings → Crews** holds the app's list of people. Each crew shows its people as
-  chips: tap a name to rename the person or move them to another crew, ✕ to take them off the list, and type in
+- **One list of people:** **Settings → People and crews** holds the app's list of people. Each crew is one group with its people as
+  rows: tap a name to rename the person, move them to another crew or take them off the list, and type in
   **Add people** (several names at once with commas). Every person and every crew has a permanent id, so a
   rename never splits anyone's sheets or hours; old sheets keep the name they were made with. Two people may
   share a name: adding a name someone already has asks first (the same person, moved to this crew, or someone
@@ -111,7 +122,7 @@ Schwab Field Records/
 
 ## Spanish mode (crew screens and the time clock)
 
-- Tap **ES** in the header, or Settings → Language. A crew phone asks "English / Español" the first time it opens a sheet.
+- Tap **ES** in the header, or Settings → Language. A new phone asks "English / Español" first thing (see First open); an older crew phone that never chose asks the first time it opens a new sheet.
 - Every crew label, button and message, the sign-in pad and the time clock switch to Spanish (wording in `es.mjs`; a bilingual foreman can fix any phrase there). The daily report and the PM's crew hours are fully bilingual on screen too. What stays English is the office record: PDFs, the accountant's CSV, and the text messages sent to the office.
 - What people type is never translated. Notes show and print exactly as written, so a note typed in Spanish stays in Spanish for whoever reads it.
 - PDFs and review-folder copies are always the English form, with the notes as typed. The text message a Spanish-mode crew sends carries a Spanish line and an English line.
@@ -119,6 +130,7 @@ Schwab Field Records/
 ## How the data moves
 
 - Each phone keeps its own records in the browser, saved as you type.
+- Deleting a task sheet, removing a step, or taking a person or a crew off the list in Settings happens at once, with no "are you sure?": the message at the bottom offers **Undo** for 6 seconds.
 - Handoffs are links. **Send to crew**, **Send results**, **Send day plan** and **Send to PM** pack the details into the part of the link after `#`, which browsers never send to the web server. Compression/base64 is readable encoding, not encryption or authentication. Anyone with the link can read or alter its contents, so send it only to the intended people.
 - Opening a link merges it in: crew results join the superintendent's sheet without touching the assignment; a re-sent sheet keeps the crew's check-offs; PM answers join the report without touching what the superintendent wrote since.
 - **Task IDs are labels.** Every sheet also has a permanent id that hours and links use, so two office phones that both numbered a sheet T1019-02 with no signal never mix up whose hours are whose. When a sheet arrives with the date and number of one of this phone's sheets that was never sent, this phone's sheet takes the next free number and says so. If both were already sent, both show **Same number as another sheet** until someone changes one's Task ID.
@@ -141,3 +153,5 @@ Schwab Field Records/
 ## Check
 
 `node --test tests/schwab-field-apps.test.js tests/schwab-review-folder.test.js tests/app-display-regressions.test.js tests/schwab-es-lint.test.js` covers the link codec, merges, report roll-up, office passcode, time clock and timesheet, people and crew ids (moving older settings over, two people with one name, renames, sheets with the same number from two phones), every new field through reload and backup and restore, the device secret, PDF writer, upload queue, mocked receiver boundaries, and that every on-screen phrase has its Spanish. Receiver checks do not exercise Google authorization, folder access or a live deployment.
+
+The browser checks in `tests/browser/` drive the real app in Chromium (Playwright; pdftotext for the PDFs). Serve `docs/schwab` (`python3 -m http.server 8765 --bind 127.0.0.1`), then run each with `BASE=http://127.0.0.1:8765/ node tests/browser/<file>`: `schwab-field-app.e2e.js` (a whole job on five phones: first run, task sheets, results, time clock, daily report, crew hours, Undo, the tab bar, 320 px, Spanish), `schwab-first-run.e2e.js`, `schwab-clock-stale.e2e.js` (the 16-hour cutoff) and `schwab-spanish-audit.e2e.js` (every screen and state in Spanish; 0 untranslated to pass). Each exits 0 when everything passes.

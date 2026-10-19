@@ -485,15 +485,17 @@ export const iso = d => `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.get
 export const today = () => iso(new Date());
 export const addDays = (day, n) => { const [y, m, d] = day.split('-').map(Number); return iso(new Date(y, m - 1, d + n)); };
 export const niceDate = (day, l = lang) => new Date(day + 'T12:00').toLocaleDateString(locale(l), { weekday: 'short', month: 'short', day: 'numeric' });
-export const nowHM = () => { const d = new Date(); return `${pad(d.getHours())}:${pad(d.getMinutes())}`; };
+const hm = d => `${pad(d.getHours())}:${pad(d.getMinutes())}`;
+export const nowHM = () => hm(new Date());
 export const toMin = t => { const m = /^(\d{1,2}):(\d{2})/.exec(t || ''); return m ? +m[1] * 60 + +m[2] : null; };
 // Minutes from start to stop; a stop earlier than the start is an overnight shift.
 export const span = (start, stop) => { const a = toMin(start), b = toMin(stop); return a == null || b == null ? 0 : (b - a + 1440) % 1440; };
 export const worked = t => (t.aStart && t.aStop ? Math.max(0, span(t.aStart, t.aStop) - t.delay) : 0); // a sheet's minutes on task, less delays
 export const fmtMin = (m, l = lang) => m >= 60 ? L('{h}h {m}m', { h: Math.floor(m / 60), m: m % 60 }, l) : L('{m}m', { m }, l); // PDFs and English message lines pass 'en'
 export const t12 = t => { const m = toMin(t); return m == null ? '' : `${(Math.floor(m / 60) + 11) % 12 + 1}:${pad(m % 60)} ${m < 720 ? 'AM' : 'PM'}`; };
-export const stamp = (ts, l = lang) => ts ? new Date(ts).toLocaleString(locale(l), { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' }) : '';
-export const timeOf = ts => new Date(ts).toLocaleTimeString(locale(lang), { hour: 'numeric', minute: '2-digit' });
+// A moment as "Oct 19, 8:15 AM" ("19 oct, 8:15 AM"): the time written like every other time on screen (t12).
+export const stamp = (ts, l = lang) => ts ? `${new Date(ts).toLocaleDateString(locale(l), { month: 'short', day: 'numeric' })}, ${t12(hm(new Date(ts)))}` : '';
+export const timeOf = ts => t12(hm(new Date(ts)));
 export const hrs = n => (Math.round(n * 10) / 10).toString();
 
 // ---------- UI pieces ----------
@@ -501,12 +503,14 @@ export const hrs = n => (Math.round(n * 10) / 10).toString();
 // A crew's color: by its id when the sheet or shift has one (a renamed crew keeps its color), else by name.
 export const crewVar = (s, name, id = '') => { let i = id ? s.crews.findIndex(c => c.id === id) : -1; if (i < 0) i = s.crews.findIndex(c => c.name === name); return `--crew:var(--c${i < 0 ? 4 : i % 6})`; };
 
-// v: the screen the arrows and the date picker stay on (day = task sheets, report).
-export const dateBar = (day, v = 'day') => `<div class="datebar">
-  <button class="nav-btn" data-go="${v}/${addDays(day, -1)}" aria-label="${L('Previous day')}">‹</button>
-  <label class="day">${niceDate(day)}<small>${day === today() ? L('Today') : day < today() ? L('Past day') : L('Planning ahead')}</small>
-    <input type="date" value="${day}" data-pick="${v}" aria-label="${L('Pick a date')}"></label>
-  <button class="nav-btn" data-go="${v}/${addDays(day, 1)}" aria-label="${L('Next day')}">›</button></div>`;
+// < date >: the arrows move a day (a week: day is its Monday, here this week's), the date opens the calendar, and once
+// you have moved off it a chip leads back. v: the screen the arrows and the picker stay on (day, report, clock).
+export const dateBar = (day, v = 'day', { week = false, here = today() } = {}) => `<div class="datebar daynav">
+  <button class="nav-btn" data-go="${v}/${addDays(day, week ? -7 : -1)}" aria-label="${week ? L('Previous week') : L('Previous day')}">${icon('back')}</button>
+  <label class="day">${icon('cal')}<span>${niceDate(day)}</span>
+    <input type="date" value="${day}" data-pick="${v}" aria-label="${week ? L('Pick a week') : L('Pick a date')}"></label>
+  <button class="nav-btn" data-go="${v}/${addDays(day, week ? 7 : 1)}" aria-label="${week ? L('Next week') : L('Next day')}">${icon('chev')}</button>
+  ${day === here ? '' : `<button class="chip today-btn" data-go="${v}/${today()}">${week ? L('This week') : L('Today')}</button>`}</div>`;
 
 export const attr = (k, v) => v ? ` ${k}="${esc(v)}"` : '';
 
@@ -554,6 +558,15 @@ const ICONS = {
   chev: '<path d="m9 5 7 7-7 7"/>',
   back: '<path d="m15 5-7 7 7 7"/>',
   check: '<path d="m5 12.5 4.5 4.5L19 7.5"/>',
+  cal: '<rect x="3.5" y="5" width="17" height="15.5" rx="2.5"/><path d="M3.5 10h17M8 3v4M16 3v4"/>',
+  play: '<path d="M7 4.8v14.4a.8.8 0 0 0 1.2.7l11.4-7.2a.8.8 0 0 0 0-1.4L8.2 4.1a.8.8 0 0 0-1.2.7z" fill="currentColor" stroke="none"/>',
+  stop: '<rect x="5.5" y="5.5" width="13" height="13" rx="2.5" fill="currentColor" stroke="none"/>',
+  del: '<path d="M21 5H9l-6 7 6 7h12a1 1 0 0 0 1-1V6a1 1 0 0 0-1-1zM13 9.5l5 5M18 9.5l-5 5"/>',
+  updown: '<path d="m8 9.5 4-4 4 4M8 14.5l4 4 4-4"/>',
+  share: '<path d="M12 3.5v11M8 7.5l4-4 4 4"/><path d="M8.5 10.5H7a2 2 0 0 0-2 2V19a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2v-6.5a2 2 0 0 0-2-2h-1.5"/>',
+  message: '<path d="M12 4c4.97 0 9 3.36 9 7.5S16.97 19 12 19c-1.1 0-2.15-.16-3.12-.46L4 20.5l1.4-3.7C3.9 15.5 3 13.6 3 11.5 3 7.36 7.03 4 12 4z"/>',
+  mail: '<rect x="3" y="5" width="18" height="14" rx="2.5"/><path d="m3.5 7.5 8.5 6 8.5-6"/>',
+  link: '<path d="M10 14a4.5 4.5 0 0 0 6.4 0l3.1-3.1a4.5 4.5 0 0 0-6.4-6.4l-1.1 1.1"/><path d="M14 10a4.5 4.5 0 0 0-6.4 0l-3.1 3.1a4.5 4.5 0 0 0 6.4 6.4l1.1-1.1"/>',
 };
 export const icon = (name, cls = '') => `<svg class="i${cls ? ' ' + cls : ''}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${ICONS[name] || ''}</svg>`;
 
@@ -600,6 +613,21 @@ export function toast(msg, tone = '', { undo, done } = {}) {
   el.timer = setTimeout(() => el.classList.remove('show'), undo ? UNDO_MS : TOAST_MS);
 }
 
+// A double tap is one tap. When a finger's first tap changed what is under it (opened or closed a sheet, moved to
+// another screen, redrew the control it set), the second one, at the same spot within 350 ms, does nothing: it would
+// land on something the person never saw (Copy link, Send anyway, a crew to move to, a tab, the next question) or undo
+// the toggle it just set. The same key tapped twice (the passcode pad, a text box) still counts twice. A mouse (a
+// deliberate double-click) and a keyboard's click (detail 0) always count; a tap that turns into a scroll is forgotten.
+let lastTap = null, dropTap = false;
+globalThis.document?.addEventListener('pointerdown', e => {
+  if (e.pointerType === 'mouse') { lastTap = null; dropTap = false; return; }
+  const tap = { at: e.timeStamp, x: e.clientX, y: e.clientY, el: e.target };
+  dropTap = !!lastTap && tap.at - lastTap.at < 350 && Math.hypot(tap.x - lastTap.x, tap.y - lastTap.y) < 30 && tap.el !== lastTap.el;
+  if (!dropTap) lastTap = tap;
+}, true);
+globalThis.document?.addEventListener('pointercancel', () => { lastTap = null; dropTap = false; }, true);
+globalThis.document?.addEventListener('click', e => { if (dropTap && e.isTrusted && e.detail) { e.preventDefault(); e.stopImmediatePropagation(); } }, true);
+
 // A button whose work sends, shares, downloads or saves: while the work runs the button is off and shows a spinner, and
 // another tap on it (or on its redrawn twin with the same data-act) does nothing, so a double tap can't send twice.
 // work: a function (it never starts on a refused tap) or a promise. Resolves to the work's result; undefined if refused.
@@ -622,12 +650,16 @@ export async function busy(btn, work) {
 export function sheet(html) {
   const d = document.createElement('dialog');
   d.className = 'sheet';
+  d.dataset.at = location.hash; // the screen it was opened on: leaving that screen (the Back button) closes it
   d.innerHTML = `<div class="sheet-in"><div class="grabber" aria-hidden="true"></div><form method="dialog"><button class="sheet-x" aria-label="${L('Close')}">${icon('close')}</button></form>${html}</div>`;
   d.addEventListener('close', () => { const t = d.querySelector('#toast'); if (t) document.body.append(t); d.remove(); }); // a toast shown in the sheet outlives it
-  d.addEventListener('click', e => { if (e.target === d) d.close(); }); // tap outside
+  const opened = Date.now(); // the second tap of a double tap that opened it isn't a tap outside
+  d.addEventListener('click', e => { if (e.target === d && Date.now() - opened > 350) d.close(); }); // tap outside
   swipeDown(d);
   document.body.append(d);
   d.showModal();
+  const shown = document.querySelector('#toast.show');
+  if (shown) d.firstElementChild.append(shown); // an Undo still on offer stays in reach above the sheet
   const box = d.firstElementChild; // focus starts on the sheet itself, not its ✕ (no ring flashing on the close button)
   box.tabIndex = -1;
   box.focus({ preventScroll: true });
@@ -666,37 +698,43 @@ export const choose = (msg, opts) => new Promise(res => {
 });
 export const ask = async (msg, yes, tone = 'primary') => (await choose(msg, [[true, yes, tone]])) === true;
 
+// The share sheet: the message, then one big row per way to send it (Share, Text message, Email, Copy link). The link
+// itself sits quietly at the bottom, for when copying is refused and it has to be selected by hand. The title's hyphens
+// don't break (T1019-01 stays on one line).
 export function sendSheet({ title, text, url }) {
-  const msg = `${text}\n${url}`;
-  const d = sheet(`<h3>${esc(title)}</h3><p class="preview">${esc(text)}</p>
-    <div class="btns">
-      ${navigator.share ? `<button class="btn primary" data-s="share">${L('Share…')}</button>` : ''}
-      <a class="btn" href="sms:?&body=${encodeURIComponent(msg)}">${L('Text message')}</a>
-      <a class="btn" href="mailto:?subject=${encodeURIComponent(title)}&body=${encodeURIComponent(msg)}">${L('Email')}</a>
-      <button class="btn" data-s="copy">${L('Copy link')}</button>
+  const msg = `${text}\n${url}`, way = (ic, label) => `${icon(ic)}<span>${label}</span>`;
+  const d = sheet(`<h3>${esc(title).replace(/(\w)-(\w)/g, '$1\u2011$2')}</h3><p class="preview">${esc(text)}</p>
+    <div class="btns share-acts">
+      ${navigator.share ? `<button class="btn" data-s="share">${way('share', L('Share…'))}</button>` : ''}
+      <a class="btn" href="sms:?&body=${encodeURIComponent(msg)}">${way('message', L('Text message'))}</a>
+      <a class="btn" href="mailto:?subject=${encodeURIComponent(title)}&body=${encodeURIComponent(msg)}">${way('mail', L('Email'))}</a>
+      <button class="btn" data-s="copy">${way('link', L('Copy link'))}</button>
     </div>
     <p class="hint">${url.length > 1800 ? L('Long link: send by iMessage, WhatsApp or email. Some plain SMS apps cut long links.') + ' ' : ''}${L('The work details are inside the link itself.')}</p>
     <textarea class="linkbox" readonly rows="2" aria-label="${L('Link')}">${esc(url)}</textarea>`);
-  d.addEventListener('click', async e => {
+  d.classList.add('share');
+  d.addEventListener('click', e => {
     const b = e.target.closest('[data-s]');
-    if (!b) return;
-    try {
-      if (b.dataset.s === 'share') await navigator.share({ title, text, url });
-      else { await navigator.clipboard.writeText(msg); toast(L('Link copied. Paste it into a text or email.')); }
-      d.close();
-    } catch (err) {
-      if (err.name === 'AbortError') return;
-      const box = d.querySelector('.linkbox');
-      box.focus(); box.select();
-      toast(L('Select the link below and copy it'));
-    }
+    if (b) busy(b, async () => { // a double tap can't open the share sheet twice
+      try {
+        if (b.dataset.s === 'share') await navigator.share({ title, text, url });
+        else { await navigator.clipboard.writeText(msg); toast(L('Link copied. Paste it into a text or email.')); }
+        d.close();
+      } catch (err) {
+        if (err.name === 'AbortError') return;
+        const box = d.querySelector('.linkbox');
+        box.focus(); box.select();
+        toast(L('Select the link below and copy it'));
+      }
+    });
   });
 }
 
 // Paste box for when a link was copied instead of tapped.
 export const pasteSheet = onCode => {
   const d = sheet(`<h3>${L('Open a link someone sent you')}</h3><p class="hint">${L('Paste the whole message or just the link. Use this when a link opened in a different browser or app than this one.')}</p>
-    <textarea class="linkbox" rows="3" aria-label="${L('Paste link here')}"></textarea><div class="btns"><button class="btn primary" data-open>${L('Open')}</button></div>`);
+    <textarea class="linkbox paste" rows="3" aria-label="${L('Paste link here')}" placeholder="${L('Paste link here')}"></textarea><div class="btns"><button class="btn primary big" data-open>${L('Open')}</button></div>`);
+  d.classList.add('paste');
   d.querySelector('[data-open]').onclick = () => {
     const code = codeFrom(d.querySelector('textarea').value);
     if (!code) return toast(L("That doesn't look like a field app link"), 'bad');
@@ -897,59 +935,71 @@ export function retryUploads(s) {
 // ---------- settings (office only: behind the passcode) ----------
 
 export function settingsView(s) {
-  const roles = ['Superintendent', 'Project manager'];
+  const roles = ['Crew member', 'Superintendent', 'Project manager']; // a crew phone (set on its first run) shows no office words
   const n = queued();
-  return `<section class="card"><h2>${L('This phone')}</h2><div class="grid">
-      <label class="field"><span>${L('Language')}</span><select data-k="s.lang">${[['en', 'English'], ['es', 'Español']].map(([v, name]) => `<option value="${v}"${v === getLang() ? ' selected' : ''}>${name}</option>`).join('')}</select></label>
+  return `<div class="settings">
+    ${setSec(L('This phone'), `<div class="fgroup">
+      ${pickRow(L('Language'), 's.lang', getLang(), [['en', 'English'], ['es', 'Español']])}
       ${field(L('Your name'), 's.me', s.me, { ph: L('Used for "Assigned by", sign-offs') })}
-      <label class="field"><span>${L('Your role')}</span><select data-k="s.role">${roles.map(r => `<option value="${r}"${r === s.role ? ' selected' : ''}>${L(r)}</option>`).join('')}</select></label>
-    </div></section>
-    <section class="card"><h2>${L('Office passcode')}</h2><p class="hint">${L("Opens task setup, the daily report, settings and the PM's crew hours. Crew sheets and the time clock stay open to everyone. Use the same code on the PM's and the superintendent's phones. Crew phones learn it from the first task sheet they open.")}</p>
-      <div class="btns"><button class="btn" data-act="changePin">${L('Change the passcode')}</button></div></section>
-    <section class="card"><h2>${L('Project')}</h2><div class="grid">
-      ${field(L('Project'), 's.project', s.project)}${field(L('Location'), 's.site', s.site)}
-      ${field(L('Superintendent'), 's.super', s.super)}${field(L('Project manager'), 's.pm', s.pm)}
-    </div></section>
-    <section class="card"><h2>${L('Floors / levels')}</h2><p class="hint">${L('One per line. They show up as quick picks; you can still type any floor.')}</p>
-      <textarea data-k="s.floors" data-lines rows="6">${esc(s.floors.join('\n'))}</textarea></section>
-    <section class="card"><h2>${L('Crews')}</h2><p class="hint">${L('Tap a name to rename the person or move them to another crew. Picking a crew on a task fills in its people.')}</p>
-      ${s.crews.map((c, i) => `<div class="crew-edit" style="--crew:var(--c${i % 6})"><div class="grid">
-        ${field(L('Crew name'), `s.crews.${i}.name`, c.name)}${field(L('Lead'), `s.crews.${i}.lead`, c.lead)}</div>
-        ${peopleEditor(s, c, 'Mike R, Jose L, Tre W')}
-        <button class="link danger" data-act="delCrew" data-i="${i}">${L('Remove {name}', { name: esc(c.name || L('crew')) })}</button></div>`).join('')}
-      ${people(s).some(p => !p.crew) ? `<div class="crew-edit">${peopleEditor(s, null)}</div>` : ''}
-      <button class="btn" data-act="addCrew">${L('+ Add crew')}</button></section>
-    <section class="card"><h2>${L('Finish / accuracy checks')}</h2><p class="hint">${L('One per line. Tap them onto a task as required checks.')}</p>
-      <textarea data-k="s.checks" data-lines rows="6">${esc(s.checks.join('\n'))}</textarea></section>
-    <section class="card"><h2>${L('Review folder')}</h2><p class="hint">${L('Optional PDF filing needs an owner-approved Google Drive receiver. Enter its upload link and code manually on each phone that should upload. Task links do not carry the upload code or change these settings.')}</p>
-      <div class="grid">${field(L('Folder upload link'), 's.folderUrl', s.folderUrl, { wide: true, ph: 'https://script.google.com/macros/s/.../exec', mode: 'url' })}${field(L('Site code'), 's.siteCode', s.siteCode, { type: 'password' })}</div>
-      <div class="btns"><button class="btn" data-act="testFolder">${L('Test the connection')}</button></div>
-      <p class="hint">${n ? L('Waiting to upload: {n}', { n }) : L('Nothing waiting to upload.')}</p></section>
-    <section class="card"><h2>${L('Backup')}</h2><p class="hint">${L('Everything is stored on this phone only. Download a backup weekly, or before clearing browser data or switching phones.')}</p>
-      <div class="btns"><button class="btn" data-act="backup">${L('Download backup')}</button>
-      <label class="btn">${L('Restore from backup')}<input type="file" accept="application/json,.json" data-restore hidden></label></div>
-      <p class="hint">${L('Using about {kb} KB of roughly 5,000 KB.', { kb: Math.ceil([...Object.values(KEYS), OUTBOX].reduce((n, k) => n + JSON.stringify(load(k, '')).length, 0) / 1024) })}</p></section>`;
+      ${pickRow(L('Your role'), 's.role', s.role, roles.map(r => [r, L(r)]))}</div>`)}
+    ${setSec(L('Office passcode'), `<div class="fgroup">${actRow('changePin', L('Change the passcode'))}</div>`,
+      L("Opens task setup, the daily report, settings and the PM's crew hours. Crew sheets and the time clock stay open to everyone. Use the same code on the PM's and the superintendent's phones. Crew phones learn it from the first task sheet they open."))}
+    ${setSec(L('Project'), `<div class="fgroup">${field(L('Project'), 's.project', s.project)}${field(L('Location'), 's.site', s.site)}
+      ${field(L('Superintendent'), 's.super', s.super)}${field(L('Project manager'), 's.pm', s.pm)}</div>`)}
+    ${setSec(L('Floors / levels'), linesBox('s.floors', s.floors, L('Floors / levels')), L('One per line. They show up as quick picks; you can still type any floor.'))}
+    ${setSec(L('People and crews'), `<p class="hint set-note">${L('Tap a name to rename the person or move them to another crew. Picking a crew on a task fills in its people.')}</p>
+      ${s.crews.map((c, i) => crewEditor(s, c, i, 'Mike R, Jose L, Tre W')).join('')}
+      ${s.people.some(p => !p.crewId) ? `<div class="crew-edit"><h4 class="caption">${L('Not on a crew')}</h4><div class="fgroup">${whoRows(s, '')}</div></div>` : ''}
+      <button class="btn wide" data-act="addCrew">${L('+ Add crew')}</button>`)}
+    ${setSec(L('Finish / accuracy checks'), linesBox('s.checks', s.checks, L('Finish / accuracy checks')), L('One per line. Tap them onto a task as required checks.'))}
+    ${setSec(L('Review folder'), `<div class="fgroup">${field(L('Folder upload link'), 's.folderUrl', s.folderUrl, { wide: true, ph: 'https://script.google.com/macros/s/.../exec', mode: 'url' })}
+      ${field(L('Site code'), 's.siteCode', s.siteCode, { type: 'password' })}${actRow('testFolder', L('Test the connection'))}</div>`,
+      [n ? L('Waiting to upload: {n}', { n }) : L('Nothing waiting to upload.'), L('Optional PDF filing needs an owner-approved Google Drive receiver. Enter its upload link and code manually on each phone that should upload. Task links do not carry the upload code or change these settings.')])}
+    ${setSec(L('Backup'), `<div class="fgroup">${actRow('backup', L('Download backup'))}
+      <label class="row set-act">${L('Restore from backup')}<input type="file" accept="application/json,.json" data-restore class="sr"></label></div>`,
+      [L('Everything is stored on this phone only. Download a backup weekly, or before clearing browser data or switching phones.'),
+        L('Using about {kb} KB of roughly 5,000 KB.', { kb: Math.ceil([...Object.values(KEYS), OUTBOX].reduce((n, k) => n + JSON.stringify(load(k, '')).length, 0) / 1024) })])}
+  </div>`;
 }
+// iOS Settings: a caption over each grouped list and quiet notes under it. Fields are .fgroup rows (the Daily
+// report's); a choice is a row that opens the phone's own picker; an action is a tinted row.
+const setSec = (title, body, notes = []) => `<section class="set"><h3 class="caption">${title}</h3>${body}${[].concat(notes).map(t => `<p class="hint set-note">${t}</p>`).join('')}</section>`;
+const actRow = (act, label) => `<button type="button" class="row set-act" data-act="${act}">${label}</button>`;
+const linesBox = (k, list, label) => `<div class="fgroup"><label class="field"><textarea data-k="${k}" data-lines rows="6" aria-label="${esc(label)}">${esc(list.join('\n'))}</textarea></label></div>`;
+// The name on the left, the value on the right; the select lies over the whole row, so a tap anywhere opens the
+// phone's picker. A value not in the list (no role yet) shows blank, so picking the first option still counts.
+const pickRow = (label, k, v, opts) => {
+  const on = opts.find(o => o[0] === v);
+  return `<label class="row set-pick"><span class="row-main">${label}</span><span class="row-end">${esc(on ? on[1] : '')}</span>${icon('updown', 'chev')}<select data-k="${k}" aria-label="${esc(label)}">${on ? '' : '<option value="" selected disabled hidden></option>'}${opts.map(([val, name]) => `<option value="${esc(val)}"${val === v ? ' selected' : ''}>${esc(name)}</option>`).join('')}</select></label>`;
+};
 
-// A crew's people as chips (c null: the people on no crew): tap a name to rename or move the person, ✕ to take them
-// off the list, and a box to add people (several at once with commas). Big targets: a chip is a 44 px row, each of its buttons at least 44 px wide.
-function peopleEditor(s, c, ph = '') {
-  const ps = people(s).filter(p => (c ? p.crewId === c.id : !p.crew)), plain = 'background:none;border:0;font:inherit;color:inherit;cursor:pointer;min-height:44px';
-  return `<div class="field"><span>${c ? L('People') : L('Not on a crew')}</span>
-    ${ps.length ? `<div class="chips">${ps.map(p => `<span class="chip" style="padding:0 0 0 14px;gap:0"><button type="button" data-act="pEdit" data-pid="${esc(p.id)}" style="${plain};min-width:44px;padding:0;text-align:left">${esc(p.name)}</button><button type="button" data-act="pDel" data-pid="${esc(p.id)}" aria-label="${esc(L('Remove {name}', { name: p.name }))}" style="${plain};min-width:44px;padding:0 4px;color:var(--bad)">✕</button></span>`).join('')}</div>`
-      : c ? `<p class="hint">${L('No one on this crew yet.')}</p>` : ''}
-    </div>${c ? `<div class="field"><span>${L('Add people')}</span><div class="edit-row"><input placeholder="${esc(ph)}" aria-label="${esc(L('Add people to {crew}', { crew: c.name || L('crew') }))}" enterkeyhint="done" autocomplete="off" data-enter="pAdd" data-crew="${esc(c.id)}">
-      <button class="x add" data-act="pAdd" data-crew="${esc(c.id)}" aria-label="${esc(L('Add to {crew}', { crew: c.name || L('crew') }))}">+</button></div></div>` : ''}`;
+// A crew as one group: its name and lead, its people (tap one to rename, move or remove them), and a box to add people
+// (several at once with commas), then the crew's own Remove.
+function crewEditor(s, c, i, ph) {
+  const crew = c.name || L('crew');
+  return `<div class="crew-edit" style="--crew:var(--c${i % 6})"><div class="fgroup">
+      ${field(L('Crew name'), `s.crews.${i}.name`, c.name)}${field(L('Lead'), `s.crews.${i}.lead`, c.lead)}
+      ${whoRows(s, c.id) || `<p class="hint">${L('No one on this crew yet.')}</p>`}
+      <div class="edit-row"><label class="field"><span>${L('Add people')}</span><input placeholder="${esc(ph)}" aria-label="${esc(L('Add people to {crew}', { crew }))}" enterkeyhint="done" autocomplete="off" data-enter="pAdd" data-crew="${esc(c.id)}"></label>
+        <button class="x add" data-act="pAdd" data-crew="${esc(c.id)}" aria-label="${esc(L('Add to {crew}', { crew }))}">+</button></div>
+    </div><button class="link danger" data-act="delCrew" data-i="${i}">${L('Remove {name}', { name: esc(crew) })}</button></div>`;
 }
+// The people on a crew (crewId '': on none) as rows. The initials are drawn by CSS from data-ini, so a row's text is the name alone.
+const initials = name => name.split(' ').slice(0, 2).map(w => Array.from(w)[0]).join('').toUpperCase();
+const whoRows = (s, crewId) => s.people.filter(p => p.crewId === crewId).map(p =>
+  `<button type="button" class="row who-row" data-act="pEdit" data-pid="${esc(p.id)}" data-ini="${esc(initials(p.name))}"><span class="row-main">${esc(p.name)}</span>${icon('chev', 'chev')}</button>`).join('');
 
-// Tap a person: rename them, or move them to another crew. Resolves when the sheet closes.
+// Tap a person: rename them, move them to another crew, or take them off the list (with Undo). Resolves when the sheet closes.
 const editPerson = (s, id) => new Promise(res => {
   const p = personById(s, id);
   if (!p) return res();
-  const d = sheet(`<h3>${esc(p.name)}</h3><div class="edit-row"><input name="who" value="${esc(p.name)}" aria-label="${esc(L('Name'))}" autocomplete="off" enterkeyhint="done">
-      <button class="btn primary" data-save>${L('Rename')}</button></div>
-    <p class="label">${L('Move to another crew')}</p>
-    <div class="menu">${s.crews.map(c => `<button class="btn" data-move="${esc(c.id)}" style="${crewVar(s, c.name, c.id)}"${c.id === p.crewId ? ' aria-current="true"' : ''}><i class="dot"></i>${c.id === p.crewId ? '✓ ' : ''}${esc(c.name || L('crew'))}</button>`).join('')}</div>`);
+  const d = sheet(`<h3>${esc(p.name)}</h3>
+    <div class="fgroup"><div class="edit-row"><label class="field"><span>${L('Name')}</span><input name="who" value="${esc(p.name)}" autocomplete="off" enterkeyhint="done"></label>
+      <button class="btn" data-save>${L('Rename')}</button></div></div>
+    <p class="caption">${L('Move to another crew')}</p>
+    <div class="menu">${s.crews.map(c => `<button class="btn" data-move="${esc(c.id)}" style="${crewVar(s, c.name, c.id)}"${c.id === p.crewId ? ' aria-current="true"' : ''}><i class="dot"></i><span>${esc(c.name || L('crew'))}</span>${c.id === p.crewId ? icon('check', 'on') : ''}</button>`).join('')}</div>
+    <div class="menu"><button class="btn danger" data-act="pDel" data-pid="${esc(p.id)}">${esc(L('Remove {name}', { name: p.name }))}</button></div>`);
+  d.classList.add('who');
   const rename = () => {
     if (!renamePerson(s, id, d.querySelector('[name=who]').value)) return toast(L('Type the name'), 'bad');
     d.close();
@@ -958,7 +1008,8 @@ const editPerson = (s, id) => new Promise(res => {
   d.addEventListener('click', e => {
     if (e.target.closest('[data-save]')) return rename();
     const m = e.target.closest('[data-move]');
-    if (m) { movePerson(s, id, m.dataset.move); d.close(); }
+    if (m && m.dataset.move !== p.crewId) { movePerson(s, id, m.dataset.move); toast(L('{name} moved to {crew}', { name: p.name, crew: crewById(s, m.dataset.move)?.name || L('crew') })); }
+    if (m) d.close();
   });
   d.addEventListener('close', () => res());
 });
@@ -979,14 +1030,32 @@ async function addFromSettings(s, el) {
   }
 }
 
-export async function settingsAct(act, s, el) {
+// change(f) applies f to the settings as they are by then (another tab may have reloaded them), saves and redraws: a
+// removal's Undo goes through it. Removing a person or a crew takes effect at once, with Undo for 6 seconds; sheets and
+// hours keep the names either way. A removed crew's people wait under "Not on a crew" and go back with the Undo.
+export async function settingsAct(act, s, el, change = f => { f(s); save(KEYS.settings, s); }) {
   if (act === 'addCrew') addCrew(s, L('Crew {x}', { x: String.fromCharCode(65 + s.crews.length) }));
-  if (act === 'delCrew' && await ask(L('Remove {name} from the crew list? Existing sheets keep their crew name.', { name: s.crews[el.dataset.i].name }), L('Remove'), 'danger')) removeCrew(s, s.crews[el.dataset.i].id);
+  if (act === 'delCrew') {
+    const at = +el.dataset.i, c = s.crews[at];
+    if (c) {
+      const ids = s.people.filter(p => p.crewId === c.id).map(p => p.id);
+      removeCrew(s, c.id);
+      toast(L('{name} removed from the crew list', { name: c.name || L('crew') }), '', { undo: () => change(t => {
+        if (crewById(t, c.id)) return;
+        t.crews.splice(Math.min(at, t.crews.length), 0, c);
+        for (const id of ids) if (t.people.some(p => p.id === id && !p.crewId)) movePerson(t, id, c.id);
+      }) });
+    }
+  }
   if (act === 'pAdd') await addFromSettings(s, el);
   if (act === 'pEdit') await editPerson(s, el.dataset.pid);
   if (act === 'pDel') {
-    const p = personById(s, el.dataset.pid);
-    if (p && await ask(L('Take {name} off the list? Sheets and hours keep the name.', { name: p.name }), L('Remove'), 'danger')) removePerson(s, p.id);
+    const at = s.people.findIndex(p => p.id === el.dataset.pid), p = s.people[at];
+    if (p && removePerson(s, p.id)) toast(L('{name} taken off the list', { name: p.name }), '', { undo: () => change(t => {
+      if (personById(t, p.id)) return;
+      t.people.splice(Math.min(at, t.people.length), 0, p);
+      movePerson(t, p.id, p.crewId); // back on their crew if it is still there, and the crew lists rewritten
+    }) });
   }
   if (act === 'backup') download(new Blob([JSON.stringify(backupData())], { type: 'application/json' }), `schwab-field-backup-${today()}.json`);
   if (act === 'testFolder') {
