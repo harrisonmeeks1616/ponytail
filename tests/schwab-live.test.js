@@ -2,7 +2,7 @@
 // The hub screens (docs/schwab/live.mjs): relative time, sheet relevance, crew grouping, who is on site, per-person weekly
 // hours (the same hundredths as report.mjs), the accountant's CSV, search, the activity sentences, the header dot, the
 // typed-text translation helpers, every view's markup (escaping, who sees what, speed with 12 crews and 60 events) and the
-// taps that change things (delete asks first and goes to the hub first, connect, archive, rotate). No DOM and no network:
+// taps that change things (delete goes at once with Undo and reaches the hub after it, connect, archive, rotate). No DOM and no network:
 // a few fake elements and a fake sync stand in for them. ROOT=/path/to/docs/schwab runs it against another copy of the app.
 //   node --test tests/schwab-live.test.js
 
@@ -492,7 +492,7 @@ test('recordsView: the PM sees three tabs and the tools, the superintendent sees
   const sup = live.recordsView(bigCtx({ role: 'super' }), 'people');
   assert.equal((sup.match(/<a href="#records\//g) || []).length, 2);
   assert.doesNotMatch(sup, /recExport|recMenu|recCsv|recArchive|recPerson/, 'no export, delete, hours or archive for the superintendent');
-  assert.match(sup, /aria-current="page">Task sheets/, 'People is not theirs: they land on sheets');
+  assert.match(sup, /aria-current="page">Sheets/, 'People is not theirs: they land on sheets');
   assert.match(live.recordsView(mkCtx({ role: 'crew' }), 'sheets'), /for the office/);
 });
 test('recordsView people: people, then weeks with totals, then shifts, and the way to edit', () => {
@@ -619,7 +619,7 @@ test('hubSettingsView: who sees what', () => {
   assert.match(sup, /hubDisconnect/);
   assert.doesNotMatch(sup, /hubInvite|hubRotate|hubTest/);
   const crew = mk('crew', 'Crew B');
-  assert.match(crew, /<dt>Crew<\/dt><dd>Crew B<\/dd>/);
+  assert.match(crew, /<span class="row-main">Crew<\/span><span class="row-end">Crew B<\/span>/);
   assert.match(crew, /hubSync/);
   assert.match(crew, /hubDisconnect/);
   assert.doesNotMatch(crew, /hubInvite|hubRotate|hubTest|Open the Google Sheet/, 'crew phones see only status, their crew and disconnect');
@@ -662,49 +662,54 @@ test('withMessage and withReview stamp the office part so the newest wins, and k
 
 // ---------- delete ----------
 
-test('deleteRecord: PM only, asks first, the hub first, nothing deleted if the hub fails', async () => {
+test('deleteRecord: PM only, gone at once with Undo, the hub purge only once the Undo is over, back if the hub fails', async () => {
   const t = task({ uid: 'del1', id: 'T9-09' });
-  // not the PM
-  let ctx = mkCtx({ role: 'super', tasks: () => [t] });
+  const offer = ctx => toasts(ctx).at(-1)[3]; // the toast's { undo, done }
+  // a removal that can be put back, as the app's own remove() does
+  const mk = (o = {}) => { const order = [], ctx = mkCtx({ tasks: () => [t], ...o, remove: async (k, key) => { order.push(`remove ${k} ${key}`); ctx.removed.push([k, key]); return () => order.push('put back'); } }); ctx.order = order; ctx.toast = (m, tone, opts) => ctx.calls.push(['toast', m, tone, opts]); return ctx; };
+  // not the PM; an unknown record; hours: nothing happens
+  let ctx = mk({ role: 'super' });
   assert.equal(await live.deleteRecord(ctx, 'task', 'del1'), false);
   assert.deepEqual([ctx.removed.length, ctx.sync.calls.length], [0, 0]);
-  // unknown record, unknown kind: no question, no change
-  ctx = mkCtx({ tasks: () => [t] });
+  ctx = mk();
   assert.equal(await live.deleteRecord(ctx, 'task', 'nope'), false);
   assert.equal(await live.deleteRecord(ctx, 'shift', 'del1'), false, 'hours are removed on the Crew hours screen, not here');
-  // says no
-  const asked = [];
-  ctx = mkCtx({ tasks: () => [t], ask: async (msg, yes, tone) => { asked.push([msg, yes, tone]); return false; } });
-  assert.equal(await live.deleteRecord(ctx, 'task', 'del1'), false);
-  assert.equal(asked.length, 1);
-  assert.deepEqual([asked[0][1], asked[0][2]], ['Delete', 'danger']);
-  assert.match(asked[0][0], /Delete task T9-09\? This can't be undone\. It is also removed from the hub\./);
-  assert.deepEqual([ctx.removed.length, ctx.sync.calls.filter(c => c[0] === 'purge').length], [0, 0]);
-  // yes, with a hub: purge, then remove
-  const order = [];
-  const sync = mkSync({ async purge(kind, key) { order.push('purge ' + kind + ' ' + key); return { ok: true, rev: 3 }; } });
-  ctx = mkCtx({ tasks: () => [t], sync, remove: async (k, key) => { order.push('remove ' + k + ' ' + key); return true; } });
+  // with a hub: off this phone at once, the toast says the hub copy goes too and offers Undo; no purge yet
+  ctx = mk();
   assert.equal(await live.deleteRecord(ctx, 'task', 'del1'), true);
-  assert.deepEqual(order, ['purge task del1', 'remove task del1']);
+  assert.deepEqual(ctx.order, ['remove task del1']);
+  assert.match(toasts(ctx).at(-1)[1], /^Task T9-09 deleted\. It is also removed from the hub\.$/);
+  assert.equal(typeof offer(ctx).undo, 'function');
+  assert.equal(ctx.sync.calls.filter(c => c[0] === 'purge').length, 0, 'nothing goes to the hub while Undo is offered');
   assert.ok(ctx.calls.some(c => c[0] === 'render'));
-  // the hub says no (offline): nothing is deleted anywhere
-  const down = mkSync({ async purge() { return { ok: false, error: 'offline', message: 'No signal.' }; } });
-  ctx = mkCtx({ tasks: () => [t], sync: down });
-  assert.equal(await live.deleteRecord(ctx, 'task', 'del1'), false);
-  assert.equal(ctx.removed.length, 0);
-  assert.deepEqual(toasts(ctx)[0].slice(1), ['No signal.', 'bad']);
-  // no hub: this phone only, and the question does not mention a hub
-  const q = [];
-  ctx = mkCtx({ tasks: () => [t], reports: () => [report({ date: '2026-10-17' })], sync: mkSync({ hubStatus: () => ({ state: 'off' }) }), ask: async m => (q.push(m), true) });
+  await offer(ctx).done(false); // the 6 seconds are over
+  assert.deepEqual(ctx.sync.calls.filter(c => c[0] === 'purge'), [['purge', 'task', 'del1']]);
+  assert.deepEqual(ctx.order, ['remove task del1'], 'and it stays gone');
+  // Undo: back on this phone, and the hub is never asked
+  ctx = mk();
+  await live.deleteRecord(ctx, 'task', 'del1');
+  offer(ctx).undo();
+  await offer(ctx).done(true);
+  assert.deepEqual([ctx.order, ctx.sync.calls.filter(c => c[0] === 'purge').length], [['remove task del1', 'put back'], 0]);
+  // the hub says no (offline): it comes back on this phone too, and the PM is told
+  ctx = mk({ sync: mkSync({ async purge() { return { ok: false, error: 'offline', message: 'No signal.' }; } }) });
+  await live.deleteRecord(ctx, 'task', 'del1');
+  await offer(ctx).done(false);
+  assert.deepEqual(ctx.order, ['remove task del1', 'put back']);
+  assert.deepEqual(toasts(ctx).at(-1).slice(1, 3), ['No signal.', 'bad']);
+  // no hub: this phone only, and the toast does not mention a hub
+  ctx = mk({ reports: () => [report({ date: '2026-10-17' })], sync: mkSync({ hubStatus: () => ({ state: 'off' }) }) });
   assert.equal(await live.deleteRecord(ctx, 'report', '2026-10-17'), true);
   assert.deepEqual(ctx.removed, [['report', '2026-10-17']]);
-  assert.ok(!/hub/.test(q[0]) && /report/.test(q[0]));
+  assert.ok(!/hub/.test(toasts(ctx).at(-1)[1]) && /report/.test(toasts(ctx).at(-1)[1]));
+  await offer(ctx).done(false);
   assert.equal(ctx.sync.calls.length, 0);
   // a superintendent's hub key cannot purge: treated as no hub for the PM's own phone
   const superKey = mkSync();
   superKey.status.role = 'super';
-  ctx = mkCtx({ tasks: () => [t], sync: superKey, ask: async m => (q.push(m), true) });
+  ctx = mk({ sync: superKey });
   await live.deleteRecord(ctx, 'task', 'del1');
+  await offer(ctx).done(false);
   assert.equal(superKey.calls.filter(c => c[0] === 'purge').length, 0);
 });
 
@@ -899,7 +904,7 @@ test('On site and the activity feed name people as the roster has them now, with
   ctx.sync.data.events = [{ rev: 2, ts: NOW - min(5), who: 'Jose L', role: 'crew', kind: 'clock.in', text: '', ref: 'o1' }, { rev: 1, ts: NOW - min(9), who: 'Jose L', role: 'crew', kind: 'clock.in', text: '', ref: 'o2' }];
   const v = live.liveView(ctx);
   assert.match(v, /<b>José Luis<\/b>/);
-  assert.match(v, /Crew Bravo · 1/);
+  assert.match(v, /Crew Bravo · since 7:30 AM/, 'on site under the crew as it is called now');
   assert.match(v, /José Luis clocked in <span class="feed-crew">· Crew A<\/span>/, 'the feed line follows the roster through the shift it is about');
   assert.match(v, /Jose L clocked in <span class="feed-crew">· Crew Bravo<\/span>/);
 });

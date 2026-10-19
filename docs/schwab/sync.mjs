@@ -46,7 +46,7 @@ const PARTS = { t: TPARTS, r: RPARTS, g: [['v', s => cfgPart(s), 'at']] };
 const shiftPart = (s, full) => [s.id, s.device, s.who, s.pid, s.date, s.in, s.out, s.crew, s.crewId, s.tasks, ...(full ? [s.edited.who, s.edited.in, s.edited.out, s.gone] : [])];
 // The roster always goes normalized, every crew and person with an id. A tab still on an older version saves settings with
 // no people; pushing that would empty the roster on every phone. A config with member lists and no people was written by
-// such a phone, so normSettings takes the people back from this phone's own roster key (shared.mjs ROSTER), ids and all.
+// such a phone, so normSettings takes the people back from this phone's own roster key (shared.mjs KEYS.roster), ids and all.
 const noRoster = s => !arr(s.people).length && arr(s.crews).some(c => String(obj(c).members || '').trim());
 const cfgPart = s => { s = obj(s); const c = shape(CFG_TPL, normSettings(noRoster(s) ? { ...s, people: undefined } : s)); if (!PIN_FORMAT.test(c.pin)) c.pin = ''; return c; };
 const inC = raw => ({ ...cfgPart(raw), at: num(obj(raw).at) });

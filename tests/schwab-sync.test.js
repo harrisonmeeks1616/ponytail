@@ -1714,14 +1714,32 @@ test('every synced field survives the hub, a reload and a backup restored on ano
   for (const key of ['schwab.tasks', 'schwab.hours', 'schwab.crewHours', 'schwab.reports', 'schwab.device']) assert.deepEqual(other.get(key), pm.storage.get(key), key);
   const rs = other.get('schwab.settings');
   assert.deepEqual([rs.hubUrl, rs.hubRole, rs.hubCrew, rs.hubKey, rs.people], [URL_A, 'pm', '', '', [{ id: 'p1', name: 'Jose L', crewId: 'cA' }]], 'the hub key stays behind, the rest comes along');
-  // with the key typed in again it is the same phone: its device, every field, nothing to send again, the hub's stamps
+  // with the key typed in again it is the same phone: its device, every field and stamp, its record of what the hub has, nothing to send again
   const back = await makePhone(hub, 'pm', { storage: other }), pushes = hub.count('push');
   assert.equal((await back.sync.connect(URL_A, KEYS.pm)).ok, true);
   await stable(back);
   assert.deepEqual([back.secret, back.sync.hubStatus().state, hub.count('push'), back.toasts], [pm.secret, 'live', pushes, []]);
-  assert.deepEqual(strip(back.task(uid)), strip(sp.task(uid)));
+  assert.deepEqual(back.task(uid), pm.task(uid));
   assert.deepEqual(back.crewHours(), pm.crewHours());
   assert.deepEqual(back.reports()[DAY].decisions, pm.reports()[DAY].decisions);
+});
+
+test('a restored backup knows what the hub had then: work that reached the hub after the backup is not rolled back, unsynced work in it still goes up', async () => {
+  const hub = fresh(), shared = await lib, pm = await makePhone(hub, 'pm'), cp = await makePhone(hub, 'crew', { crew: 'Crew A' });
+  const uid = pm.addTask();
+  await stable(pm, cp);
+  cp.net.down = true; tick(60e3); cp.tick(uid, 'i1'); cp.editTask(uid, t => { t.status = 'Complete'; }); await cp.cycle(); // the crew finishes with no signal
+  pm.net.down = true; tick(60e3); pm.editTask(uid, t => { t.scope = 'Pull 10 AWG'; }); await pm.cycle(); // later, the PM edits the sheet with no signal
+  const data = clone(await withLocal(pm.storage, () => shared.backupData())); // and downloads a backup
+  cp.net.down = false; tick(60e3); await stable(cp);
+  tick(60e3);
+  assert.equal(await withLocal(pm.storage, () => shared.restoreData(data)), true);
+  const back = await makePhone(hub, 'pm', { storage: pm.storage }); // the page reloads after a restore, and the hub key is typed in again
+  assert.equal((await back.sync.connect(URL_A, KEYS.pm)).ok, true);
+  await stable(back, cp);
+  const h = hub.taskView(hub.tasks.get(uid));
+  assert.deepEqual([h.status, h.items[0].done, h.scope], ['Complete', true, 'Pull 10 AWG'], "the hub keeps the crew's work and gets the PM's edit");
+  for (const p of [back, cp]) assert.deepEqual([p.task(uid).status, p.task(uid).items[0].done, p.task(uid).scope], ['Complete', true, 'Pull 10 AWG'], `${p.role} phone`);
 });
 
 test('the field lists here are the lists in hub/Code.gs, so the two cannot drift apart unnoticed', () => {
@@ -1769,17 +1787,24 @@ test('the hub fields have a key of their own: an older tab saving settings canno
 
 test('another job, an older tab, a texted sheet, a one-off failure: nothing stale goes up, and nobody is promised a retry', async () => {
   // A phone moving to another hub (another job) does not upload what it synced with the old one; an edit made after still goes up.
-  const a = fresh(), b = new FakeHub(clock), URL_B = 'https://script.google.com/macros/s/OTHERJOB/exec';
-  const sp = await makePhone(a, 'super', { fetchImpl: (url, init) => (url === URL_B ? b : a).fetch(url, init) });
+  const a = fresh(), b = new FakeHub(clock), URL_B = 'https://script.google.com/macros/s/OTHERJOB/exec', URL_C = 'https://script.google.com/macros/s/THIRDJOB/exec', hubs = { [URL_B]: b };
+  const sp = await makePhone(a, 'super', { fetchImpl: (url, init) => (hubs[url] || a).fetch(url, init) });
+  b.pushReport('super', { date: DAY, results: 'job B results', updatedAt: clock() }); // job B's own daily report for today
+  tick(60e3);
   const old = sp.addTask({ scope: 'job A sheet' });
+  sp.editReport(DAY, r => { r.results = 'job A results'; });
   await sp.cycle();
-  assert.ok(a.tasks.has(old));
+  assert.ok(a.tasks.has(old) && a.reports.has(DAY));
   assert.equal((await sp.sync.connect(URL_B, KEYS.super)).ok, true);
   tick(30e3); await sp.cycle();
-  assert.equal(b.tasks.size, 0, "job A's sheet stays off job B's hub");
+  assert.deepEqual([b.tasks.size, b.reports.get(DAY).results], [0, 'job B results'], "job A's sheet and report stay off job B's hub");
   sp.editTask(old, t => { t.scope = 'edited after the move'; });
   tick(30e3); await sp.cycle();
   assert.equal(b.tasks.get(old)?.a.scope, 'edited after the move', 'an edit made after the move is new work');
+  sp.sync.disconnect(); hubs[URL_C] = new FakeHub(clock); // a disconnect, then another job's invite: the same
+  assert.equal((await sp.sync.connect(URL_C, KEYS.super)).ok, true);
+  tick(30e3); await sp.cycle();
+  assert.equal(hubs[URL_C].tasks.size + hubs[URL_C].reports.size, 0, 'nothing synced before the disconnect goes to the next hub');
   // Disconnected and connected again: an edit made while away is ranked by when it was made, not by when the phone came back.
   const h2 = fresh(), s1 = await makePhone(h2, 'super'), s2 = await makePhone(h2, 'super'), x = s1.addTask({ scope: 'first' });
   await s1.cycle(); await s2.cycle();

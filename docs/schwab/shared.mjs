@@ -7,19 +7,12 @@ import ES from './es.mjs';
 
 // The passcode also keeps a key of its own: a tab still running the version before it (phones keep old
 // tabs open for days) rewrites settings without it, and an old backup has none. hours: this phone's own
-<<<<<<< ours
-// clock-ins; crewHours: the PM's timesheet of everyone's; device: this phone's hub secret, in a key of its own for the
-// same reason as the passcode. roster: the people and crews with their ids, kept apart for the same reason (see
-// loadSettings). Backups and restores carry every key here (a backup leaves out the hub key).
-export const KEYS = { settings: 'schwab.settings', tasks: 'schwab.tasks', reports: 'schwab.reports', pin: 'schwab.pin', hours: 'schwab.hours', crewHours: 'schwab.crewHours', device: 'schwab.device', roster: 'schwab.roster' };
-=======
 // clock-ins; crewHours: the PM's timesheet of everyone's; device: this phone's hub secret, and hub: the hub link, key, role
-// and crew (HUB_FIELDS), each in a key of its own for the same reason as the passcode. Backups and restores carry every
-// key here (a backup leaves out the hub key).
-export const KEYS = { settings: 'schwab.settings', tasks: 'schwab.tasks', reports: 'schwab.reports', pin: 'schwab.pin', hours: 'schwab.hours', crewHours: 'schwab.crewHours', device: 'schwab.device', hub: 'schwab.hub' };
+// and crew (HUB_FIELDS), each in a key of its own for the same reason as the passcode. roster: the people and crews with
+// their ids, kept apart for the same reason (see normSettings). Backups and restores carry every key here (a backup
+// leaves out the hub key).
+export const KEYS = { settings: 'schwab.settings', tasks: 'schwab.tasks', reports: 'schwab.reports', pin: 'schwab.pin', hours: 'schwab.hours', crewHours: 'schwab.crewHours', device: 'schwab.device', roster: 'schwab.roster', hub: 'schwab.hub' };
 export const HUB_FIELDS = ['hubUrl', 'hubKey', 'hubRole', 'hubCrew'];
-const ROSTER = 'schwab.roster'; // a copy of settings.people and the crew ids, for normSettings: not in KEYS, a backup's settings carry the roster
->>>>>>> theirs
 export const COMPANY = 'H.A. Sack-Electrical', COMPANY_ALT = 'Sack Company-Electrical', COMPANIES = `${COMPANY} · ${COMPANY_ALT}`;
 // The top lines of every PDF: who did the work, then the job.
 export const letterhead = (s, more = '') => `${COMPANIES}\n${[s.project, s.site, more].filter(Boolean).join(' · ')}`;
@@ -66,18 +59,12 @@ export function load(key, fallback) {
 // Past that, move to IndexedDB or a shared backend; Backup keeps a copy until then.
 // Settings with a roster also write it to its own key, wherever they are saved from.
 export function save(key, val) {
-<<<<<<< ours
   try {
     localStorage.setItem(key, JSON.stringify(val));
     if (key === KEYS.settings && Array.isArray(val?.people) && Array.isArray(val.crews)) localStorage.setItem(KEYS.roster, JSON.stringify(rosterOf(val)));
-    return true;
   } catch { return false; }
-=======
-  try { localStorage.setItem(key, JSON.stringify(val)); } catch { return false; }
-  if (key === KEYS.settings && Array.isArray(val?.people) && Array.isArray(val.crews)) try { localStorage.setItem(ROSTER, JSON.stringify({ crews: val.crews.map(c => ({ id: c?.id, name: c?.name })), people: val.people })); } catch {}
   saved(key);
   return true;
->>>>>>> theirs
 }
 // The app's one hook into every save (tasks.html pokes the hub sync with it); nothing by default.
 let saved = () => {};
@@ -99,11 +86,10 @@ export const DEFAULT_SETTINGS = {
   checks: ['Supports / strapping', 'Labeling', 'Terminations / torque', 'Testing', 'Covers / plates', 'Cleanup'],
 };
 // Settings from storage, a backup or the hub: known fields only, every crew and person with an id, the roster checked.
-// A tab still on a version before the roster saves settings with no people and no crew ids: the roster comes back from its
-// own key, crews by name. ponytail: names that old tab typed into a crew's member list are not picked up; reload it to fix.
+// Settings with no people (a tab on a version before the roster saved them, see below) take this phone's roster back.
 export function normSettings(raw) {
-  const ro = raw && typeof raw === 'object' && !Array.isArray(raw.people) && load(ROSTER, null);
-  if (Array.isArray(ro?.people)) raw = { ...raw, people: ro.people, crews: (Array.isArray(raw.crews) ? raw.crews : []).map(c => ({ ...c, id: c?.id || (Array.isArray(ro.crews) ? ro.crews : []).find(x => x?.name === c?.name)?.id || '' })) };
+  const roster = raw && typeof raw === 'object' && !Array.isArray(raw.people) && load(KEYS.roster, null);
+  if (Array.isArray(roster?.people)) raw = withRoster(raw, shape(ROSTER_TPL, roster));
   const s = raw ? shape(SETTINGS_TPL, raw) : structuredClone(DEFAULT_SETTINGS);
   fixRoster(s, Array.isArray(raw?.people));
   return s;
@@ -116,14 +102,9 @@ export function normSettings(raw) {
 // ponytail: a crew renamed in the old tab matches no name, so it gets a new id and its people show under "Not on a
 // crew" (ids kept). Match by members too if old tabs ever rename crews.
 export function loadSettings() {
-<<<<<<< ours
-  const raw = load(KEYS.settings, null), roster = load(KEYS.roster, null), pin = load(KEYS.pin, '');
-  const old = raw && typeof raw === 'object' && !Array.isArray(raw.people) && Array.isArray(roster?.people);
-  const s = normSettings(old ? withRoster(raw, shape(ROSTER_TPL, roster)) : raw);
+  const raw = load(KEYS.settings, null), pin = load(KEYS.pin, ''), hub = load(KEYS.hub, null);
+  const s = normSettings(raw);
   if (raw && Array.isArray(raw.people)) save(KEYS.roster, rosterOf(s)); // kept current from the first open of this version
-=======
-  const s = normSettings(load(KEYS.settings, null)), pin = load(KEYS.pin, ''), hub = load(KEYS.hub, null);
->>>>>>> theirs
   if (PIN_FORMAT.test(pin)) s.pin = pin;
   if (hub && typeof hub === 'object') for (const k of HUB_FIELDS) s[k] = typeof hub[k] === 'string' ? hub[k] : ''; // its own key wins over an old tab's settings, a disconnect included
   return s;
@@ -150,7 +131,7 @@ export const cleanName = name => String(name ?? '').replace(/,/g, ' ').trim().re
 const split = members => (members || '').split(',').map(cleanName).filter(nameKey);
 // ponytail: an id made while migrating comes from the name (a 53-bit hash), so phones migrating the same lists agree.
 // New people and crews get random ids. A tab still on the old version (its save drops people and crew ids) gets the
-// roster back from its own key (ROSTER, normSettings), so random ids and two people sharing a name survive it.
+// roster back from its own key (KEYS.roster, normSettings), so random ids and two people sharing a name survive it.
 const hash = s => {
   let a = 0xdeadbeef, b = 0x41c6ce57;
   for (let i = 0; i < s.length; i++) { const c = s.charCodeAt(i); a = Math.imul(a ^ c, 2654435761); b = Math.imul(b ^ c, 1597334677); }
@@ -603,15 +584,16 @@ const ICONS = {
 export const icon = (name, cls = '') => `<svg class="i${cls ? ' ' + cls : ''}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${ICONS[name] || ''}</svg>`;
 
 // The large title each screen opens with: the title, a quiet line under it (sub), the screen's ⋯ menu (more: the
-// data-act it opens) and, on a drill-in screen, the way back (back: { go, label }, a data-go address). render() clears
-// it, so a screen that doesn't call it shows no stale title.
+// data-act it opens) and, on a drill-in screen, the way back (back: { go, label }, a data-go address; or { act, v,
+// label }, a tap the screen handles). render() clears it, so a screen that doesn't call it shows no stale title.
 export function screenHead(title, { sub = '', more = '', back = null } = {}) {
   const $ = id => globalThis.document?.getElementById(id);
   if (!$('title')) return;
   $('title').textContent = title;
   $('subtitle').textContent = sub;
   $('titleMore').innerHTML = more ? `<button class="icon-btn more" data-act="${esc(more)}" aria-label="${L('More actions')}">${icon('more')}</button>` : '';
-  $('headBack').innerHTML = back ? `<button class="link back" data-go="${esc(back.go)}">${icon('back')}<span>${esc(back.label)}</span></button>` : '';
+  const to = back?.act ? `data-act="${esc(back.act)}" data-v="${esc(back.v ?? '')}"` : `data-go="${esc(back?.go)}"`; // a drill-in inside a screen goes back by its tap
+  $('headBack').innerHTML = back ? `<button class="link back" ${to}>${icon('back')}<span>${esc(back.label)}</span></button>` : '';
 }
 
 // An Undo offer that lasts ms. tap() runs undo once, if the offer is still open; it ends by itself after ms, or when
@@ -973,7 +955,8 @@ export function retryUploads(s) {
 
 // ---------- settings (office only: behind the passcode) ----------
 
-export function settingsView(s) {
+// hub: the Settings > Hub group (live.mjs hubSettingsView), between the checks and the review folder.
+export function settingsView(s, hub = '') {
   const roles = ['Crew member', 'Superintendent', 'Project manager']; // a crew phone (set on its first run) shows no office words
   const n = queued();
   return `<div class="settings">
@@ -991,6 +974,7 @@ export function settingsView(s) {
       ${s.people.some(p => !p.crewId) ? `<div class="crew-edit"><h4 class="caption">${L('Not on a crew')}</h4><div class="fgroup">${whoRows(s, '')}</div></div>` : ''}
       <button class="btn wide" data-act="addCrew">${L('+ Add crew')}</button>`)}
     ${setSec(L('Finish / accuracy checks'), linesBox('s.checks', s.checks, L('Finish / accuracy checks')), L('One per line. Tap them onto a task as required checks.'))}
+    ${hub}
     ${setSec(L('Review folder'), `<div class="fgroup">${field(L('Folder upload link'), 's.folderUrl', s.folderUrl, { wide: true, ph: 'https://script.google.com/macros/s/.../exec', mode: 'url' })}
       ${field(L('Site code'), 's.siteCode', s.siteCode, { type: 'password' })}${actRow('testFolder', L('Test the connection'))}</div>`,
       [n ? L('Waiting to upload: {n}', { n }) : L('Nothing waiting to upload.'), L('Optional PDF filing needs an owner-approved Google Drive receiver. Enter its upload link and code manually on each phone that should upload. Task links do not carry the upload code or change these settings.')])}
@@ -1002,8 +986,8 @@ export function settingsView(s) {
 }
 // iOS Settings: a caption over each grouped list and quiet notes under it. Fields are .fgroup rows (the Daily
 // report's); a choice is a row that opens the phone's own picker; an action is a tinted row.
-const setSec = (title, body, notes = []) => `<section class="set"><h3 class="caption">${title}</h3>${body}${[].concat(notes).map(t => `<p class="hint set-note">${t}</p>`).join('')}</section>`;
-const actRow = (act, label) => `<button type="button" class="row set-act" data-act="${act}">${label}</button>`;
+export const setSec = (title, body, notes = []) => `<section class="set"><h3 class="caption">${title}</h3>${body}${[].concat(notes).map(t => `<p class="hint set-note">${t}</p>`).join('')}</section>`;
+export const actRow = (act, label, attrs = '') => `<button type="button" class="row set-act" data-act="${act}"${attrs}>${label}</button>`;
 const linesBox = (k, list, label) => `<div class="fgroup"><label class="field"><textarea data-k="${k}" data-lines rows="6" aria-label="${esc(label)}">${esc(list.join('\n'))}</textarea></label></div>`;
 // The name on the left, the value on the right; the select lies over the whole row, so a tap anywhere opens the
 // phone's picker. A value not in the list (no role yet) shows blank, so picking the first option still counts.
@@ -1024,7 +1008,7 @@ function crewEditor(s, c, i, ph) {
     </div><button class="link danger" data-act="delCrew" data-i="${i}">${L('Remove {name}', { name: esc(crew) })}</button></div>`;
 }
 // The people on a crew (crewId '': on none) as rows. The initials are drawn by CSS from data-ini, so a row's text is the name alone.
-const initials = name => name.split(' ').slice(0, 2).map(w => Array.from(w)[0]).join('').toUpperCase();
+export const initials = name => name.split(' ').slice(0, 2).map(w => Array.from(w)[0]).join('').toUpperCase();
 const whoRows = (s, crewId) => s.people.filter(p => p.crewId === crewId).map(p =>
   `<button type="button" class="row who-row" data-act="pEdit" data-pid="${esc(p.id)}" data-ini="${esc(initials(p.name))}"><span class="row-main">${esc(p.name)}</span>${icon('chev', 'chev')}</button>`).join('');
 
@@ -1074,7 +1058,6 @@ async function addFromSettings(s, el) {
 // hours keep the names either way. A removed crew's people wait under "Not on a crew" and go back with the Undo.
 export async function settingsAct(act, s, el, change = f => { f(s); save(KEYS.settings, s); }) {
   if (act === 'addCrew') addCrew(s, L('Crew {x}', { x: String.fromCharCode(65 + s.crews.length) }));
-<<<<<<< ours
   if (act === 'delCrew') {
     const at = +el.dataset.i, c = s.crews[at];
     if (c) {
@@ -1087,10 +1070,6 @@ export async function settingsAct(act, s, el, change = f => { f(s); save(KEYS.se
       }) });
     }
   }
-=======
-  const dc = act === 'delCrew' && s.crews[el.dataset.i]; // by id after the question: a pull may reorder the list while it is open
-  if (dc && await ask(L('Remove {name} from the crew list? Existing sheets keep their crew name.', { name: dc.name }), L('Remove'), 'danger')) removeCrew(s, dc.id);
->>>>>>> theirs
   if (act === 'pAdd') await addFromSettings(s, el);
   if (act === 'pEdit') await editPerson(s, el.dataset.pid);
   if (act === 'pDel') {
@@ -1116,21 +1095,22 @@ export async function settingsAct(act, s, el, change = f => { f(s); save(KEYS.se
 
 // Everything this phone keeps, as stored, except the hub key: a backup file gets passed around, and the PM can send a
 // new invite. The device secret goes along, so a restored phone keeps its own hours.
+const SYNC = 'schwab.hubSync'; // sync.mjs keeps it, and restoreData below says why it travels with a backup
 export function backupData() {
-  const data = Object.fromEntries(Object.values(KEYS).map(k => [k, load(k, null)]));
+  const data = Object.fromEntries([...Object.values(KEYS), SYNC].map(k => [k, load(k, null)]));
   for (const k of [KEYS.settings, KEYS.hub]) if (data[k] && typeof data[k] === 'object') data[k] = { ...data[k], hubKey: '' };
   return data;
 }
 export const isBackup = data => !!data && typeof data === 'object' && Object.values(KEYS).some(k => k in data);
-<<<<<<< ours
 // Writes every key the backup has; false if the phone ran out of space part way. A backup's settings bring their own
-// roster (or, from before people had ids, none), never this phone's old one.
-export const restoreData = data => (data[KEYS.settings] == null || save(KEYS.roster, null)) && Object.values(KEYS).every(k => data[k] == null || save(k, data[k]));
-=======
-// Writes every key the backup has; false if the phone ran out of space part way. The hub sync's record of what the hub has
-// (sync.mjs schwab.hubSync) described the old stores: without it the next round merges pull-first, so newer hub copies win.
-export const restoreData = data => { try { localStorage.removeItem('schwab.hubSync'); } catch {} return Object.values(KEYS).every(k => data[k] == null || save(k, data[k])); };
->>>>>>> theirs
+// roster (or, from before people had ids, none), never this phone's old one. The hub sync's record of what the hub had of
+// each record (sync.mjs schwab.hubSync) comes along and is written last: it describes the restored records, so only what
+// was unsynced at backup time goes up and what the hub got since comes back. This phone's own record described the old
+// stores, so it goes first; with none in the backup (or a restore cut short) the next round merges pull-first.
+export const restoreData = data => {
+  try { localStorage.removeItem(SYNC); } catch {}
+  return (data[KEYS.settings] == null || save(KEYS.roster, null)) && [...Object.values(KEYS), SYNC].every(k => data[k] == null || save(k, data[k]));
+};
 
 export async function restore(file) {
   let data;

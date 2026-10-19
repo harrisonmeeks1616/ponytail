@@ -11,14 +11,9 @@
 </head>
 <body>
 <header class="top"><div class="top-in">
-<<<<<<< ours
   <svg class="mark" viewBox="0 0 24 24" width="30" height="30" aria-hidden="true"><rect width="24" height="24" rx="6.5"/><path d="M13.6 3.5 6.5 13.4h4.6l-1.2 7.1 7.6-10.4h-4.7z"/></svg>
   <div class="brand"><h1>H.A. Sack-Electrical</h1><p>Sack Company-Electrical</p></div>
-=======
-  <svg class="mark" viewBox="0 0 24 24" width="32" height="32" aria-hidden="true"><rect width="24" height="24" rx="6" fill="var(--accent)"/><path d="M13.6 3.5 6.5 13.4h4.6l-1.2 7.1 7.6-10.4h-4.7z" fill="var(--brand)"/></svg>
-  <div class="grow brand"><h1>H.A. Sack-Electrical</h1><p>Sack Company-Electrical</p></div>
   <span id="hubDot"></span>
->>>>>>> theirs
   <button class="icon-btn lang" id="langBtn" data-act="toggleLang" aria-label="Español">ES</button>
   <button class="icon-btn" id="gearBtn" data-go="settings" hidden></button>
   <button class="icon-btn" id="lockBtn" data-act="lockBtn" aria-label="Office sign-in"></button>
@@ -37,13 +32,8 @@ import {
   nextId, renumberClashes, sameNumber, ensureDevice,
   today, addDays, niceDate, nowHM, span, fmtMin, t12, stamp, hrs, timeOf, field, datalist, seg, setPath, getPath, readInput, dateBar,
   toast, sheet, ask, sendSheet, pasteSheet, makePdf, savePdf, fileAway, retryUploads, settingsView, settingsAct, restore,
-<<<<<<< ours
   registerSW, crewVar as cv, L, setLang, getLang, COMPANY, COMPANY_ALT, COMPANIES, letterhead, icon, screenHead, busy,
-  UNLOCK, PIN_FORMAT, hasPin, adoptPin, setPin, pinHash, tryPin, unlocked, signIn, signOut,
-=======
-  registerSW, dateBar, crewVar as cv, L, setLang, getLang, COMPANIES, letterhead,
-  UNLOCK, hasPin, adoptPin, setPin, pinHash, tryPin, unlocked, signIn, signOut, onSave,
->>>>>>> theirs
+  UNLOCK, PIN_FORMAT, hasPin, adoptPin, setPin, pinHash, tryPin, unlocked, signIn, signOut, onSave,
 } from './shared.mjs';
 import { renderOffice, reportAct, reportInput, openReport, openHours, hoursInput, workerChange, fileReportIfChanged, reloadReports, sectionToggle, hasReports, attachShifts,
   reportsNow, crewNow, dropReport, setTextField } from './report.mjs';
@@ -126,12 +116,8 @@ function enlist(t) {
 // #live, #records/<people|sheets|reports> and #hub (the hub's status, open to a crew phone) are the hub screens of live.mjs.
 const VIEWS = ['clock', 'report', 'settings', 'live', 'records', 'hub'];
 const isPM = () => S.role === 'Project manager';
-<<<<<<< ours
 const crewPhone = () => S.role === 'Crew member'; // set on the first run: no office words on this phone unless Settings changes it
-const needsOffice = vw => ['report', 'settings'].includes(vw.v) || (vw.v === 'clock' && isPM()) || (vw.v === 'task' && find(vw.uid)?.origin !== 'link');
-=======
 const needsOffice = vw => ['report', 'settings', 'live', 'records'].includes(vw.v) || (vw.v === 'clock' && isPM()) || (vw.v === 'task' && find(vw.uid)?.origin !== 'link');
->>>>>>> theirs
 
 function route() {
   if (setup) return; // the first run is still asking; it routes when it's done
@@ -239,8 +225,8 @@ const renumbered = moved => moved.map(([t, old]) => ' ' + L('Your sheet {old} is
 // ---------- views ----------
 
 // The tab bar: a crew phone (or any phone signed out) has Today and its time clock; signed in, the office screens.
-// Live and Records join here when the hub is wired: [view, label] in the list, an icon name in TAB_ICON.
-const TAB_ICON = { day: 'today', clock: 'clock', report: 'report' };
+// An office phone on a hub also has Live and Records (live.mjs).
+const TAB_ICON = { day: 'today', clock: 'clock', report: 'report', live: 'live', records: 'records' };
 function header() {
   const on = office(), lb = document.getElementById('langBtn'), lock = document.getElementById('lockBtn'), gear = document.getElementById('gearBtn'), tabs = document.getElementById('officeTabs');
   document.body.classList.toggle('office', on);
@@ -253,21 +239,14 @@ function header() {
   gear.setAttribute('aria-label', L('Settings'));
   document.getElementById('proj').textContent = [S.project, S.site].filter(Boolean).join(' · ');
   tabs.setAttribute('aria-label', L('Screens'));
-<<<<<<< ours
-  const here = { clock: 'clock', report: 'report', settings: '' }[view.v] ?? 'day';
-  const list = on ? [['day', L('Tasks')], ['clock', isPM() ? L('Hours') : L('Time clock')], ['report', L('Report')]] : [['day', L('Today')], ['clock', L('Time clock')]];
+  const here = { clock: 'clock', report: 'report', live: 'live', records: 'records', settings: '', hub: '' }[view.v] ?? 'day';
+  const list = on ? [['day', L('Tasks')], ['clock', isPM() ? L('Hours') : L('Time clock')], ['report', L('Report')], ...(hubOn() ? [['live', L('Live')], ['records', L('Records')]] : [])]
+    : [['day', L('Today')], ['clock', L('Time clock')]];
   tabs.innerHTML = list.map(([v, label]) => {
     const locked = v === 'clock' && isPM() && !on; // the PM's time clock is the crew timesheet, behind the passcode
-    return `<a href="#${v}/${day}"${v === here ? ' aria-current="page"' : ''}${locked ? ` aria-label="${esc(`${label}, ${L('needs the office passcode')}`)}"` : ''}>${icon(TAB_ICON[v])}<span>${label}${locked ? icon('lock', 'lock') : ''}</span></a>`;
+    return `<a href="#${v}${v === 'live' || v === 'records' ? '' : '/' + day}"${v === here ? ' aria-current="page"' : ''}${locked ? ` aria-label="${esc(`${label}, ${L('needs the office passcode')}`)}"` : ''}>${icon(TAB_ICON[v])}<span>${label}${locked ? icon('lock', 'lock') : ''}</span></a>`;
   }).join('');
-=======
-  const here = { clock: 'clock', report: 'report', live: 'live', records: 'records', settings: '', hub: '' }[view.v] ?? 'day';
-  const locked = `<svg class="lock" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" aria-hidden="true">${LOCK.shut}</svg>`;
-  const hubTabs = on && hubOn() ? [['live', L('Live')], ['records', L('Records')]] : []; // office phones on a hub
-  tabs.innerHTML = [['day', L('Tasks')], ['clock', isPM() && on ? L('Crew hours') : L('Time clock')], ['report', L('Daily report')], ...hubTabs]
-    .map(([v, label]) => `<a href="#${v}${v === 'live' || v === 'records' ? '' : '/' + day}"${v === here ? ' aria-current="page"' : ''}${(v === 'report' || (v === 'clock' && isPM())) && !on ? ` aria-label="${esc(`${label}, ${L('needs the office passcode')}`)}">${label}${locked}` : `>${label}`}</a>`).join('');
   document.getElementById('hubDot').innerHTML = statusDot(sync.hubStatus(), getLang(), role() === 'crew' ? 'hub' : 'live'); // nothing without a hub
->>>>>>> theirs
 }
 
 let drawnOn = today(); // the day the screen was last drawn, to notice midnight
@@ -276,19 +255,14 @@ function render() {
   drawnOn = today();
   dups = hubOn() ? sync.duplicateShortIds(T) : null;
   header();
-<<<<<<< ours
   screenHead(''); // each screen sets its own title
-  bar.hidden = view.v === 'settings';
-  bar.innerHTML = ''; // and puts its one primary action here
-  if (view.v === 'settings') { screenHead(L('Settings'), { back: { go: `day/${day}`, label: L('Back to task sheets') } }); app.innerHTML = settingsView(S); }
-=======
   bar.hidden = ['settings', 'live', 'records', 'hub'].includes(view.v);
-  const back = `<button class="link" data-go="day/${day}">‹ ${L('Back to task sheets')}</button>`;
-  if (view.v === 'settings') app.innerHTML = `${back}${settingsView(S)}${hubSettingsView(ctx())}`;
-  else if (view.v === 'hub') app.innerHTML = back + hubSettingsView(ctx());
+  bar.innerHTML = ''; // and puts its one primary action here
+  const back = { go: `day/${day}`, label: L('Back to task sheets') };
+  if (view.v === 'settings') { screenHead(L('Settings'), { back }); app.innerHTML = settingsView(S, hubSettingsView(ctx())); }
+  else if (view.v === 'hub') { screenHead(L('Hub'), { back }); app.innerHTML = `<div class="settings">${hubSettingsView(ctx())}</div>`; } // a crew phone's way to the hub (the dot)
   else if (view.v === 'live') app.innerHTML = liveView(ctx());
   else if (view.v === 'records') app.innerHTML = recordsView(ctx(), view.sub);
->>>>>>> theirs
   else if (view.v === 'clock' || view.v === 'report') renderOffice(view.v, S, day);
   else if (view.v === 'task') renderTask(current());
   else renderBoard();
@@ -330,13 +304,8 @@ function renderBoard() {
     ${office() ? '' : `<button class="btn wide open-link" data-act="paste">${L('Open a link')}</button>`}
     ${office() || crewPhone() ? '' : `<button class="link sign-in" data-act="lockBtn">${L('Office sign-in')}</button>`}`
     : !office()
-<<<<<<< ours
       ? `<div class="empty">${icon('today', 'empty-ic')}<h2>${L('No task sheets for {date}', { date: niceDate(day) })}</h2>
-        <p>${L('Open the link your superintendent texted you, or paste it here.')}</p>
-=======
-      ? `<div class="empty"><h2>${L('No task sheets for {date}', { date: niceDate(day) })}</h2>
         <p>${hubOn() ? L('Sheets for your crew show up here by themselves. A texted link still works too.') : L('Open the link your superintendent texted you, or paste it here.')}</p>
->>>>>>> theirs
         <button class="btn primary" data-act="paste">${L('Open a link someone sent you')}</button>
         ${crewPhone() ? '' : `<button class="link" data-act="lockBtn">${L('Superintendent or PM? Sign in to the office screens')}</button>`}</div>`
       : `<div class="empty">${icon('today', 'empty-ic')}<h2>${L('No task sheets for {date}', { date: niceDate(day) })}</h2>
@@ -359,14 +328,15 @@ function row(t) {
     <span class="row-main"><span class="row-title">${t.area ? `<span class="area">${esc(t.area)}</span> ` : ''}<span class="tid">${esc(t.id || L('New task'))}</span></span>
       <span class="row-sub">${[`<span class="who"><i class="dot"></i> ${esc(t.crew || L('No crew yet'))}</span>`, when && `<span class="nw">${esc(when)}</span>`,
         `<span class="stage" data-tone="${tone}">${esc(label)}</span>`].filter(Boolean).join(' ·&nbsp;')}</span>
-      ${sameNumber(T, t) ? `<span class="pill" data-tone="warn">${L('Same number as another sheet')}</span>` : ''}</span>
+      ${same(t) ? `<span class="pill" data-tone="warn">${L('Same number as another sheet')}</span>` : ''}</span>
     ${t.est ? `<span class="row-end">${esc(L('{n} hrs', { n: t.est }))}</span>` : ''}${icon('chev', 'chev')}
   </a>`;
 }
 
 // Two sent sheets with the same date and number (made on two office phones offline): both say so until one is renumbered.
 // With a hub, any two (a sheet that came only through the hub was never texted, so it has no sentAt).
-const clash = (t, more = '') => ((dups ? dups.has(t.uid) : sameNumber(T, t)) ? `<p class="hint"><span class="pill" data-tone="warn">${L('Same number as another sheet')}</span>${more}</p>` : '');
+const same = t => (dups ? dups.has(t.uid) : sameNumber(T, t));
+const clash = (t, more = '') => (same(t) ? `<p class="hint"><span class="pill" data-tone="warn">${L('Same number as another sheet')}</span>${more}</p>` : '');
 
 function renderTask(t) {
   const crewSide = t.origin === 'link';
@@ -387,10 +357,13 @@ function renderTask(t) {
 }
 
 // The calm note at the top of a sheet: on a crew phone, the office's message; on the office phone, where review stands.
+// The office's words show in the reader's language on a hub (live.mjs txView; as typed without one).
 function banner(t, crewSide) {
-  const box = (tone, title, text, foot, more = '') => `<div class="banner" data-tone="${tone}" role="note"><b>${esc(title)}</b>${text ? `<p>${esc(text)}</p>` : ''}${foot ? `<small>${esc(foot)}</small>` : ''}${more}</div>`;
-  if (crewSide) return t.reply ? box('info', L('Message from the office'), t.reply, [t.replyBy, t.replyAt && stamp(t.replyAt)].filter(Boolean).join(' · ')) : '';
-  if (t.review) return box(t.review === 'Accepted' ? 'good' : 'warn', L(t.review), t.followUp, t.reviewer && L('by {name}', { name: t.reviewer }));
+  const box = (tone, title, html, foot, more = '') => `<div class="banner" data-tone="${tone}" role="note"><b>${esc(title)}</b>${html ? `<p>${html}</p>` : ''}${foot ? `<small>${esc(foot)}</small>` : ''}${more}</div>`;
+  const cx = ctx(), tx = text => text && txView(cx, text, t.aLang);
+  const reviewed = () => (t.review ? box(t.review === 'Accepted' ? 'good' : 'warn', L(t.review), tx(t.followUp), t.reviewer && L('by {name}', { name: t.reviewer })) : '');
+  if (crewSide) return (t.reply ? box('info', L('Message from the office'), tx(t.reply), [t.replyBy, t.replyAt && stamp(t.replyAt)].filter(Boolean).join(' · ')) : '') + reviewed(); // the review reaches a crew phone through the hub
+  if (t.review) return reviewed();
   if (t.status && view.tab !== 'review') return box('info', L('Finished · ready for review'), '', [L(t.status), t.gotAt && stamp(t.gotAt)].filter(Boolean).join(' · '),
     `<button class="link" data-act="tab" data-v="review">${L('Review')}${icon('chev')}</button>`);
   return '';
@@ -446,22 +419,10 @@ function brief(t) {
   const [label, tone] = stage(t), c = ctx(), tx = (text, lang) => txView(c, text, lang); // as typed with no hub
   const row = (k, html) => (html ? `<dt>${esc(k)}</dt><dd>${html}</dd>` : ''); // html: already escaped
   const note = n => (n ? ' · ' + esc(n) : '');
-<<<<<<< ours
   return `<section class="brief" style="${crewVar(t.crew, t.crewId)}">
     <div class="brief-top"><span class="who"><i class="dot"></i> ${esc(t.crew || L('Crew'))}</span><span class="pill" data-tone="${tone}">${esc(label)}</span></div>
-    ${t.scope ? `<p class="scope-text">${esc(t.scope)}</p>` : ''}
-    <dl class="kv info">${row(L('Drawings'), esc(t.refs))}${row(L('Planned'), t.pStart && esc(fromTo(t.pStart, t.pStop)))}${row(L('Check in at'), esc(t12(t.checkIn)))}
-=======
-  const by = (...bits) => bits.filter(Boolean).map(esc).join(' · ');
-  // With a hub the office's message and review reach the crew's sheet on their next pull.
-  const fromOffice = hubOn() ? (t.reply ? `<div class="live-note"><span class="label">${by(L('Message'), t.replyBy, t.replyAt && stamp(t.replyAt))}</span>${tx(t.reply, t.aLang)}</div>` : '')
-    + (t.review ? `<div class="live-note"><span class="label">${by(`${L('Review')}: ${L(t.review)}`, t.reviewer)}</span>${t.followUp ? tx(t.followUp, t.aLang) : ''}</div>` : '') : '';
-  return `<section class="card brief" style="${crewVar(t.crew, t.crewId)}">
-    <div class="row1"><span class="label">${esc(t.crew || L('Crew'))} · ${esc(L('Task {id}', { id: t.id }))}</span><span class="pill" data-tone="${tone}">${esc(label)}</span></div>
-    ${fromOffice}<div class="big">${t.floor ? esc(t.floor) : esc(L('Floor not set'))}${t.area ? ' · ' + tx(t.area, t.aLang) : ''}</div>
     ${t.scope ? `<p class="scope-text">${tx(t.scope, t.aLang)}</p>` : ''}
-    <dl class="kv">${row(L('Drawings'), tx(t.refs, t.aLang))}${row(L('Planned'), t.pStart && esc(fromTo(t.pStart, t.pStop)))}${row(L('Check in at'), esc(t12(t.checkIn)))}
->>>>>>> theirs
+    <dl class="kv info">${row(L('Drawings'), tx(t.refs, t.aLang))}${row(L('Planned'), t.pStart && esc(fromTo(t.pStart, t.pStop)))}${row(L('Check in at'), esc(t12(t.checkIn)))}
       ${row(L('Allotted'), t.allot && esc(L('{n} hrs', { n: t.allot })) + note(t.allotNote))}${row(L('Estimate'), t.est && esc(L('{n} hrs', { n: t.est })) + note(t.estNote))}
       ${row(L('Crew'), t.members.map(m => esc(m) + (nameKey(m) && nameKey(m) === nameKey(S.worker) ? ` (${esc(L('you'))})` : '')).join(', '))}${row(L('Assigned'), esc(niceDate(t.date) + (t.by ? ' · ' + L('by {name}', { name: t.by }) : '')))}</dl></section>`;
 }
@@ -477,17 +438,11 @@ function workedLine(t) {
 
 // The crew's part: big round checkboxes, one Time & status card (Start and Stop, the status), then the notes.
 function results(t) {
-<<<<<<< ours
-  const d = doneCount(t), n = t.items.length, c = t.checks.filter(x => x.done).length;
-  const tick = (list, it, i) => `<button class="tick" data-act="tick" data-list="${list}" data-i="${i}" aria-pressed="${it.done}"><span class="box">✓</span><span class="txt">${esc(it.text)}</span>${it.at ? `<small>${timeOf(it.at)}</small>` : ''}</button>`;
+  const d = doneCount(t), n = t.items.length, c = t.checks.filter(x => x.done).length, cx = ctx();
+  // a step's words in the reader's language; no tap to the original inside the tick button (that tap ticks)
+  const tick = (list, it, i) => `<button class="tick" data-act="tick" data-list="${list}" data-i="${i}" aria-pressed="${it.done}"><span class="box">✓</span><span class="txt">${txView(cx, it.text, t.aLang, getLang(), { toggle: false })}</span>${it.at ? `<small>${timeOf(it.at)}</small>` : ''}</button>`;
   // Start and Stop: a big button until tapped, then the time it took, which can be fixed by hand.
   const clock = (k, label, now, primary) => `<div class="clockslot"><span>${label}</span>${t[k]
-=======
-  const d = doneCount(t), n = t.items.length, c = ctx();
-  // a step's words in the reader's language; no tap to the original inside the tick button (that tap ticks)
-  const tick = (list, it, i) => `<button class="tick" data-act="tick" data-list="${list}" data-i="${i}" aria-pressed="${it.done}"><span class="box">✓</span><span class="txt">${txView(c, it.text, t.aLang, getLang(), { toggle: false })}</span>${it.at ? `<small>${timeOf(it.at)}</small>` : ''}</button>`;
-  const clock = (k, label, now, primary) => t[k]
->>>>>>> theirs
     ? `<input type="time" data-k="t.${k}" value="${esc(t[k])}" aria-label="${label}">`
     : `<button class="btn big${primary ? ' primary' : ''}" data-act="clock" data-v="${k}">${now}</button>`}</div>`;
   return `${n ? `<section class="steps"><h3 class="section-h">${L('Check off as you go')}<small>${L('{d} of {n} done', { d, n })}</small></h3>
@@ -502,41 +457,23 @@ function results(t) {
       <input type="number" inputmode="numeric" min="0" step="any" data-k="t.delay" value="${t.delay || ''}" placeholder="0" aria-label="${L('Delay minutes')}">
       <button class="x" data-act="delay" data-v="15" aria-label="${L('15 minutes more')}">+</button></div></div>
     <div class="field"><span>${L('Status')}</span>${seg('t.status', t.status, [['Complete', 'good', L('Complete')], ['Partial', 'warn', L('Partial')], ['Blocked', 'bad', L('Blocked')]])}</div>
-<<<<<<< ours
   </section>
   <section class="card notes"><h2>${L('Notes')}</h2>
-    ${field(L('Work / quantity completed (locations and details)'), 't.doneText', t.doneText, { rows: 3 })}
-    ${field(L('Work remaining'), 't.remain', t.remain, { rows: 2 })}
-    ${field(L('Crew comments / concerns'), 't.comments', t.comments, { rows: 3, ph: L('What helped or slowed the work? Quality, rework, support needed') })}
-=======
-    ${txField(c, L('Work / quantity completed (locations and details)'), 't.doneText', t.doneText, { rows: 3 }, t.cLang)}
-    ${txField(c, L('Work remaining'), 't.remain', t.remain, { rows: 2 }, t.cLang)}
-  </section>
-  <section class="card"><h2><span class="num">4</span>${L('Crew comments / concerns')}</h2>
-    ${txField(c, L('What helped or slowed the work? Quality, rework, support needed'), 't.comments', t.comments, { rows: 3 }, t.cLang)}
->>>>>>> theirs
+    ${txField(cx, L('Work / quantity completed (locations and details)'), 't.doneText', t.doneText, { rows: 3 }, t.cLang)}
+    ${txField(cx, L('Work remaining'), 't.remain', t.remain, { rows: 2 }, t.cLang)}
+    ${txField(cx, L('Crew comments / concerns'), 't.comments', t.comments, { rows: 3, ph: L('What helped or slowed the work? Quality, rework, support needed') }, t.cLang)}
     ${field(L('Crew / lead'), 't.lead', t.lead)}
   </section>`;
 }
 
 function review(t) {
-<<<<<<< ours
-  const [label, tone] = stage(t), w = worked(t);
+  const [label, tone] = stage(t), w = worked(t), cx = ctx(), tx = text => txView(cx, text, t.cLang); // the crew's words in the reader's language
   const row = (k, html, cls = '') => (html ? `<dt${cls}>${esc(k)}</dt><dd${cls}>${html}</dd>` : ''), long = ' class="long"'; // long: typed text, stacked
   return `<section class="brief" style="${crewVar(t.crew, t.crewId)}"><div class="brief-top"><span class="who"><i class="dot"></i> ${esc(t.crew || L('Crew'))}</span><span class="pill" data-tone="${tone}">${esc(label)}</span></div>
     ${t.status || t.aStart ? `<dl class="kv info">${row(L('Status'), esc(t.status ? L(t.status) : L('In progress')))}${row(L('Steps'), t.items.length && esc(L('{d} of {n} done', { d: doneCount(t), n: t.items.length })))}
       ${row(L('Checks'), t.checks.length && esc(L('{d} of {n} done', { d: t.checks.filter(c => c.done).length, n: t.checks.length })))}
       ${row(L('Worked'), w && esc(`${fmtMin(w)} · ${L('{n} crew-hrs', { n: hrs(w / 60 * (t.size || 1)) })}`))}${row(L('Estimate'), t.est && esc(`${L('{n} hrs', { n: t.est })} · ${L('{n} crew-hrs', { n: hrs(t.est * (t.size || 1)) })}`))}
-      ${row(L('Delays'), t.delay && esc(L('{n} min', { n: t.delay })))}${row(L('Completed'), t.doneText && esc(t.doneText), long)}${row(L('Remaining'), t.remain && esc(t.remain), long)}${row(L('Crew notes'), t.comments && esc(t.comments), long)}
-=======
-  const [label, tone] = stage(t), w = worked(t), c = ctx(), tx = text => txView(c, text, t.cLang); // the crew's words in the reader's language
-  const row = (k, html) => (html ? `<dt>${esc(k)}</dt><dd>${html}</dd>` : '');
-  return `<section class="card brief" style="${crewVar(t.crew, t.crewId)}"><div class="row1"><span class="label">${esc(t.crew || L('Crew'))} · ${esc(L('Task {id}', { id: t.id }))} · ${t.floor ? esc(t.floor) : ''}</span><span class="pill" data-tone="${tone}">${esc(label)}</span></div>
-    ${t.status || t.aStart ? `<dl class="kv">${row(L('Status'), esc(t.status ? L(t.status) : L('In progress')))}${row(L('Steps'), t.items.length && esc(L('{d} of {n} done', { d: doneCount(t), n: t.items.length })))}
-      ${row(L('Checks'), t.checks.length && esc(L('{d} of {n} done', { d: t.checks.filter(c => c.done).length, n: t.checks.length })))}
-      ${row(L('Worked'), w && esc(`${fmtMin(w)} · ${L('{n} crew-hrs', { n: hrs(w / 60 * (t.size || 1)) })}`))}${row(L('Estimate'), t.est && esc(`${L('{n} hrs', { n: t.est })} · ${L('{n} crew-hrs', { n: hrs(t.est * (t.size || 1)) })}`))}
-      ${row(L('Delays'), t.delay && esc(L('{n} min', { n: t.delay })))}${row(L('Completed'), t.doneText && tx(t.doneText))}${row(L('Remaining'), t.remain && tx(t.remain))}${row(L('Crew notes'), t.comments && tx(t.comments))}
->>>>>>> theirs
+      ${row(L('Delays'), t.delay && esc(L('{n} min', { n: t.delay })))}${row(L('Completed'), t.doneText && tx(t.doneText), long)}${row(L('Remaining'), t.remain && tx(t.remain), long)}${row(L('Crew notes'), t.comments && tx(t.comments), long)}
       ${row(L('Received'), esc(stamp(t.gotAt)))}</dl>`
     : `<p class="hint">${L("No results from the crew yet. They'll show here when the crew sends them, or fill them in yourself on the Crew results tab.")}</p>`}</section>`
   + group(L('Lead / superintendent review'), `
@@ -642,11 +579,13 @@ async function firstRun() {
   const crew = 'Crew member', a = { lang: '', role: '', name: '' };
   let step = 'lang', msg = '';
   // Opened from a texted link: its names to pick from, and the office code it carries (kept in memory until the end).
-  let linked = [];
+  // A hub invite answers who uses this phone itself: after the language, its join sheet asks the rest (openJoin).
+  let linked = [], invite = null;
   const readLink = async () => {
     if (!location.hash.startsWith('#p=')) return;
     try {
       const data = await unpack(location.hash.slice(3));
+      if (data.kind === 'join') invite = data;
       linked = [data.task, ...(Array.isArray(data.tasks) ? data.tasks : [])].filter(Boolean).flatMap(x => normTask(x).members);
       if (['task', 'result', 'day', 'report'].includes(data.kind) && !hasPin(S) && PIN_FORMAT.test(data.pin)) S.pin = data.pin;
     } catch {} // a damaged link says so once the phone is set up
@@ -711,8 +650,11 @@ async function firstRun() {
       if (!b) return;
       const v = b.dataset.v;
       switch (b.dataset.fr) {
-        case 'lang': a.lang = v; setLang(v); step = 'role'; return draw();
-        case 'role': a.role = v; await readLink(); step = 'name'; return draw('#frName');
+        case 'lang':
+          a.lang = v; setLang(v); await readLink();
+          if (invite) { a.role = invite.role === 'crew' ? crew : 'Superintendent'; return finish(); }
+          step = 'role'; return draw();
+        case 'role': a.role = v; step = 'name'; return draw('#frName');
         case 'back': step = v; msg = ''; return draw();
         case 'pick': d.querySelector('#frName').value = v; return next(); // one tap on a known name answers
         case 'next': return next();
@@ -894,24 +836,9 @@ async function act(a, el) {
       toast(a === 'carry' ? L('Carried to {date}', { date: niceDate(date) }) : L('Duplicated. Change the crew or floor.'));
       return go(`task/${c.uid}/assign`);
     }
-<<<<<<< ours
-    case 'del': { // gone at once, with Undo for 6 seconds instead of an "are you sure?"
-      const at = T.indexOf(t);
-      T = T.filter(x => x !== t);
-=======
-    case 'del':
-      if (role() === 'pm' && hubOn()) return deleteRecord(ctx(), 'task', t.uid); // asks, and takes it off the hub first (or deletes nothing)
-      if (!await ask(L("Delete task {id}? This can't be undone.", { id: t.id }), L('Delete'), 'danger')) return;
-      T = T.filter(x => x.uid !== t.uid); // by uid: the hub sync may have reloaded the list while the question was open
->>>>>>> theirs
-      persist();
-      go('day/' + t.date);
-      return toast(L('Task {id} deleted', { id: t.id || L('New task') }), '', { undo: () => {
-        if (find(t.uid)) return;
-        T.splice(Math.min(at, T.length), 0, t);
-        persist();
-        render();
-      } });
+    case 'del': { // gone at once, with Undo for 6 seconds instead of an "are you sure?"; the PM's phone on a hub then takes it off the hub too
+      if (role() === 'pm' && hubOn()) return deleteRecord(ctx(), 'task', t.uid);
+      return toast(L('Task {id} deleted', { id: t.id || L('New task') }), '', { undo: remove('task', t.uid) });
     }
     case 'pdfTask': return savePdf(`${fileName(t)}.pdf`, record(t));
     case 'pdfDay': return savePdf(`Task sheets ${day}.pdf`, makePdf(`Electrical task sheets · ${niceDate(day, 'en')}`, letterhead(S), dayTasks().flatMap(recordRows), `${COMPANIES} · ${niceDate(day, 'en')}`));
@@ -938,19 +865,13 @@ document.addEventListener('click', e => {
   e.preventDefault();
   el.closest('dialog')?.close();
   if (stale()) return;
-<<<<<<< ours
+  if (drawLater && (app.contains(el) || bar.contains(el))) return void drawSoon(); // drawn before a pull reloaded what it shows: redraw, the person taps again
   if (el.dataset.go) return go(el.dataset.go);
   const a = el.dataset.act;
   // A second tap on an action still running (sending, sharing, saving) does nothing; then the redrawn control plays its animation.
-  busy(el, () => ((view.v === 'clock' || view.v === 'report') && !SHELL.has(a) ? reportAct(a, el, S, day, view.v) : act(a, el)))
+  busy(el, () => (liveOwns(a) ? liveAct(ctx(), a, el) // the hub screens' own taps
+    : (view.v === 'clock' || view.v === 'report') && !SHELL.has(a) ? reportAct(a, el, S, day, view.v) : act(a, el)))
     .then(() => twin(el)?.classList.add('just'));
-=======
-  if (drawLater && (app.contains(el) || bar.contains(el))) return void drawSoon(); // drawn before a pull reloaded what it shows: redraw, the person taps again
-  if (el.dataset.go) go(el.dataset.go);
-  else if (liveOwns(el.dataset.act)) liveAct(ctx(), el.dataset.act, el); // the hub screens' own taps
-  else if ((view.v === 'clock' || view.v === 'report') && !SHELL.has(el.dataset.act)) reportAct(el.dataset.act, el, S, day, view.v);
-  else act(el.dataset.act, el);
->>>>>>> theirs
 });
 // The control as drawn again after a tap (a checkbox, a segment), found by its data attributes.
 const twin = el => (el.isConnected ? el : app.querySelector(['act', 'v', 'i', 'list', 'k'].filter(k => el.dataset[k] != null).map(k => `[data-${k}="${CSS.escape(el.dataset[k])}"]`).join('')));
@@ -1036,14 +957,21 @@ function saveTask(n) {
   persist();
   fileIfChanged(n); // a review is filed, as the Review tab files it
 }
-// The PM deleted a record (live.mjs deleteRecord, after the hub let it go). The sync may have taken it off already.
-async function remove(kind, key) {
+// A delete (the sheet's menu, live.mjs deleteRecord): gone from this phone at once. Returns what puts it back where it
+// was, for the Undo; null if this phone had no such record.
+function remove(kind, key) {
   if (kind === 'report') return dropReport(key);
-  const had = T.some(x => x.uid === key);
-  T = T.filter(x => x.uid !== key);
-  if (had) persist();
-  if (location.hash.startsWith(`#task/${key}/`)) { view = { v: 'board' }; location.replace('#day/' + day); }
-  return had;
+  const at = T.findIndex(x => x.uid === key), t = T[at];
+  if (!t) return null;
+  T.splice(at, 1);
+  persist();
+  if (view.v === 'task' && view.uid === key) { view = { v: 'board' }; go('day/' + t.date); } // a sheet gone from under its own screen
+  return () => {
+    if (find(key)) return; // back already (another tab's Undo, or the hub)
+    T.splice(Math.min(at, T.length), 0, t);
+    persist();
+    render();
+  };
 }
 // The sync saved what it pulled: every in-memory copy reloads now, before any further tap. The screen redraws too, but
 // never under a field someone is typing in: then it waits until the field is left, and until the tap that left it lands.

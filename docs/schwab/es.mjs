@@ -176,8 +176,6 @@ export default {
   'Unfinished sheets copied: {n}': 'Hojas pendientes copiadas: {n}',
   'Carried to {date}': 'Pasada al {date}',
   'Duplicated. Change the crew or floor.': 'Duplicada. Cambie la cuadrilla o el piso.',
-  "Delete task {id}? This can't be undone.": '¿Borrar la tarea {id}? No se puede deshacer.',
-  'Delete': 'Borrar',
 
   // sending and pasting links
   'Close': 'Cerrar',
@@ -575,7 +573,6 @@ export default {
   'Save follow-up': 'Guardar el seguimiento',
   'Review saved': 'Revisión guardada',
   'Records are for the office': 'Los registros son para la oficina',
-  'By person': 'Por persona',
   'Reports': 'Reportes',
   'Records': 'Registros',
   'Search names': 'Buscar nombres',
@@ -620,10 +617,8 @@ export default {
   'Collecting records from the hub…': 'Reuniendo registros del sistema central…',
   'The hub did not answer. Download only what is on this phone?': 'El sistema central no respondió. ¿Descargar solo lo que hay en este teléfono?',
   'Download': 'Descargar',
-  "Delete the {date} report? This can't be undone.": '¿Borrar el reporte del {date}? No se puede deshacer.',
   'It is also removed from the hub.': 'También se quita del sistema central.',
   'The hub could not be reached, so nothing was deleted.': 'No se pudo conectar con el sistema central, así que no se borró nada.',
-  'Deleted': 'Borrado',
   'Hub': 'Sistema central',
   'Optional. One shared log of hours, task sheets and reports, a live board, and translation of what people type. Paste the hub link and your key.': 'Opcional. Un registro compartido de horas, hojas de tareas y reportes, un tablero en vivo y la traducción de lo que escribe la gente. Pegue el enlace del sistema central y su clave.',
   'Hub link': 'Enlace del sistema central',
@@ -684,7 +679,6 @@ export default {
 
   // identity: people, devices, duplicate numbers (hub screens)
 
-<<<<<<< ours
 
   // shell: tab bar, settings button, toast Undo
   'Report': 'Reporte',
@@ -725,7 +719,7 @@ export default {
   'People and crews': 'Personas y cuadrillas',
   '{name} taken off the list': 'Se quitó a {name} de la lista',
   '{name} removed from the crew list': 'Se quitó {name} de la lista de cuadrillas',
-=======
+
   // the activity feed: PM shift edits, deletes, keys, archive
   'PM added a shift for {who} on {date}': 'El gerente de proyecto agregó un turno para {who} el {date}',
   'PM removed a shift for {who} on {date}': 'El gerente de proyecto quitó un turno de {who} del {date}',
@@ -745,5 +739,7 @@ export default {
   'Sheets for your crew show up here by themselves. A texted link still works too.': 'Las hojas de su cuadrilla aparecen aquí solas. Un enlace por mensaje también sigue funcionando.',
   'Clock in and Clock out go to the PM through the hub. With no signal, a text to the PM opens instead. Only the PM can change hours.': 'Las entradas y salidas que marque le llegan al gerente de proyecto por el sistema central. Sin señal, se abre un mensaje para el gerente de proyecto. Solo el gerente de proyecto puede cambiar las horas.',
   'Saved. Your hours go to the PM through the hub.': 'Guardado. Sus horas le llegan al gerente de proyecto por el sistema central.',
->>>>>>> theirs
+
+  // Records: segments
+  'Sheets': 'Hojas',
 };
