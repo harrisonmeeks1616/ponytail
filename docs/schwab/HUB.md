@@ -51,7 +51,8 @@ Wrong keys: no detail in the error, and after 30 bad keys in a minute every requ
 - Delete: PM `purge` (also reachable as `deleted` in a push by pm). The server keeps a tombstone 90 days so phones remove it on their next pull.
 - Crew phones show the task as `origin: 'link'`; office phones as `origin: 'mine'`.
 
-### Shift (key `id`; fields as `SHIFT_TPL` in shared.mjs: `id device who date in out edited{who,in,out} gone at`)
+### Shift (key `id`; fields as `SHIFT_TPL` in shared.mjs: `id device who date in out crew tasks edited{who,in,out} gone at`)
+- `crew` (the crew the person is on, from the roster) and `tasks` (task IDs they were assigned that day, e.g. `["T1019-02"]`) are set by the worker's phone at clock-in and clock-out and follow the same worker rules as `in`; the PM can change them. Names are matched to the roster (Settings crew members) case- and accent-insensitively.
 - **Worker rules** (any key, shifts the key's own device made): new id is added unless a non-gone PM-added shift (empty `device`) for the same person and date exists, in which case it is stored `gone: true`. Existing id: only if the stored `device` matches; updates `who` only if `at` is newer and `edited.who` is false; `in` and `out` follow the phone unless `edited.in` / `edited.out`; an older text never undoes a clock-out; `gone` shifts are never revived. The client never sets `edited` or `gone` for itself: the server sets `edited` flags false for worker pushes.
 - **PM rules** (pm key): the shift is stored as sent (fields validated), including `edited`, `gone`, and PM-added shifts (empty `device`).
 - Hours math is identical on client and server: clock-in to clock-out in real minutes (DST-correct, overnight = next morning), payroll hundredths `round(minutes * 5 / 3)` per shift, summed (`cents` in report.mjs). The server's timezone is America/New_York (the job's).

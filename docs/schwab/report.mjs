@@ -276,103 +276,105 @@ export const OUT = {
 
 const sec = (id, num, title, body, badge = '') => `<details class="card sec" id="sec-${id}" data-sec="${id}"${open.has(id) ? ' open' : ''}>
   <summary><h2>${num ? `<span class="num">${num}</span>` : ''}${title}</h2>${badge}</summary><div class="sec-body">${body}</div></details>`;
-const remove = (list, i, label) => `<button class="link danger" data-act="del" data-list="${list}" data-i="${i}">Remove ${label}</button>`;
-const count = (n, label, tone = '') => (n ? `<span class="pill" data-tone="${tone}">${n} ${label}</span>` : '');
+const remove = (list, i, label) => `<button class="link danger" data-act="del" data-list="${list}" data-i="${i}">${label}</button>`;
+const count = (n, text, tone = '') => (n ? `<span class="pill" data-tone="${tone}">${text}</span>` : '');
 
 function reportView(S, day) {
   const r = rep(S, day), late = r.next.filter(isLate).length, pend = waiting(r).length;
+  const unconfirmed = r.needs.filter(n => n.item && !n.confirmed).length, bare = active(r).filter(c => !c.done).length;
+  const cur = STATUS().find(s => s[0] === r.status);
   $('app').innerHTML = dateBar(day, 'report') + `<div id="summary" class="stack">${summary(r)}</div>
     <section class="card"><div class="grid">
-      ${field('Superintendent', 'r.super', r.super)}${field('Shift start', 'r.shiftStart', r.shiftStart, { type: 'time' })}${field('Shift end', 'r.shiftEnd', r.shiftEnd, { type: 'time' })}
-    </div><p class="hint">${r.submittedAt ? `Sent to the PM ${stampEn(r.submittedAt)}` : 'Not sent to the PM yet'}${r.pmReview ? ` · PM reviewed: ${esc(r.pmReview)}` : ''}</p></section>
-    ${sec('sum', 1, 'Overall status & today’s results', `${seg('r.status', r.status, STATUS)}
-      ${field('Most important results today, planned work missed, and effect on the job', 'r.results', r.results, { rows: 4 })}`,
-      r.status ? `<span class="pill" data-tone="${STATUS.find(s => s[0] === r.status)?.[1] || ''}">${esc(r.status)}</span>` : '')}
-    ${sec('wins', 2, 'Good results & lessons to repeat', field('Crew wins, quality improvements, faster methods, repeat-floor lessons', 'r.wins', r.wins, { rows: 3 }))}
-    ${sec('issues', 3, 'Site issues, concerns & coordination', field('Safety / quality issues, other trades, access, inspections, scope changes', 'r.issues', r.issues, { rows: 3 })
-      + field('Who was notified / when', 'r.notified', r.notified))}
-    ${sec('needs', 4, 'Material, equipment & manpower', r.needs.map((n, i) => `<div class="item"><div class="grid">
-        ${field('Item / resource', `r.needs.${i}.item`, n.item, { wide: true, ph: 'e.g. 2" EMT, scissor lift, 2 more journeymen' })}
-        ${field('Quantity', `r.needs.${i}.qty`, n.qty)}${field('Floor / crew', `r.needs.${i}.where`, n.where, { list: 'floors' })}
-        ${field('Needed by', `r.needs.${i}.by`, n.by, { type: 'datetime-local' })}</div>
-        <label class="switch"><input type="checkbox" data-k="r.needs.${i}.confirmed"${n.confirmed ? ' checked' : ''}> Availability confirmed</label>
-        ${remove('needs', i, 'need')}</div>`).join('') + '<button class="btn" data-act="add" data-v="needs">+ Add a need</button>',
-      count(r.needs.filter(n => n.item && !n.confirmed).length, 'unconfirmed', 'warn'))}
-    ${sec('pm', 5, 'Project manager decision help', `<p class="hint">State the decision, your recommendation, and when you need an answer. The PM answers right here.</p>`
+      ${field(L('Superintendent'), 'r.super', r.super)}${field(L('Shift start'), 'r.shiftStart', r.shiftStart, { type: 'time' })}${field(L('Shift end'), 'r.shiftEnd', r.shiftEnd, { type: 'time' })}
+    </div><p class="hint">${r.submittedAt ? esc(L('Sent to the PM {time}', { time: stamp(r.submittedAt) })) : L('Not sent to the PM yet')}${r.pmReview ? ` · ${esc(L('PM reviewed: {note}', { note: r.pmReview }))}` : ''}</p></section>
+    ${sec('sum', 1, L('Overall status & today’s results'), `${seg('r.status', r.status, STATUS())}
+      ${field(L('Most important results today, planned work missed, and effect on the job'), 'r.results', r.results, { rows: 4 })}`,
+      r.status ? `<span class="pill" data-tone="${cur?.[1] || ''}">${esc(cur?.[2] || r.status)}</span>` : '')}
+    ${sec('wins', 2, L('Good results & lessons to repeat'), field(L('Crew wins, quality improvements, faster methods, repeat-floor lessons'), 'r.wins', r.wins, { rows: 3 }))}
+    ${sec('issues', 3, L('Site issues, concerns & coordination'), field(L('Safety / quality issues, other trades, access, inspections, scope changes'), 'r.issues', r.issues, { rows: 3 })
+      + field(L('Who was notified / when'), 'r.notified', r.notified))}
+    ${sec('needs', 4, L('Material, equipment & manpower'), r.needs.map((n, i) => `<div class="item"><div class="grid">
+        ${field(L('Item / resource'), `r.needs.${i}.item`, n.item, { wide: true, ph: L('e.g. 2" EMT, scissor lift, 2 more journeymen') })}
+        ${field(L('Quantity'), `r.needs.${i}.qty`, n.qty)}${field(L('Floor / crew'), `r.needs.${i}.where`, n.where, { list: 'floors' })}
+        ${field(L('Needed by'), `r.needs.${i}.by`, n.by, { type: 'datetime-local' })}</div>
+        <label class="switch"><input type="checkbox" data-k="r.needs.${i}.confirmed"${n.confirmed ? ' checked' : ''}> ${L('Availability confirmed')}</label>
+        ${remove('needs', i, L('Remove need'))}</div>`).join('') + `<button class="btn" data-act="add" data-v="needs">${L('+ Add a need')}</button>`,
+      count(unconfirmed, L('{n} unconfirmed', { n: unconfirmed }), 'warn'))}
+    ${sec('pm', 5, L('Project manager decision help'), `<p class="hint">${L('State the decision, your recommendation, and when you need an answer. The PM answers right here.')}</p>`
       + r.decisions.map((d, i) => `<div class="item">
-        ${field('Decision / support needed', `r.decisions.${i}.q`, d.q, { rows: 2 })}
-        <div class="grid">${field('Recommendation', `r.decisions.${i}.rec`, d.rec, { wide: true })}${field('Needed by', `r.decisions.${i}.by`, d.by, { type: 'datetime-local' })}</div>
-        ${d.by && !d.pm && new Date(d.by) < new Date() ? '<span class="pill" data-tone="bad">Past due</span>' : ''}
-        <div class="field"><span>PM response</span>${seg(`r.decisions.${i}.pm`, d.pm, [['Approved', 'good'], ['Declined', 'bad'], ['Discuss', 'info']])}</div>
-        ${field('PM note', `r.decisions.${i}.pmNote`, d.pmNote)}
-        ${remove('decisions', i, 'decision')}</div>`).join('') + '<button class="btn" data-act="add" data-v="decisions">+ Add a decision</button>',
-      count(pend, 'waiting', 'warn'))}
-    ${sec('floors', '', 'Floor reports · crew detail', r.floors.map((f, fi) => `<div class="floor">
-        <div class="edit-row">${field('Actual floor / level', `r.floors.${fi}.floor`, f.floor, { list: 'floors' })}<button class="x" data-act="delFloor" data-i="${fi}" aria-label="Remove floor">✕</button></div>
+        ${field(L('Decision / support needed'), `r.decisions.${i}.q`, d.q, { rows: 2 })}
+        <div class="grid">${field(L('Recommendation'), `r.decisions.${i}.rec`, d.rec, { wide: true })}${field(L('Needed by'), `r.decisions.${i}.by`, d.by, { type: 'datetime-local' })}</div>
+        ${d.by && !d.pm && new Date(d.by) < new Date() ? `<span class="pill" data-tone="bad">${L('Past due')}</span>` : ''}
+        <div class="field"><span>${L('PM response')}</span>${seg(`r.decisions.${i}.pm`, d.pm, [['Approved', 'good', L('Approved')], ['Declined', 'bad', L('Declined')], ['Discuss', 'info', L('Discuss')]])}</div>
+        ${field(L('PM note'), `r.decisions.${i}.pmNote`, d.pmNote)}
+        ${remove('decisions', i, L('Remove decision'))}</div>`).join('') + `<button class="btn" data-act="add" data-v="decisions">${L('+ Add a decision')}</button>`,
+      count(pend, L('{n} waiting', { n: pend }), 'warn'))}
+    ${sec('floors', '', L('Floor reports · crew detail'), r.floors.map((f, fi) => `<div class="floor">
+        <div class="edit-row">${field(L('Actual floor / level'), `r.floors.${fi}.floor`, f.floor, { list: 'floors' })}<button class="x" data-act="delFloor" data-i="${fi}" aria-label="${L('Remove floor')}">✕</button></div>
         ${f.crews.map((c, ci) => crewBlock(S, r, fi, ci, c)).join('')}
-        <button class="link" data-act="addCrewTo" data-i="${fi}">+ Add another crew to this floor</button></div>`).join('')
-      + `${r.floors.length ? '' : '<p class="hint">Add each floor worked today, or fill them in from the crews’ task sheets on this phone.</p>'}
-        <div class="btns"><button class="btn" data-act="addFloor">+ Add floor</button><button class="btn primary" data-act="fill">Fill from task sheets</button></div>
+        <button class="link" data-act="addCrewTo" data-i="${fi}">${L('+ Add another crew to this floor')}</button></div>`).join('')
+      + `${r.floors.length ? '' : `<p class="hint">${L('Add each floor worked today, or fill them in from the crews’ task sheets on this phone.')}</p>`}
+        <div class="btns"><button class="btn" data-act="addFloor">${L('+ Add floor')}</button><button class="btn primary" data-act="fill">${L('Fill from task sheets')}</button></div>
         ${datalist('floors', S.floors)}`,
-      count(active(r).filter(c => !c.done).length, 'need notes', 'warn'))}
-    ${sec('next', '', 'Next steps & completion forecast', r.next.map((s, i) => `<div class="item">
-        ${field('Next step / floor / crew', `r.next.${i}.step`, s.step, { rows: 2 })}
-        ${field('Prerequisites / resources', `r.next.${i}.prereq`, s.prereq)}
-        <div class="grid">${field('Planned start', `r.next.${i}.start`, s.start, { type: 'datetime-local' })}${field('Estimated duration', `r.next.${i}.dur`, s.dur, { ph: 'e.g. 2 days' })}
-        ${field('Expected finish', `r.next.${i}.finish`, s.finish, { type: 'datetime-local' })}${field('Required deadline', `r.next.${i}.deadline`, s.deadline, { type: 'datetime-local' })}
-        ${field('Responsible lead', `r.next.${i}.lead`, s.lead)}${field('Confirm / check-in by', `r.next.${i}.checkin`, s.checkin, { type: 'datetime-local' })}</div>
+      count(bare, L('{n} need notes', { n: bare }), 'warn'))}
+    ${sec('next', '', L('Next steps & completion forecast'), r.next.map((s, i) => `<div class="item">
+        ${field(L('Next step / floor / crew'), `r.next.${i}.step`, s.step, { rows: 2 })}
+        ${field(L('Prerequisites / resources'), `r.next.${i}.prereq`, s.prereq)}
+        <div class="grid">${field(L('Planned start'), `r.next.${i}.start`, s.start, { type: 'datetime-local' })}${field(L('Estimated duration'), `r.next.${i}.dur`, s.dur, { ph: L('e.g. 2 days') })}
+        ${field(L('Expected finish'), `r.next.${i}.finish`, s.finish, { type: 'datetime-local' })}${field(L('Required deadline'), `r.next.${i}.deadline`, s.deadline, { type: 'datetime-local' })}
+        ${field(L('Responsible lead'), `r.next.${i}.lead`, s.lead)}${field(L('Confirm / check-in by'), `r.next.${i}.checkin`, s.checkin, { type: 'datetime-local' })}</div>
         <p class="out ${isLate(s) ? 'late' : ''}" data-out="late" data-i="${i}">${lateLine(s)}</p>
-        ${remove('next', i, 'step')}</div>`).join('') + '<button class="btn" data-act="add" data-v="next">+ Add next step</button>',
-      count(late, 'late', 'bad'))}
-    ${sec('risks', '', 'Potential delays & workarounds', r.risks.map((x, i) => `<div class="item">
-        ${field('Risk / affected floor & crew', `r.risks.${i}.risk`, x.risk, { rows: 2 })}
-        ${field('Expected impact / time at risk', `r.risks.${i}.impact`, x.impact)}
-        ${field('Prevention / workaround', `r.risks.${i}.prevent`, x.prevent, { rows: 2 })}
-        ${field('Fallback work if blocked', `r.risks.${i}.fallback`, x.fallback)}
-        <div class="grid">${field('Action owner', `r.risks.${i}.owner`, x.owner)}${field('Action needed by', `r.risks.${i}.by`, x.by, { type: 'datetime-local' })}</div>
-        ${remove('risks', i, 'risk')}</div>`).join('') + '<button class="btn" data-act="add" data-v="risks">+ Add a risk</button>'
-      + '<p class="hint">Escalate urgent issues when you find them, and note who you told in section 3.</p>')}
-    ${sec('sign', '', 'Sign-off', `<div class="grid">${field('Prepared by', 'r.preparedBy', r.preparedBy)}${field('PM review / time', 'r.pmReview', r.pmReview)}</div>
-      ${isPM(S) ? '<button class="btn" data-act="stampPM">Stamp my review now</button>' : ''}`)}
-    <p class="hint">Changes save on this phone as you type.${S.folderUrl ? ' Sending the report also files a PDF in the review folder.' : ''}</p>`;
-  $('bar').innerHTML = `<div class="bar-in"><button class="btn primary big" data-act="send">${isPM(S) ? 'Send back to Supt.' : 'Send to PM'}</button>
-    <button class="btn more" data-act="menu" aria-label="More actions">⋯</button></div>`;
+        ${remove('next', i, L('Remove step'))}</div>`).join('') + `<button class="btn" data-act="add" data-v="next">${L('+ Add next step')}</button>`,
+      count(late, L('{n} late', { n: late }), 'bad'))}
+    ${sec('risks', '', L('Potential delays & workarounds'), r.risks.map((x, i) => `<div class="item">
+        ${field(L('Risk / affected floor & crew'), `r.risks.${i}.risk`, x.risk, { rows: 2 })}
+        ${field(L('Expected impact / time at risk'), `r.risks.${i}.impact`, x.impact)}
+        ${field(L('Prevention / workaround'), `r.risks.${i}.prevent`, x.prevent, { rows: 2 })}
+        ${field(L('Fallback work if blocked'), `r.risks.${i}.fallback`, x.fallback)}
+        <div class="grid">${field(L('Action owner'), `r.risks.${i}.owner`, x.owner)}${field(L('Action needed by'), `r.risks.${i}.by`, x.by, { type: 'datetime-local' })}</div>
+        ${remove('risks', i, L('Remove risk'))}</div>`).join('') + `<button class="btn" data-act="add" data-v="risks">${L('+ Add a risk')}</button>`
+      + `<p class="hint">${L('Escalate urgent issues when you find them, and note who you told in section 3.')}</p>`)}
+    ${sec('sign', '', L('Sign-off'), `<div class="grid">${field(L('Prepared by'), 'r.preparedBy', r.preparedBy)}${field(L('PM review / time'), 'r.pmReview', r.pmReview)}</div>
+      ${isPM(S) ? `<button class="btn" data-act="stampPM">${L('Stamp my review now')}</button>` : ''}`)}
+    <p class="hint">${L('Changes save on this phone as you type.')}${S.folderUrl ? ` ${L('Sending the report also files a PDF in the review folder.')}` : ''}</p>`;
+  $('bar').innerHTML = `<div class="bar-in"><button class="btn primary big" data-act="send">${isPM(S) ? L('Send back to Supt.') : L('Send to PM')}</button>
+    <button class="btn more" data-act="menu" aria-label="${L('More actions')}">⋯</button></div>`;
 }
 
 // Totals and section check marks, redrawn as the superintendent types.
 function summary(r) {
   const late = r.next.filter(isLate).length, pend = waiting(r).length;
   const ready = [
-    ['sum', 'Summary', r.status && (r.results || r.status === 'No work today')],
-    ['floors', 'Floors', active(r).length && active(r).every(c => c.done)],
-    ['next', 'Next steps', r.next.some(s => s.step)],
-    ['risks', 'Risks', r.risks.some(x => x.risk)],
-    ['sign', 'Sign-off', r.preparedBy],
+    ['sum', L('Summary'), r.status && (r.results || r.status === 'No work today')],
+    ['floors', L('Floors'), active(r).length && active(r).every(c => c.done)],
+    ['next', L('Next steps'), r.next.some(s => s.step)],
+    ['risks', L('Risks'), r.risks.some(x => x.risk)],
+    ['sign', L('Sign-off'), r.preparedBy],
   ];
   return `<div class="stats">
-      <div class="stat"><b>${hrs(laborHrs(r))}</b><span>Labor-hrs</span></div>
-      <div class="stat"><b>${active(r).length}</b><span>Crew sections</span></div>
-      <div class="stat"><b class="${pend ? 'warn' : ''}">${pend}</b><span>Decisions waiting</span></div>
-      <div class="stat"><b class="${late ? 'bad' : ''}">${late}</b><span>Late forecasts</span></div>
+      <div class="stat"><b>${hrs(laborHrs(r))}</b><span>${L('Labor-hrs')}</span></div>
+      <div class="stat"><b>${active(r).length}</b><span>${L('Crew sections')}</span></div>
+      <div class="stat"><b class="${pend ? 'warn' : ''}">${pend}</b><span>${L('Decisions waiting')}</span></div>
+      <div class="stat"><b class="${late ? 'bad' : ''}">${late}</b><span>${L('Late forecasts')}</span></div>
     </div>
-    <div class="chips" role="group" aria-label="Jump to section">${ready.map(([id, label, ok]) => `<button class="chip${ok ? ' ok' : ''}" data-act="jump" data-v="${id}">${ok ? '✓ ' : ''}${label}</button>`).join('')}</div>`;
+    <div class="chips" role="group" aria-label="${L('Jump to section')}">${ready.map(([id, label, ok]) => `<button class="chip${ok ? ' ok' : ''}" data-act="jump" data-v="${id}">${ok ? '✓ ' : ''}${label}</button>`).join('')}</div>`;
 }
 
 function crewBlock(S, r, fi, ci, c) {
   const k = `r.floors.${fi}.crews.${ci}`;
   return `<div class="crew-edit" style="${crewVar(S, c.name)}">
     <div class="row1"><strong>${esc(c.name)}</strong>
-      <button class="chip" data-act="na" data-f="${fi}" data-c="${ci}" aria-pressed="${!c.na}">${c.na ? 'N/A, tap to add' : 'Worked here'}</button></div>
+      <button class="chip" data-act="na" data-f="${fi}" data-c="${ci}" aria-pressed="${!c.na}">${c.na ? L('N/A, tap to add') : L('Worked here')}</button></div>
     ${c.na ? '' : `<div class="grid">
-      ${field('Crew / lead', `${k}.lead`, c.lead)}${field('Worker count', `${k}.workers`, c.workers, { type: 'number', mode: 'numeric' })}
-      ${field('Members', `${k}.members`, c.members, { wide: true })}
-      ${field('Room / area', `${k}.area`, c.area)}${field('Task / drawing ref.', `${k}.ref`, c.ref)}
-      ${field('Work start', `${k}.start`, c.start, { type: 'time' })}${field('Work stop', `${k}.stop`, c.stop, { type: 'time' })}</div>
+      ${field(L('Crew / lead'), `${k}.lead`, c.lead)}${field(L('Worker count'), `${k}.workers`, c.workers, { type: 'number', mode: 'numeric' })}
+      ${field(L('Members'), `${k}.members`, c.members, { wide: true })}
+      ${field(L('Room / area'), `${k}.area`, c.area)}${field(L('Task / drawing ref.'), `${k}.ref`, c.ref)}
+      ${field(L('Work start'), `${k}.start`, c.start, { type: 'time' })}${field(L('Work stop'), `${k}.stop`, c.stop, { type: 'time' })}</div>
       <p class="out" data-out="lh" data-f="${fi}" data-c="${ci}">${OUT.lh(r, { f: fi, c: ci })}</p>
-      ${field('Work completed: installation, quantities, exact locations, remaining work', `${k}.done`, c.done, { rows: 3 })}
-      ${field('Quality / testing / accuracy', `${k}.quality`, c.quality, { rows: 2 })}
-      ${field('Hold-ups / delays: cause, duration, workers affected, action taken', `${k}.holdups`, c.holdups, { rows: 2 })}
-      ${field('Good results / improvements', `${k}.good`, c.good, { rows: 2 })}`}</div>`;
+      ${field(L('Work completed: installation, quantities, exact locations, remaining work'), `${k}.done`, c.done, { rows: 3 })}
+      ${field(L('Quality / testing / accuracy'), `${k}.quality`, c.quality, { rows: 2 })}
+      ${field(L('Hold-ups / delays: cause, duration, workers affected, action taken'), `${k}.holdups`, c.holdups, { rows: 2 })}
+      ${field(L('Good results / improvements'), `${k}.good`, c.good, { rows: 2 })}`}</div>`;
 }
 
 // ---------- PDF and the review folder ----------
@@ -408,20 +410,21 @@ export const fileReportIfChanged = (S, day) => { const r = R[day]; return r?.sub
 // A report link opened on this phone. Returns the report's day, or '' if the link had none.
 export async function openReport(data, S) {
   const inc = normReport(data.report);
-  if (!inc.date) { toast('That link has no report in it', 'bad'); return ''; }
+  if (!inc.date) { toast(L('That link has no report in it'), 'bad'); return ''; }
   const mine = R[inc.date], pmSent = data.from === 'Project manager';
   if (mine?.updatedAt && mine.updatedAt !== inc.updatedAt && pmSent !== isPM(S)) {
     // Normal back-and-forth: neither side's work is lost, so there's nothing to ask.
     R[inc.date] = pmSent ? mergeAnswers(mine, inc) : mergeAnswers(inc, mine);
     R[inc.date].updatedAt = Date.now();
-    toast(pmSent ? 'PM answers added to your report' : 'Updated report loaded. Your answers are kept.');
+    toast(pmSent ? L('PM answers added to your report') : L('Updated report loaded. Your answers are kept.'));
     open.add('pm');
     fileReport(S, R[inc.date]);
   } else if (!mine?.updatedAt || mine.updatedAt === inc.updatedAt
-    || await ask(`Replace your copy of the ${dayEn(inc.date)} report with the one in this link? Link copy saved ${stampEn(inc.updatedAt)}. Yours saved ${stampEn(mine.updatedAt)}.`, 'Use the link copy')) {
+    || await ask(L('Replace your copy of the {date} report with the one in this link? Link copy saved {link}. Yours saved {mine}.',
+      { date: niceDate(inc.date), link: stamp(inc.updatedAt), mine: stamp(mine.updatedAt) }), L('Use the link copy'))) {
     R[inc.date] = inc;
     inc.updatedAt ||= Date.now();
-    toast('Report loaded');
+    toast(L('Report loaded'));
     if (isPM(S)) open.add('pm');
     fileReport(S, inc);
   }
@@ -431,7 +434,7 @@ export async function openReport(data, S) {
 
 async function send(S, day) {
   const r = rep(S, day);
-  if (!r.status) { open.add('sum'); reportView(S, day); return toast('Set the overall status first', 'bad'); }
+  if (!r.status) { open.add('sum'); reportView(S, day); return toast(L('Set the overall status first'), 'bad'); }
   if (!isPM(S)) r.submittedAt = Date.now();
   r.updatedAt = Date.now();
   persist();
@@ -440,8 +443,8 @@ async function send(S, day) {
   const answered = r.decisions.filter(d => d.q && d.pm).length, asked = r.decisions.filter(d => d.q).length;
   const firstDue = waiting(r).map(d => d.by).filter(Boolean).sort()[0];
   sendSheet(isPM(S)
-    ? { title: `PM review · ${dayEn(r.date)}`, url, text: `PM review of the ${dayEn(r.date)} daily report: ${answered} of ${asked} decisions answered.` }
-    : { title: `Daily report · ${dayEn(r.date)}`, url,
+    ? { title: L('PM review · {date}', { date: niceDate(r.date) }), url, text: `PM review of the ${dayEn(r.date)} daily report: ${answered} of ${asked} decisions answered.` }
+    : { title: L('Daily report · {date}', { date: niceDate(r.date) }), url,
       text: `Daily report ${dayEn(r.date)}, ${S.project} (${COMPANIES}): ${r.status}. ${active(r).length} crew sections, ${hrs(laborHrs(r))} labor-hrs.`
         + (asked - answered ? ` ${asked - answered} decision${asked - answered === 1 ? ' needs' : 's need'} you${firstDue ? ' by ' + when(firstDue) : ''}.` : '') });
   fileReport(S, r);
@@ -460,42 +463,43 @@ export async function reportAct(a, el, S, day, v) {
     case 'set': { const ctx = { r, s: S }; setPath(ctx, el.dataset.k, getPath(ctx, el.dataset.k) === val ? '' : val); break; }
     case 'jump': open.add(val); reportView(S, day); return $('sec-' + val).scrollIntoView({ behavior: 'smooth', block: 'start' });
     case 'add': r[val].push(blank(val)); open.add({ needs: 'needs', decisions: 'pm', next: 'next', risks: 'risks' }[val]); break;
-    case 'del': if (!await ask('Remove this entry?', 'Remove', 'danger')) return; r[el.dataset.list].splice(i, 1); break;
+    case 'del': if (!await ask(L('Remove this entry?'), L('Remove'), 'danger')) return; r[el.dataset.list].splice(i, 1); break;
     case 'addFloor': r.floors.push(newFloor('', S.crews.map(c => c.name))); open.add('floors'); break;
-    case 'delFloor': if (!await ask(`Remove ${r.floors[i].floor || 'this floor'} and its crew notes?`, 'Remove', 'danger')) return; r.floors.splice(i, 1); break;
-    case 'addCrewTo': r.floors[i].crews.push({ ...CREW_TPL, na: false, name: `Crew ${String.fromCharCode(65 + r.floors[i].crews.length)}` }); break;
+    case 'delFloor': if (!await ask(r.floors[i].floor ? L('Remove {floor} and its crew notes?', { floor: r.floors[i].floor }) : L('Remove this floor and its crew notes?'), L('Remove'), 'danger')) return; r.floors.splice(i, 1); break;
+    case 'addCrewTo': r.floors[i].crews.push({ ...CREW_TPL, na: false, name: L('Crew {x}', { x: String.fromCharCode(65 + r.floors[i].crews.length) }) }); break;
     case 'na': { const c = r.floors[+el.dataset.f].crews[+el.dataset.c]; c.na = !c.na; break; }
     case 'fill': {
       const ts = load(KEYS.tasks, []).map(normTask).filter(t => t.date === day);
-      if (!ts.length) return toast(`No task sheets for ${dayEn(day)} on this phone. Make or load them on the Tasks tab first.`, 'bad');
+      if (!ts.length) return toast(L('No task sheets for {date} on this phone. Make or load them on the Tasks tab first.', { date: niceDate(day) }), 'bad');
       const n = fillFromTasks(r, ts, S.crews.map(c => c.name));
       open.add('floors');
-      toast(`Filled ${n} crew section${n === 1 ? '' : 's'} from ${ts.length} task sheet${ts.length === 1 ? '' : 's'}. Typed notes kept; work hours updated.`);
+      toast(L('Filled {sections} from {sheets}. Typed notes kept; work hours updated.', {
+        sections: n === 1 ? L('1 crew section') : L('{n} crew sections', { n }), sheets: ts.length === 1 ? L('1 task sheet') : L('{n} task sheets', { n: ts.length }) }));
       break;
     }
     case 'carry': {
       const prev = Object.keys(R).filter(d => d < day && R[d].updatedAt).sort().at(-1);
-      if (!prev) return toast('No earlier report on this phone to copy from');
+      if (!prev) return toast(L('No earlier report on this phone to copy from'));
       const p = R[prev], copy = x => structuredClone(x);
       Object.assign(r, { super: r.super || p.super, shiftStart: r.shiftStart || p.shiftStart, shiftEnd: r.shiftEnd || p.shiftEnd });
       if (!r.floors.length) r.floors = p.floors.map(f => ({ floor: f.floor, crews: f.crews.map(c => ({ ...CREW_TPL, name: c.name, na: c.na, lead: c.lead, workers: c.workers, members: c.members })) }));
       r.needs.push(...p.needs.filter(n => !n.confirmed && !r.needs.some(x => x.item === n.item)).map(copy));
       r.next.push(...p.next.filter(s => !r.next.some(x => x.step === s.step)).map(copy));
       r.risks.push(...p.risks.filter(x => !r.risks.some(y => y.risk === x.risk)).map(copy));
-      toast(`Copied crews, open needs, next steps and risks from ${dayEn(prev)}`);
+      toast(L('Copied crews, open needs, next steps and risks from {date}', { date: niceDate(prev) }));
       break;
     }
     case 'stampPM': r.pmReview = `${S.me || 'PM'} · ${stampEn(Date.now())}`; break;
     case 'send': return send(S, day);
     case 'menu':
-      return menu([['fill', 'Fill floors from task sheets'], ['carry', 'Copy crews, needs and risks from last report'], ['paste', 'Open a link someone sent you'],
-        ['pdf', 'Save as PDF'], S.folderUrl && ['fileNow', 'Save to the review folder now'], ['settings', 'Settings, crews and backup'], ['clear', 'Clear this report', 'danger']]);
+      return menu([['fill', L('Fill floors from task sheets')], ['carry', L('Copy crews, needs and risks from last report')], ['paste', L('Open a link someone sent you')],
+        ['pdf', L('Save as PDF')], S.folderUrl && ['fileNow', L('Save to the review folder now')], ['settings', L('Settings, crews and backup')], ['clear', L('Clear this report'), 'danger']]);
     case 'pdf': return savePdf(`Daily Report ${r.date}.pdf`, record(S, r));
     case 'fileNow': return fileReport(S, r);
     case 'paste': return pasteSheet(code => go('p=' + code));
     case 'settings': return go('settings');
     case 'clear':
-      if (!await ask(`Clear everything in the ${dayEn(day)} report?`, 'Clear', 'danger')) return;
+      if (!await ask(L('Clear everything in the {date} report?', { date: niceDate(day) }), L('Clear'), 'danger')) return;
       delete R[day];
       persist();
       return renderOffice(v, S, day);
@@ -518,12 +522,13 @@ export async function reportAct(a, el, S, day, v) {
     case 'hRename': return renameWorker(day, val);
     case 'hDel': {
       const s = CREW.find(x => x.id === el.dataset.id);
-      if (!s || !await ask(`Remove ${s.who ? `${s.who}'s` : 'this'} ${dayEn(s.date)} shift? A later text from their phone won't bring it back.`, 'Remove', 'danger')) return;
+      if (!s || !await ask(s.who ? L("Remove {name}'s {date} shift? A later text from their phone won't bring it back.", { name: s.who, date: niceDate(s.date) })
+        : L("Remove this {date} shift? A later text from their phone won't bring it back.", { date: niceDate(s.date) }), L('Remove'), 'danger')) return;
       s.gone = true;
       keep(KEYS.crewHours, CREW);
       return renderOffice(v, S, day);
     }
-    case 'hPmMenu': return menu([['hAdd', 'Add a shift'], ['paste', 'Open a link someone sent you'], ['settings', 'Settings, crews and backup']]);
+    case 'hPmMenu': return menu([['hAdd', L('Add a shift')], ['paste', L('Open a link someone sent you')], ['settings', L('Settings, crews and backup')]]);
     default: return;
   }
   r.updatedAt = Date.now();
