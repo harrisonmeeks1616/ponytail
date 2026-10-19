@@ -7,8 +7,9 @@ import ES from './es.mjs';
 
 // The passcode also keeps a key of its own: a tab still running the version before it (phones keep old
 // tabs open for days) rewrites settings without it, and an old backup has none. hours: this phone's own
-// clock-ins; crewHours: the PM's timesheet of everyone's. Backups and restores carry every key here.
-export const KEYS = { settings: 'schwab.settings', tasks: 'schwab.tasks', reports: 'schwab.reports', pin: 'schwab.pin', hours: 'schwab.hours', crewHours: 'schwab.crewHours' };
+// clock-ins; crewHours: the PM's timesheet of everyone's; device: this phone's hub secret, in a key of its own for the
+// same reason as the passcode. Backups and restores carry every key here (a backup leaves out the hub key).
+export const KEYS = { settings: 'schwab.settings', tasks: 'schwab.tasks', reports: 'schwab.reports', pin: 'schwab.pin', hours: 'schwab.hours', crewHours: 'schwab.crewHours', device: 'schwab.device' };
 export const COMPANY = 'H.A. Sack-Electrical', COMPANY_ALT = 'Sack Company-Electrical', COMPANIES = `${COMPANY} · ${COMPANY_ALT}`;
 // The top lines of every PDF: who did the work, then the job.
 export const letterhead = (s, more = '') => `${COMPANIES}\n${[s.project, s.site, more].filter(Boolean).join(' · ')}`;
@@ -57,36 +58,138 @@ export function save(key, val) {
   try { localStorage.setItem(key, JSON.stringify(val)); return true; } catch { return false; }
 }
 
-export const SETTINGS_TPL = { lang: '', me: '', role: '', super: '', pm: '', project: '', site: '', floors: [''], crews: [{ name: '', lead: '', members: '' }], checks: [''], folderUrl: '', siteCode: '', pin: '', worker: '', device: '' };
+// hubKey is a secret: never in a backup, a link or the hub's config. hubRole and hubCrew are set by the sync engine.
+// workerId: the roster person this phone's time clock name is (empty when the name matches nobody here).
+export const SETTINGS_TPL = {
+  lang: '', me: '', role: '', super: '', pm: '', project: '', site: '', floors: [''],
+  crews: [{ id: '', name: '', lead: '', members: '' }], people: [{ id: '', name: '', crewId: '' }], checks: [''],
+  folderUrl: '', siteCode: '', pin: '', worker: '', workerId: '', device: '', hubUrl: '', hubKey: '', hubRole: '', hubCrew: '',
+};
 export const DEFAULT_SETTINGS = {
-  lang: '', me: '', role: 'Superintendent', super: '', pm: '', folderUrl: '', siteCode: '', pin: '', worker: '', device: '',
+  lang: '', me: '', role: 'Superintendent', super: '', pm: '', folderUrl: '', siteCode: '', pin: '', worker: '', workerId: '', device: '',
+  hubUrl: '', hubKey: '', hubRole: '', hubCrew: '',
   project: 'Charles Schwab Building', site: 'Charlotte, NC',
   floors: ['Basement', 'Level 1', 'Level 2', 'Level 3', 'Level 4', 'Level 5', 'Roof'],
-  crews: ['A', 'B', 'C', 'D'].map(x => ({ name: 'Crew ' + x, lead: '', members: '' })),
+  crews: ['A', 'B', 'C', 'D'].map(x => ({ id: '', name: 'Crew ' + x, lead: '', members: '' })), people: [],
   checks: ['Supports / strapping', 'Labeling', 'Terminations / torque', 'Testing', 'Covers / plates', 'Cleanup'],
 };
+// Settings from storage, a backup or the hub: known fields only, every crew and person with an id, the roster checked.
+export function normSettings(raw) {
+  const s = raw ? shape(SETTINGS_TPL, raw) : structuredClone(DEFAULT_SETTINGS);
+  fixRoster(s, Array.isArray(raw?.people));
+  return s;
+}
 export function loadSettings() {
-  const raw = load(KEYS.settings, null), s = raw ? shape(SETTINGS_TPL, raw) : structuredClone(DEFAULT_SETTINGS), pin = load(KEYS.pin, '');
+  const s = normSettings(load(KEYS.settings, null)), pin = load(KEYS.pin, '');
   if (PIN_FORMAT.test(pin)) s.pin = pin;
   return s;
 }
-export const roster = (s, crew) => (s.crews.find(c => c.name === crew)?.members || '').split(',').map(x => x.trim()).filter(Boolean);
+
+// ---------- people and crews ----------
+// settings.people is the roster, the one list of people for the sheets, the time clock and the crew hours. A person
+// and a crew each have an id that never changes: a rename keeps every sheet and shift attached. Names are matched
+// (nameKey) only when someone types or picks one; two people may share a name. crews[].members is the comma list of
+// each crew's people, rewritten from the roster for older versions of the app, which still read it.
+// A name matches however it was typed, so 'José  L' on a sheet is 'jose l' on the time clock. Only letters and digits
+// count: a comma, a period or an iPhone's curly apostrophe is a space, so 'Mike O’Neil' is "Mike O'Neil" and 'José L.' is 'Jose L'.
+export const nameKey = name => String(name ?? '').normalize('NFD').replace(/[\u0300-\u036f]/g, '').replace(/[^\p{L}\p{N}]+/gu, ' ').trim().toLowerCase();
+// A name as the lists keep it: no comma (the members list is comma separated), single spaces, up to 60 characters.
+export const cleanName = name => String(name ?? '').replace(/,/g, ' ').trim().replace(/\s+/g, ' ').slice(0, 60);
+const split = members => (members || '').split(',').map(cleanName).filter(nameKey);
+// ponytail: an id made while migrating comes from the name (a 53-bit hash), so phones migrating the same lists agree,
+// and a tab still on the old version (its save drops people and crew ids) re-migrates to the same ids. Someone renamed
+// in between gets a new id that one time. New people and crews get random ids.
+const hash = s => {
+  let a = 0xdeadbeef, b = 0x41c6ce57;
+  for (let i = 0; i < s.length; i++) { const c = s.charCodeAt(i); a = Math.imul(a ^ c, 2654435761); b = Math.imul(b ^ c, 1597334677); }
+  a = Math.imul(a ^ (a >>> 16), 2246822507) ^ Math.imul(b ^ (b >>> 13), 3266489909);
+  b = Math.imul(b ^ (b >>> 16), 2246822507) ^ Math.imul(a ^ (a >>> 13), 3266489909);
+  return (4294967296 * (2097151 & b) + (a >>> 0)).toString(36);
+};
+const newId = (prefix, taken, seed = uid() + Math.random()) => {
+  let id = prefix + hash(seed);
+  for (let n = 2; taken.has(id); n++) id = prefix + hash(seed + '#' + n);
+  taken.add(id);
+  return id;
+};
+const idsIn = s => new Set([...s.crews, ...s.people].map(x => x.id));
+const syncMembers = s => { for (const c of s.crews) c.members = s.people.filter(p => p.crewId === c.id).map(p => p.name).join(', '); };
+// hasPeople: the stored settings have a roster. Without one (made before people had ids) it is built from the crews'
+// member lists: one person per name, on the first crew that lists it, as names were matched before.
+function fixRoster(s, hasPeople) {
+  const taken = new Set();
+  for (const c of s.crews) c.id = FORMAT.uid.test(c.id) && !taken.has(c.id) ? (taken.add(c.id), c.id) : newId('c', taken, 'crew|' + nameKey(c.name));
+  if (!hasPeople) s.people = s.crews.flatMap(c => split(c.members).map(name => ({ id: '', name, crewId: c.id }))).slice(0, 500); // a list's cap, as shape() keeps it
+  const crewIds = new Set(s.crews.map(c => c.id)), seen = new Set();
+  s.people = s.people.map(p => ({ ...p, name: cleanName(p.name) })).filter(p => nameKey(p.name) && (hasPeople || (!seen.has(nameKey(p.name)) && seen.add(nameKey(p.name)))));
+  for (const p of s.people) {
+    p.id = FORMAT.uid.test(p.id) && !taken.has(p.id) ? (taken.add(p.id), p.id) : newId('p', taken, 'person|' + nameKey(p.name));
+    if (!crewIds.has(p.crewId)) p.crewId = '';
+  }
+  syncMembers(s);
+}
+export const crewById = (s, id) => (id ? s?.crews.find(c => c.id === id) : undefined);
+// The roster with each person's crew name: [{ id, name, crewId, crew }].
+export const people = s => (s?.people || []).map(p => ({ id: p.id, name: p.name, crewId: p.crewId, crew: crewById(s, p.crewId)?.name || '' }));
+export const personById = (s, id) => (id ? people(s).find(p => p.id === id) : undefined);
+// The person a typed name is. Among people sharing the name, the one on crewId, else the first on the roster.
+export const findPerson = (s, name, crewId = '') => {
+  const k = nameKey(name), ms = k ? people(s).filter(p => nameKey(p.name) === k) : [];
+  return ms.find(p => crewId && p.crewId === crewId) || ms[0];
+};
+// Always a new person, even with a name already on the roster (the screens ask first). id: to restore one whose
+// hours already carry it. Returns the person, or undefined for no name.
+export function addPerson(s, name, crewId = '', id = '') {
+  const n = cleanName(name), taken = idsIn(s);
+  if (!nameKey(n)) return undefined;
+  s.people.push({ id: isId(id) && !taken.has(id) ? id : newId('p', taken), name: n, crewId: crewById(s, crewId) ? crewId : '' });
+  syncMembers(s);
+  return personById(s, s.people.at(-1).id);
+}
+const edit = (s, id, f) => { const p = id && s.people.find(x => x.id === id); if (p) { f(p); syncMembers(s); } return !!p; };
+// Renames keep the id, so assignments and hours stay with the person; old sheets keep the name they were made with.
+export const renamePerson = (s, id, name) => !!nameKey(cleanName(name)) && edit(s, id, p => { p.name = cleanName(name); });
+export const movePerson = (s, id, crewId) => edit(s, id, p => { p.crewId = crewById(s, crewId) ? crewId : ''; });
+export const removePerson = (s, id) => { const n = s.people.length; s.people = s.people.filter(p => p.id !== id); syncMembers(s); return s.people.length < n; };
+export const renameCrew = (s, id, name) => { const c = crewById(s, id); if (c) c.name = String(name ?? '').trim().slice(0, 60); return !!c; };
+export const addCrew = (s, name) => { const c = { id: newId('c', idsIn(s)), name, lead: '', members: '' }; s.crews.push(c); return c; };
+export function removeCrew(s, id) {
+  s.crews = s.crews.filter(c => c.id !== id);
+  for (const p of s.people) if (p.crewId === id) p.crewId = ''; // they stay on the roster, under "Not on a crew"
+  syncMembers(s);
+}
+
+// Whether a sheet lists a person: by id when both the sheet and the caller have one, else by name, so a sheet made
+// before ids, or on a phone that doesn't know the person, still finds them.
+const lists = (t, k, pid) => t.members.some((m, i) => (pid && t.memberIds[i] ? t.memberIds[i] === pid : !!k && nameKey(m) === k));
+// The sheets of that day that list the person: their crew (the first sheet that names one) and the sheets as task
+// links [{ uid, id }]: the uid finds the sheet, the short id is its label.
+export function assignmentFor(tasks, name, day, pid = '') {
+  const k = nameKey(name), sheets = k || pid ? tasks.filter(t => t.date === day && lists(t, k, pid)) : [], first = sheets.find(t => t.crew);
+  return { crew: first?.crew || '', crewId: first?.crewId || '', tasks: taskLinks(sheets.map(t => ({ uid: t.uid, id: t.id }))), sheets };
+}
 
 const ITEM = { id: '', text: '', done: false, at: 0 };
+// crewId and memberIds (one per name in members, '' for a name typed before people had ids) are who the sheet is for;
+// crew and members are the names it was made with. aLang and cLang: the language the office and the crew typed in.
+// reply: the office's message to the crew. assignAt and crewAt: when the office part and the crew part last changed (the hub's merge stamps).
 export const TASK_TPL = {
-  uid: '', origin: '', from: '', id: '', date: '', by: '', floor: '', area: '', crew: '', lead: '', members: [''], size: 0,
-  scope: '', refs: '', items: [ITEM], checks: [ITEM],
+  uid: '', origin: '', from: '', id: '', date: '', by: '', floor: '', area: '', crew: '', crewId: '', lead: '', members: [''], memberIds: [''], size: 0,
+  scope: '', refs: '', items: [ITEM], checks: [ITEM], aLang: '',
   allot: 0, allotNote: '', est: 0, estNote: '', pStart: '', pStop: '', checkIn: '',
   aStart: '', aStop: '', delay: 0, status: '', doneText: '', remain: '', comments: '', cLang: '',
-  review: '', reviewer: '', followUp: '', sentAt: 0, resultAt: 0, gotAt: 0, updatedAt: 0, filedAt: 0,
+  review: '', reviewer: '', followUp: '', reply: '', replyAt: 0, replyBy: '', sentAt: 0, resultAt: 0, gotAt: 0, updatedAt: 0, filedAt: 0, assignAt: 0, crewAt: 0,
 };
 // Ids, dates and times end up in addresses and page markup, so they must keep their exact format.
 // Anything else in them (a damaged or crafted link) is dropped here, once, for every link, backup and save.
 const FORMAT = { uid: /^[\w-]{1,40}$/, date: /^\d{4}-\d{2}-\d{2}$/, time: /^([01]\d|2[0-3]):[0-5]\d(?::[0-5]\d)?$/ };
 const isDay = d => FORMAT.date.test(d) && addDays(d, 0) === d; // a real calendar day, not 2026-02-30
+const isId = x => typeof x === 'string' && FORMAT.uid.test(x); // not undefined, which a regex reads as 'undefined'
 export function normTask(t) {
   const n = shape(TASK_TPL, t);
   if (!FORMAT.uid.test(n.uid)) n.uid = '';
+  if (!FORMAT.uid.test(n.crewId)) n.crewId = '';
+  n.memberIds = n.members.map((_, i) => (isId(n.memberIds[i]) ? n.memberIds[i] : ''));
   for (const k of ['pStart', 'pStop', 'checkIn', 'aStart', 'aStop']) if (!FORMAT.time.test(n[k])) n[k] = '';
   // Every sheet belongs to a day; one with no usable date would vanish from every board.
   // It goes back on the day it was last edited (or today), and is filed again under that date.
@@ -99,7 +202,7 @@ export function normTask(t) {
 }
 export const newItem = text => ({ id: uid(), text, done: false, at: 0 });
 
-const ASSIGN = ['id', 'date', 'by', 'floor', 'area', 'crew', 'members', 'size', 'scope', 'refs', 'allot', 'allotNote', 'est', 'estNote', 'pStart', 'pStop', 'checkIn'];
+const ASSIGN = ['id', 'date', 'by', 'floor', 'area', 'crew', 'crewId', 'members', 'memberIds', 'size', 'scope', 'refs', 'aLang', 'allot', 'allotNote', 'est', 'estNote', 'pStart', 'pStop', 'checkIn', 'reply', 'replyAt', 'replyBy'];
 const CREW = ['lead', 'aStart', 'aStop', 'delay', 'status', 'doneText', 'remain', 'comments', 'cLang', 'resultAt'];
 
 // part 'crew': take the crew's results and check-offs, keep my assignment.
@@ -132,10 +235,34 @@ export function mergeAnswers(base, answers) {
 export function cloneTask(t, date, onlyOpen) {
   const c = normTask(structuredClone(t));
   for (const k of CREW) if (k !== 'lead') c[k] = TASK_TPL[k];
-  for (const k of ['review', 'reviewer', 'followUp', 'sentAt', 'gotAt']) c[k] = TASK_TPL[k];
+  for (const k of ['review', 'reviewer', 'followUp', 'reply', 'replyAt', 'replyBy', 'sentAt', 'gotAt', 'assignAt', 'crewAt']) c[k] = TASK_TPL[k];
   for (const list of ['items', 'checks']) c[list] = c[list].filter(i => !onlyOpen || !i.done).map(i => newItem(i.text));
   return Object.assign(c, { uid: uid(), origin: 'mine', date, updatedAt: Date.now() });
 }
+
+// Short task ids (T1019-02) are labels for people. Two office phones working offline can both make one, so anything
+// that points at a sheet keeps its uid too; the number is only what is shown.
+export function nextId(tasks, date) {
+  const mmdd = date.slice(5).replace('-', '');
+  for (let i = 1; ; i++) {
+    const id = `T${mmdd}-${String(i).padStart(2, '0')}`;
+    if (!tasks.some(t => t.date === date && t.id === id)) return id;
+  }
+}
+// A sheet arrived (a link now, the hub later) with the date and number of one of this phone's own sheets. Ours takes
+// the next free number when it was never sent, since no one else has seen its number; returns [[sheet, old id]].
+export function renumberClashes(tasks, inc) {
+  const out = [];
+  for (const t of tasks) {
+    if (t === inc || t.uid === inc.uid || t.origin !== 'mine' || t.sentAt || !t.id || t.id !== inc.id || t.date !== inc.date) continue;
+    out.push([t, t.id]);
+    t.id = nextId(tasks, t.date);
+    t.updatedAt = Date.now();
+  }
+  return out;
+}
+// Both already sent with the same date and number: each shows a warning until someone changes one's Task ID.
+export const sameNumber = (tasks, t) => !!(t.id && t.sentAt) && tasks.some(x => x.uid !== t.uid && x.date === t.date && x.id === t.id && x.sentAt);
 
 export const CREW_TPL = { name: '', na: true, lead: '', workers: 0, labor: 0, laborFromTasks: false, members: '', area: '', ref: '', start: '', stop: '', done: '', quality: '', holdups: '', good: '' };
 export const REPORT_TPL = {
@@ -146,7 +273,7 @@ export const REPORT_TPL = {
   floors: [{ floor: '', crews: [CREW_TPL] }],
   next: [{ step: '', prereq: '', start: '', dur: '', finish: '', deadline: '', lead: '', checkin: '' }],
   risks: [{ risk: '', impact: '', prevent: '', fallback: '', owner: '', by: '' }],
-  preparedBy: '', pmReview: '', updatedAt: 0, filedAt: 0,
+  preparedBy: '', pmReview: '', updatedAt: 0, filedAt: 0, lang: '', pmAt: 0, // lang: the language it was typed in; pmAt: the PM part's merge stamp
 };
 const REPORT_STATUS = ['On plan', 'At risk', 'Behind plan', 'No work today']; // same list as STATUS in report.mjs
 export function normReport(r) {
@@ -158,13 +285,25 @@ export function normReport(r) {
 
 // One clock-in to clock-out, under the name it was clocked in with. Only taps on the worker's own phone make
 // one; only the PM changes one. edited marks what the PM changed, so a worker's later link can't undo it;
-// gone, a shift the PM removed; at, when the newest link that named it was sent.
-export const SHIFT_TPL = { id: '', device: '', who: '', date: '', in: '', out: '', edited: { who: false, in: false, out: false }, gone: false, at: 0 };
+// gone, a shift the PM removed; at, when the newest link that named it was sent. pid: the roster person, when the
+// phone knew who it was. crew, crewId and tasks: the crew and the task sheets the worker's phone had them on that day.
+export const SHIFT_TPL = { id: '', device: '', who: '', pid: '', crew: '', crewId: '', tasks: [{ uid: '', id: '' }], date: '', in: '', out: '', edited: { who: false, in: false, out: false }, gone: false, at: 0 };
+// Task links [{ uid, id }]: the uid finds the sheet; id is the number it had, for display. A link from an older phone is
+// the number alone ('T1019-02' becomes { uid: '', id: 'T1019-02' }), dropped once the same number arrives with its uid.
+// The Task ID is typed on the sheet ('L3 East-14', 'Baño-2', 'E-301/4'), so an id keeps letters, digits, spaces and
+// . _ # / -; it is shown escaped and quoted in the CSV. At most 10.
+export function taskLinks(list) {
+  const ls = (Array.isArray(list) ? list : []).slice(0, 500).map(x => shape(SHIFT_TPL.tasks[0], typeof x === 'string' ? { id: x } : x))
+    .map(x => ({ uid: FORMAT.uid.test(x.uid) ? x.uid : '', id: /^[\p{L}\p{M}\p{N}_ .#\/-]{1,20}$/u.test(x.id.trim()) ? x.id.trim() : '' }));
+  return ls.filter((x, i) => (x.uid ? ls.findIndex(y => y.uid === x.uid) === i : x.id && !ls.some(y => y.uid && y.id === x.id) && ls.findIndex(y => !y.uid && y.id === x.id) === i)).slice(0, 10);
+}
 export function normShift(x) {
   const n = shape(SHIFT_TPL, x);
   n.who = n.who.trim().slice(0, 60);
+  n.crew = n.crew.trim().slice(0, 60);
+  n.tasks = taskLinks(x?.tasks);
   for (const k of ['in', 'out']) if (!FORMAT.time.test(n[k])) n[k] = '';
-  if (!FORMAT.uid.test(n.device)) n.device = '';
+  for (const k of ['device', 'pid', 'crewId']) if (!FORMAT.uid.test(n[k])) n[k] = '';
   return FORMAT.uid.test(n.id) && isDay(n.date) && n.in ? n : null; // no id, day or clock-in: nothing to log
 }
 export const blank = list => shape(REPORT_TPL[list][0], {});
@@ -247,6 +386,29 @@ const hex = buf => [...new Uint8Array(buf)].map(b => b.toString(16).padStart(2, 
 export async function pinHash(pin, salt = hex(crypto.getRandomValues(new Uint8Array(8)))) {
   return `${salt}:${hex(await crypto.subtle.digest('SHA-256', new TextEncoder().encode(`${salt}:${pin}`)))}`;
 }
+// ---------- this phone's device identity (HUB.md, Identity) ----------
+// A private secret of 32 letters and digits in its own key; the device id is the first 32 hex characters of its SHA-256.
+// The hub learns the id only from the secret, so knowing another phone's id (it is in texts and the Sheet) opens nothing.
+const ALNUM = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789';
+const devRec = () => { const d = load(KEYS.device, null); return /^[A-Za-z0-9]{32}$/.test(d?.secret) && /^[0-9a-f]{32}$/.test(d?.id) ? d : null; };
+export const deviceId = () => devRec()?.id || '';
+export const deviceSecret = () => devRec()?.secret || '';
+const idOf = async secret => hex(await crypto.subtle.digest('SHA-256', new TextEncoder().encode(secret))).slice(0, 32);
+// Makes the secret once (a restored backup brings the old phone's back). Resolves to the id, or '' where the phone
+// can't (no crypto.subtle off https): the time clock then keeps using the older settings.device.
+export async function ensureDevice() {
+  try {
+    let secret = load(KEYS.device, null)?.secret;
+    if (!/^[A-Za-z0-9]{32}$/.test(secret)) {
+      secret = '';
+      while (secret.length < 32) for (const b of crypto.getRandomValues(new Uint8Array(48))) if (b < 248 && secret.length < 32) secret += ALNUM[b % 62]; // 248 = 4 x 62: no bias
+    }
+    const id = await idOf(secret);
+    if (deviceId() !== id && !save(KEYS.device, { secret, id })) return '';
+    return id;
+  } catch { return ''; }
+}
+
 const OPEN_MS = 12 * 36e5, TRIES = 5, WAIT_MS = 60e3; // signed in for a work shift; 5 wrong codes, then a 1 minute wait
 const lockState = () => shape({ until: 0, fails: 0, wait: 0 }, load(UNLOCK, {}));
 export const unlocked = (now = Date.now()) => lockState().until > now;
@@ -304,7 +466,7 @@ export const toMin = t => { const m = /^(\d{1,2}):(\d{2})/.exec(t || ''); return
 // Minutes from start to stop; a stop earlier than the start is an overnight shift.
 export const span = (start, stop) => { const a = toMin(start), b = toMin(stop); return a == null || b == null ? 0 : (b - a + 1440) % 1440; };
 export const worked = t => (t.aStart && t.aStop ? Math.max(0, span(t.aStart, t.aStop) - t.delay) : 0); // a sheet's minutes on task, less delays
-export const fmtMin = m => m >= 60 ? `${Math.floor(m / 60)}h ${m % 60}m` : `${m}m`;
+export const fmtMin = (m, l = lang) => m >= 60 ? L('{h}h {m}m', { h: Math.floor(m / 60), m: m % 60 }, l) : L('{m}m', { m }, l); // PDFs and English message lines pass 'en'
 export const t12 = t => { const m = toMin(t); return m == null ? '' : `${(Math.floor(m / 60) + 11) % 12 + 1}:${pad(m % 60)} ${m < 720 ? 'AM' : 'PM'}`; };
 export const stamp = (ts, l = lang) => ts ? new Date(ts).toLocaleString(locale(l), { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' }) : '';
 export const timeOf = ts => new Date(ts).toLocaleTimeString(locale(lang), { hour: 'numeric', minute: '2-digit' });
@@ -312,7 +474,8 @@ export const hrs = n => (Math.round(n * 10) / 10).toString();
 
 // ---------- UI pieces ----------
 
-export const crewVar = (s, name) => { const i = s.crews.findIndex(c => c.name === name); return `--crew:var(--c${i < 0 ? 4 : i % 6})`; };
+// A crew's color: by its id when the sheet or shift has one (a renamed crew keeps its color), else by name.
+export const crewVar = (s, name, id = '') => { let i = id ? s.crews.findIndex(c => c.id === id) : -1; if (i < 0) i = s.crews.findIndex(c => c.name === name); return `--crew:var(--c${i < 0 ? 4 : i % 6})`; };
 
 // v: the screen the arrows and the date picker stay on (day = task sheets, report).
 export const dateBar = (day, v = 'day') => `<div class="datebar">
@@ -373,12 +536,14 @@ export function sheet(html) {
   return d;
 }
 
-// In-page confirm: bigger targets than the browser's, and it can say what the buttons do.
-export const ask = (msg, yes, tone = 'primary') => new Promise(res => {
-  const d = sheet(`<p class="ask">${esc(msg)}</p><div class="btns"><button class="btn ${tone}" data-a="1">${esc(yes)}</button><button class="btn" data-a="0">${L('Cancel')}</button></div>`);
-  d.addEventListener('click', e => { const b = e.target.closest('[data-a]'); if (b) { res(b.dataset.a === '1'); d.close(); } });
-  d.addEventListener('close', () => res(false));
+// In-page question: bigger targets than the browser's, and the buttons say what they do. opts: [[value, label, tone]];
+// resolves to the value tapped, or null for Cancel or closing it.
+export const choose = (msg, opts) => new Promise(res => {
+  const d = sheet(`<p class="ask">${esc(msg)}</p><div class="btns">${opts.map(([, label, tone], i) => `<button class="btn ${tone || ''}" data-a="${i + 1}">${esc(label)}</button>`).join('')}<button class="btn" data-a="0">${L('Cancel')}</button></div>`);
+  d.addEventListener('click', e => { const b = e.target.closest('[data-a]'); if (b) { res(+b.dataset.a ? opts[b.dataset.a - 1][0] : null); d.close(); } });
+  d.addEventListener('close', () => res(null));
 });
+export const ask = async (msg, yes, tone = 'primary') => (await choose(msg, [[true, yes, tone]])) === true;
 
 export function sendSheet({ title, text, url }) {
   const msg = `${text}\n${url}`;
@@ -544,13 +709,28 @@ const sameCopy = (a, b) => same(a, b) && a.pdf === b.pdf && a.v === b.v;
 export const queue = item => save(OUTBOX, [...box().filter(x => !same(x, item)), item]);
 export const queued = () => box().length;
 
+// review-folder.gs answers in English. These are its replies, so Spanish mode can show them in Spanish; any other text stays as it came.
+const folderSays = e => {
+  const known = {
+    'Invalid request': L('Invalid request'),
+    'Upload integration not configured': L('Upload integration not configured'),
+    'Wrong site code': L('Wrong site code'),
+    'Invalid date or PDF': L('Invalid date or PDF'),
+    'Invalid record version': L('Invalid record version'),
+    'Busy; try again shortly': L('Busy; try again shortly'),
+    'Daily upload limit reached; ask the owner': L('Daily upload limit reached; ask the owner'),
+    'Upload failed; owner must review Drive setup': L('Upload failed; owner must review Drive setup'),
+  };
+  return Object.hasOwn(known, e) ? known[e] : e;
+};
+
 async function post(s, body) {
   const url = String(s.folderUrl || '').trim();
   if (!/^https:\/\/script\.google\.com\/macros\/s\/[\w-]+\/exec$/.test(url)) throw new Error(L('Use the Apps Script upload link ending in /exec'));
   // A plain-text body keeps this a "simple" request, which Apps Script answers without a CORS preflight.
   const res = await fetch(url, { method: 'POST', body: JSON.stringify({ ...body, code: s.siteCode }) });
   const reply = await res.json().catch(() => ({}));
-  if (!reply.ok) throw new Error(reply.error || `the folder answered with error ${res.status}`);
+  if (!reply.ok) throw new Error(reply.error || L('the folder answered with error {status}', { status: res.status }));
 }
 
 let busy = null;
@@ -584,7 +764,7 @@ export async function fileAway(s, f) {
   let r = await flush(s);
   if (waiting()) r = await flush(s); // another upload was mid-way, or a refused record went first; go again for this one
   // Report on this record only; another record's refusal is not this one's failure.
-  toast(!waiting() ? L('Saved to the review folder') : r.error ? L('Review folder said: {error}. Kept on this phone; check Settings.', { error: r.error })
+  toast(!waiting() ? L('Saved to the review folder') : r.error ? L('Review folder said: {error}. Kept on this phone; check Settings.', { error: folderSays(r.error) })
     : L('Saved on this phone. It goes to the review folder when there is signal.'), waiting() && r.error ? 'bad' : '');
 }
 
@@ -611,11 +791,12 @@ export function settingsView(s) {
     </div></section>
     <section class="card"><h2>${L('Floors / levels')}</h2><p class="hint">${L('One per line. They show up as quick picks; you can still type any floor.')}</p>
       <textarea data-k="s.floors" data-lines rows="6">${esc(s.floors.join('\n'))}</textarea></section>
-    <section class="card"><h2>${L('Crews')}</h2><p class="hint">${L('Members are separated by commas. Picking a crew on a task fills these in.')}</p>
+    <section class="card"><h2>${L('Crews')}</h2><p class="hint">${L('Tap a name to rename the person or move them to another crew. Picking a crew on a task fills in its people.')}</p>
       ${s.crews.map((c, i) => `<div class="crew-edit" style="--crew:var(--c${i % 6})"><div class="grid">
-        ${field(L('Crew name'), `s.crews.${i}.name`, c.name)}${field(L('Lead'), `s.crews.${i}.lead`, c.lead)}
-        ${field(L('Members'), `s.crews.${i}.members`, c.members, { wide: true, ph: 'Mike R, Jose L, Tre W' })}</div>
+        ${field(L('Crew name'), `s.crews.${i}.name`, c.name)}${field(L('Lead'), `s.crews.${i}.lead`, c.lead)}</div>
+        ${peopleEditor(s, c, 'Mike R, Jose L, Tre W')}
         <button class="link danger" data-act="delCrew" data-i="${i}">${L('Remove {name}', { name: esc(c.name || L('crew')) })}</button></div>`).join('')}
+      ${people(s).some(p => !p.crew) ? `<div class="crew-edit">${peopleEditor(s, null)}</div>` : ''}
       <button class="btn" data-act="addCrew">${L('+ Add crew')}</button></section>
     <section class="card"><h2>${L('Finish / accuracy checks')}</h2><p class="hint">${L('One per line. Tap them onto a task as required checks.')}</p>
       <textarea data-k="s.checks" data-lines rows="6">${esc(s.checks.join('\n'))}</textarea></section>
@@ -629,31 +810,93 @@ export function settingsView(s) {
       <p class="hint">${L('Using about {kb} KB of roughly 5,000 KB.', { kb: Math.ceil([...Object.values(KEYS), OUTBOX].reduce((n, k) => n + JSON.stringify(load(k, '')).length, 0) / 1024) })}</p></section>`;
 }
 
-export async function settingsAct(act, s, el) {
-  if (act === 'addCrew') s.crews.push({ name: L('Crew {x}', { x: String.fromCharCode(65 + s.crews.length) }), lead: '', members: '' });
-  if (act === 'delCrew' && await ask(L('Remove {name} from the crew list? Existing sheets keep their crew name.', { name: s.crews[el.dataset.i].name }), L('Remove'), 'danger')) s.crews.splice(el.dataset.i, 1);
-  if (act === 'backup') {
-    const data = Object.fromEntries(Object.values(KEYS).map(k => [k, load(k, null)]));
-    download(new Blob([JSON.stringify(data)], { type: 'application/json' }), `schwab-field-backup-${today()}.json`);
+// A crew's people as chips (c null: the people on no crew): tap a name to rename or move the person, ✕ to take them
+// off the list, and a box to add people (several at once with commas). Big targets: a chip is a 40 px row, the add button 44 px.
+function peopleEditor(s, c, ph = '') {
+  const ps = people(s).filter(p => (c ? p.crewId === c.id : !p.crew)), plain = 'background:none;border:0;font:inherit;color:inherit;cursor:pointer;min-height:40px';
+  return `<div class="field"><span>${c ? L('People') : L('Not on a crew')}</span>
+    ${ps.length ? `<div class="chips">${ps.map(p => `<span class="chip" style="padding:0 0 0 14px;gap:0"><button type="button" data-act="pEdit" data-pid="${esc(p.id)}" style="${plain};padding:0;text-align:left">${esc(p.name)}</button><button type="button" data-act="pDel" data-pid="${esc(p.id)}" aria-label="${esc(L('Remove {name}', { name: p.name }))}" style="${plain};min-width:40px;padding:0 4px;color:var(--bad)">✕</button></span>`).join('')}</div>`
+      : c ? `<p class="hint">${L('No one on this crew yet.')}</p>` : ''}
+    </div>${c ? `<div class="field"><span>${L('Add people')}</span><div class="edit-row"><input placeholder="${esc(ph)}" aria-label="${esc(L('Add people to {crew}', { crew: c.name || L('crew') }))}" enterkeyhint="done" autocomplete="off" data-enter="pAdd" data-crew="${esc(c.id)}">
+      <button class="x add" data-act="pAdd" data-crew="${esc(c.id)}" aria-label="${esc(L('Add to {crew}', { crew: c.name || L('crew') }))}">+</button></div></div>` : ''}`;
+}
+
+// Tap a person: rename them, or move them to another crew. Resolves when the sheet closes.
+const editPerson = (s, id) => new Promise(res => {
+  const p = personById(s, id);
+  if (!p) return res();
+  const d = sheet(`<h3>${esc(p.name)}</h3><div class="edit-row"><input name="who" value="${esc(p.name)}" aria-label="${esc(L('Name'))}" autocomplete="off" enterkeyhint="done">
+      <button class="btn primary" data-save>${L('Rename')}</button></div>
+    <p class="label">${L('Move to another crew')}</p>
+    <div class="menu">${s.crews.map(c => `<button class="btn" data-move="${esc(c.id)}" style="${crewVar(s, c.name, c.id)}"${c.id === p.crewId ? ' aria-current="true"' : ''}><i class="dot"></i>${c.id === p.crewId ? '✓ ' : ''}${esc(c.name || L('crew'))}</button>`).join('')}</div>`);
+  const rename = () => {
+    if (!renamePerson(s, id, d.querySelector('[name=who]').value)) return toast(L('Type the name'), 'bad');
+    d.close();
+  };
+  d.querySelector('[name=who]').addEventListener('keydown', e => { if (e.key === 'Enter') { e.preventDefault(); rename(); } });
+  d.addEventListener('click', e => {
+    if (e.target.closest('[data-save]')) return rename();
+    const m = e.target.closest('[data-move]');
+    if (m) { movePerson(s, id, m.dataset.move); d.close(); }
+  });
+  d.addEventListener('close', () => res());
+});
+
+// Adding a name someone on the roster already has asks first: the same person (moved here) or a second person.
+async function addFromSettings(s, el) {
+  const box = el.closest('.edit-row').querySelector('input'), names = box.value.split(',').map(cleanName).filter(nameKey), c = crewById(s, el.dataset.crew);
+  if (!c || !names.length) return box.focus();
+  const crew = c.name || L('crew');
+  for (const name of names) {
+    const twin = findPerson(s, name, c.id);
+    const pick = !twin ? 'new' : twin.crewId === c.id
+      ? await choose(L('{name} is already on {crew}. Add a second person with the same name?', { name: twin.name, crew }), [['new', L('Add a second {name}', { name: twin.name })]])
+      : await choose(L('{name} is already on {crew}. Is that the same person?', { name: twin.name, crew: twin.crew || L('the list') }),
+        [['move', L('Same person: move to {crew}', { crew }), 'primary'], ['new', L('Someone else: add a second {name}', { name: twin.name })]]);
+    if (pick === 'move') { movePerson(s, twin.id, c.id); toast(L('{name} moved to {crew}', { name: twin.name, crew })); }
+    if (pick === 'new') addPerson(s, name, c.id);
   }
+}
+
+export async function settingsAct(act, s, el) {
+  if (act === 'addCrew') addCrew(s, L('Crew {x}', { x: String.fromCharCode(65 + s.crews.length) }));
+  if (act === 'delCrew' && await ask(L('Remove {name} from the crew list? Existing sheets keep their crew name.', { name: s.crews[el.dataset.i].name }), L('Remove'), 'danger')) removeCrew(s, s.crews[el.dataset.i].id);
+  if (act === 'pAdd') await addFromSettings(s, el);
+  if (act === 'pEdit') await editPerson(s, el.dataset.pid);
+  if (act === 'pDel') {
+    const p = personById(s, el.dataset.pid);
+    if (p && await ask(L('Take {name} off the list? Sheets and hours keep the name.', { name: p.name }), L('Remove'), 'danger')) removePerson(s, p.id);
+  }
+  if (act === 'backup') download(new Blob([JSON.stringify(backupData())], { type: 'application/json' }), `schwab-field-backup-${today()}.json`);
   if (act === 'testFolder') {
     try {
       await post(s, { ping: true });
       toast(L('Connected. Finished sheets and reports will save to the review folder.'));
       retryUploads(s);
     } catch (e) {
-      toast(e instanceof TypeError ? L("Couldn't reach the review folder. Check the link and your signal.") : L('Review folder said: {error}', { error: e.message }), 'bad');
+      toast(e instanceof TypeError ? L("Couldn't reach the review folder. Check the link and your signal.") : L('Review folder said: {error}', { error: folderSays(e.message) }), 'bad');
     }
   }
   save(KEYS.settings, s);
 }
 
+// Everything this phone keeps, as stored, except the hub key: a backup file gets passed around, and the PM can send a
+// new invite. The device secret goes along, so a restored phone keeps its own hours.
+export function backupData() {
+  const data = Object.fromEntries(Object.values(KEYS).map(k => [k, load(k, null)]));
+  if (data[KEYS.settings] && typeof data[KEYS.settings] === 'object') data[KEYS.settings] = { ...data[KEYS.settings], hubKey: '' };
+  return data;
+}
+export const isBackup = data => !!data && typeof data === 'object' && Object.values(KEYS).some(k => k in data);
+// Writes every key the backup has; false if the phone ran out of space part way.
+export const restoreData = data => Object.values(KEYS).every(k => data[k] == null || save(k, data[k]));
+
 export async function restore(file) {
   let data;
   try { data = JSON.parse(await file.text()); } catch { return toast(L("That file isn't a field app backup"), 'bad'); }
-  if (!data || !Object.values(KEYS).some(k => k in data)) return toast(L("That file isn't a field app backup"), 'bad');
+  if (!isBackup(data)) return toast(L("That file isn't a field app backup"), 'bad');
   if (!await ask(L('Replace everything on this phone with this backup?'), L('Replace'), 'danger')) return;
-  if (!Object.values(KEYS).every(k => data[k] == null || save(k, data[k]))) return toast(L('Restore stopped: this phone is out of space. Free space and restore again.'), 'bad');
+  if (!restoreData(data)) return toast(L('Restore stopped: this phone is out of space. Free space and restore again.'), 'bad');
   location.reload();
 }
 
