@@ -496,6 +496,11 @@ input[type=search] { -webkit-appearance: none; appearance: none; }
 .hubdot[data-state=syncing] i { background: var(--c2); }
 .hubdot[data-state=offline] i { background: transparent; }
 .hubdot[data-state=error] i { background: var(--bad); }
+/* Signed in, the dot rides on the Live tab's icon: a fourth button in the brand strip would shrink both company names. */
+.tabbar a { position: relative; }
+.tabbar .hubdot { position: absolute; top: 5px; left: calc(50% + 5px); pointer-events: none; }
+.tabbar .hubdot i { width: 13px; height: 13px; box-shadow: 0 0 0 2px var(--bg); }
+.tabbar .hubdot[data-state=offline] i { background: var(--bg); }
 .hub-dot { display: inline-block; flex: none; width: 10px; height: 10px; margin-right: 8px; border-radius: 50%; background: var(--muted); }
 .hub-dot[data-state=live] { background: var(--done); }
 .hub-dot[data-state=syncing] { background: var(--info); }

@@ -1133,7 +1133,7 @@ test('ASSIGN and CREW agree with shared.mjs; the entity templates are the client
   // A template's shape: field names and value types, all the way down ('s' and 't' on the server are both strings).
   const sig = t => (Array.isArray(t) ? [sig(t[0])] : t && typeof t === 'object' ? Object.fromEntries(Object.keys(t).sort().map(k => [k, sig(t[k])])) : typeof t);
   const omit = (o, keys) => Object.fromEntries(Object.entries(o).filter(([k]) => !keys.includes(k)));
-  const LOCAL = ['origin', 'from', 'gotAt', 'filedAt', 'updatedAt']; // HUB.md: task fields that never leave a phone
+  const LOCAL = ['origin', 'from', 'gotAt', 'filedAt', 'updatedAt', 'news']; // HUB.md: task fields that never leave a phone
   const server = { TASK: get('TASK'), SHIFT: get('SHIFT'), REPORT: get('REPORT'), CONFIG: get('CONFIG') };
   assert.deepEqual(sig(server.TASK), sig(omit(shared.TASK_TPL, LOCAL)), 'TASK_TPL holds every synced task field: crewId, memberIds, reply, replyAt, replyBy, aLang and the part stamps assignAt, crewAt');
   assert.deepEqual(sig(get('ITEM')), sig(shared.TASK_TPL.items[0]));

@@ -1102,7 +1102,9 @@ function pullOnce_(ctx, since) {
   prefetch_(ctx, { tasks: taskRows, shifts: shiftRows.concat(openRows), reports: reportRows, events: eventRows, config: crews ? cfgAll : cfgRows });
   const cfgOf = function (rows) { return fetchEntities_(ctx, 'config', rows, normConfig_, function () { return 'config'; })[0]; };
 
-  const crewKeep = crews && crewSheets_(crews, cfgOf(cfgAll)), keep = function (o) { return !crewKeep || crewKeep(o) === true; };
+  const pid = typeof r.pid === 'string' && FORMAT.uid.test(r.pid) ? r.pid : ''; // the person a crew phone is: a sheet that lists them comes too, whatever its crew
+  const listed = function (o) { return pid !== '' && o.memberIds.indexOf(pid) >= 0; };
+  const crewKeep = crews && crewSheets_(crews, cfgOf(cfgAll)), keep = function (o) { return !crewKeep || crewKeep(o) === true || listed(o); };
   const sent = fetchEntities_(ctx, 'tasks', taskRows, normTask_, function (o) { return o.uid; }, function (o) { return office || o.sentAt > 0; }); // a crew key gets a sheet once it was sent, never a draft
   out.tasks = cut(sent.filter(keep));
   const mine = function (o) { return pm || (ctx.dev !== '' && o.device === ctx.dev); }; // crew and super see their own phone's hours only
@@ -1121,7 +1123,7 @@ function pullOnce_(ctx, since) {
   if (cfg) out.config = cfg;
   // a sent sheet that changed and is now another crew's (moved there) leaves these crews' phones as a deleted one does,
   // marked moved: a phone keeps one it has work on that has not gone up, or got only by text (HUB.md, pull)
-  const left = sent.filter(function (o) { return crewKeep && crewKeep(o) === false; }).map(function (o) { return { kind: 'tasks', key: o.uid, rev: o.rev, moved: true }; });
+  const left = sent.filter(function (o) { return crewKeep && crewKeep(o) === false && !listed(o); }).map(function (o) { return { kind: 'tasks', key: o.uid, rev: o.rev, moved: true }; });
   out.deleted = cut(readIndex_(ctx, 'deleted').filter(function (x) { return x.rev > since && (office || x.kind !== 'reports'); })
     .map(function (x) { return { kind: x.kind, key: x.key, rev: x.rev }; }).concat(left));
   if (limit < rev) { out.rev = limit; out.more = true; }

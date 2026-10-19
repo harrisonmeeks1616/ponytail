@@ -14,7 +14,7 @@
 // and crews by their ids in the shared settings, and task sheets by uid. Short task ids are labels that two office phones
 // working offline can both hand out.
 
-import { KEYS, HUB_FIELDS, load, save, shape, L, normTask, normShift, normReport, normSettings, mergeAnswers, pack, linkTo, PIN_FORMAT, ensureDevice, nextId } from './shared.mjs';
+import { KEYS, HUB_FIELDS, load, save, shape, L, normTask, normShift, normReport, normSettings, mergeAnswers, pack, linkTo, PIN_FORMAT, ensureDevice, nextId, nameKey, findPerson, personById, crewById } from './shared.mjs';
 
 const ROLES = ['crew', 'super', 'pm'];
 const URL_OK = /^https:\/\/script\.google\.com\/(?:a\/macros\/[\w.-]+|macros)\/s\/[\w-]+\/exec$/;
@@ -105,9 +105,18 @@ export function makeSync(o = {}) {
   function hub() {
     const s = cfg();
     if (!URL_OK.test(s.hubUrl) || !KEY_OK.test(s.hubKey)) return null;
-    const d = device(); // dev labels and finds this phone's own shifts; only secret goes to the hub
-    return { url: s.hubUrl, key: s.hubKey, role: ROLES.includes(s.hubRole) ? s.hubRole : '', crew: String(s.hubCrew || '').slice(0, 60), dev: d.id, secret: d.secret };
+    const d = device(), role = ROLES.includes(s.hubRole) ? s.hubRole : '', w = role === 'crew' ? person(s) : { crew: str(s.hubCrew, 60), pid: '' }; // dev labels and finds this phone's own shifts; only secret goes to the hub
+    return { url: s.hubUrl, key: s.hubKey, role, crew: w.crew, pid: w.pid, dev: d.id, secret: d.secret };
   }
+  // A crew phone is its person's (the time clock name; among namesakes, the one tapped). It pulls their crew on the shared
+  // roster, so a person the PM moves to another crew takes the phone along, and the sheets that list them (HUB.md, pull);
+  // a name the roster does not know keeps the crew the phone joined.
+  function person(s) {
+    const R = { crews: arr(s.crews).filter(isObj), people: arr(s.people).filter(isObj) }, joined = str(s.hubCrew, 60), byId = personById(R, s.workerId);
+    const me = byId && nameKey(byId.name) === nameKey(s.worker) ? byId : findPerson(R, s.worker, R.crews.find(c => c.name === joined)?.id);
+    return { crew: str(crewById(R, me?.crewId)?.name, 60) || joined, pid: str(me?.id, 40) };
+  }
+  const sigOf = c => [c.role, c.crew, winDays(c.role), ...(c.pid ? [c.pid] : [])].join('|'); // a new one: the next pull is a full one
   function loadState() {
     const s = obj(store.get(ST, null)), st = { rev: num(s.rev), sig: String(s.sig || ''), skew: num(s.skew), ok: num(s.ok) };
     for (const k of ['t', 'h', 'm', 'r', 'g', 'told', 'del']) st[k] = dict(s[k]);
@@ -137,15 +146,17 @@ export function makeSync(o = {}) {
   // ---------- status ----------
 
   let cur = { state: 'off', message: '', at: 0 }, pending = 0, info = {}, live = { events: [], onsite: [], at: 0 };
-  let epoch = 0, running = null, again = false, timer = 0, pokeT = 0, fails = 0, nextAllowed = 0, lastTry = 0;
+  let epoch = 0, running = null, again = false, timer = 0, pokeT = 0, fails = 0, nextAllowed = 0, lastTry = 0, refused = false; // refused: a refused key was said out loud
   const err = (code, m) => Object.assign(new Error(m || say(code)), { code });
+  const pmHere = () => { const s = cfg(); return s.hubRole ? s.hubRole === 'pm' : s.role === 'Project manager'; }; // connecting, the role is not known yet: the phone's own
   const bad = code => ({ ok: false, error: code, message: say(code) });
   // connect, invite and the PM's one-off actions: nothing retries them, so no "trying again" or "goes to the hub" wording
   const lost = e => { const code = e.code || 'server'; return { ok: false, error: code, message: ['offline', 'busy', 'quota', 'server'].includes(code) ? L('That did not work. Try again.') : e.message }; };
   function say(code) {
     return ({
       offline: L('No signal. Your work is saved on this phone and goes to the hub when you are back online.'),
-      unauthorized: L('The hub did not accept this phone. Ask the PM for a new invite link.'),
+      unauthorized: pmHere() ? L('The hub did not accept this PM key. Copy it again from the Execution log of the hub script and paste all of it. If it is lost, run resetPmKey there.')
+        : L('The hub did not accept this phone. Ask the PM for a new invite link.'), // the PM pastes its key from the setup; everyone else joins by invite
       forbidden: L('This phone is not allowed to do that on the hub.'),
       busy: L('The hub is busy. Trying again in a minute.'),
       quota: L('The hub has reached its daily limit. It will try again later.'),
@@ -485,6 +496,7 @@ export function makeSync(o = {}) {
     const st = loadState(), kinds = new Set(), ts = now();
     const win = winDays(c.role), cut = cutoff(ts, win);
     let moved = [];
+    const news = []; // sheets an office message or follow-up just reached (a crew phone)
     if (rep.same !== true) {
       const lc = readLocal(c), tw = c.role === 'crew' ? ['crew'] : ['assign', 'crew'], rw = c.role === 'pm' ? ['sup', 'pm'] : c.role === 'super' ? ['sup'] : [];
       scan(st, c, lc);
@@ -497,6 +509,8 @@ export function makeSync(o = {}) {
         if (!loc && inc.date < cut) continue;
         const next = mergeTask(loc, inc, ent(st.t, inc.uid), tw, c.role, ts);
         if (next === loc) continue;
+        // an office message or follow-up reaching a crew phone is said, and marked on the board until the sheet is opened
+        if (c.role === 'crew' && ((next.reply && (next.reply !== loc?.reply || next.replyAt !== loc?.replyAt)) || (next.followUp && next.followUp !== loc?.followUp))) { next.news = true; news.push(next.id); }
         if (loc) lc.tasks[i] = next; else { at.set(inc.uid, lc.tasks.length); lc.tasks.push(next); }
         dirty.tasks = true;
       }
@@ -559,6 +573,7 @@ export function makeSync(o = {}) {
       }
       flush(lc, dirty, kinds);
       if (moved.length) toast(moved.map(m => L('Your sheet {old} is now {id}: another sheet has that number.', m)).join(' '));
+      if (news.length) toast(L('Message from the office on sheet {id}', { id: news.join(', ') }));
       if (arr(rep.events).length) live.events = [...shape([EV_TPL], rep.events), ...live.events].filter((e, i, a) => a.findIndex(x => x.rev === e.rev && x.ts === e.ts) === i).sort((a, b) => b.rev - a.rev).slice(0, 50);
       if (Array.isArray(rep.onsite)) live.onsite = shape([ON_TPL], rep.onsite).slice(0, 100);
       live.at = ts;
@@ -571,10 +586,10 @@ export function makeSync(o = {}) {
     notify(kinds);
   }
   async function pullPhase(c, ep) {
-    const sig = [c.role, c.crew, winDays(c.role)].join('|');
+    const sig = sigOf(c);
     for (let page = 0; page < 20; page++) { // the hub sends at most 500 of a kind and says `more`; it lowers rev so the next pull starts where this one stopped
       const st = loadState();
-      const req = { since: st.sig !== sig ? 0 : st.rev, days: winDays(c.role), ...(c.role === 'crew' && c.crew && { crews: [c.crew] }) };
+      const req = { since: st.sig !== sig ? 0 : st.rev, days: winDays(c.role), ...(c.role === 'crew' && c.crew && { crews: [c.crew] }), ...(c.role === 'crew' && c.pid && { pid: c.pid }) };
       const rep = await call('pull', req);
       if (ep !== epoch) throw err('aborted');
       applyPull(c, rep, sig);
@@ -615,7 +630,7 @@ export function makeSync(o = {}) {
       if (['forbidden', 'bad_request'].includes(r.error)) purgeLater(kind, key, 0); // the hub will never take it (not the PM key any more)
     }
     // First contact (or a new role, crew or window): merge what the hub has before pushing anything, so old local copies cannot overwrite newer ones.
-    const first = loadState().sig !== [c.role, c.crew, winDays(c.role)].join('|');
+    const first = loadState().sig !== sigOf(c);
     if (first) await pullPhase(c, ep);
     const held = await pushPhase(c, ep, !first && c.role !== 'crew'); // else an office phone's sheet the hub has never had goes after the pull, which renumbers it if a synced sheet has its day and number
     await pullPhase(c, ep);
@@ -632,7 +647,7 @@ export function makeSync(o = {}) {
         let delay = TICK_MS;
         try {
           await run(ep);
-          fails = 0; nextAllowed = 0;
+          fails = 0; nextAllowed = 0; refused = false;
           setStatus('live', '', now());
         } catch (e) {
           if (e.code === 'aborted' || ep !== epoch) return void (hub() && schedule(POKE_MS)); // the settings changed under this cycle: start over with the new ones
@@ -642,6 +657,7 @@ export function makeSync(o = {}) {
           delay = BACKOFF[Math.min(fails, BACKOFF.length) - 1] * 1000;
           if (code === 'busy') delay = Math.max(delay, 60e3);
           if (code === 'unauthorized') delay = HALT_MS; // a wrong key will not fix itself: look again in 10 minutes, not every 20 seconds
+          if (code === 'unauthorized' && !refused) { refused = true; toast(e.message, 'bad'); } // a replaced key: the person is told what to do, not just a red dot
           if (code === 'forbidden') patchSettings({ hubRole: '' }); // maybe the key's role changed: ask the hub again next time
           nextAllowed = now() + delay;
           setStatus(['offline', 'busy', 'quota'].includes(code) ? 'offline' : 'error', e.code ? e.message : say('server'));
@@ -871,7 +887,8 @@ export function makeSync(o = {}) {
   }
 
   return { hubStatus, poke, cycle, wake, start, joinFrom, connect, disconnect, invite, translate, records, stats, purge, purgeLater, rotate, archive, selftest, fromText,
-    liveData: () => ({ ...live, info }), onHub: (key, kind = 'task') => (kind === 'report' ? loadState().r[key]?.sup : loadState().t[key]?.assign)?.v !== undefined }; // onHub: the hub has this sheet (so its number is known) or report
+    liveData: () => ({ ...live, info }), onHub: (key, kind = 'task') => (kind === 'report' ? loadState().r[key]?.sup : loadState().t[key]?.assign)?.v !== undefined, // onHub: the hub has this sheet (so its number is known) or report
+    replyOnHub: t => { const b = loadState().t[t?.uid]?.assign?.b; return !!b && b.reply === t.reply && b.replyAt === t.replyAt; } }; // the hub took this sheet's message as it is here (the office part as last had from the hub)
 }
 
 // Sheets that share a day and a short id with another sheet: uid -> the uids of the others. Pure, for any list of sheets.
@@ -914,4 +931,5 @@ export const archive = before => get().archive(before);
 export const selftest = () => get().selftest();
 export const liveData = () => get().liveData();
 export const onHub = (key, kind) => get().onHub(key, kind);
+export const replyOnHub = t => get().replyOnHub(t);
 export const fromText = (kind, key, part, at, skew) => get().fromText(kind, key, part, at, skew);

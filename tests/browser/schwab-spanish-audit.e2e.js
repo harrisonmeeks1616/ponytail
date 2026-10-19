@@ -1081,6 +1081,10 @@ async function joinScreens(h) {
   const r = await h.open({ role: 'crew' }); // a "they pick" invite carries the job's crews
   await nav(r, '#p=' + await invite({ crews: ['ZQLighting', 'ZQPower'] })); await r.waitForSelector('dialog [data-join]');
   await h.snap(r, 'Join sheet, crews from the invite');
+  const n = await h.open({ role: 'crew' }); // a crew invite carries its people: a name to tap, and a typed one the list lacks is questioned once
+  await nav(n, '#p=' + await invite({ crew: 'Crew A', people: [{ name: 'ZQAna', crew: 'Crew A' }, { name: 'ZQJose', crew: 'Crew A' }] })); await n.waitForSelector('dialog [data-who]');
+  await h.snap(n, 'Join sheet, names from the invite');
+  await n.fill('dialog [name=who]', 'ZQAnaRodriguez'); await click(n, 'dialog [data-join]'); await h.after(n, 'Join sheet, names from the invite'); // not on the crew list
   const own = await h.open({ role: 'pm', hub: hubOf('pm') }); // the PM opens the crew invite it just made
   await nav(own, '#p=' + await invite({ crew: 'Crew A' })); await h.after(own, 'Join: the PM phone opens its own invite');
   const s = await h.open({ role: 'super' });

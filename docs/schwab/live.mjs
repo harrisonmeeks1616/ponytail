@@ -10,7 +10,7 @@
 //   reports()    the touched daily reports (normReport), as an array or as the date-keyed object
 //   role         'pm' | 'super' | 'crew': the office role of this phone. Only 'pm' deletes what the hub has, exports, sees hours and administers the hub
 //   day          'YYYY-MM-DD' the app is on (the Live board always shows the real today, from now())
-//   sync         the sync.mjs API: hubStatus, liveData, cycle, connect, disconnect, joinFrom, invite, translate, records, stats, purge, purgeLater, onHub, rotate, archive, selftest
+//   sync         the sync.mjs API: hubStatus, liveData, cycle, connect, disconnect, joinFrom, invite, translate, records, stats, purge, purgeLater, onHub, replyOnHub, rotate, archive, selftest
 //   go(hash)     navigate, hash without '#' (go('clock/2026-10-12'))
 //   render()     redraw the current screen after this file changed its own state
 //   toast(msg, tone)
@@ -234,10 +234,12 @@ export function hubLabel(state, l = getLang()) {
   return state === 'live' ? L('Live', {}, l) : state === 'syncing' ? L('Syncing', {}, l) : state === 'offline' ? L('Offline', {}, l) : state === 'error' ? L('Problem', {}, l) : L('Not connected', {}, l);
 }
 // The small header indicator: nothing without a hub. go: where a tap leads ('live' on office phones, 'settings' on crew phones).
-export function statusDot(status, l = getLang(), go = 'settings') {
+// badge: the dot alone, for the Live tab (tasks.html header: a fourth button in the brand strip would shrink the company names).
+export function statusDot(status, l = getLang(), go = 'settings', badge = false) {
   const s = status?.state;
   if (!GOT.has(s)) return '';
   const n = status.pending | 0, label = L('Hub: {state}', { state: hubLabel(s, l) }, l) + (n && s !== 'live' ? `, ${L('{n} not sent yet', { n }, l)}` : '');
+  if (badge) return `<i class="hubdot" data-state="${s}" role="img" aria-label="${esc(label)}" title="${esc(label)}"><i></i></i>`;
   return `<button type="button" class="icon-btn hubdot" data-go="${esc(go)}" data-state="${s}" aria-label="${esc(label)}" title="${esc(label)}"><i></i></button>`;
 }
 
@@ -390,7 +392,7 @@ function sheetCard(ctx, t, now, dup) {
     <a class="row" href="${taskHref(t)}"><span class="row-lead">${pieOf(t)}</span>
       <span class="row-main"><span class="row-title"><span class="tid">${esc(t.id || L('New task'))}</span> <span class="area">${esc(where)}</span></span>
         <span class="row-sub meta">${n ? `${esc(L('{d} of {n} steps done', { d, n }))} · ` : ''}<span class="stage" data-tone="${tone || ''}">${esc(label)}</span>${dup ? ` ${sameNo()}` : ''}</span>
-        <span class="row-sub meta">${esc([last, t.reply && t.replyAt ? L('Message sent {ago}', { ago: ago(t.replyAt, now) }) : ''].filter(Boolean).join(' · '))}</span></span>${icon('chev', 'chev')}</a>
+        <span class="row-sub meta">${esc([last, t.reply && t.replyAt ? msgLine(ctx, t, now) : ''].filter(Boolean).join(' · '))}</span></span>${icon('chev', 'chev')}</a>
     ${note ? `<div class="live-note"><span class="caption">${L('Crew notes')}</span>${txView(ctx, clip(note, 240), langOf(t, nk))}</div>` : ''}
     <div class="live-acts">${need ? `<button class="btn primary" data-act="liveReview" data-u="${esc(t.uid)}">${L('Review')}</button>` : ''}<button class="btn" data-act="liveMsg" data-u="${esc(t.uid)}">${L('Message')}</button></div></div>`;
 }
@@ -407,6 +409,8 @@ export function withReview(t, review, note, ms, by, l = getLang()) {
 }
 const latest = (ctx, uid) => ctx.tasks().find(t => t.uid === uid); // act on the sheet as it is now, not as it was when the sheet opened
 const byWho = ctx => ctx.S.me || roleName(ctx.role);
+// "Sent" only once the hub has the message: a draft's goes to the crew with the sheet, and one still on this phone waits for signal.
+const msgLine = (ctx, t, now) => (!t.sentAt ? L('Message goes out with the sheet') : ctx.sync.replyOnHub?.(t) ? L('Message sent {ago}', { ago: ago(t.replyAt, now) }) : L('Message not sent yet'));
 
 function messageSheet(ctx, t) {
   const now = nowOf(ctx);
@@ -417,14 +421,19 @@ function messageSheet(ctx, t) {
     <div class="btns"><button class="btn primary" data-send>${L('Send')}</button></div>`);
   after(ctx, d);
   d.querySelector('textarea').focus();
-  d.querySelector('[data-send]').onclick = () => {
+  d.querySelector('[data-send]').onclick = async () => {
     const text = d.querySelector('textarea').value;
     if (!text.trim()) return ctx.toast(L('Type a message first'), 'bad');
-    const cur = latest(ctx, t.uid);
+    const cur = latest(ctx, t.uid), crew = t.crew || L('the crew');
     if (!cur) { d.close(); return ctx.toast(L('That sheet is gone'), 'bad'); }
     ctx.saveTask(withMessage(cur, text, nowOf(ctx), byWho(ctx)));
     d.close();
-    ctx.toast(L('Message sent to {crew}', { crew: t.crew || L('the crew') }));
+    ctx.render();
+    if (!cur.sentAt) return ctx.toast(L('Message saved. It goes to {crew} with the sheet when you tap Send to crew.', { crew })); // the hub gives crews sent sheets only
+    ctx.toast(L('Sending…'));
+    const on = () => ctx.sync.replyOnHub?.(latest(ctx, t.uid));
+    for (let i = 0; i < 2 && !on(); i++) await ctx.sync.cycle(); // a round already running read the sheet before the message: the next one takes it
+    ctx.toast(on() ? L('Message sent to {crew}', { crew }) : L('Message saved on this phone. It goes to {crew} when the hub can be reached.', { crew }), on() ? '' : 'bad');
     ctx.render();
   };
 }
@@ -712,7 +721,9 @@ async function invite(ctx, role) {
   if (role === 'super' || !names.length) return make('');
   const d = sheet(`<h3>${L('Which crew is this invite for?')}</h3><div class="menu">${names.map(n => `<button class="btn" data-crew="${esc(n)}" style="${crewVar(ctx.S, n)}"><i class="dot"></i>${esc(n)}</button>`).join('')}
     <button class="btn" data-crew="">${L('Not sure: they pick')}</button></div>`);
-  d.addEventListener('click', e => { const b = e.target.closest('[data-crew]'); if (b) { d.close(); make(b.dataset.crew); } });
+  // answered once the link is made: the Invite crew tap (busy in tasks.html) shows it working and takes no second tap meanwhile
+  const crew = await new Promise(done => { d.addEventListener('click', e => { const b = e.target.closest('[data-crew]'); if (b) { done(b.dataset.crew); d.close(); } }); d.addEventListener('close', () => done(null)); });
+  if (crew !== null) await make(crew);
 }
 
 // A phone opening a join link: the person's name (and crew), then the hub does the rest. data: the unpacked link. A crew

@@ -49,7 +49,7 @@ ensureDevice(); // this phone's hub identity; the time clock uses the older devi
 attachShifts(S);
 const loadTasks = () => load(KEYS.tasks, []).map(normTask).filter(t => t.uid); // a sheet with no usable id can't be opened or told apart
 let T = loadTasks();
-let day = today(), crewFilter = '', view = { v: 'board' };
+let day = today(), crewFilter = '', view = { v: 'board' }, openedFrom = null; // openedFrom: the Live or Records screen a sheet was opened from
 
 const persist = () => save(KEYS.tasks, T) || toast(L("This phone wouldn't save. Open Settings and download a backup."), 'bad');
 const find = u => T.find(t => t.uid === u);
@@ -129,9 +129,10 @@ function route() {
   fileReportIfChanged(S, day);
   const h = location.hash.slice(1);
   if (h.startsWith('p=')) return openCode(h.slice(2));
-  const [v, a, b] = h.split('/');
+  const [v, a, b] = h.split('/'), was = view;
   if (['day', 'clock', 'report'].includes(v) && /^\d{4}-\d{2}-\d{2}$/.test(a) && addDays(a, 0) === a) day = a; // a real day, not 2026-02-30
   view = v === 'task' && find(a) ? { v: 'task', uid: a, tab: b || 'assign' } : { v: VIEWS.includes(v) ? v : 'board', sub: a };
+  if (view.v === 'task' && was?.uid !== view.uid) openedFrom = ['live', 'records'].includes(was?.v) ? was : null; // its Back goes there (a tab of the sheet keeps it)
   if (view.v === 'task') day = find(a).date;
   if (needsOffice(view) && !office()) { // the crew board stays behind the passcode pad
     view = { v: 'board' };
@@ -247,11 +248,12 @@ function header() {
   const here = { clock: 'clock', report: 'report', live: 'live', records: 'records', settings: '', hub: '' }[view.v] ?? 'day';
   const list = on ? [['day', L('Tasks')], ['clock', isPM() ? L('Hours') : L('Time clock')], ['report', L('Report')], ...(hubOn() ? [['live', L('Live')], ['records', L('Records')]] : [])]
     : [['day', L('Today')], ['clock', L('Time clock')]];
+  const dot = badge => statusDot(sync.hubStatus(), getLang(), role() === 'crew' ? 'hub' : 'live', badge); // nothing without a hub
   tabs.innerHTML = list.map(([v, label]) => {
     const locked = v === 'clock' && isPM() && !on; // the PM's time clock is the crew timesheet, behind the passcode
-    return `<a href="#${v}${v === 'live' || v === 'records' ? '' : '/' + day}"${v === here ? ' aria-current="page"' : ''}${locked ? ` aria-label="${esc(`${label}, ${L('needs the office passcode')}`)}"` : ''}>${icon(TAB_ICON[v])}<span>${label}${locked ? icon('lock', 'lock') : ''}</span></a>`;
+    return `<a href="#${v}${v === 'live' || v === 'records' ? '' : '/' + day}"${v === here ? ' aria-current="page"' : ''}${locked ? ` aria-label="${esc(`${label}, ${L('needs the office passcode')}`)}"` : ''}>${icon(TAB_ICON[v])}<span>${label}${locked ? icon('lock', 'lock') : ''}</span>${v === 'live' ? dot(true) : ''}</a>`;
   }).join('');
-  document.getElementById('hubDot').innerHTML = statusDot(sync.hubStatus(), getLang(), role() === 'crew' ? 'hub' : 'live'); // nothing without a hub
+  document.getElementById('hubDot').innerHTML = list.some(([v]) => v === 'live') ? '' : dot(); // signed in, the dot rides on the Live tab: with the gear, a fourth button here would shrink both company names
 }
 
 let drawnOn = today(); // the day the screen was last drawn, to notice midnight
@@ -333,7 +335,7 @@ function row(t) {
     <span class="row-main"><span class="row-title">${t.area ? `<span class="area">${esc(t.area)}</span> ` : ''}<span class="tid">${esc(t.id || L('New task'))}</span></span>
       <span class="row-sub">${[`<span class="who"><i class="dot"></i> ${esc(t.crew || L('No crew yet'))}</span>`, when && `<span class="nw">${esc(when)}</span>`,
         `<span class="stage" data-tone="${tone}">${esc(label)}</span>`].filter(Boolean).join(' ·&nbsp;')}</span>
-      ${same(t) ? `<span class="pill" data-tone="warn">${L('Same number as another sheet')}</span>` : ''}</span>
+      ${same(t) ? `<span class="pill" data-tone="warn">${L('Same number as another sheet')}</span>` : ''}${t.news ? `<span class="pill news" data-tone="info">${L('New message')}</span>` : ''}</span>
     ${t.est ? `<span class="row-end">${esc(L('{n} hrs', { n: t.est }))}</span>` : ''}${icon('chev', 'chev')}
   </a>`;
 }
@@ -345,10 +347,11 @@ const clash = (t, more = '') => (same(t) ? `<p class="hint"><span class="pill" d
 
 function renderTask(t) {
   const crewSide = t.origin === 'link';
+  if (t.news) { t.news = false; persist(); } // opened: the office's new message is on screen (sync.mjs marked it)
   const tabs = [['assign', L('Assign')], ['results', L('Crew results')], ['review', L('Review')]];
   screenHead(t.area || (t.id ? L('Task {id}', { id: t.id }) : L('New task')), {
     sub: [t.floor, t.area && t.id && L('Task {id}', { id: t.id })].filter(Boolean).join(' · '), more: crewSide ? 'crewMenu' : 'taskMenu',
-    back: { go: `day/${t.date}`, label: L('{date} task sheets', { date: niceDate(t.date) }) },
+    back: openedFrom ? { go: openedFrom.v + (openedFrom.sub ? '/' + openedFrom.sub : ''), label: openedFrom.v === 'live' ? L('Live') : L('Records') } : { go: `day/${t.date}`, label: L('{date} task sheets', { date: niceDate(t.date) }) },
   });
   app.innerHTML = `<div class="tsheet">${crewSide
     ? banner(t, true) + clash(t) + brief(t) + results(t)

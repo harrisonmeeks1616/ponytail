@@ -758,4 +758,14 @@ export default {
 
   // Joining the hub: the name as the roster spells it (PHONE-UX-11)
   'This name is not on the crew list. Tap your name above, or tap Join again to use it as typed.': 'Este nombre no está en la lista de la cuadrilla. Toque su nombre arriba, o toque Unirse otra vez para usarlo tal como lo escribió.',
+
+  // Phone UX round 2: office messages on crew phones, messages only called sent once on the hub, a wrong PM key
+  'Message from the office on sheet {id}': 'Mensaje de la oficina en la hoja {id}',
+  'New message': 'Mensaje nuevo',
+  'Message goes out with the sheet': 'El mensaje sale con la hoja',
+  'Message not sent yet': 'Mensaje todavía no enviado',
+  'Message saved. It goes to {crew} with the sheet when you tap Send to crew.': 'Mensaje guardado. Le llega a {crew} con la hoja cuando toque Enviar a cuadrilla.',
+  'Sending…': 'Enviando…',
+  'Message saved on this phone. It goes to {crew} when the hub can be reached.': 'Mensaje guardado en este teléfono. Le llega a {crew} cuando haya conexión con el sistema central.',
+  'The hub did not accept this PM key. Copy it again from the Execution log of the hub script and paste all of it. If it is lost, run resetPmKey there.': 'El sistema central no aceptó esta clave del gerente de proyecto. Cópiela otra vez del registro de ejecución del script del sistema central y péguela completa. Si se perdió, ejecute resetPmKey ahí.',
 };

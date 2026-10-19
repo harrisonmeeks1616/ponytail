@@ -946,6 +946,27 @@ test('messageSheet and reviewSheet act on the sheet as it is now', async () => {
   } finally { globalThis.document = prev; globalThis.location = prevLoc; }
 });
 
+test('Message says sent only once the hub has it: a draft\'s goes with the sheet, one with no signal waits on this phone (PHONE-UX-06)', async () => {
+  const hubHas = new Set(), sync = mkSync({ replyOnHub: t => hubHas.has(t?.uid), async cycle() { sync.calls.push(['cycle']); if (sync.up) hubHas.add('s1'); return sync.status; } });
+  let tasks = [task({ uid: 'd1', sentAt: 0 }), task({ uid: 's1', id: 'T1019-02' })];
+  const ctx = mkCtx({ sync, tasks: () => tasks, saveTask: t => { tasks = tasks.map(x => (x.uid === t.uid ? t : x)); } });
+  const els = new Map(), el = sel => els.get(sel) || els.set(sel, { focus() {}, value: '', hidden: false }).get(sel);
+  const prev = globalThis.document, prevLoc = globalThis.location;
+  globalThis.location = { hash: '#live' };
+  globalThis.document = { getElementById: () => null, querySelector: () => null, body: { append() {} },
+    createElement: () => ({ innerHTML: '', dataset: {}, style: {}, firstElementChild: { append() {}, focus() {} }, addEventListener() {}, showModal() {}, close() {}, querySelector: el, querySelectorAll: () => [] }) };
+  const send = async (u, text) => { els.clear(); await live.act(ctx, 'liveMsg', { dataset: { u } }); el('textarea').value = text; await el('[data-send]').onclick(); return toasts(ctx).at(-1).slice(1); };
+  try {
+    assert.deepEqual(await send('d1', 'Meet at the gang box'), ['Message saved. It goes to Crew A with the sheet when you tap Send to crew.', undefined], 'a draft never reaches a crew phone');
+    assert.deepEqual(await send('s1', 'Stop at grid line 7'), ['Message saved on this phone. It goes to Crew A when the hub can be reached.', 'bad'], 'no signal: not sent');
+    const html = live.liveView(ctx);
+    assert.ok(html.includes('Message goes out with the sheet') && html.includes('Message not sent yet') && !html.includes('Message sent'), 'the cards claim nothing either');
+    sync.up = true;
+    assert.deepEqual(await send('s1', 'Stop at grid line 7'), ['Message sent to Crew A', ''], 'sent once the hub took it');
+    assert.match(live.liveView(ctx), /Message sent just now/);
+  } finally { globalThis.document = prev; globalThis.location = prevLoc; }
+});
+
 // ---------- identity: people by id, sheets by uid (HUB.md, Identity) ----------
 
 // Two people named Jose L, one on each crew, and the hours of each.

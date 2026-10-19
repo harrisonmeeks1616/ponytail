@@ -182,7 +182,9 @@ and live updates. It is one Google Apps Script web app plus one Google Sheet, bo
 **What stays where**
 
 - Every phone keeps working from its own copy: crew phones keep 14 days, office phones 60. Edits made with no signal
-  wait on the phone and go when it is back. The status dot in the header shows Live, Syncing, Offline or Problem.
+  wait on the phone and go when it is back. The status dot in the header (on an office phone signed in, on the Live tab,
+  so both company names keep their size) shows Live, Syncing, Offline or Problem. A phone whose key was replaced also
+  says to ask the PM for a new invite.
 - The Sheet keeps everything. **Records → Load older records** shows what the phone no longer keeps, without storing it.
 - The hub key stays on the phone it was typed on. A backup leaves it out: after a restore, open a new invite (or paste
   the key again). A backup made on a hub also notes what the hub had then, so restoring it does not roll back work that
@@ -196,6 +198,8 @@ and live updates. It is one Google Apps Script web app plus one Google Sheet, bo
 
 - A lost phone, or someone who left: **Settings → Hub → Replace the crew key** (or the superintendent key). Every phone on
   the old key stops syncing until it opens a new invite. A lost PM key: run `resetPmKey` in the script editor.
+- A worker moved to another crew in Settings, or put on another crew's sheet, gets those sheets on their phone by
+  themselves (the phone follows its person on the crew list).
 - A Sheet holds 10 million cells. Records shows how full it is and warns at 70%. **Archive older records** moves
   everything before a date (at least 30 days back) into a new archive Sheet; it stays readable there.
 

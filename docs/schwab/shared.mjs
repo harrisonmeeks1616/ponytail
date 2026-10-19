@@ -207,12 +207,13 @@ const ITEM = { id: '', text: '', done: false, at: 0 };
 // crew and members are the names it was made with. aLangs and cLangs: the language each office and crew text was typed in, by
 // its field ('scope', 'remain') or a step's id (typedIn, langOf); aLang and cLang: each part's first one, for text typed before those.
 // reply: the office's message to the crew. assignAt and crewAt: when the office part and the crew part last changed (the hub's merge stamps).
+// news (this phone only): an office message or follow-up reached this crew phone through the hub; the board marks it until the sheet is opened.
 export const TASK_TPL = {
   uid: '', origin: '', from: '', id: '', date: '', by: '', floor: '', area: '', crew: '', crewId: '', lead: '', members: [''], memberIds: [''], size: 0,
   scope: '', refs: '', items: [ITEM], checks: [ITEM], aLang: '', aLangs: {},
   allot: 0, allotNote: '', est: 0, estNote: '', pStart: '', pStop: '', checkIn: '',
   aStart: '', aStop: '', delay: 0, status: '', doneText: '', remain: '', comments: '', cLang: '', cLangs: {},
-  review: '', reviewer: '', followUp: '', reply: '', replyAt: 0, replyBy: '', sentAt: 0, resultAt: 0, gotAt: 0, updatedAt: 0, filedAt: 0, assignAt: 0, crewAt: 0,
+  review: '', reviewer: '', followUp: '', reply: '', replyAt: 0, replyBy: '', sentAt: 0, resultAt: 0, gotAt: 0, updatedAt: 0, filedAt: 0, assignAt: 0, crewAt: 0, news: false,
 };
 // Ids, dates and times end up in addresses and page markup, so they must keep their exact format.
 // Anything else in them (a damaged or crafted link) is dropped here, once, for every link, backup and save.

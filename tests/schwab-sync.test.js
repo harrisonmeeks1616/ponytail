@@ -723,6 +723,10 @@ test('joining: an invite link sets a phone up only when the hub agrees, never re
   assert.deepEqual([w1.ok, w1.error], [false, 'unauthorized']);
   assert.equal(wrong.settings().hubKey, '');
   assert.ok(!JSON.stringify(w1).includes('x'.repeat(32)), 'a key never appears in an answer');
+  // PHONE-UX-09: a wrong key pasted in Settings > Hub says what is wrong for who is connecting: the PM has no invite to ask for
+  const typo = async role => (await (await makePhone(hub, role, { url: '', key: '', noRole: true })).sync.connect(URL_A, 'y'.repeat(32))).message;
+  assert.deepEqual([await typo('pm'), await typo('super')], ['The hub did not accept this PM key. Copy it again from the Execution log of the hub script and paste all of it. If it is lost, run resetPmKey there.',
+    'The hub did not accept this phone. Ask the PM for a new invite link.']);
   const mism = await blank(), m1 = await mism.sync.joinFrom(link({ role: 'super' })); // the link says super, the key is a crew key
   assert.deepEqual([m1.ok, m1.error], [false, 'mismatch']);
   assert.equal(mism.settings().hubUrl, '');
@@ -753,6 +757,8 @@ test('joining: an invite link sets a phone up only when the hub agrees, never re
   assert.equal((await pm.sync.rotate('crew')).ok, true);
   await lost.cycle();
   assert.equal(lost.sync.hubStatus().state, 'error');
+  await lost.cycle();
+  assert.deepEqual(lost.toasts, ['The hub did not accept this phone. Ask the PM for a new invite link. [bad]'], 'PHONE-UX-15: the crew is told what to do, once, not only by a red dot');
   const fresh2 = await pm.sync.invite('crew', 'Crew A'), again = await lost.sync.joinFrom(await unpack(fresh2.url.split('#p=')[1]));
   assert.equal(again.ok, true);
   await lost.cycle();
@@ -1486,7 +1492,7 @@ test('against the real hub/Code.gs (through the Google mock): a crew, a superint
   const before = pushes;
   await settleAll(sp, cp, pm);
   assert.equal(pushes, before);
-  assert.deepEqual([sp.toasts, pm.toasts, cp.toasts], [[], [], []]);
+  assert.deepEqual([sp.toasts, pm.toasts, cp.toasts], [[], [], ['The hub did not accept this phone. Ask the PM for a new invite link. [bad]']], 'no refusals; the crew phone was told once when its key was replaced');
   for (const p of [sp, pm, cp]) assert.equal(p.sync.hubStatus().pending, 0);
 });
 
@@ -1751,7 +1757,7 @@ test('every synced field survives the hub, a reload and a backup restored on ano
   await stable(pm, sp, cp);
   // the phone that wrote a part keeps that part's stamp in its sync state (so its own push coming back changes nothing);
   // every other phone holds the hub's stamp on the sheet itself
-  const local = ['origin', 'from', 'gotAt', 'filedAt', 'updatedAt'], strip = (t, also = []) => Object.fromEntries(Object.entries(t).filter(([k]) => !local.includes(k) && !also.includes(k)));
+  const local = ['origin', 'from', 'gotAt', 'filedAt', 'updatedAt', 'news'], strip = (t, also = []) => Object.fromEntries(Object.entries(t).filter(([k]) => !local.includes(k) && !also.includes(k)));
   const want = strip(pm.task(uid), ['assignAt', 'crewAt']), hubT = hub.taskView(hub.tasks.get(uid));
   assert.deepEqual([want.reply, want.replyBy, want.aLang, want.cLang, want.crewId, want.memberIds, want.items[0].done], ['Bring the lift', 'Pat', 'es', 'es', 'cA', ['p1'], true]);
   assert.ok(want.replyAt > 0 && want.resultAt > 0 && hubT.assignAt > 0 && hubT.crewAt > 0);
@@ -2072,6 +2078,29 @@ test('against the real hub/Code.gs: a crew phone keeps a sheet texted to it for 
   await step(a);
   assert.equal(a.task(ua), undefined, 'then the old crew\'s sheet leaves the phone');
   assert.deepEqual(a.toasts, []);
+});
+
+test('against the real hub/Code.gs: a crew phone follows its person: put on another crew\'s sheet, or moved to another crew, they get those sheets (PHONE-UX-04)', async () => {
+  const { mock, k, real } = realHub();
+  const sp = await makePhone(real, 'super', { key: k.super }), ana = await makePhone(real, 'crew', { key: k.crew, crew: 'Crew A', worker: 'Ana R' });
+  const step = async (...ps) => { for (const p of ps) { mock.advance(5e3); await p.cycle(); } };
+  const crews = [{ id: 'cA', name: 'Crew A', lead: '', members: '' }, { id: 'cB', name: 'Crew B', lead: '', members: '' }, { id: 'cC', name: 'Crew C', lead: '', members: '' }];
+  const roster = anaOn => sp.save('schwab.settings', { ...sp.settings(), crews, people: [{ id: 'pA', name: 'Ana R', crewId: anaOn }, { id: 'pL', name: 'Luis M', crewId: 'cB' }] });
+  roster('cA');
+  const ua = sp.addTask({ crew: 'Crew A', crewId: 'cA', sentAt: sp.now() });
+  const uc = sp.addTask({ id: 'T1019-03', crew: 'Crew C', crewId: 'cC', members: ['Ana R'], memberIds: ['pA'], sentAt: sp.now() }); // Ana lent to Crew C today
+  await step(sp, ana, ana);
+  assert.deepEqual([!!ana.task(ua), !!ana.task(uc)], [true, true], "her crew's sheet, and Crew C's sheet with her name on it");
+  // the PM moves Ana to Crew B in Settings, then sends Crew B a sheet: her phone follows her
+  roster('cB');
+  const ub = sp.addTask({ id: 'T1019-02', crew: 'Crew B', crewId: 'cB', members: ['Luis M'], memberIds: ['pL'], sentAt: sp.now() });
+  await step(sp, ana, ana);
+  assert.deepEqual([!!ana.task(ub), ana.sync.hubStatus().crew, !!ana.task(uc), ana.task(ua)], [true, 'Crew B', true, undefined], "Crew B's sheet arrives, the Hub page says Crew B, Crew C's sheet with her name stays, and Crew A's leaves");
+  // taken off Crew C's sheet, it leaves her phone too
+  sp.editTask(uc, t => { t.members = []; t.memberIds = []; });
+  await step(sp, ana);
+  assert.equal(ana.task(uc), undefined);
+  assert.deepEqual(ana.toasts, []);
 });
 
 test('a text from a phone on the hub is read in hub time: a sender clock running ahead does not make an old text win', async () => {
