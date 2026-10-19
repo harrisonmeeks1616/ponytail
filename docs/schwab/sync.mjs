@@ -101,7 +101,8 @@ export function makeSync(o = {}) {
     for (const k of ['t', 'h', 'm', 'r', 'g', 'told']) st[k] = dict(s[k]);
     return st;
   }
-  const saveState = st => store.set(ST, st);
+  let meta = { rev: 0, ok: 0 }; // what hubStatus shows, so a screen can ask on every draw without reading the whole state
+  const saveState = st => { meta = { rev: st.rev, ok: st.ok }; return store.set(ST, st); };
   const inT = raw => {
     const t = withX(norm.task(raw), raw, X_TASK);
     for (const l of ['items', 'checks']) { const seen = new Set(); t[l] = t[l].filter(i => i.id && !seen.has(i.id) && seen.add(i.id)); }
@@ -155,8 +156,7 @@ export function makeSync(o = {}) {
     if (!c) return { state: 'off', message: '', at: 0, pending: 0, role: '', crew: '', rev: 0 };
     let { state, message } = cur;
     if (state === 'live' && now() - cur.at >= LIVE_MS) { state = 'offline'; message = say('offline'); }
-    const st = loadState();
-    return { state, message, at: cur.at || st.ok, pending, role: c.role, crew: c.crew, rev: st.rev };
+    return { state, message, at: cur.at || meta.ok, pending, role: c.role, crew: c.crew, rev: meta.rev };
   }
   const notify = kinds => { if (kinds.size) try { o.onChange?.([...kinds]); } catch (e) { queueMicrotask(() => { throw e; }); } };
 
@@ -551,7 +551,7 @@ export function makeSync(o = {}) {
           fails = 0; nextAllowed = 0;
           setStatus('live', '', now());
         } catch (e) {
-          if (e.code === 'aborted' || ep !== epoch) return;
+          if (e.code === 'aborted' || ep !== epoch) return void (hub() && schedule(POKE_MS)); // the settings changed under this cycle: start over with the new ones
           const code = e.code || 'server';
           fails++;
           delay = BACKOFF[Math.min(fails, BACKOFF.length) - 1] * 1000;
