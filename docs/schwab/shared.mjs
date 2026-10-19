@@ -251,16 +251,16 @@ export function mergeTask(local, inc, part) {
   return local;
 }
 
-// The PM owns the decision answers and the review stamp; the superintendent owns everything else.
-// An answer whose question was reworded since is added as its own entry, never dropped.
+// The PM owns the decision answers and the review stamp; the superintendent owns everything else. answers is the
+// PM's copy, so it decides, an answer the PM took back included. One whose question was reworded since is added as
+// its own entry, never dropped.
 export function mergeAnswers(base, answers) {
   for (const d of answers.decisions) {
-    if (!d.pm && !d.pmNote) continue;
     const m = base.decisions.find(x => x.q === d.q);
     if (m) Object.assign(m, { pm: d.pm, pmNote: d.pmNote });
-    else base.decisions.push(d);
+    else if (d.pm || d.pmNote) base.decisions.push(d);
   }
-  base.pmReview = answers.pmReview || base.pmReview;
+  base.pmReview = answers.pmReview;
   return base;
 }
 

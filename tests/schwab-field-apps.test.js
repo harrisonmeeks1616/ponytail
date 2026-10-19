@@ -720,9 +720,12 @@ test("time clock: crew and task ids follow the worker's texts and never undo the
   log[0].gone = true;
   importShifts(log, [shift({ crew: 'Crew Z', tasks: ['T9'] })], 4);
   assert.deepEqual([log[0].crew, ids(log[0])], ['Crew A', ['T1', 'T2']], "another phone's link, or one for a shift the PM removed, changes nothing");
-  const byHand = [normShift({ id: 'pm1', who: 'Ana P', date: '2026-10-12', in: '07:00', edited: { who: true, in: true, out: true } })];
+  const byHand = [normShift({ id: 'pm1', who: 'Ana P', date: '2026-10-12', in: '07:00', out: '15:30', edited: { who: true, in: true, out: true } })];
   importShifts(byHand, [shift({ id: 'e', who: 'ána p', date: '2026-10-12', crew: 'Crew B' })], 5);
   assert.deepEqual(byHand.map(s => s.gone), [false, true], 'a day the PM added by hand matches the late text whatever its accents');
+  byHand[0].out = ''; // a day added with no clock-out waits for the phone's times: they are added for the PM to see
+  importShifts(byHand, [shift({ id: 'f', who: 'Ana P', date: '2026-10-12', out: '15:35' })], 6);
+  assert.deepEqual(byHand.map(s => [s.out, s.gone]), [['', false], ['', true], ['15:35', false]]);
 
   const S = (await lib).normSettings({ crews: [{ name: 'Crew B', lead: '', members: 'Ana P' }] });
   const ps = byPerson([shift({ id: 'p1', who: 'José L', date: '2026-10-12', crew: 'Crew A' }), shift({ id: 'p2', who: 'jose l', date: '2026-10-14', crew: 'Crew C' }), shift({ id: 'p3', who: 'Jose  L', date: '2026-10-15' }),
@@ -865,4 +868,12 @@ test('an older tab saving settings with no people keeps every person and id; a r
     assert.ok(restoreData({ [KEYS.tasks]: [] }));
     assert.equal(store.get('schwab.hubSync'), undefined, 'the next round merges pull-first, so newer hub copies win');
   } finally { delete globalThis.localStorage; }
+});
+
+test('a report text opened on the other phone: the PM copy decides the PM part, an answer the PM took back included', async () => {
+  const { normReport, mergeAnswers } = await lib;
+  const sup = normReport({ wins: 'newer words', decisions: [{ q: 'Saturday OT?', pm: 'Approved' }, { q: 'Lift Monday?', pm: 'Yes', pmNote: 'book it' }], pmReview: 'H · 5 PM' }); // the superintendent's text, sent before the PM took them back
+  const pm = normReport({ decisions: [{ q: 'Saturday OT?', pm: '' }, { q: 'Lift Monday?', pm: 'No', pmNote: '' }], pmReview: '' });
+  mergeAnswers(sup, pm);
+  assert.deepEqual([sup.wins, sup.decisions.map(d => [d.q, d.pm, d.pmNote]), sup.pmReview], ['newer words', [['Saturday OT?', '', ''], ['Lift Monday?', 'No', '']], '']);
 });

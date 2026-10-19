@@ -652,8 +652,8 @@ function normTask_(raw, now) {
   t.memberIds = t.memberIds.map(function (id) { return FORMAT.uid.test(id) ? id : ''; }); // '' keeps the places: memberIds may run next to members
   ['assignAt', 'crewAt', 'replyAt', 'sentAt', 'resultAt'].forEach(function (k) { t[k] = clampStamp_(t[k], now); }); // never more than 5 minutes ahead
   t.items = listIds_(t.items, now); t.checks = listIds_(t.checks, now);
-  // crewBase: the crew part as the phone last had it from the hub, read like a task (one level deep) and never stored
-  if (isObj_(raw.crewBase)) t.base = normTask_(Object.assign({}, raw.crewBase, { crewBase: null, uid: t.uid, date: t.date }), now);
+  // crewBase and assignBase: a part as the phone last had it from the hub, read like a task (one level deep) and never stored
+  ['crewBase', 'assignBase'].forEach(function (k) { if (isObj_(raw[k])) t[k] = normTask_(Object.assign({ date: t.date }, raw[k], { crewBase: null, assignBase: null, uid: t.uid }), now); });
   return t;
 }
 // A task's short id as typed, kept only as a label: printable, at most 40 characters, never starting like a formula.
@@ -716,6 +716,26 @@ function structure_(incoming, stored) { // the office decides which items exist;
 // A crew value the phone sends goes in: with no base, always (its newer stamp took the whole part); with a base, only when
 // the phone changed it since then, and the stored value is still the base's or the phone's stamp is the newer one.
 function takes_(base, newer, mine, was, cur) { const j = JSON.stringify; return !base || (j(mine) !== j(was) && (newer || j(cur) === j(was))); }
+// A list the same way (a sheet's steps, the roster, floors): entries the phone added, removed or changed since its base go
+// in, field by field as above; the stored list's other entries (another phone's adds and edits) stay, and one another phone
+// removed stays removed. Entries match by key_. Without a base the phone's list is taken whole.
+function key_(x) { return isObj_(x) ? x.id || '#' + nameKey_(x.name) : String(x); } // an id; a crew from an older phone by name; a floor or check as itself
+function list3_(stored, mine, base, newer) {
+  if (!base) return mine;
+  const by = function (l) { const m = dict_(); l.forEach(function (x) { m[key_(x)] = x; }); return m; }, S = by(stored), B = by(base);
+  const out = mine.filter(function (x) { return !(B[key_(x)] !== undefined && S[key_(x)] === undefined); }).map(function (x) {
+    const b = B[key_(x)], s = S[key_(x)], o = isObj_(x) && b !== undefined && s !== undefined ? clone_(s) : x;
+    if (o !== x) Object.keys(x).forEach(function (f) { if (takes_(base, newer, x[f], b[f], s[f])) o[f] = x[f]; });
+    return o;
+  });
+  const placed = by(out);
+  let at = 0;
+  stored.forEach(function (x) { // another phone's additions, each after the entry it followed
+    const k = key_(x);
+    if (placed[k] !== undefined) at = out.indexOf(placed[k]) + 1; else if (B[k] === undefined) out.splice(at++, 0, x);
+  });
+  return out;
+}
 function ticks_(stored, incoming, base, newer) { // the crew ticks items that exist; it cannot add, remove or reword one
   return stored.map(function (s) {
     const i = incoming.find(function (x) { return x.id === s.id; }), b = base && (base.find(function (x) { return x.id === s.id; }) || { done: false, at: 0 });
@@ -730,14 +750,16 @@ function mergeTask_(ctx, stored, inc) {
   const office = ctx.role !== 'crew';
   if (!stored && !office) return { reason: 'forbidden' }; // only the office creates a task
   const t = stored ? clone_(stored) : shape_(TASK, { uid: inc.uid }), was = stored ? clone_(stored) : null;
-  if (office && (!stored || (inc.assignAt > 0 && inc.assignAt >= t.assignAt))) {
-    ASSIGN.concat(OFFICE_EXTRA).forEach(function (k) { t[k] = inc[k]; });
-    t.items = structure_(inc.items, t.items); t.checks = structure_(inc.checks, t.checks);
-    t.assignAt = inc.assignAt;
+  // Two office phones (assignBase) or two phones on one crew (crewBase): with a base only what this phone changed goes over
+  // the stored part, so neither wipes the other's edits; a field or step both changed goes to the newer stamp. Without
+  // one, the newer stamp takes the whole part.
+  const anew = inc.assignAt > 0 && inc.assignAt >= t.assignAt, abase = stored && inc.assignAt > 0 ? inc.assignBase : null;
+  if (office && (!stored || anew || abase)) {
+    ASSIGN.concat(OFFICE_EXTRA).forEach(function (k) { if (takes_(abase, anew, inc[k], abase && abase[k], t[k])) t[k] = inc[k]; });
+    t.items = structure_(list3_(t.items, inc.items, abase && abase.items, anew), t.items); t.checks = structure_(list3_(t.checks, inc.checks, abase && abase.checks, anew), t.checks);
+    t.assignAt = Math.max(t.assignAt, inc.assignAt);
   }
-  // Two phones on one crew: with crewBase only what this phone changed goes over the stored part, so neither wipes the
-  // other's taps; a field or step both changed goes to the newer stamp. Without one, the newer stamp takes the whole part.
-  const newer = ctx.role === 'crew' ? inc.crewAt > 0 && inc.crewAt >= t.crewAt : inc.crewAt > t.crewAt, base = stored && inc.crewAt > 0 ? inc.base : null;
+  const newer = ctx.role === 'crew' ? inc.crewAt > 0 && inc.crewAt >= t.crewAt : inc.crewAt > t.crewAt, base = stored && inc.crewAt > 0 ? inc.crewBase : null;
   if (newer || base) {
     CREW.forEach(function (k) { if (takes_(base, newer, inc[k], base && base[k], t[k])) t[k] = inc[k]; });
     t.items = ticks_(t.items, inc.items, base && base.items, newer); t.checks = ticks_(t.checks, inc.checks, base && base.checks, newer);
@@ -768,9 +790,9 @@ function mergeShift_(ctx, stored, inc, state) {
     if (inc.device === '') return { reason: 'forbidden' };                 // a PM-added shift is the PM's alone
     if (stored && stored.device !== ctx.dev) return { reason: 'device' };  // a key only speaks for the phone it came from
     if (!stored) {
-      const twin = Object.keys(state.byKey).some(function (k) { // the PM already added this person's day by hand: it stands, this one is filed removed
-        const x = state.byKey[k].obj;
-        return x && x.date === inc.date && !x.gone && !x.device && samePerson_(x, inc);
+      const twin = Object.keys(state.byKey).some(function (k) { // the PM already added this person's whole day by hand: it stands, this one is filed removed
+        const x = state.byKey[k].obj; // one with no clock-out yet is waiting for this phone's taps: they stay, for the PM to see
+        return x && x.date === inc.date && !x.gone && !x.device && x.out && samePerson_(x, inc);
       });
       s = Object.assign({}, inc, { device: ctx.dev, edited: clone_(noEdits_), gone: twin }); // the client never sets edited or gone for itself
       if (!twin) ev.push([inc.out ? 'clock.out' : 'clock.in', s.who, s.who + (inc.out ? ' clocked out at ' + t12_(s.out) : ' clocked in at ' + t12_(s.in)) + ', ' + s.date, s.id]);
@@ -868,14 +890,23 @@ function pushKind_(ctx, b, name, list) {
 
 function pushConfig_(ctx, b, raw) {
   if (ctx.role === 'crew') return { configStatus: 'rejected', configReason: 'forbidden' };
-  const n = JSON.stringify(raw).length > MAX_ENTITY ? null : normConfig_(raw, ctx.now);
+  let n = JSON.stringify(raw).length > MAX_ENTITY ? null : normConfig_(raw, ctx.now);
   if (!n) return { configStatus: 'rejected', configReason: 'invalid' };
   // Config has no stamp in the contract: an optional `at` orders two office phones, otherwise the last push wins.
   n.at = n.at || ctx.now;
   const entry = loadEntries_(ctx, 'config', normConfig_, ['config'], null).config || { row: 0, rev: 0, obj: null, json: '' };
   if (entry.obj) keepRoster_(n, entry.obj, raw);
-  const roster = function (c) { return JSON.stringify(c ? [c.people, c.crews] : [[], []]); }, was = roster(entry.obj);
-  if ((!entry.obj || n.at >= entry.obj.at) && save_(ctx, b, 'config', entry, n, configRow_) && roster(n) !== was) b.hours = true; // Weekly totals show the roster's names
+  // base: the settings as this phone last had them from the hub. With it only what the phone changed since goes in, as with
+  // a sheet's assignBase: two office phones adding people at once both keep theirs.
+  const s = entry.obj, base = s && isObj_(raw.base) ? normConfig_(raw.base, ctx.now) : null, newer = !s || n.at >= s.at;
+  if (base) {
+    const m = clone_(s);
+    Object.keys(CONFIG).forEach(function (k) { if (k !== 'at') m[k] = Array.isArray(m[k]) ? list3_(m[k], n[k], base[k], newer) : takes_(base, newer, n[k], base[k], m[k]) ? n[k] : m[k]; });
+    m.at = Math.max(s.at, n.at);
+    n = m;
+  }
+  const roster = function (c) { return JSON.stringify(c ? [c.people, c.crews] : [[], []]); }, was = roster(s);
+  if ((newer || base) && save_(ctx, b, 'config', entry, n, configRow_) && roster(n) !== was) b.hours = true; // Weekly totals show the roster's names
   const c = clone_(entry.obj);
   c.rev = entry.rev;
   return { config: c, configStatus: 'ok' };
@@ -1069,8 +1100,9 @@ function pullOnce_(ctx, since) {
   }
   const cfg = cfgOf(cfgRows);
   if (cfg) out.config = cfg;
-  // a sent sheet that changed and is now another crew's (moved there) leaves these crews' phones as a deleted one does
-  const left = sent.filter(function (o) { return crewKeep && crewKeep(o) === false; }).map(function (o) { return { kind: 'tasks', key: o.uid, rev: o.rev }; });
+  // a sent sheet that changed and is now another crew's (moved there) leaves these crews' phones as a deleted one does,
+  // marked moved: a phone keeps one it has work on that has not gone up, or got only by text (HUB.md, pull)
+  const left = sent.filter(function (o) { return crewKeep && crewKeep(o) === false; }).map(function (o) { return { kind: 'tasks', key: o.uid, rev: o.rev, moved: true }; });
   out.deleted = cut(readIndex_(ctx, 'deleted').filter(function (x) { return x.rev > since && (office || x.kind !== 'reports'); })
     .map(function (x) { return { kind: x.kind, key: x.key, rev: x.rev }; }).concat(left));
   if (limit < rev) { out.rev = limit; out.more = true; }

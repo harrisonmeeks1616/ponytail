@@ -166,7 +166,7 @@ async function openCode(code) {
   // On a hub the text is a copy of what the hub delivers: it is merged only when newer than the hub copy here (sync.mjs fromText).
   const merges = data.kind === 'task' ? t?.origin === 'link' : !!t && t.origin !== 'link';
   const older = merges && (data.kind === 'task' ? inc.sentAt && t.sentAt && inc.sentAt < t.sentAt : t.resultAt && inc.resultAt < t.resultAt);
-  const held = merges && !older && !sync.fromText('t', t.uid, data.kind === 'task' ? 'assign' : 'crew', data.kind === 'task' ? inc.sentAt : inc.resultAt);
+  const held = merges && !older && !sync.fromText('t', t.uid, data.kind === 'task' ? 'assign' : 'crew', data.kind === 'task' ? inc.sentAt : inc.resultAt, data.skew);
   if (older || held) {
     toast(older ? L('This is an older copy of this sheet. The newer one is kept.') : L('This phone already has the newest copy of this sheet from the hub.'));
     return location.replace(`#task/${t.uid}/${data.kind === 'result' ? 'review' : 'assign'}`);
@@ -179,7 +179,7 @@ async function openCode(code) {
     } else if (t.origin === 'link') mergeTask(t, inc, 'assign'); // re-sent sheet: new assignment, crew check-offs kept
     moved = renumberClashes(T, t, sync.onHub);
   } else if (!t || t.origin !== 'link') { // results reaching the superintendent (not the crew re-opening its own)
-    if (!t) T.push(t = Object.assign(inc, { origin: 'mine' }));
+    if (!t) { sync.fromText('t', inc.uid, 'assign', inc.assignAt || inc.sentAt); T.push(t = Object.assign(inc, { origin: 'mine' })); } // its office part goes up as old as the copy it is, never as the crew's last edit
     else mergeTask(t, inc, 'crew');
     t.gotAt = Date.now();
     moved = renumberClashes(T, t, sync.onHub);
@@ -217,7 +217,7 @@ async function importDay(data) {
   const fresh = inc.filter(t => !find(t.uid)), known = inc.filter(t => find(t.uid));
   if (inc.length && await ask(L('Load the task plan for {date}? New sheets: {fresh}. Updated: {known}. Check-offs already on this phone are kept.', { date: niceDate(date), fresh: fresh.length, known: known.length }), L('Load plan'))) {
     for (const t of fresh) T.push(Object.assign(t, { origin: 'mine' }));
-    for (const t of known) if (sync.fromText('t', t.uid, 'assign', t.updatedAt)) mergeTask(find(t.uid), t, 'assign'); // on a hub, only what is newer than the hub copy here
+    for (const t of known) if (sync.fromText('t', t.uid, 'assign', t.updatedAt, data.skew)) mergeTask(find(t.uid), t, 'assign'); // on a hub, only what is newer than the hub copy here
     const moved = inc.flatMap(t => renumberClashes(T, find(t.uid), sync.onHub));
     persist();
     toast(L('Plan loaded') + renumbered(moved));
@@ -693,7 +693,7 @@ function taskMsg(t, l) {
 
 async function send(kind, t) {
   if (kind === 'task') { t.sentAt = Date.now(); persist(); render(); }
-  const payload = kind === 'day' ? { v: 1, kind, pin: S.pin, date: day, tasks: dayTasks() } : { v: 1, kind, pin: S.pin, task: t };
+  const payload = { v: 1, kind, pin: S.pin, skew: sync.hubStatus().skew || 0, ...(kind === 'day' ? { date: day, tasks: dayTasks() } : { task: t }) }; // skew: this phone's hub time offset (sync.mjs fromText)
   const url = linkTo('tasks.html', await pack(payload));
   if (kind === 'task') {
     // A crew that has answered in Spanish before gets the message in both languages.

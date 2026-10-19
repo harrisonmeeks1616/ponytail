@@ -7,7 +7,8 @@
 // crewAt; updatedAt and pmAt). The newest stamp wins a part; a part this phone has not pushed yet is "mine" and is
 // stamped when the scan first sees it change. Per part, schwab.hubSync keeps s (hash of the local copy the hub
 // has), v and vh (stamp and content hash of the hub's version last seen), p and at (the unsynced copy and its stamp),
-// x (a copy the hub refused), b (a sheet's crew part as last had from the hub: crewBase), tx (the time of a text merged here).
+// x (a copy the hub refused), b (the part as last had from the hub: a sheet's crewBase and assignBase, the settings' base),
+// tx (the time of a text merged here).
 //
 // Who is who (HUB.md, Identity): the hub knows this phone only by its device secret (devSecret, on every request), people
 // and crews by their ids in the shared settings, and task sheets by uid. Short task ids are labels that two office phones
@@ -37,13 +38,14 @@ export const C_KEYS = ['lead', 'aStart', 'aStop', 'delay', 'status', 'doneText',
 const ticks = l => l.filter(i => i.done || i.at).map(i => [i.id, i.done, i.at]); // unticked steps are left out, so a new step is not an edit
 const aPart = t => ({ ...pick(t, A_KEYS), items: t.items.map(i => [i.id, i.text]), checks: t.checks.map(i => [i.id, i.text]) });
 const cPart = t => ({ ...pick(t, C_KEYS), items: ticks(t.items), checks: ticks(t.checks) });
-// The crew part as this phone last had it from the hub, in wire form (crewBase, HUB.md): the hub takes only what changed since.
+// A part as this phone last had it from the hub, in wire form (assignBase and crewBase, HUB.md): the hub takes only what changed since.
+const aBase = t => { const l = x => x.map(i => ({ id: i.id, text: i.text })); return { ...pick(t, A_KEYS), items: l(t.items), checks: l(t.checks) }; };
 const cBase = t => { const l = x => x.filter(i => i.done || i.at).map(i => ({ id: i.id, done: i.done, at: i.at })); return { ...pick(t, C_KEYS), items: l(t.items), checks: l(t.checks) }; };
-const TPARTS = [['assign', aPart, 'assignAt'], ['crew', cPart, 'crewAt']];
+const TPARTS = [['assign', aPart, 'assignAt', aBase], ['crew', cPart, 'crewAt', cBase]];
 const supPart = r => { const { pmReview, pmAt, updatedAt, filedAt, decisions, ...rest } = r; return { ...rest, decisions: decisions.map(d => [d.q, d.rec, d.by]) }; };
 const pmPart = r => ({ pmReview: r.pmReview, answers: r.decisions.filter(d => d.pm || d.pmNote).map(d => [d.q, d.pm, d.pmNote]) });
 const RPARTS = [['sup', supPart, 'updatedAt'], ['pm', pmPart, 'pmAt']];
-const PARTS = { t: TPARTS, r: RPARTS, g: [['v', s => cfgPart(s), 'at']] };
+const PARTS = { t: TPARTS, r: RPARTS, g: [['v', s => cfgPart(s), 'at', s => cfgPart(s)]] };
 // A worker's shift is the phone's own words (never edited or gone); a PM-ruled one is everything.
 const shiftPart = (s, full) => [s.id, s.device, s.who, s.pid, s.date, s.in, s.out, s.crew, s.crewId, s.tasks, ...(full ? [s.edited.who, s.edited.in, s.edited.out, s.gone] : [])];
 // The roster always goes normalized, every crew and person with an id. A tab still on an older version saves settings with
@@ -112,7 +114,7 @@ export function makeSync(o = {}) {
     return st;
   }
   let meta = null; // what hubStatus shows, so a screen can ask on every draw without reading the whole state
-  const saveState = st => { meta = pick(st, ['rev', 'ok']); return store.set(ST, st); };
+  const saveState = st => { meta = pick(st, ['rev', 'ok', 'skew']); return store.set(ST, st); };
   const inT = raw => {
     const t = norm.task(raw);
     for (const l of ['items', 'checks']) { const seen = new Set(); t[l] = t[l].filter(i => i.id && !seen.has(i.id) && seen.add(i.id)); }
@@ -169,8 +171,8 @@ export function makeSync(o = {}) {
     let { state, message } = cur;
     if (state === 'off') state = 'offline'; // a hub is set but no round has said how it is yet (the page just opened): not off, not live
     if (state === 'live' && now() - cur.at >= LIVE_MS) { state = 'offline'; message = say('offline'); }
-    const m = meta ||= pick(loadState(), ['rev', 'ok']);
-    return { state, message, at: cur.at || m.ok, pending, role: c.role, crew: c.crew, rev: m.rev };
+    const m = meta ||= pick(loadState(), ['rev', 'ok', 'skew']);
+    return { state, message, at: cur.at || m.ok, pending, role: c.role, crew: c.crew, rev: m.rev, skew: m.skew }; // skew: hub time minus this phone's clock, sent with texts (fromText)
   }
   const notify = kinds => { if (kinds.size) try { o.onChange?.([...kinds]); } catch (e) { queueMicrotask(() => { throw e; }); } };
 
@@ -212,7 +214,7 @@ export function makeSync(o = {}) {
   }
   const wireTask = (t, sent) => {
     const w = { uid: t.uid, date: t.date }, A = sent.assign, C = sent.crew; // the hub validates every sheet by uid and day, so the day goes with a crew part too; the crew key ignores it
-    if (A) Object.assign(w, pick(t, A_KEYS), { assignAt: A.at });
+    if (A) Object.assign(w, pick(t, A_KEYS), { assignAt: A.at }, A.b && { assignBase: A.b });
     if (C) Object.assign(w, pick(t, C_KEYS), { crewAt: C.at }, C.b && { crewBase: C.b });
     for (const l of ['items', 'checks']) w[l] = t[l].map(i => ({ id: i.id, ...(A && { text: i.text }), ...(C && { done: i.done, at: i.at }) })); // a crew phone sends ticks, never wording
     return w;
@@ -271,7 +273,7 @@ export function makeSync(o = {}) {
     if (c.role === 'crew') pr.s = h;
     else if (pr.s === h) { delete pr.p; delete pr.at; } else if (pr.x !== h) {
       if (pr.p !== h) Object.assign(pr, { p: h, at: Math.max(skewed(st), num(pr.v) + 1, num(pr.at) + 1) }); // the hub orders two office phones' settings by this stamp
-      items.push({ k: 'g', key: 'c', sent: { v: { h, at: pr.at } }, wire: { ...cp, at: pr.at } });
+      items.push({ k: 'g', key: 'c', sent: { v: { h, at: pr.at, b: pr.b } }, wire: { ...cp, at: pr.at, ...(pr.b && { base: pr.b }) } });
     }
     for (const k of Object.keys(seen)) for (const key of Object.keys(st[k])) if (!seen[k].has(key)) delete st[k][key];
     pending = items.length;
@@ -321,22 +323,24 @@ export function makeSync(o = {}) {
     if (res.status !== 'ok' && res.reason !== 'archived') return 0; // archived: the hub already keeps it in its archive sheet, which is as good as synced
     const inc = it.k === 't' && res.task ? inT(res.task) : it.k === 'r' && res.report ? inR(res.report, it.key) : it.k === 'g' && isObj(res.config) ? inC(res.config) : null;
     for (const p in it.sent) {
-      const pr = ent(rec, p), { h, at } = it.sent[p], [, fn, stamp] = PARTS[it.k]?.find(x => x[0] === p) || [], theirs = inc ? num(inc[stamp]) : 0;
-      if (theirs > at) continue; // someone's newer version won: the pull right behind this brings it
-      // v and vh name the hub's version: stamp and content, since two phones can tie on a stamp. A sheet the hub merged with
-      // another phone's taps is not the copy here: vh stays this copy's, so the pull right behind brings the merged one.
-      Object.assign(pr, { s: h, v: theirs || at, vh: inc && it.k !== 't' ? hs(fn(inc)) : h });
-      if (it.k === 't' && p === 'crew') pr.b = cBase(it.wire);
+      const pr = ent(rec, p), { h, at, b } = it.sent[p], [, fn, stamp, base] = PARTS[it.k]?.find(x => x[0] === p) || [], theirs = inc ? num(inc[stamp]) : 0;
+      if (theirs > at && !b) continue; // someone's newer version won: the pull right behind this brings it (sent with a base, only what changed went in, so it is in)
+      // v and vh name the hub's version: stamp and content, since two phones can tie on a stamp. A sheet or settings the hub
+      // merged with another phone's edits are not the copy here: vh stays this copy's, so the pull right behind brings the merged one.
+      Object.assign(pr, { s: h, v: theirs || at, vh: inc && it.k === 'r' ? hs(fn(inc)) : h });
+      if (base) pr.b = base(it.wire);
       if (pr.p === h) { delete pr.p; delete pr.at; }
     }
     return 0;
   }
-  async function pushPhase(c, ep) {
-    let st = loadState(), fresh = 0;
+  async function pushPhase(c, ep, hold = false) {
+    let st = loadState(), fresh = 0, held = false;
     const items = scan(st, c, readLocal(c)), send = [];
     for (const it of items) { // a single entity over the hub's cap can never be accepted
       if (c.role === 'crew' && it.k === 't' && st.t[it.key]?.assign?.v === undefined) continue; // a texted sheet the hub never sent: it stays counted as not sent
+      if (hold && it.k === 't' && st.t[it.key]?.assign?.v === undefined && it.wire.id && !it.wire.sentAt) { held = true; continue; } // a new unsent sheet waits for the pull (renumber)
       it.len = JSON.stringify(it.wire).length + 1;
+      if (it.len > CAP.entity) { for (const p in it.sent) delete it.sent[p].b; for (const k of ['assignBase', 'crewBase', 'base']) delete it.wire[k]; it.len = JSON.stringify(it.wire).length + 1; } // too big with its bases: the whole part goes by its stamp, as before
       if (it.len > CAP.entity) fresh += ack(st, it, { status: 'rejected' }); else send.push(it);
     }
     saveState(st);
@@ -348,6 +352,7 @@ export function makeSync(o = {}) {
         }
       }
     } finally { if (fresh && ep === epoch) toast(L('Items the hub did not accept: {n}. They stay on this phone.', { n: fresh }), 'bad'); }
+    return held;
   }
 
   // ---------- merge ----------
@@ -377,8 +382,8 @@ export function makeSync(o = {}) {
         out[l] = (took.assign ? inc : loc)[l].map(i => ({ id: i.id, text: i.text, done: !!mark.get(i.id)?.done, at: mark.get(i.id)?.at || 0 }));
       }
     }
-    for (const [p, fn, at] of TPARTS) if (took[p]) {
-      Object.assign(ent(rec, p), { s: hs(fn(out)), v: num(inc[at]), vh: hs(fn(inc)), ...(p === 'crew' && { b: cBase(inc) }) });
+    for (const [p, fn, at, base] of TPARTS) if (took[p]) {
+      Object.assign(ent(rec, p), { s: hs(fn(out)), v: num(inc[at]), vh: hs(fn(inc)), b: base(inc) });
       delete rec[p].p; delete rec[p].at;
     }
     if (loc && sameDoc(loc, out)) return loc;
@@ -426,7 +431,7 @@ export function makeSync(o = {}) {
   }
   function upsert(list, map, inc, full) {
     const i = list.findIndex(s => s.id === inc.id), loc = list[i], pr = ent(ent(map, inc.id), 'v');
-    if (!full && inc.gone) { // a twin of a day the PM added by hand: the PM's entry stands, so it never shows on the worker's own clock
+    if (!full && inc.gone) { // removed by the PM, or a twin of a whole day the PM added by hand: the PM's entry stands, off the worker's own clock
       delete map[inc.id];
       return i >= 0 && !!list.splice(i, 1);
     }
@@ -516,7 +521,11 @@ export function makeSync(o = {}) {
         if (c.dev && inc.device === c.dev && upsert(lc.hours, st.h, inc, false)) dirty.hours = true;
         if (c.role === 'pm' && upsert(lc.crewH, st.m, inc, true)) dirty.crewHours = true;
       }
-      for (const d of arr(rep.deleted).slice(0, 500)) dropKey(lc, st, dirty, obj(d).kind, String(obj(d).key));
+      for (const d of arr(rep.deleted).slice(0, 500)) {
+        const key = String(obj(d).key), t = obj(d).moved === true && lc.tasks.find(x => x.uid === key);
+        if (t && !(st.t[key]?.assign?.v !== undefined && taskClean(st, t, tw))) continue; // moved to another crew: one only texted here, or with work not sent yet, stays
+        dropKey(lc, st, dirty, obj(d).kind, key);
+      }
       // the window: older sheets that the hub holds are dropped from the phone; an unsynced or refused one never is
       const prune = (list, old, clean, map, key, flag) => { const n = list.length, keep = list.filter(x => !(old(x) && clean(x))); for (const x of list) if (!keep.includes(x)) delete map[key(x)]; if (keep.length !== n) { list.splice(0, n, ...keep); dirty[flag] = true; } };
       prune(lc.tasks, t => t.date < cut, t => taskClean(st, t, tw), st.t, t => t.uid, 'tasks');
@@ -543,7 +552,7 @@ export function makeSync(o = {}) {
               if (patch.pin) store.set(KEYS.pin, patch.pin);
               kinds.add('settings');
             }
-            Object.assign(pr, { s: hs(cfgPart({ ...s0, ...patch })), v: inc.at, vh });
+            Object.assign(pr, { s: hs(cfgPart({ ...s0, ...patch })), v: inc.at, vh, b: cfgPart(inc) });
             delete pr.p; delete pr.at; delete pr.x;
           }
         }
@@ -601,9 +610,11 @@ export function makeSync(o = {}) {
     relabel(c);
     if (!c.role) { const rep = await whoami(c); if (ep !== epoch) throw err('aborted'); patchSettings({ hubRole: rep.role }); c = hub(); }
     // First contact (or a new role, crew or window): merge what the hub has before pushing anything, so old local copies cannot overwrite newer ones.
-    if (loadState().sig !== [c.role, c.crew, winDays(c.role)].join('|')) await pullPhase(c, ep);
-    await pushPhase(c, ep);
+    const first = loadState().sig !== [c.role, c.crew, winDays(c.role)].join('|');
+    if (first) await pullPhase(c, ep);
+    const held = await pushPhase(c, ep, !first && c.role !== 'crew'); // else an office phone's sheet the hub has never had goes after the pull, which renumbers it if a synced sheet has its day and number
     await pullPhase(c, ep);
+    if (held) { await pushPhase(c, ep); await pullPhase(c, ep); }
   }
   function cycle() {
     if (running) again = true;
@@ -716,10 +727,12 @@ export function makeSync(o = {}) {
   // the part the text would change and the text's own time. False when this phone already holds that part as new as the
   // text (from the hub, or its own unsynced edit): the app keeps its copy. Else true: the app merges it, and the change goes
   // up stamped with the text's time, never "now", so newer work the hub has is not undone by an old text.
-  // ponytail: the text's time is the sending phone's clock, compared with hub stamps as is; a clock minutes off misjudges only
-  // edits made within those minutes.
-  function fromText(kind, key, part, at) {
+  // skew: the sending phone's hub offset (hubStatus().skew, carried in the text), so its clock reads as hub time.
+  // ponytail: a text from a phone with no hub has no offset; its clock is taken as is, and a clock minutes off misjudges
+  // only edits made within those minutes.
+  function fromText(kind, key, part, at, skew = 0) {
     if (!hub()) return true;
+    at = num(at) && num(at) + num(skew);
     const st = loadState(), pr = ent(ent(st[kind], key), part);
     if ((pr.v !== undefined || pr.at !== undefined) && num(at) <= Math.max(num(pr.v), num(pr.at))) return false;
     pr.tx = num(at);
@@ -884,4 +897,4 @@ export const archive = before => get().archive(before);
 export const selftest = () => get().selftest();
 export const liveData = () => get().liveData();
 export const onHub = uid => get().onHub(uid);
-export const fromText = (kind, key, part, at) => get().fromText(kind, key, part, at);
+export const fromText = (kind, key, part, at, skew) => get().fromText(kind, key, part, at, skew);

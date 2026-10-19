@@ -746,4 +746,7 @@ export default {
   // a texted copy on a hub phone (sync.mjs fromText)
   'This phone already has the newest copy of this sheet from the hub.': 'Este teléfono ya tiene la copia más reciente de esta hoja desde el sistema central.',
   'This phone already has the newest copy of this report from the hub.': 'Este teléfono ya tiene la copia más reciente de este reporte desde el sistema central.',
+
+  // Time clock: a tap the hub did not add (PHONE-UX-03)
+  'The PM has already set your hours for {date}, so this tap was not added. Tell the PM if they are wrong.': 'El gerente de proyecto ya fijó sus horas del {date}, así que este toque no se agregó. Avísele al gerente de proyecto si no son correctas.',
 };

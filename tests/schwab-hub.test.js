@@ -700,6 +700,10 @@ test('shift: a day the PM added by hand is not doubled by a late text', () => {
   ok(pm.push({ shifts: [{ ...stored(env.hub, 'pm1'), gone: true }] }));
   const r2 = ok(crew.push({ shifts: [shift({ id: 'g', who: 'ANA P', date: '2026-10-12', out: '15:35' })] }));
   assert.equal(r2.shifts[0].shift.gone, false);
+  // A day the PM added with no clock-out yet (the phone was dead in the morning) waits for the phone: its taps are kept.
+  ok(pm.push({ shifts: [shift({ id: 'pm2', device: '', who: 'Ana P', date: '2026-10-14', in: '06:30', out: '', edited: { who: true, in: true, out: true } })] }));
+  assert.equal(ok(crew.push({ shifts: [shift({ id: 'h', who: 'Ana P', date: '2026-10-14', in: '11:31', out: '' })] })).shifts[0].shift.gone, false, 'the clock-in tap stands');
+  assert.equal(ok(crew.push({ shifts: [shift({ id: 'h', who: 'Ana P', date: '2026-10-14', in: '11:31', out: '15:30' })] })).shifts[0].shift.out, '15:30', 'and so does the clock-out');
 });
 
 test('shift validation: id, device, date, clock-in are required and shaped; names trimmed; times may be HH:MM or HH:MM:SS', () => {

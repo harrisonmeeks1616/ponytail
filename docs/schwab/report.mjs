@@ -193,10 +193,11 @@ export function importShifts(log, shifts, at = 0) {
     if (!s.device) continue;
     const m = log.find(x => x.id === s.id);
     if (!m) {
-      // ponytail: the PM already added this person's day by hand (the texts never came), so the PM's entry
+      // ponytail: the PM already added this person's whole day by hand (the texts never came), so the PM's entry
       // stands and this one is filed as removed, never doubling the day. A real second shift that day is
-      // added back by hand; match on overlapping times instead if split shifts become common.
-      const twin = log.some(x => !x.gone && !x.device && same(x, s));
+      // added back by hand; match on overlapping times instead if split shifts become common. A day the PM
+      // added with no clock-out is waiting for this phone's times: they are added for the PM to see.
+      const twin = log.some(x => !x.gone && !x.device && x.out && same(x, s));
       log.push({ ...s, at, edited: { who: false, in: false, out: false }, gone: twin });
       if (twin) skipped++; else added++;
       continue;
@@ -589,7 +590,7 @@ export async function openReport(data, S) {
   const mine = R[inc.date], pmSent = data.from === 'Project manager';
   if (mine?.updatedAt && mine.updatedAt !== inc.updatedAt && pmSent !== isPM(S)) {
     // On a hub the text is a copy of what the hub delivers: merged only when newer than the hub copy here (sync.mjs fromText).
-    if (!fromText('r', inc.date, pmSent ? 'pm' : 'sup', inc.updatedAt)) { toast(L('This phone already has the newest copy of this report from the hub.')); return inc.date; }
+    if (!fromText('r', inc.date, pmSent ? 'pm' : 'sup', inc.updatedAt, data.skew)) { toast(L('This phone already has the newest copy of this report from the hub.')); return inc.date; }
     // Normal back-and-forth: neither side's work is lost, so there's nothing to ask.
     R[inc.date] = pmSent ? mergeAnswers(mine, inc) : mergeAnswers(inc, mine);
     R[inc.date].updatedAt = Date.now();
@@ -616,7 +617,7 @@ async function send(S, day) {
   r.updatedAt = Date.now();
   persist();
   reportView(S, day);
-  const url = linkTo('tasks.html', await pack({ v: 1, kind: 'report', from: S.role, pin: S.pin, report: r }));
+  const url = linkTo('tasks.html', await pack({ v: 1, kind: 'report', from: S.role, pin: S.pin, skew: hubStatus().skew || 0, report: r }));
   const answered = r.decisions.filter(d => d.q && d.pm).length, asked = r.decisions.filter(d => d.q).length;
   const firstDue = waiting(r).map(d => d.by).filter(Boolean).sort()[0];
   sendSheet(isPM(S)
@@ -716,7 +717,11 @@ export async function reportAct(a, el, S, day, v) {
       // At once, not after the usual short wait. The text to the PM opens unless the tap's own round got through (signal gone, hub busy,
       // key replaced). A round already running (opening the app starts one) read the hours before the tap, so the tap's is the next one.
       const late = hubStatus().state === 'syncing';
-      if (hubAnswers() && (await cycle()).state === 'live' && (!late || (await cycle()).state === 'live')) return toast(L('Saved. Your hours go to the PM through the hub.'));
+      if (hubAnswers() && (await cycle()).state === 'live' && (!late || (await cycle()).state === 'live')) {
+        if (MY.some(x => x.id === s.id)) return toast(L('Saved. Your hours go to the PM through the hub.'));
+        // the hub filed it as removed (HUB.md, Shift: the PM entered this whole day by hand), so it left this clock: say so
+        return toast(L('The PM has already set your hours for {date}, so this tap was not added. Tell the PM if they are wrong.', { date: niceDate(s.date) }), 'bad');
+      }
       return sendMine(S, s, on ? 'out' : 'in'); // no hub, or no answer from it lately: the text to the PM
     }
     case 'hWho': S.workerId = val; keep(KEYS.settings, S); return renderOffice(v, S, day); // which of the people sharing this name
