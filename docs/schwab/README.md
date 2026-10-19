@@ -47,17 +47,26 @@ receiver; the static app does not connect it automatically.
   removed shift stays removed. A day the PM added by hand stays as entered: a late text for the same person
   and day is filed as removed, with a warning. Each shift keeps the name it was clocked in with, so a borrowed
   phone never moves its owner's hours. Hours links opened on any other phone change nothing.
-- **One list of people:** the crew member lists in **Settings → Crews** are the app's list of people, and names
-  match whatever the capitals, accents, spacing or punctuation ("José  L." is "jose l", "O’Neil" is "O'Neil"). A name added on a task sheet that has a
-  crew is saved on that crew if it is on no crew yet; nobody is ever taken off a crew automatically. On the time
-  clock the name box offers the names the phone knows (its crew lists and its task sheets) and takes their
-  spelling; a name no list knows gets a hint to check the spelling. A **Today** card lists that day's sheets on
-  the phone that name the worker, each opening its sheet, and the crew view marks the worker "(you)". Each clock-in
-  and clock-out records the worker's crew and task IDs from those sheets (else the crew from the crew lists), and
-  they ride to the PM with the hours. On **Crew hours** each person shows under their crew list spelling, with a
-  crew, and each shift its tasks; a name on none of the PM phone's crew lists is marked **Not on a crew list**,
+- **One list of people:** **Settings → Crews** holds the app's list of people. Each crew shows its people as
+  chips: tap a name to rename the person or move them to another crew, ✕ to take them off the list, and type in
+  **Add people** (several names at once with commas). Every person and every crew has a permanent id, so a
+  rename never splits anyone's sheets or hours; old sheets keep the name they were made with. Two people may
+  share a name: adding a name someone already has asks first (the same person, moved to this crew, or someone
+  else), and the screens show the crew next to the name. Names are matched only when someone types or picks one,
+  whatever the capitals, accents, spacing or punctuation ("José  L." is "jose l", "O’Neil" is "O'Neil"). A name
+  typed on a task sheet that matches nobody joins the sheet's crew as a new person; nobody is ever taken off a
+  crew automatically. Settings saved by the older version (comma lists of members) become people the first time
+  this version opens: one person per name, on the first crew that lists it.
+- **On the time clock** the name box offers the names the phone knows (its people and its task sheets) and takes
+  their spelling; a name no list knows gets a hint to check the spelling, and a name two people share shows both,
+  with their crews, to tap the right one. A **Today** card lists that day's sheets on the phone that name the
+  worker, each opening its sheet, and the crew view marks the worker "(you)". Each clock-in and clock-out records
+  the person, their crew and the sheets they were on that day (each by its permanent id, with its Task ID as the
+  label), and they ride to the PM with the hours. On **Crew hours** each person shows under their current name with
+  their crew, and each shift its tasks; a name on none of the PM phone's crews is marked **Not on a crew list**,
   and **Add to a crew** puts it on one (one tap when the worker's sheets named a crew this phone has). A
-  **Rename** also renames the person on their crew list, so they keep their crew.
+  **Rename** renames the person in Settings too (same person, same id); renaming to a name someone else has asks
+  whether it is the same person (the hours move to them) or two people.
 - **Send to accountant** shares the week as a spreadsheet (CSV: name, crew, date, in, out, hours, tasks, week totals) and
   a PDF timesheet, through the phone's share sheet (Mail, Files) or as downloads on a computer. It warns
   first if a shift has no clock-out. Hours are to two decimals (7h 45m is 7.75), rounded per shift so the rows
@@ -112,9 +121,10 @@ Schwab Field Records/
 - Each phone keeps its own records in the browser, saved as you type.
 - Handoffs are links. **Send to crew**, **Send results**, **Send day plan** and **Send to PM** pack the details into the part of the link after `#`, which browsers never send to the web server. Compression/base64 is readable encoding, not encryption or authentication. Anyone with the link can read or alter its contents, so send it only to the intended people.
 - Opening a link merges it in: crew results join the superintendent's sheet without touching the assignment; a re-sent sheet keeps the crew's check-offs; PM answers join the report without touching what the superintendent wrote since.
+- **Task IDs are labels.** Every sheet also has a permanent id that hours and links use, so two office phones that both numbered a sheet T1019-02 with no signal never mix up whose hours are whose. When a sheet arrives with the date and number of one of this phone's sheets that was never sent, this phone's sheet takes the next free number and says so. If both were already sent, both show **Same number as another sheet** until someone changes one's Task ID.
 - **Fill from task sheets** on the Daily report tab rolls the day's task sheets (on the same phone) into the floor and crew sections. It fills only empty text fields; the work hours and labor-hours follow the sheets on every fill.
 - **⋯ → Settings → Download backup** saves everything on that phone to a file.
-- Backups contain work records and settings, including the upload code if configured. Keep backups private.
+- Backups contain work records and settings, including the upload code if configured, and this phone's device secret (so a phone restored from it keeps its own hours). They never contain the hub key: after a restore, open a new hub invite. Keep backups private.
 
 ## Things to know
 
@@ -130,4 +140,4 @@ Schwab Field Records/
 
 ## Check
 
-`node --test tests/schwab-field-apps.test.js tests/schwab-review-folder.test.js tests/app-display-regressions.test.js` covers the link codec, merges, report roll-up, office passcode, time clock and timesheet, PDF writer, upload queue and mocked receiver boundaries. Receiver checks do not exercise Google authorization, folder access or a live deployment.
+`node --test tests/schwab-field-apps.test.js tests/schwab-review-folder.test.js tests/app-display-regressions.test.js tests/schwab-es-lint.test.js` covers the link codec, merges, report roll-up, office passcode, time clock and timesheet, people and crew ids (moving older settings over, two people with one name, renames, sheets with the same number from two phones), every new field through reload and backup and restore, the device secret, PDF writer, upload queue, mocked receiver boundaries, and that every on-screen phrase has its Spanish. Receiver checks do not exercise Google authorization, folder access or a live deployment.

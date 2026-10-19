@@ -32,8 +32,9 @@
 //   bar        these screens use no bottom bar: hide it, as Settings does
 //   paste      hubSettingsView on a phone with no hub offers the app's own data-act="paste" (Open a link someone sent you)
 
-import { KEYS, COMPANY, L, getLang, esc, iso, addDays, niceDate, t12, fmtMin, worked, nameKey, crewVar, field, sheet, ask, sendSheet, download, load, save } from './shared.mjs';
-import { monday, shiftMin, byPerson, timesheetCsv } from './report.mjs';
+import { KEYS, COMPANY, L, getLang, esc, iso, addDays, niceDate, t12, fmtMin, worked, nameKey, crewVar, field, sheet, ask, sendSheet, download, load, save, personById, crewById } from './shared.mjs';
+import { monday, shiftMin, byPerson, personKey, timesheetCsv } from './report.mjs';
+import { duplicateShortIds } from './sync.mjs';
 
 // ---------- small things ----------
 
@@ -104,6 +105,20 @@ export function lastActivity(t) {
   return m;
 }
 export const progress = t => ({ d: t.items.filter(i => i.done).length, n: t.items.length });
+// Where tapping a sheet goes: the review when it waits for one, else the assignment. Always by uid: a short id can repeat.
+const taskHref = t => `#task/${esc(t.uid)}/${t.status && !t.review ? 'review' : 'assign'}`;
+// The sheet a reference means: its uid, or (from an older hub) its short id, which counts only while one sheet on the
+// newest day with it has it.
+function sheetFinder(tasks) {
+  const byUid = new Map(tasks.map(t => [t.uid, t])), newest = new Map(), twice = new Set();
+  for (const t of tasks) {
+    if (!t.id) continue;
+    const o = newest.get(t.id);
+    if (!o || o.date < t.date) { newest.set(t.id, t); twice.delete(t.id); } else if (o.date === t.date) twice.add(t.id);
+  }
+  return ref => (ref ? byUid.get(ref) || (twice.has(ref) ? undefined : newest.get(ref)) : undefined);
+}
+const sameNo = () => pill(L('Same number as another sheet'), 'warn');
 const finished = t => t.status === 'Complete' || t.review === 'Accepted';
 const byRelevance = (a, b) => rank(a) - rank(b) || lastActivity(b) - lastActivity(a) || String(a.id).localeCompare(b.id);
 export const sortSheets = l => [...l].sort(byRelevance);
@@ -132,7 +147,8 @@ const hundredths = s => Math.round(shiftMin(s) * 5 / 3);
 export const h2 = c => (c / 100).toFixed(2);
 const byStart = (a, b) => at(a.date, a.in) - at(b.date, b.in);
 const missed = (s, now) => !s.out && now - at(s.date, s.in) >= SHIFT_MS;
-// Each person (by name however typed), their Monday to Sunday weeks newest first, and the shifts in each. hours: hundredths.
+// Each person (the timesheets of report.mjs byPerson: by roster id, else by name however typed), their Monday to Sunday
+// weeks newest first, and the shifts in each. key: which timesheet; two people sharing a name are two. hours: hundredths.
 // open: shifts with no clock-out that are past a real shift's length; live: clocked in now.
 // ponytail: recomputed on every draw and keystroke; about 40 ms at 3,600 shifts (60 people, 60 days). Cache by length if the timesheet outgrows that.
 export function peopleWeeks(shifts, S, now = Date.now()) {
@@ -140,7 +156,7 @@ export function peopleWeeks(shifts, S, now = Date.now()) {
     const weeks = new Map();
     for (const s of p.shifts) { const m = monday(s.date); (weeks.get(m) || weeks.set(m, []).get(m)).push(s); }
     return {
-      who: p.who, crew: p.crew, hours: p.hours, shifts: p.shifts.length,
+      key: p.key, pid: p.pid, who: p.who, crew: p.crew, crewId: p.crewId, hours: p.hours, shifts: p.shifts.length,
       weeks: [...weeks].sort((a, b) => b[0].localeCompare(a[0])).map(([mon, ss]) => ({
         mon, shifts: ss.sort(byStart), hours: ss.reduce((n, s) => n + hundredths(s), 0),
         open: ss.filter(s => missed(s, now)).length, live: ss.filter(s => !s.out && !missed(s, now)).length,
@@ -148,24 +164,32 @@ export function peopleWeeks(shifts, S, now = Date.now()) {
     };
   });
 }
-// The accountant's spreadsheet for one Monday to Sunday week (one person if who is given), the same file Send to accountant makes.
-export function weekCsv(shifts, mon, S, who = '') {
-  const sun = addDays(mon, 6), k = nameKey(who);
-  const week = shifts.filter(s => !s.gone && s.date >= mon && s.date <= sun && (!k || nameKey(s.who) === k)).sort(byStart);
-  return timesheetCsv(byPerson(week, 'en', S));
+// The accountant's spreadsheet for one Monday to Sunday week (one person if key, a peopleWeeks key, is given), the same file Send to accountant makes.
+export function weekCsv(shifts, mon, S, key = '') {
+  const sun = addDays(mon, 6), week = shifts.filter(s => !s.gone && s.date >= mon && s.date <= sun).sort(byStart);
+  return timesheetCsv(byPerson(week, 'en', S).filter(p => !key || p.key === key));
 }
-// Who is on site: open shifts started less than 16 hours ago, one line per person (the newest shift). entries: [{who, date, in, crew?}]
-export function onSite(entries, now) {
+// Someone a shift, an on-site line or a feed line is about, as the roster has them now: key (as byPerson), name and crew.
+// A person the roster does not know keeps the name and crew the record was made with.
+function personNow(S, x) {
+  const key = personKey(S, x), p = personById(S, key);
+  return { key, name: p?.name || x.who || '', crew: p?.crew || crewById(S, x.crewId)?.name || x.crew || '', crewId: p?.crewId || x.crewId || '' };
+}
+// Who is on site: open shifts started less than 16 hours ago, one line per person (the newest shift), under the roster's
+// current name and crew. entries: [{who, date, in, pid?, crew?, crewId?}]. A line with only a name (from a hub that sends
+// no ids) is left out when someone with that name is already on the list.
+export function onSite(entries, now, S) {
   const seen = new Map();
   for (const e of entries) {
     const since = at(e.date, e.in);
     if (!e.who || !since || since > now + 5 * 6e4 || now - since >= SHIFT_MS) continue; // a few minutes of clock difference between phones is normal
-    const k = nameKey(e.who);
-    if (!seen.has(k) || since > seen.get(k).since) seen.set(k, { who: e.who, in: e.in, date: e.date, crew: e.crew || '', since });
+    const p = personNow(S, e);
+    if (!seen.has(p.key) || since > seen.get(p.key).since) seen.set(p.key, { key: p.key, who: p.name, in: e.in, date: e.date, crew: p.crew, crewId: p.crewId, since });
   }
-  return [...seen.values()].sort((a, b) => a.who.localeCompare(b.who));
+  const named = new Set([...seen.values()].filter(x => !x.key.startsWith('n:')).map(x => nameKey(x.who)));
+  return [...seen.values()].filter(x => !x.key.startsWith('n:') || !named.has(nameKey(x.who))).sort((a, b) => a.who.localeCompare(b.who) || a.crew.localeCompare(b.crew));
 }
-export const openShifts = shifts => shifts.filter(s => !s.gone && !s.out).map(s => ({ who: s.who, date: s.date, in: s.in, crew: s.crew }));
+export const openShifts = shifts => shifts.filter(s => !s.gone && !s.out).map(s => ({ who: s.who, pid: s.pid, date: s.date, in: s.in, crew: s.crew, crewId: s.crewId }));
 
 // ---------- the activity feed ----------
 
@@ -278,9 +302,8 @@ export async function txApply(ctx, root = globalThis.document) {
 export function liveView(ctx) {
   if (ctx.role !== 'pm' && ctx.role !== 'super') return `<div class="empty"><h2>${L('The live board is for the office')}</h2></div>`;
   const now = nowOf(ctx), day = dayOf(now), st = hub(ctx), live = { events: [], onsite: [], at: 0, info: {}, ...ctx.sync?.liveData?.() }, S = ctx.S;
-  const sheets = ctx.tasks().filter(t => t.date === day), here = onSite([...openShifts(shiftsOf(ctx)), ...live.onsite], now);
-  const byId = new Map(); // a feed line links to the newest sheet with that id
-  for (const t of ctx.tasks()) if (t.id && (!byId.has(t.id) || byId.get(t.id).date < t.date)) byId.set(t.id, t);
+  const sheets = ctx.tasks().filter(t => t.date === day), here = onSite([...openShifts(shiftsOf(ctx)), ...live.onsite], now, S);
+  const sheetOf = sheetFinder(ctx.tasks()), shiftOf = new Map(shiftsOf(ctx).map(s => [s.id, s])), dup = duplicateShortIds(sheets);
   const updated = Math.max(live.at || 0, st.at || 0); // live.at moves only when something changed; st.at at every good round trip
   const head = `<section class="card live-head">
     <div class="row1"><span class="live-state"><i class="hub-dot" data-state="${esc(st.state)}"></i><b>${esc(hubLabel(st.state))}</b></span>
@@ -295,12 +318,18 @@ export function liveView(ctx) {
   const site = siteCard(S, here);
   const groups = groupByCrew(sheets, S.crews.map(c => c.name));
   const board = sheets.length ? groups.map(g => `<h3 class="live-crew" style="${crewVar(S, g.crew)}"><span><i class="dot"></i> ${esc(g.crew || L('No crew yet'))}</span>
-      <small>${esc(L('{d} of {n} done', { d: g.sheets.filter(finished).length, n: g.sheets.length }))}</small></h3>${g.sheets.map(t => (rank(t) === 6 ? doneRow(ctx, t) : sheetCard(ctx, t, now))).join('')}`).join('')
+      <small>${esc(L('{d} of {n} done', { d: g.sheets.filter(finished).length, n: g.sheets.length }))}</small></h3>${g.sheets.map(t => (rank(t) === 6 ? doneRow(ctx, t) : sheetCard(ctx, t, now, dup.has(t.uid)))).join('')}`).join('')
     : `<div class="empty"><h2>${L('No task sheets for today yet')}</h2><button class="btn" data-go="day/${day}">${L('Open the Tasks tab')}</button></div>`;
   const feed = live.events.slice(0, 50);
+  // a clock line names the person as the roster has them now (by the shift it is about); a sheet line says the sheet's crew
+  const lineOf = e => {
+    const task = String(e.kind).startsWith('task.'), t = task ? sheetOf(e.ref) : undefined, s = !task && shiftOf.get(e.ref);
+    const p = s ? personNow(S, s) : personNow(S, { who: e.who }), crew = t ? crewById(S, t.crewId)?.name || t.crew : p.crew;
+    return [t, `<span class="feed-x">${esc(eventLine({ ...e, who: p.name || e.who, ref: t?.id || e.ref }))}${crew ? ` <span class="feed-crew">· ${esc(crew)}</span>` : ''}</span>`];
+  };
   const events = `<section class="card"><h2>${L('Activity')}</h2>${feed.length
-    ? `<ol class="feed">${feed.map(e => { const t = byId.get(e.ref), line = `<span class="feed-x">${esc(eventLine(e))}</span>`;
-      return `<li><small>${esc(ago(e.ts, now))}</small>${t ? `<a href="#task/${esc(t.uid)}/${t.status && !t.review ? 'review' : 'assign'}">${line}</a>` : line}</li>`; }).join('')}</ol>`
+    ? `<ol class="feed">${feed.map(e => { const [t, line] = lineOf(e);
+      return `<li><small>${esc(ago(e.ts, now))}</small>${t ? `<a href="${taskHref(t)}">${line}</a>` : line}</li>`; }).join('')}</ol>`
     : `<p class="hint">${st.state === 'off' ? L('Connect the hub to see crews start, finish and clock in.') : L('Nothing yet. Crews starting, finishing and clocking in show up here.')}</p>`}</section>`;
   return `${head}${stats}${site}<h2 class="group-h"><span>${L("Today's sheets")}</span><span>${sheets.length}</span></h2>${board}${events}`;
 }
@@ -308,30 +337,30 @@ export function liveView(ctx) {
 // Who is on site, by crew. Past a dozen people the list folds up to one line of counts, so it can't push the sheets off the screen.
 const SITE_FOLD = 12;
 function siteCard(S, here) {
-  const m = new Map(), order = S.crews.map(c => c.name);
+  const m = new Map(), order = S.crews.map(c => c.name), ids = new Map(here.map(p => [p.crew, p.crewId]));
   for (const p of here) (m.get(p.crew) || m.set(p.crew, []).get(p.crew)).push(p);
   const pos = c => { const i = order.indexOf(c); return i < 0 ? order.length : i; };
   const groups = [...m].sort((a, b) => (a[0] === '') - (b[0] === '') || pos(a[0]) - pos(b[0]) || a[0].localeCompare(b[0]));
   const label = c => (c ? `<i class="dot"></i> ${esc(c)}` : esc(L('Crew not set')));
   const open = here.length <= SITE_FOLD || ui.siteOpen;
   return `<section class="card"><h2>${L('On site now')}</h2>${!here.length ? `<p class="hint">${L('Nobody is clocked in right now.')}</p>`
-    : open ? groups.map(([crew, ps]) => `<div class="onsite-g" style="${crew ? crewVar(S, crew) : ''}"><span class="label">${label(crew)} · ${ps.length}</span>
+    : open ? groups.map(([crew, ps]) => `<div class="onsite-g" style="${crew ? crewVar(S, crew, ids.get(crew)) : ''}"><span class="label">${label(crew)} · ${ps.length}</span>
         <div class="onsite">${ps.map(p => `<span><b>${esc(p.who)}</b><small>${esc(L('since {time}', { time: t12(p.in) }))}</small></span>`).join('')}</div></div>`).join('')
       : `<p class="hint">${groups.map(([crew, ps]) => `${crew ? esc(crew) : esc(L('Crew not set'))} ${ps.length}`).join(' · ')}</p>`}
     ${here.length > SITE_FOLD ? `<button class="link" data-act="liveSite">${ui.siteOpen ? L('Hide the list') : L('Show the list')}</button>` : ''}</section>`;
 }
 // An accepted sheet needs nothing more from the office: one line, so the sheets that do need it stay in view.
-const doneRow = (ctx, t) => `<a class="live-done" style="${crewVar(ctx.S, t.crew)}" href="#task/${esc(t.uid)}/assign"><b class="tid">${esc(t.id || L('New task'))}</b>
+const doneRow = (ctx, t) => `<a class="live-done" style="${crewVar(ctx.S, t.crew, t.crewId)}" href="#task/${esc(t.uid)}/assign"><b class="tid">${esc(t.id || L('New task'))}</b>
   <span>${esc([t.floor, t.area].filter(Boolean).join(' · '))}</span>${pill(stage(t)[0], 'good')}</a>`;
 
-function sheetCard(ctx, t, now) {
+function sheetCard(ctx, t, now, dup) {
   const [label, tone] = stage(t), { d, n } = progress(t), la = lastActivity(t), need = t.status && !t.review;
   const where = [t.floor, t.area].filter(Boolean).join(' · ') || L('Floor not set');
   const last = la ? L('Last activity {ago}', { ago: ago(la, now) }) : t.sentAt ? L('Sent {ago}', { ago: ago(t.sentAt, now) }) : L('Not started');
   const note = t.status === 'Blocked' ? t.comments || t.remain : t.status === 'Partial' ? t.remain || t.comments : '';
-  return `<article class="tcard live-card" style="${crewVar(ctx.S, t.crew)}">
-    <a class="live-main" href="#task/${esc(t.uid)}/${need ? 'review' : 'assign'}">
-      <div class="row1"><span class="tid">${esc(t.id || L('New task'))}</span>${pill(label, tone || '')}</div>
+  return `<article class="tcard live-card" style="${crewVar(ctx.S, t.crew, t.crewId)}">
+    <a class="live-main" href="${taskHref(t)}">
+      <div class="row1"><span class="tid">${esc(t.id || L('New task'))}</span>${pill(label, tone || '')}${dup ? sameNo() : ''}</div>
       <div class="meta"><span>${esc(where)}</span>${n ? `<span>${esc(L('{d} of {n} steps done', { d, n }))}</span>` : ''}</div>
       ${n ? `<div class="progress" role="img" aria-label="${esc(L('{d} of {n} steps done', { d, n }))}"><i style="width:${d / n * 100}%"></i></div>` : ''}
       <div class="meta"><span>${esc(last)}</span>${t.reply && t.replyAt ? `<span>${esc(L('Message sent {ago}', { ago: ago(t.replyAt, now) }))}</span>` : ''}</div></a>
@@ -403,7 +432,7 @@ function reviewSheet(ctx, t) {
 // ---------- Records ----------
 
 const weekLabel = mon => L('{start} to {stop}', { start: niceDate(mon), stop: niceDate(addDays(mon, 6)) });
-const crewDot = (S, crew) => (crew ? `<span style="${crewVar(S, crew)}"><i class="dot"></i> ${esc(crew)}</span>` : '');
+const crewDot = (S, crew, id = '') => (crew ? `<span style="${crewVar(S, crew, id)}"><i class="dot"></i> ${esc(crew)}</span>` : '');
 
 export function recordsView(ctx, sub) {
   if (ctx.role !== 'pm' && ctx.role !== 'super') return `<div class="empty"><h2>${L('Records are for the office')}</h2></div>`;
@@ -418,7 +447,7 @@ const chip = (f, v, label, style = '') => `<button class="chip" data-act="recFil
 
 function peopleSub(ctx) {
   const now = nowOf(ctx), all = peopleWeeks(shiftsOf(ctx), ctx.S, now);
-  const one = ui.person && all.find(p => nameKey(p.who) === nameKey(ui.person));
+  const one = ui.person && all.find(p => p.key === ui.person); // by timesheet key: two people may share a name
   if (ui.person && !one) ui.person = ''; // gone from the timesheet since
   if (one) return personDetail(ctx, one, now);
   return `<div class="rec-controls">${searchBox(L('Search names'), L('Search names'))}</div><div id="recList" class="stack">${peopleList(ctx, all)}</div>`;
@@ -430,26 +459,28 @@ function peopleList(ctx, all = peopleWeeks(shiftsOf(ctx), ctx.S, nowOf(ctx))) {
     : `<div class="empty"><h2>${L('No hours logged yet')}</h2><p>${L("Each worker's Clock in and Clock out texts you a link. Tap it on this phone to log their hours here.")}</p></div>`;
   return `<h2 class="group-h"><span>${L('Hours by person')}</span><span>${ps.length}</span></h2>` + ps.map(p => {
     const wk = d => p.weeks.find(w => w.mon === d), cur = wk(mon), open = p.weeks.reduce((n, w) => n + w.open, 0);
-    return `<button class="rec-row" data-act="recPerson" data-v="${esc(p.who)}"><span class="rec-main"><b class="tid">${esc(p.who)}</b>
-      <small>${crewDot(ctx.S, p.crew)}${p.crew ? ' · ' : ''}${esc(L('Last week: {n} hrs', { n: h2(wk(last)?.hours || 0) }))}</small>${open ? pill(L('No clock-out'), 'warn') : cur?.live ? pill(L('On the clock'), 'info') : ''}</span>
+    return `<button class="rec-row" data-act="recPerson" data-v="${esc(p.key)}"><span class="rec-main"><b class="tid">${esc(p.who)}</b>
+      <small>${crewDot(ctx.S, p.crew, p.crewId)}${p.crew ? ' · ' : ''}${esc(L('Last week: {n} hrs', { n: h2(wk(last)?.hours || 0) }))}</small>${open ? pill(L('No clock-out'), 'warn') : cur?.live ? pill(L('On the clock'), 'info') : ''}</span>
       <span class="rec-side"><b>${h2(cur?.hours || 0)}</b><small>${L('This week')}</small></span></button>`;
   }).join('');
 }
 function personDetail(ctx, p, now) {
-  const pm = ctx.role === 'pm';
+  const pm = ctx.role === 'pm', byUid = new Map(ctx.tasks().map(t => [t.uid, t]));
   return `<button class="link" data-act="recPerson" data-v="">‹ ${L('All people')}</button>
     <section class="card person"><div class="row1"><h2>${esc(p.who)}</h2><b class="total">${esc(L('{n} hrs', { n: h2(p.hours) }))}</b></div>
-      <div class="chips">${crewDot(ctx.S, p.crew)}<span class="hint">${esc(p.shifts === 1 ? L('1 shift') : L('{n} shifts', { n: p.shifts }))}</span></div></section>
+      <div class="chips">${crewDot(ctx.S, p.crew, p.crewId)}<span class="hint">${esc(p.shifts === 1 ? L('1 shift') : L('{n} shifts', { n: p.shifts }))}</span></div></section>
     ${p.weeks.map((w, i) => `<details class="card rec-week"${i === 0 ? ' open' : ''}>
       <summary><span class="rec-main"><b>${esc(weekLabel(w.mon))}</b>${w.open ? pill(L('No clock-out'), 'warn') : w.live ? pill(L('On the clock'), 'info') : ''}</span><b class="total">${esc(L('{n} hrs', { n: h2(w.hours) }))}</b></summary>
-      ${w.shifts.map(s => shiftRow(s, now)).join('')}
-      ${pm ? `<div class="btns"><button class="btn" data-go="clock/${w.mon}">${L('Edit hours')}</button><button class="btn" data-act="recWeekCsv" data-mon="${w.mon}" data-v="${esc(p.who)}">${L('Download week (CSV)')}</button></div>` : ''}</details>`).join('')}`;
+      ${w.shifts.map(s => shiftRow(s, now, byUid)).join('')}
+      ${pm ? `<div class="btns"><button class="btn" data-go="clock/${w.mon}">${L('Edit hours')}</button><button class="btn" data-act="recWeekCsv" data-mon="${w.mon}" data-v="${esc(p.key)}" data-name="${esc(p.who)}">${L('Download week (CSV)')}</button></div>` : ''}</details>`).join('')}`;
 }
-function shiftRow(s, now) {
-  const edited = s.edited.in || s.edited.out, labels = s.tasks.map(x => (typeof x === 'string' ? x : x?.id)).filter(Boolean); // a task is an id, or {uid, id}
-  const ids = labels.length === 1 ? L('Task {id}', { id: labels[0] }) : labels.length ? L('Tasks {ids}', { ids: labels.join(', ') }) : '';
+// A shift's sheets open by uid and show the number the sheet has now; one this phone does not have shows the number it had.
+function shiftRow(s, now, byUid) {
+  const edited = s.edited.in || s.edited.out;
+  const links = s.tasks.map(x => (typeof x === 'string' ? { uid: '', id: x } : x || {})).map(x => { const t = x.uid && byUid.get(x.uid), id = t?.id || x.id; return id ? (t ? `<a href="${taskHref(t)}">${esc(id)}</a>` : esc(id)) : ''; }).filter(Boolean);
+  const ids = links.length === 1 ? L('Task {id}', { id: links[0] }) : links.length ? L('Tasks {ids}', { ids: links.join(', ') }) : ''; // the pieces are escaped above
   return `<div class="shift"><div class="row1"><b>${esc(niceDate(s.date))}</b><span class="out">${s.out ? esc(L('{n} hrs', { n: h2(hundredths(s)) })) : missed(s, now) ? pill(L('No clock-out'), 'warn') : pill(L('On the clock'), 'info')}${edited ? ` · ${L('edited')}` : ''}</span></div>
-    <p class="hint">${esc(s.out ? L('{start} to {stop}', { start: t12(s.in), stop: t12(s.out) }) : t12(s.in))}${ids ? ' · ' + esc(ids) : ''}</p></div>`;
+    <p class="hint">${esc(s.out ? L('{start} to {stop}', { start: t12(s.in), stop: t12(s.out) }) : t12(s.in))}${ids ? ' · ' + ids : ''}</p></div>`;
 }
 
 function sheetsSub(ctx) {
@@ -461,16 +492,16 @@ function sheetsSub(ctx) {
     <div id="recList" class="stack">${sheetsList(ctx)}</div>`;
 }
 function sheetsList(ctx) {
-  const all = filterSheets(ctx.tasks(), ui), shown = all.slice(0, ui.limit), days = [...new Set(shown.map(t => t.date))];
+  const all = filterSheets(ctx.tasks(), ui), shown = all.slice(0, ui.limit), days = [...new Set(shown.map(t => t.date))], dup = duplicateShortIds(ctx.tasks());
   if (!all.length) return `<p class="hint">${ctx.tasks().length ? L('No sheets match.') : L('No task sheets on this phone yet.')}</p>`;
   return days.map(d => { const ts = shown.filter(t => t.date === d);
-    return `<h2 class="group-h"><span>${esc(niceDate(d))}</span><span>${ts.length}</span></h2>${ts.map(t => sheetRow(ctx, t)).join('')}`; }).join('')
+    return `<h2 class="group-h"><span>${esc(niceDate(d))}</span><span>${ts.length}</span></h2>${ts.map(t => sheetRow(ctx, t, dup.has(t.uid))).join('')}`; }).join('')
     + (all.length > shown.length ? `<button class="btn" data-act="recMore">${L('Show more')} (${all.length - shown.length})</button>` : '');
 }
-function sheetRow(ctx, t) {
+function sheetRow(ctx, t, dup) {
   const [label, tone] = stage(t), where = [t.floor, t.area].filter(Boolean).join(' · ');
-  return `<div class="rec-row" style="${crewVar(ctx.S, t.crew)}"><a class="rec-main" href="#task/${esc(t.uid)}/${t.status && !t.review ? 'review' : 'assign'}">
-      <span class="row1"><b class="tid">${esc(t.id || L('New task'))}</b>${pill(label, tone || '')}</span>
+  return `<div class="rec-row" style="${crewVar(ctx.S, t.crew, t.crewId)}"><a class="rec-main" href="${taskHref(t)}">
+      <span class="row1"><b class="tid">${esc(t.id || L('New task'))}</b>${pill(label, tone || '')}${dup ? sameNo() : ''}</span>
       <small><i class="dot"></i> ${esc(t.crew || L('No crew yet'))}${where ? ' · ' + esc(where) : ''}</small>${t.scope ? `<small class="clamp">${esc(t.scope)}</small>` : ''}</a>
     ${ctx.role === 'pm' ? `<button class="rec-more" data-act="recMenu" data-kind="task" data-key="${esc(t.uid)}" aria-label="${esc(L('More actions'))}">⋯</button>` : ''}</div>`;
 }
@@ -707,7 +738,7 @@ export async function act(ctx, a, el) {
       case 'recCsv': case 'recWeekCsv': {
         const mon = a === 'recCsv' ? $('recWeek')?.value : el.dataset.mon;
         if (!/^\d{4}-\d{2}-\d{2}$/.test(mon || '') || monday(mon) !== mon) break;
-        download(new Blob(['﻿' + weekCsv(shiftsOf(ctx), mon, ctx.S, a === 'recWeekCsv' ? v : '')], { type: 'text/csv' }), `timesheet-week-of-${mon}${a === 'recWeekCsv' ? '-' + (nameKey(v).replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '') || 'person') : ''}.csv`);
+        download(new Blob(['﻿' + weekCsv(shiftsOf(ctx), mon, ctx.S, a === 'recWeekCsv' ? v : '')], { type: 'text/csv' }), `timesheet-week-of-${mon}${a === 'recWeekCsv' ? '-' + (nameKey(el.dataset.name).replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '') || 'person') : ''}.csv`);
         break;
       }
       case 'recExport': if (ctx.role === 'pm' && ui.busy !== 'export') { ui.busy = 'export'; ctx.render(); try { await exportAll(ctx); } finally { ui.busy = ''; ctx.render(); } } break;
@@ -769,7 +800,8 @@ async function older(ctx, kind) {
   o.err = '';
   ctx.render();
   const local = { tasks: ctx.tasks(), shifts: shiftsOf(ctx), reports: reportsOf(ctx) }[kind].map(x => x.date).sort()[0];
-  const r = await ctx.sync.records({ kind, from: '2000-01-01', to: local ? addDays(local, -1) : dayOf(nowOf(ctx)), q: ui.q, who: kind === 'shifts' ? ui.person : '', cursor: o.cursor });
+  const who = kind === 'shifts' && ui.person ? peopleWeeks(shiftsOf(ctx), ctx.S).find(p => p.key === ui.person)?.who || '' : ''; // the hub looks a person up by name
+  const r = await ctx.sync.records({ kind, from: '2000-01-01', to: local ? addDays(local, -1) : dayOf(nowOf(ctx)), q: ui.q, who, cursor: o.cursor });
   o.busy = false;
   if (r.ok) { o.items.push(...r.items); o.cursor = r.cursor; } else o.err = r.message || L('The hub could not be reached.');
   ctx.render();

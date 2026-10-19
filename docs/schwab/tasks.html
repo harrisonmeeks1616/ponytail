@@ -22,19 +22,22 @@
 <nav class="bar" id="bar"></nav>
 <script type="module">
 import {
-  KEYS, esc, uid, load, save, loadSettings, roster, nameKey, findPerson, addToCrew, normTask, newItem, mergeTask, cloneTask, pack, unpack, linkTo,
+  KEYS, esc, uid, load, save, loadSettings, nameKey, cleanName, people, findPerson, crewById, addPerson, normTask, newItem, mergeTask, cloneTask, pack, unpack, linkTo,
+  nextId, renumberClashes, sameNumber, ensureDevice,
   today, addDays, niceDate, nowHM, span, fmtMin, t12, stamp, hrs, timeOf, field, datalist, seg, setPath, getPath, readInput,
   toast, sheet, ask, sendSheet, pasteSheet, makePdf, savePdf, fileAway, retryUploads, settingsView, settingsAct, restore,
   registerSW, dateBar, crewVar as cv, L, setLang, getLang, COMPANIES, letterhead,
   UNLOCK, hasPin, adoptPin, setPin, pinHash, tryPin, unlocked, signIn, signOut,
 } from './shared.mjs';
-import { renderOffice, reportAct, reportInput, openReport, openHours, hoursInput, workerChange, fileReportIfChanged, reloadReports, sectionToggle, hasReports } from './report.mjs';
+import { renderOffice, reportAct, reportInput, openReport, openHours, hoursInput, workerChange, fileReportIfChanged, reloadReports, sectionToggle, hasReports, attachShifts } from './report.mjs';
 
 window.appStarted = true; // every file loaded (see the fallback above)
 registerSW();
 const app = document.getElementById('app'), bar = document.getElementById('bar');
 let S = loadSettings();
 setLang(S.lang);
+ensureDevice(); // this phone's hub identity; the time clock uses the older device id until it exists
+attachShifts(S);
 const loadTasks = () => load(KEYS.tasks, []).map(normTask).filter(t => t.uid); // a sheet with no usable id can't be opened or told apart
 let T = loadTasks();
 let day = today(), crewFilter = '', view = { v: 'board' };
@@ -43,7 +46,7 @@ const persist = () => save(KEYS.tasks, T) || toast(L("This phone wouldn't save. 
 const find = u => T.find(t => t.uid === u);
 const current = () => (view.v === 'task' ? find(view.uid) : null);
 const go = h => (location.hash === '#' + h ? route() : (location.hash = h));
-const crewVar = name => cv(S, name);
+const crewVar = (name, id) => cv(S, name, id);
 const floorRank = f => { const i = S.floors.indexOf(f); return i < 0 ? 999 : i; };
 const doneCount = t => t.items.filter(i => i.done).length;
 const worked = t => (t.aStart && t.aStop ? Math.max(0, span(t.aStart, t.aStop) - t.delay) : 0); // same as shared.mjs; kept here so a stale cached shared.mjs can't break this page
@@ -64,28 +67,28 @@ function stage(t) {
   return [L('Draft'), ''];
 }
 
-function nextId(date) {
-  const mmdd = date.slice(5).replace('-', '');
-  for (let i = 1; ; i++) {
-    const id = `T${mmdd}-${String(i).padStart(2, '0')}`;
-    if (!T.some(t => t.date === date && t.id === id)) return id;
-  }
-}
-
-function pickCrew(t, name) {
-  if (t.crew === name) return;
-  const typed = t.crew ? [] : t.members.filter(m => !findPerson(S, m)); // names typed before a crew was picked stay, and join it
-  t.crew = name;
-  t.lead = S.crews.find(c => c.name === name)?.lead || '';
-  t.members = [...roster(S, name), ...typed];
+// Picking a crew puts its people on the sheet, by id; names typed before a crew was picked stay, and join it.
+function pickCrew(t, c) {
+  if (!c) return;
+  if (t.crewId ? t.crewId === c.id : t.crew === c.name) { t.crewId = c.id; return; } // the same crew again (a sheet from before ids learns its id)
+  const typed = t.crew ? [] : t.members.filter((m, i) => !t.memberIds[i] && !findPerson(S, m));
+  const ps = people(S).filter(p => p.crewId === c.id);
+  Object.assign(t, { crew: c.name, crewId: c.id, lead: c.lead, members: [...ps.map(p => p.name), ...typed], memberIds: [...ps.map(p => p.id), ...typed.map(() => '')] });
   t.size = t.members.length || t.size;
-  enlist(t, typed);
+  enlist(t);
 }
 
-// A name put on a sheet joins the sheet's crew in Settings when it is on no crew yet: one list of people for the
-// sheets, the time clock and the crew hours. Nobody is taken off a crew from here.
-function enlist(t, names) {
-  const added = names.filter(n => addToCrew(S, t.crew, n));
+// Every name on the sheet without an id is matched to the roster (preferring the sheet's crew); a name that matches
+// no one joins the sheet's crew in Settings as a new person: one list of people for the sheets, the time clock and
+// the crew hours. Nobody is taken off a crew from here.
+function enlist(t) {
+  const added = [];
+  t.memberIds = t.members.map((m, i) => {
+    if (t.memberIds[i]) return t.memberIds[i];
+    let p = findPerson(S, m, t.crewId);
+    if (!p && crewById(S, t.crewId) && (p = addPerson(S, m, t.crewId))) added.push(p.name);
+    return p?.id || '';
+  });
   if (!added.length) return;
   save(KEYS.settings, S);
   toast(added.length === 1 ? L('{name} added to {crew}', { name: added[0], crew: t.crew }) : L('{names} added to {crew}', { names: added.join(', '), crew: t.crew }));
@@ -136,7 +139,7 @@ async function openCode(code) {
   }
   if (data.kind === 'report') { const d = await openReport(data, S); return location.replace(d ? '#report/' + d : '#day/' + day); }
   if (data.kind === 'day') return importDay(data);
-  if (data.kind === 'hours') { const d = openHours(data); return location.replace('#clock/' + (d || day)); }
+  if (data.kind === 'hours') { const d = openHours(data, S); return location.replace('#clock/' + (d || day)); }
   const inc = normTask(data.task);
   let t = find(inc.uid), firstSheet = false;
   if (!inc.uid || !['task', 'result'].includes(data.kind)) { toast(L('That link has no task sheet in it'), 'bad'); return location.replace('#day/' + day); }
@@ -144,17 +147,21 @@ async function openCode(code) {
   const older = data.kind === 'task' ? t?.origin === 'link' && inc.sentAt && t.sentAt && inc.sentAt < t.sentAt
     : t && t.origin !== 'link' && t.resultAt && inc.resultAt < t.resultAt;
   if (older) { toast(L('This is an older copy of this sheet. The newer one is kept.')); return location.replace(`#task/${t.uid}/${data.kind === 'result' ? 'review' : 'assign'}`); }
+  let moved = [];
   if (data.kind === 'task') {
     if (!t) {
       T.push(t = Object.assign(inc, { origin: 'link', gotAt: Date.now() })); // a crew phone opening its sheet
       firstSheet = !S.lang && !S.me && !T.some(x => x.origin === 'mine'); // a phone with a name in Settings is an office phone
     } else if (t.origin === 'link') mergeTask(t, inc, 'assign'); // re-sent sheet: new assignment, crew check-offs kept
+    moved = renumberClashes(T, t);
   } else if (!t || t.origin !== 'link') { // results reaching the superintendent (not the crew re-opening its own)
     if (!t) T.push(t = Object.assign(inc, { origin: 'mine' }));
     else mergeTask(t, inc, 'crew');
     t.gotAt = Date.now();
-    toast(L('{crew} results for {id} received', { crew: t.crew || L('Crew'), id: t.id }));
+    moved = renumberClashes(T, t);
+    toast(L('{crew} results for {id} received', { crew: t.crew || L('Crew'), id: t.id }) + renumbered(moved));
   }
+  if (moved.length && data.kind === 'task') toast(renumbered(moved).trim());
   if (data.kind === 'result' && t.origin !== 'link') fileTask(t);
   persist();
   location.replace(`#task/${t.uid}/${data.kind === 'result' ? 'review' : 'assign'}`);
@@ -171,11 +178,14 @@ async function importDay(data) {
   if (inc.length && await ask(L('Load the task plan for {date}? New sheets: {fresh}. Updated: {known}. Check-offs already on this phone are kept.', { date: niceDate(date), fresh: fresh.length, known: known.length }), L('Load plan'))) {
     for (const t of fresh) T.push(Object.assign(t, { origin: 'mine' }));
     for (const t of known) mergeTask(find(t.uid), t, 'assign');
+    const moved = inc.flatMap(t => renumberClashes(T, find(t.uid)));
     persist();
-    toast(L('Plan loaded'));
+    toast(L('Plan loaded') + renumbered(moved));
   }
   location.replace('#day/' + date);
 }
+// What renumberClashes changed, for the toast: ' Your sheet T1019-02 is now T1019-03 ...' ('' when nothing).
+const renumbered = moved => moved.map(([t, old]) => ' ' + L('Your sheet {old} is now {id}: another sheet has that number.', { old, id: t.id })).join('');
 
 // ---------- views ----------
 
@@ -256,8 +266,9 @@ function renderBoard() {
 
 function card(t) {
   const [label, tone] = stage(t), n = t.items.length, d = doneCount(t);
-  return `<a class="tcard" href="#task/${esc(t.uid)}/${t.status && !t.review ? 'review' : 'assign'}" style="${crewVar(t.crew)}">
+  return `<a class="tcard" href="#task/${esc(t.uid)}/${t.status && !t.review ? 'review' : 'assign'}" style="${crewVar(t.crew, t.crewId)}">
     <div class="row1"><span class="tid">${esc(t.id || L('New task'))}</span><span class="pill" data-tone="${tone}">${esc(label)}</span></div>
+    ${clash(t)}
     <div class="meta"><span><i class="dot"></i> ${esc(t.crew || L('No crew yet'))}${t.size ? ' · ' + esc(L(t.size === 1 ? '1 person' : '{n} people', { n: t.size })) : ''}</span>
       ${t.area ? `<span>${esc(t.area)}</span>` : ''}${t.pStart ? `<span>${esc(t.pStop ? fromTo(t.pStart, t.pStop) : t12(t.pStart))}</span>` : ''}${t.est ? `<span>${esc(L('Est. {n} hrs', { n: t.est }))}</span>` : ''}</div>
     ${t.scope ? `<p class="scope">${esc(t.scope)}</p>` : ''}
@@ -265,10 +276,14 @@ function card(t) {
   </a>`;
 }
 
+// Two sent sheets with the same date and number (made on two office phones offline): both say so until one is renumbered.
+const clash = (t, more = '') => (sameNumber(T, t) ? `<p class="hint"><span class="pill" data-tone="warn">${L('Same number as another sheet')}</span>${more}</p>` : '');
+
 function renderTask(t) {
   const crewSide = t.origin === 'link';
   const tabs = [['assign', L('Assign')], ['results', L('Crew results')], ['review', L('Review')]];
-  app.innerHTML = `<button class="link" data-go="day/${esc(t.date)}">‹ ${esc(L('{date} task sheets', { date: niceDate(t.date) }))}</button>` + (crewSide
+  app.innerHTML = `<button class="link" data-go="day/${esc(t.date)}">‹ ${esc(L('{date} task sheets', { date: niceDate(t.date) }))}</button>`
+    + clash(t, crewSide ? '' : ' ' + L('Change the Task ID on one of them.')) + (crewSide
     ? brief(t) + results(t)
     : `<nav class="tabs">${tabs.map(([k, l]) => `<a href="#task/${esc(t.uid)}/${k}" data-act="tab" data-v="${k}"${k === view.tab ? ' aria-current="page"' : ''}>${l}</a>`).join('')}</nav>`
       + (view.tab === 'results' ? brief(t) + results(t) : view.tab === 'review' ? review(t) : assign(t)))
@@ -285,18 +300,23 @@ const crewHrsLine = t => L('Crew of {size}: {allot} crew-hrs allotted, {est} est
 
 const addRow = (id, ph, a) => `<div class="edit-row"><input id="${id}" placeholder="${esc(ph)}" enterkeyhint="done" data-enter="${a}"><button class="x add" data-act="${a}" aria-label="${esc(ph)}">+</button></div>`;
 
+// The member on the sheet that is this person: by id when both have one, else by name.
+const memberAt = (t, pid, name) => t.members.findIndex((m, i) => (pid && t.memberIds[i] ? t.memberIds[i] === pid : nameKey(m) === nameKey(name)));
+
 function assign(t) {
-  const people = [...new Map([...roster(S, t.crew), ...t.members].map(p => [nameKey(p), p])).values()]; // one chip a person, however spelled
-  const on = p => t.members.some(m => nameKey(m) === nameKey(p));
+  // One chip a person: the crew's people, then anyone else on the sheet.
+  const chips = people(S).filter(p => (t.crewId ? p.crewId === t.crewId : p.crew === t.crew)).map(p => ({ id: p.id, name: p.name }));
+  t.members.forEach((name, i) => { if (memberAt({ members: chips.map(c => c.name), memberIds: chips.map(c => c.id) }, t.memberIds[i], name) < 0) chips.push({ id: t.memberIds[i], name }); });
+  const on = p => memberAt(t, p.id, p.name) >= 0;
   const checks = [...new Set([...S.checks, ...t.checks.map(c => c.text)])];
   return `<section class="card"><h2>${L('Assignment')}</h2><div class="grid">
       ${field(L('Date'), 't.date', t.date, { type: 'date' })}${field(L('Assigned by'), 't.by', t.by)}
       ${field(L('Floor / level'), 't.floor', t.floor, { list: 'floors' })}${field(L('Task ID'), 't.id', t.id)}
       ${field(L('Room / area'), 't.area', t.area, { list: 'areas', wide: true, ph: L('e.g. Elec room 3E, east corridor') })}
     </div>
-    <div class="field"><span>${L('Crew')}</span><div class="chips">${S.crews.map(c => `<button class="chip" data-act="crew" data-v="${esc(c.name)}" aria-pressed="${t.crew === c.name}" style="${crewVar(c.name)}"><i class="dot"></i>${esc(c.name)}</button>`).join('')}</div></div>
+    <div class="field"><span>${L('Crew')}</span><div class="chips">${S.crews.map(c => `<button class="chip" data-act="crew" data-v="${esc(c.id)}" aria-pressed="${t.crewId ? t.crewId === c.id : t.crew === c.name}" style="${crewVar(c.name, c.id)}"><i class="dot"></i>${esc(c.name)}</button>`).join('')}</div></div>
     <div class="field"><span>${L('Crew members on this task')}</span>
-      ${people.length ? `<div class="chips">${people.map(p => `<button class="chip" data-act="member" data-v="${esc(p)}" aria-pressed="${on(p)}">${esc(p)}</button>`).join('')}</div>` : ''}
+      ${chips.length ? `<div class="chips">${chips.map(p => `<button class="chip" data-act="member" data-v="${esc(p.name)}" data-pid="${esc(p.id)}" aria-pressed="${on(p)}">${esc(p.name)}</button>`).join('')}</div>` : ''}
       ${addRow('newMember', L('Add a name'), 'addMember')}</div>
     <div class="grid">${field(L('Crew lead'), 't.lead', t.lead)}${field(L('Crew size'), 't.size', t.size, { type: 'number', mode: 'numeric' })}</div>
     ${datalist('floors', S.floors)}${datalist('areas', T.map(x => x.area))}
@@ -326,7 +346,7 @@ function brief(t) {
   const [label, tone] = stage(t);
   const row = (k, html) => (html ? `<dt>${esc(k)}</dt><dd>${html}</dd>` : ''); // html: already escaped
   const note = n => (n ? ' · ' + esc(n) : '');
-  return `<section class="card brief" style="${crewVar(t.crew)}">
+  return `<section class="card brief" style="${crewVar(t.crew, t.crewId)}">
     <div class="row1"><span class="label">${esc(t.crew || L('Crew'))} · ${esc(L('Task {id}', { id: t.id }))}</span><span class="pill" data-tone="${tone}">${esc(label)}</span></div>
     <div class="big">${t.floor ? esc(t.floor) : esc(L('Floor not set'))}${t.area ? ' · ' + esc(t.area) : ''}</div>
     ${t.scope ? `<p class="scope-text">${esc(t.scope)}</p>` : ''}
@@ -376,7 +396,7 @@ function results(t) {
 function review(t) {
   const [label, tone] = stage(t), w = worked(t);
   const row = (k, html) => (html ? `<dt>${esc(k)}</dt><dd>${html}</dd>` : '');
-  return `<section class="card brief" style="${crewVar(t.crew)}"><div class="row1"><span class="label">${esc(t.crew || L('Crew'))} · ${esc(L('Task {id}', { id: t.id }))} · ${t.floor ? esc(t.floor) : ''}</span><span class="pill" data-tone="${tone}">${esc(label)}</span></div>
+  return `<section class="card brief" style="${crewVar(t.crew, t.crewId)}"><div class="row1"><span class="label">${esc(t.crew || L('Crew'))} · ${esc(L('Task {id}', { id: t.id }))} · ${t.floor ? esc(t.floor) : ''}</span><span class="pill" data-tone="${tone}">${esc(label)}</span></div>
     ${t.status || t.aStart ? `<dl class="kv">${row(L('Status'), esc(t.status ? L(t.status) : L('In progress')))}${row(L('Steps'), t.items.length && esc(L('{d} of {n} done', { d: doneCount(t), n: t.items.length })))}
       ${row(L('Checks'), t.checks.length && esc(L('{d} of {n} done', { d: t.checks.filter(c => c.done).length, n: t.checks.length })))}
       ${row(L('Worked'), w && esc(`${fmtMin(w)} · ${L('{n} crew-hrs', { n: hrs(w / 60 * (t.size || 1)) })}`))}${row(L('Estimate'), t.est && esc(`${L('{n} hrs', { n: t.est })} · ${L('{n} crew-hrs', { n: hrs(t.est * (t.size || 1)) })}`))}
@@ -515,8 +535,8 @@ async function act(a, el) {
   const t = current(), v = el.dataset.v;
   switch (a) {
     case 'new': {
-      const nt = normTask({ uid: uid(), origin: 'mine', id: nextId(day), date: day, by: S.me, updatedAt: Date.now() });
-      if (crewFilter) pickCrew(nt, crewFilter);
+      const nt = normTask({ uid: uid(), origin: 'mine', id: nextId(T, day), date: day, by: S.me, updatedAt: Date.now() });
+      if (crewFilter) pickCrew(nt, S.crews.find(c => c.name === crewFilter));
       T.push(nt);
       persist();
       return go(`task/${nt.uid}/assign`);
@@ -541,10 +561,10 @@ async function act(a, el) {
       if (el.dataset.k === 't.review' && t.review) { t.updatedAt = Date.now(); persist(); render(); return fileTask(t); } // stamp the edit, then file
       break;
     }
-    case 'crew': pickCrew(t, v); break;
+    case 'crew': pickCrew(t, crewById(S, v)); break;
     case 'member': {
-      const same = m => nameKey(m) === nameKey(v);
-      t.members = t.members.some(same) ? t.members.filter(m => !same(m)) : [...t.members, v];
+      const i = memberAt(t, el.dataset.pid, v);
+      if (i >= 0) { t.members.splice(i, 1); t.memberIds.splice(i, 1); } else { t.members.push(v); t.memberIds.push(el.dataset.pid || ''); }
       t.size = t.members.length;
       break;
     }
@@ -553,10 +573,10 @@ async function act(a, el) {
       const text = input.value.trim();
       if (!text) return input.focus();
       if (a === 'addMember') {
-        const name = findPerson(S, text)?.name || text.replace(/[\s,]+/g, ' ').trim().slice(0, 60); // a crew list's spelling, else as the list will save it
-        if (nameKey(name) && !t.members.some(m => nameKey(m) === nameKey(name))) t.members.push(name); // ',,,' adds nobody
+        const p = findPerson(S, text, t.crewId), name = p?.name || cleanName(text); // the roster's spelling, else as the roster will save it
+        if (nameKey(name) && memberAt(t, p?.id, name) < 0) { t.members.push(name); t.memberIds.push(p?.id || ''); } // ',,,' adds nobody
         t.size = t.members.length;
-        enlist(t, [name]);
+        enlist(t);
       }
       if (a === 'addItem') t.items.push(newItem(text));
       if (a === 'addCheck' && !t.checks.some(c => c.text === text)) t.checks.push(newItem(text));
@@ -606,7 +626,7 @@ async function act(a, el) {
       if (!open.length) return toast(L('Nothing left open from {date}', { date: niceDate(prev) }));
       for (const x of open) {
         const c = cloneTask(x, day, true);
-        Object.assign(c, { from: x.uid, id: nextId(day), by: S.me || x.by, scope: x.remain ? `${x.remain}\n\n${L('Carried over from {id}: {scope}', { id: x.id, scope: x.scope })}` : x.scope });
+        Object.assign(c, { from: x.uid, id: nextId(T, day), by: S.me || x.by, scope: x.remain ? `${x.remain}\n\n${L('Carried over from {id}: {scope}', { id: x.id, scope: x.scope })}` : x.scope });
         T.push(c);
       }
       toast(L('Unfinished sheets copied: {n}', { n: open.length }));
@@ -615,7 +635,7 @@ async function act(a, el) {
     case 'carry': case 'dup': {
       const date = a === 'carry' ? addDays(t.date, 1) : t.date;
       const c = cloneTask(t, date, a === 'carry');
-      Object.assign(c, { id: nextId(date), from: a === 'carry' ? t.uid : '', scope: a === 'carry' && t.remain ? `${t.remain}\n\n${L('Carried over from {id}: {scope}', { id: t.id, scope: t.scope })}` : t.scope });
+      Object.assign(c, { id: nextId(T, date), from: a === 'carry' ? t.uid : '', scope: a === 'carry' && t.remain ? `${t.remain}\n\n${L('Carried over from {id}: {scope}', { id: t.id, scope: t.scope })}` : t.scope });
       T.push(c);
       persist();
       toast(a === 'carry' ? L('Carried to {date}', { date: niceDate(date) }) : L('Duplicated. Change the crew or floor.'));
@@ -631,7 +651,13 @@ async function act(a, el) {
     case 'fileNow': return fileTask(t);
     case 'paste': return pasteSheet(code => go('p=' + code));
     case 'settings': return go('settings');
-    case 'addCrew': case 'delCrew': case 'backup': case 'testFolder': await settingsAct(a, S, el); break;
+    case 'addCrew': case 'delCrew': case 'backup': case 'testFolder': case 'pEdit': case 'pDel': await settingsAct(a, S, el); break;
+    case 'pAdd': { // keep the keyboard up in that crew's box for the next name
+      const crew = el.dataset.crew;
+      await settingsAct(a, S, el);
+      render();
+      return document.querySelector(`input[data-enter=pAdd][data-crew="${CSS.escape(crew)}"]`)?.focus();
+    }
   }
   if (t) t.updatedAt = Date.now();
   persist();
@@ -673,6 +699,9 @@ document.addEventListener('input', e => {
     if (k === 's.lang' || k === 's.role') { setLang(S.lang); render(); }
     return;
   }
+  // The language each part is typed in, so the hub can translate it for a reader of the other language.
+  if (/^t\.(scope|refs|allotNote|estNote|followUp|items\.\d+\.text)$/.test(k)) t.aLang = getLang();
+  if (/^t\.(doneText|remain|comments)$/.test(k)) t.cLang = getLang();
   t.updatedAt = Date.now();
   persist();
   for (const o of app.querySelectorAll('[data-out]')) o.textContent = OUT[o.dataset.out](t);
@@ -692,7 +721,7 @@ document.addEventListener('keydown', e => {
 
 // The other app (or another tab) changed shared data: reload so a stale copy here never overwrites it.
 const reload = () => {
-  S = loadSettings(); setLang(S.lang); T = loadTasks(); reloadReports();
+  S = loadSettings(); setLang(S.lang); T = loadTasks(); reloadReports(); attachShifts(S);
   if (view.v === 'task' && !current()) view = { v: 'board' };
   if (document.body.classList.contains('office') && !office()) document.querySelectorAll('dialog[open]:not(.pin)').forEach(d => d.close()); // signed out elsewhere: an office question left open can't finish
   needsOffice(view) && !office() ? route() : render();

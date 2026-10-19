@@ -8,8 +8,12 @@
 // stamped when the scan first sees it change. Per part, schwab.hubSync keeps s (hash of the local copy the hub
 // has), v and vh (stamp and content hash of the hub's version last seen), p and at (the unsynced copy and its stamp),
 // x (a copy the hub refused).
+//
+// Who is who (HUB.md, Identity): the hub knows this phone only by its device secret (devSecret, on every request), people
+// and crews by their ids in the shared settings, and task sheets by uid. Short task ids are labels that two office phones
+// working offline can both hand out.
 
-import { KEYS, load, save, shape, uid, L, normTask, normShift, normReport, mergeAnswers, pack, linkTo, PIN_FORMAT } from './shared.mjs';
+import { KEYS, load, save, shape, L, normTask, normShift, normReport, normSettings, mergeAnswers, pack, linkTo, PIN_FORMAT, ensureDevice, nextId } from './shared.mjs';
 
 const ROLES = ['crew', 'super', 'pm'];
 const URL_OK = /^https:\/\/script\.google\.com\/(?:a\/macros\/[\w.-]+|macros)\/s\/[\w-]+\/exec$/;
@@ -21,16 +25,13 @@ const TIMEOUT = { translate: 20e3, archive: 120e3, selftest: 90e3, stats: 40e3 }
 const ST = 'schwab.hubSync', TR = 'schwab.tr', TR_MAX = 800;
 const CAP = { push: 100, bytes: 500e3, entity: 45e3 }; // the hub takes 200 entities, 1,000,000 characters and 45,000 per entity
 
-// Fields the templates in shared.mjs may not have yet (see requiredIntegration): kept from the raw data when norm drops them.
-const X_TASK = { aLang: '', assignAt: 0, crewAt: 0, reply: '', replyAt: 0, replyBy: '' };
-const X_REPORT = { lang: '', pmAt: 0 };
-const X_SHIFT = { crew: '', tasks: [''] };
-const EV_TPL = { rev: 0, ts: 0, who: '', role: '', kind: '', text: '', ref: '' }, ON_TPL = { who: '', in: '', date: '' };
+const EV_TPL = { rev: 0, ts: 0, who: '', role: '', kind: '', text: '', ref: '' }, ON_TPL = { who: '', in: '', date: '', pid: '', crewId: '', crew: '' }; // pid and crew when the hub sends them
+const DEV_ID = /^[0-9a-f]{32}$/;
 const SHEET_OK = /^https:\/\/docs\.google\.com\/spreadsheets\/[\w\-/.?=&#%]{0,250}$/; // the PM taps this link: only a Google Sheet
 const sheetUrl = u => (typeof u === 'string' && SHEET_OK.test(u) ? u : '');
-const CFG_TPL = { project: '', site: '', super: '', pm: '', floors: [''], crews: [{ name: '', lead: '', members: '' }], checks: [''], pin: '' };
+const CFG_TPL = { project: '', site: '', super: '', pm: '', floors: [''], crews: [{ id: '', name: '', lead: '', members: '' }], people: [{ id: '', name: '', crewId: '' }], checks: [''], pin: '' };
 
-const A_KEYS = ['id', 'date', 'by', 'floor', 'area', 'crew', 'members', 'size', 'scope', 'refs', 'allot', 'allotNote', 'est', 'estNote', 'pStart', 'pStop', 'checkIn',
+const A_KEYS = ['id', 'date', 'by', 'floor', 'area', 'crew', 'crewId', 'members', 'memberIds', 'size', 'scope', 'refs', 'allot', 'allotNote', 'est', 'estNote', 'pStart', 'pStop', 'checkIn',
   'review', 'reviewer', 'followUp', 'reply', 'replyAt', 'replyBy', 'aLang', 'sentAt'];
 const C_KEYS = ['lead', 'aStart', 'aStop', 'delay', 'status', 'doneText', 'remain', 'comments', 'cLang', 'resultAt'];
 const ticks = l => l.filter(i => i.done || i.at).map(i => [i.id, i.done, i.at]); // unticked steps are left out, so a new step is not an edit
@@ -42,8 +43,12 @@ const pmPart = r => ({ pmReview: r.pmReview, answers: r.decisions.filter(d => d.
 const RPARTS = [['sup', supPart, 'updatedAt'], ['pm', pmPart, 'pmAt']];
 const PARTS = { t: TPARTS, r: RPARTS, g: [['v', s => cfgPart(s), 'at']] };
 // A worker's shift is the phone's own words (never edited or gone); a PM-ruled one is everything.
-const shiftPart = (s, full) => [s.id, s.device, s.who, s.date, s.in, s.out, s.crew, s.tasks, ...(full ? [s.edited.who, s.edited.in, s.edited.out, s.gone] : [])];
-const cfgPart = s => { const c = shape(CFG_TPL, s); if (!PIN_FORMAT.test(c.pin)) c.pin = ''; return c; };
+const shiftPart = (s, full) => [s.id, s.device, s.who, s.pid, s.date, s.in, s.out, s.crew, s.crewId, s.tasks, ...(full ? [s.edited.who, s.edited.in, s.edited.out, s.gone] : [])];
+// The roster always goes normalized, every crew and person with an id. A tab still on an older version saves settings with
+// no people; pushing that would empty the roster on every phone. A config with member lists and no people was written by
+// such a phone, so its people are rebuilt from the lists (normSettings), with the same ids every phone computes.
+const noRoster = s => !arr(s.people).length && arr(s.crews).some(c => String(obj(c).members || '').trim());
+const cfgPart = s => { s = obj(s); const c = shape(CFG_TPL, normSettings(noRoster(s) ? { ...s, people: undefined } : s)); if (!PIN_FORMAT.test(c.pin)) c.pin = ''; return c; };
 const inC = raw => ({ ...cfgPart(raw), at: num(obj(raw).at) });
 
 const str = (x, n) => String(x ?? '').slice(0, n);
@@ -53,7 +58,6 @@ const isObj = x => !!x && typeof x === 'object' && !Array.isArray(x);
 const obj = x => (isObj(x) ? x : {});
 const dict = x => Object.assign(Object.create(null), obj(x)); // keys come from the hub: "__proto__" must be an ordinary key
 const pick = (o, ks) => { const r = {}; for (const k of ks) r[k] = o[k]; return r; };
-const withX = (n, raw, tpl) => { for (const k in tpl) if (!(k in n)) n[k] = shape(tpl[k], obj(raw)[k]); return n; };
 const canon = x => (Array.isArray(x) ? `[${x.map(canon)}]` : x && typeof x === 'object' ? `{${Object.keys(x).sort().map(k => JSON.stringify(k) + ':' + canon(x[k]))}}` : JSON.stringify(x));
 // ponytail: a 53-bit string hash (cyrb53) tells "changed since the hub last had it"; a collision (about 1 in 9e15) would only delay one push until its next edit.
 const hs = x => {
@@ -79,7 +83,7 @@ export function makeSync(o = {}) {
   const tm = o.timers || { set: (f, ms) => setTimeout(f, ms), clear: id => clearTimeout(id) };
   const hidden = o.hidden || (() => typeof document !== 'undefined' && document.hidden === true);
   const toast = o.toast || (() => {});
-  const packFn = o.pack || pack, linkFn = o.linkTo || linkTo;
+  const packFn = o.pack || pack, linkFn = o.linkTo || linkTo, ensure = o.ensureDevice || ensureDevice;
 
   // ---------- settings, state, normalizing ----------
 
@@ -89,12 +93,13 @@ export function makeSync(o = {}) {
     if (o.S) Object.assign(o.S, p);
     return ok;
   }
+  // This phone's secret and the id the hub derives from it (shared.mjs ensureDevice writes both); empty until it has run.
+  const device = () => { const d = obj(store.get(KEYS.device, null)); return KEY_OK.test(d.secret) && DEV_ID.test(d.id) ? d : { secret: '', id: '' }; };
   function hub() {
     const s = cfg();
     if (!URL_OK.test(s.hubUrl) || !KEY_OK.test(s.hubKey)) return null;
-    const dev = String(s.device || uid()); // shifts are owned by device: the id must exist before the first request
-    if (!s.device) patchSettings({ device: dev });
-    return { url: s.hubUrl, key: s.hubKey, role: ROLES.includes(s.hubRole) ? s.hubRole : '', crew: String(s.hubCrew || '').slice(0, 60), dev };
+    const d = device(); // dev labels and finds this phone's own shifts; only secret goes to the hub
+    return { url: s.hubUrl, key: s.hubKey, role: ROLES.includes(s.hubRole) ? s.hubRole : '', crew: String(s.hubCrew || '').slice(0, 60), dev: d.id, secret: d.secret };
   }
   function loadState() {
     const s = obj(store.get(ST, null)), st = { rev: num(s.rev), sig: String(s.sig || ''), skew: num(s.skew), ok: num(s.ok) };
@@ -104,12 +109,12 @@ export function makeSync(o = {}) {
   let meta = null; // what hubStatus shows, so a screen can ask on every draw without reading the whole state
   const saveState = st => { meta = pick(st, ['rev', 'ok']); return store.set(ST, st); };
   const inT = raw => {
-    const t = withX(norm.task(raw), raw, X_TASK);
+    const t = norm.task(raw);
     for (const l of ['items', 'checks']) { const seen = new Set(); t[l] = t[l].filter(i => i.id && !seen.has(i.id) && seen.add(i.id)); }
     return t;
   };
-  const inS = raw => { const s = norm.shift(raw); if (!s) return null; withX(s, raw, X_SHIFT); s.crew = s.crew.trim().slice(0, 60); s.tasks = s.tasks.map(x => x.slice(0, 40)).filter(Boolean).slice(0, 20); return s; };
-  const inR = (raw, key) => { const r = withX(norm.report(raw), raw, X_REPORT); return r.date && r.date === key ? r : null; };
+  const inS = raw => norm.shift(raw); // the person, crew and task links (pid, crewId, tasks [{uid, id}]) are in SHIFT_TPL
+  const inR = (raw, key) => { const r = norm.report(raw); return r.date && r.date === key ? r : null; };
   function readLocal(c) {
     const rawR = c.role === 'crew' ? {} : obj(store.get(KEYS.reports, {})), reports = [], other = {};
     for (const [d, r] of Object.entries(rawR)) { const n = inR(r, d); if (n) reports.push(n); else other[d] = r; }
@@ -170,8 +175,9 @@ export function makeSync(o = {}) {
     const timeout = tm.set(() => ac?.abort(), opt.timeout || TIMEOUT[action] || 30e3);
     let j = null, status = 0;
     try {
-      // A plain-text body keeps this a "simple" request, which Apps Script answers without a CORS preflight. The key rides in the body, never the address.
-      const res = await fetchImpl(c.url, { method: 'POST', body: JSON.stringify({ ...extra, v: 1, key: c.key, action, dev: c.dev }), headers: { 'Content-Type': 'text/plain;charset=utf-8' },
+      // A plain-text body keeps this a "simple" request, which Apps Script answers without a CORS preflight. The key and the
+      // device secret ride in the body, never the address; the hub works out the device from the secret, so no dev is sent.
+      const res = await fetchImpl(c.url, { method: 'POST', body: JSON.stringify({ ...extra, v: 1, key: c.key, action, ...(c.secret && { devSecret: c.secret }) }), headers: { 'Content-Type': 'text/plain;charset=utf-8' },
         signal: ac?.signal, credentials: 'omit', redirect: 'follow', referrerPolicy: 'no-referrer', cache: 'no-store' });
       status = res.status;
       j = await res.json().catch(() => null);
@@ -208,7 +214,7 @@ export function makeSync(o = {}) {
     if (sent.sup) return { ...w, decisions: r.decisions.map(d => ({ ...d, pm: '', pmNote: '' })), pmReview: '', pmAt: 0, updatedAt: sent.sup.at };
     return { date: r.date, decisions: r.decisions.filter(d => d.q || d.pm || d.pmNote).map(d => ({ q: d.q, pm: d.pm, pmNote: d.pmNote })), pmReview: r.pmReview, pmAt: sent.pm.at, updatedAt: 0 }; // every question, so an answer the PM took back is taken back on the hub too
   };
-  const wireShift = (s, full, at) => ({ id: s.id, device: s.device, who: s.who, date: s.date, in: s.in, out: s.out, crew: s.crew, tasks: s.tasks,
+  const wireShift = (s, full, at) => ({ id: s.id, device: s.device, who: s.who, pid: s.pid, date: s.date, in: s.in, out: s.out, crew: s.crew, crewId: s.crewId, tasks: s.tasks,
     edited: full ? s.edited : { who: false, in: false, out: false }, gone: full ? s.gone : false, at: full ? s.at : at });
 
   // Returns the pushable items; stamps new edits and forgets records of things no longer here. Pure bookkeeping: no network, no store writes.
@@ -392,8 +398,8 @@ export function makeSync(o = {}) {
     const r = { ...i, edited: { ...flags }, gone: l.gone || i.gone, at: Math.max(l.at, i.at) };
     const [a, b] = full ? [l, i] : [i, l]; // a: wins when flagged; b: otherwise
     for (const k of ['who', 'in', 'out']) r[k] = (full ? l.edited : i.edited)[k] ? a[k] : k === 'out' ? b.out || a.out : b[k]; // a clock-out is never undone
-    if (full) Object.assign(r, { crew: l.crew, tasks: l.tasks });
-    else if (!(i.edited.who || i.edited.in || i.edited.out)) Object.assign(r, { crew: l.crew, tasks: l.tasks }); // crew and tasks follow the phone until the PM has touched the shift
+    // who it is and what they were on (pid, crew, task links) follow the phone until the PM has touched the shift
+    if (full || !(i.edited.who || i.edited.in || i.edited.out)) Object.assign(r, { pid: l.pid, crew: l.crew, crewId: l.crewId, tasks: l.tasks });
     return r;
   }
   function upsert(list, map, inc, full) {
@@ -417,6 +423,19 @@ export function makeSync(o = {}) {
   const reportClean = (st, r, writes) => writes.every(p => { const pr = st.r[r.date]?.[p], fn = RPARTS.find(x => x[0] === p)[1]; return pr && pr.s === hs(fn(r)) && pr.x === undefined; });
   const shiftClean = (map, s, full) => { const pr = map[s.id]?.v; return pr && pr.s === hs(shiftPart(s, full)) && pr.x === undefined; };
 
+  // Two office phones working offline can hand two sheets one number (HUB.md, Identity). A sheet the hub has never had and
+  // that was never texted takes the next free number when a sheet on the hub has its day and number; two that both got out
+  // keep theirs, and the screens mark them (duplicateShortIds). Shifts and links point at the uid, so nothing moves with it.
+  function renumber(st, tasks, ts) {
+    const out = [], onHub = t => st.t[t.uid]?.assign?.v !== undefined;
+    for (const t of tasks) {
+      if (!t.id || t.sentAt || onHub(t) || !tasks.some(x => x !== t && x.date === t.date && x.id === t.id && onHub(x))) continue;
+      out.push({ old: t.id, id: (t.id = nextId(tasks, t.date)) });
+      t.updatedAt = ts;
+    }
+    return out;
+  }
+
   // A hub tombstone, or a purge from this phone: the entity leaves the phone even with an unsynced edit.
   function dropKey(lc, st, dirty, kind, key) {
     const cutOut = (list, f, map, flag) => { const keep = list.filter(x => !f(x)); delete map[key]; if (keep.length !== list.length) { list.splice(0, list.length, ...keep); dirty[flag] = true; } };
@@ -438,6 +457,7 @@ export function makeSync(o = {}) {
   function applyPull(c, rep, sig) {
     const st = loadState(), kinds = new Set(), ts = now();
     const win = winDays(c.role), cut = cutoff(ts, win);
+    let moved = [];
     if (rep.same !== true) {
       const lc = readLocal(c), tw = c.role === 'crew' ? ['crew'] : ['assign', 'crew'], rw = c.role === 'pm' ? ['sup', 'pm'] : c.role === 'super' ? ['sup'] : [];
       scan(st, c, lc);
@@ -453,6 +473,8 @@ export function makeSync(o = {}) {
         if (loc) lc.tasks[i] = next; else { at.set(inc.uid, lc.tasks.length); lc.tasks.push(next); }
         dirty.tasks = true;
       }
+      // only the office writes a sheet's number; on the last page, so a sheet of this phone in a later page is not taken for new
+      if (c.role !== 'crew' && rep.more !== true && (moved = renumber(st, lc.tasks, ts)).length) dirty.tasks = true;
       if (c.role !== 'crew') {
         const ri = new Map(lc.reports.map((r, i) => [r.date, i]));
         for (const raw of arr(rep.reports).slice(0, 500)) {
@@ -486,8 +508,14 @@ export function makeSync(o = {}) {
           if (c.role !== 'crew' && pr.s !== undefined && mine !== pr.s && mine !== vh && inc.at <= num(pr.at)) Object.assign(pr, { v: inc.at, vh });
           else {
             // only fields that arrived with the right type: a damaged setting cannot blank a good one
-            const patch = pick(cfgPart(rep.config), ['project', 'site', 'super', 'pm', 'floors', 'crews', 'checks'].filter(k => Array.isArray(rep.config[k]) === Array.isArray(CFG_TPL[k]) && typeof rep.config[k] === typeof CFG_TPL[k]));
+            const patch = pick(cfgPart(rep.config), ['project', 'site', 'super', 'pm', 'floors', 'crews', 'people', 'checks'].filter(k => Array.isArray(rep.config[k]) === Array.isArray(CFG_TPL[k]) && typeof rep.config[k] === typeof CFG_TPL[k]));
             if (PIN_FORMAT.test(inc.pin) && !PIN_FORMAT.test(s0.pin) && !PIN_FORMAT.test(store.get(KEYS.pin, ''))) patch.pin = inc.pin; // a phone keeps the first code it learns
+            // a crew phone follows its crew through a rename: the crew keeps its id, the phone takes the new name
+            // ponytail: the hub picks a crew's sheets by name, so sheets made before a rename keep the old name and stop
+            // reaching this phone; matching the pull's crews by crewId on the hub closes that.
+            const was = c.role === 'crew' && pr.s !== undefined && cfgPart(s0).crews.find(x => x.name === c.crew); // a crew list from this hub, not a new phone's defaults
+            const renamed = was && arr(patch.crews).find(x => x.id === was.id);
+            if (renamed?.name) patch.hubCrew = renamed.name;
             if (hs(cfgPart({ ...s0, ...patch })) !== mine) {
               if (!patchSettings(patch)) throw err('space');
               if (patch.pin) store.set(KEYS.pin, patch.pin);
@@ -499,6 +527,7 @@ export function makeSync(o = {}) {
         }
       }
       flush(lc, dirty, kinds);
+      if (moved.length) toast(moved.map(m => L('Your sheet {old} is now {id}: another sheet has that number.', m)).join(' '));
       if (arr(rep.events).length) live.events = [...shape([EV_TPL], rep.events), ...live.events].filter((e, i, a) => a.findIndex(x => x.rev === e.rev && x.ts === e.ts) === i).sort((a, b) => b.rev - a.rev).slice(0, 50);
       if (Array.isArray(rep.onsite)) live.onsite = shape([ON_TPL], rep.onsite).slice(0, 100);
       live.at = ts;
@@ -530,9 +559,24 @@ export function makeSync(o = {}) {
     info = { role: rep.role, name: str(rep.name, 60), sheetUrl: sheetUrl(rep.sheetUrl) };
     return rep;
   }
+  // A phone that clocked in before it had a device secret labeled its own shifts with an older random id (settings.device).
+  // They take the id the hub derives from the secret. A copy already texted to the PM stays under the old id there, and one
+  // a hub took under the old id before this version refuses the relabeled copy once, with the usual notice (HUB.md tradeoff).
+  function relabel(c) {
+    const old = String(cfg().device || '');
+    if (!c.dev || old === c.dev) return;
+    const list = arr(store.get(KEYS.hours, []));
+    let n = 0;
+    if (old) for (const s of list) if (isObj(s) && s.device === old) { s.device = c.dev; n++; }
+    if ((n && !store.set(KEYS.hours, list)) || !patchSettings({ device: c.dev })) throw err('space');
+    if (n) notify(new Set(['hours']));
+  }
   async function run(ep) {
+    await ensure(); // the secret exists before the first request: the hub knows this phone by nothing else
+    if (ep !== epoch) throw err('aborted');
     let c = hub();
     if (!c) return setStatus('off');
+    relabel(c);
     if (!c.role) { const rep = await whoami(c); if (ep !== epoch) throw err('aborted'); patchSettings({ hubRole: rep.role }); c = hub(); }
     // First contact (or a new role, crew or window): merge what the hub has before pushing anything, so old local copies cannot overwrite newer ones.
     if (loadState().sig !== [c.role, c.crew, winDays(c.role)].join('|')) await pullPhase(c, ep);
@@ -594,14 +638,15 @@ export function makeSync(o = {}) {
     url = String(url || '').trim(); key = String(key || '').trim();
     if (!URL_OK.test(url)) return bad('bad_url');
     if (!KEY_OK.test(key)) return bad('bad_key');
-    const s = cfg(), dev = s.device || uid();
+    await ensure();
+    const s = cfg();
     let rep;
-    try { rep = await whoami(null, { cfg: { url, key, dev, role: '' } }); } catch (e) { return lost(e); }
+    try { rep = await whoami(null, { cfg: { url, key, secret: device().secret, role: '' } }); } catch (e) { return lost(e); }
     if (extra.role && extra.role !== rep.role) return bad('mismatch');
     epoch++; fails = 0; nextAllowed = 0;
     const same = s.hubUrl === url;
     if (!same) store.set(ST, null); // a different hub knows none of what this phone has synced
-    patchSettings({ hubUrl: url, hubKey: key, hubRole: rep.role, hubCrew: typeof extra.crew === 'string' ? extra.crew : same ? String(s.hubCrew || '') : '', device: dev });
+    patchSettings({ hubUrl: url, hubKey: key, hubRole: rep.role, hubCrew: typeof extra.crew === 'string' ? extra.crew : same ? String(s.hubCrew || '') : '' });
     setStatus('syncing');
     poke();
     return { ok: true, role: rep.role, name: info.name, sheetUrl: info.sheetUrl };
@@ -753,6 +798,14 @@ export function makeSync(o = {}) {
 
   return { hubStatus, poke, cycle, wake, start, joinFrom, connect, disconnect, invite, translate, records, stats, purge, rotate, archive, selftest,
     liveData: () => ({ ...live, info }) };
+}
+
+// Sheets that share a day and a short id with another sheet: uid -> the uids of the others. Pure, for any list of sheets.
+export function duplicateShortIds(tasks) {
+  const by = new Map(), out = new Map();
+  for (const t of arr(tasks)) if (t?.id && t.uid) { const k = t.date + '|' + t.id, l = by.get(k) || by.set(k, []).get(k); if (!l.includes(t.uid)) l.push(t.uid); }
+  for (const l of by.values()) if (l.length > 1) for (const u of l) out.set(u, l.filter(x => x !== u));
+  return out;
 }
 
 // ---------- the app's instance ----------

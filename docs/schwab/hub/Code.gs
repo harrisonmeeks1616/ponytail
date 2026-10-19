@@ -33,6 +33,10 @@
 //     only with a strictly newer stamp (a tie never wipes someone else's work).
 //   - archive moves rows older than `before` (not in the future); hours move in whole Monday-to-Sunday weeks. A later push
 //     of an archived record is refused with 'archived'.
+//   - a phone is its devSecret (its own 32 characters of [A-Za-z0-9], sent with every request): the device id is the first
+//     32 hex characters of SHA-256(devSecret), and a `dev` the caller sends is ignored. A device id is not a secret (it is
+//     in texts and the Sheet), so knowing one opens nothing. No valid devSecret: no device, so worker-rule shift writes are
+//     refused ('device') and a crew or super pull has no shifts.
 
 const HUB_VERSION = '1.0.0';
 const HUB_TZ = 'America/New_York'; // the job's time zone; appsscript.json sets the same, and the hours math depends on it
@@ -70,18 +74,20 @@ const KINDS = { task: 'tasks', tasks: 'tasks', shift: 'shifts', shifts: 'shifts'
 // ---------- entity templates (what a stored entity looks like) ----------
 // 's' = short text (200 chars), 't' = long text (8000), 0 = number >= 0, false/true = boolean (the default is kept).
 // Local-only task fields (origin, from, gotAt, filedAt, updatedAt) are not here: they never leave a phone.
-const ASSIGN = ['id', 'date', 'by', 'floor', 'area', 'crew', 'members', 'size', 'scope', 'refs', 'allot', 'allotNote', 'est', 'estNote', 'pStart', 'pStop', 'checkIn'];
+const ASSIGN = ['id', 'date', 'by', 'floor', 'area', 'crew', 'crewId', 'members', 'memberIds', 'size', 'scope', 'refs', 'allot', 'allotNote', 'est', 'estNote', 'pStart', 'pStop', 'checkIn'];
 const CREW = ['lead', 'aStart', 'aStop', 'delay', 'status', 'doneText', 'remain', 'comments', 'cLang', 'resultAt'];
 const OFFICE_EXTRA = ['review', 'reviewer', 'followUp', 'reply', 'replyAt', 'replyBy', 'aLang', 'sentAt'];
 const ITEM = { id: 's', text: 's', done: false, at: 0 };
 const TASK = {
-  uid: 's', id: 's', date: 's', by: 's', floor: 's', area: 's', crew: 's', members: ['s'], size: 0, scope: 't', refs: 't',
+  uid: 's', id: 's', date: 's', by: 's', floor: 's', area: 's', crew: 's', crewId: 's', members: ['s'], memberIds: ['s'], size: 0, scope: 't', refs: 't',
   allot: 0, allotNote: 't', est: 0, estNote: 't', pStart: 's', pStop: 's', checkIn: 's',
   items: [ITEM], checks: [ITEM],
   review: 's', reviewer: 's', followUp: 't', reply: 't', replyAt: 0, replyBy: 's', aLang: 's', sentAt: 0, assignAt: 0,
   lead: 's', aStart: 's', aStop: 's', delay: 0, status: 's', doneText: 't', remain: 't', comments: 't', cLang: 's', resultAt: 0, crewAt: 0,
 };
-const SHIFT = { id: 's', device: 's', who: 's', date: 's', in: 's', out: 's', crew: 's', tasks: ['s'], edited: { who: false, in: false, out: false }, gone: false, at: 0 };
+// A shift names the person (pid), the crew (crewId) and the task sheets (uid) by id; who, crew and tasks[].id are the labels
+// they had then, for reading.
+const SHIFT = { id: 's', device: 's', who: 's', pid: 's', date: 's', in: 's', out: 's', crew: 's', crewId: 's', tasks: [{ uid: 's', id: 's' }], edited: { who: false, in: false, out: false }, gone: false, at: 0 };
 const CREW_BLOCK = { name: 's', na: true, lead: 's', workers: 0, labor: 0, laborFromTasks: false, members: 't', area: 's', ref: 's', start: 's', stop: 's', done: 't', quality: 't', holdups: 't', good: 't' };
 const REPORT = {
   date: 's', super: 's', shiftStart: 's', shiftEnd: 's', submittedAt: 0, status: 's', results: 't', wins: 't', issues: 't', notified: 't',
@@ -92,7 +98,8 @@ const REPORT = {
   risks: [{ risk: 't', impact: 't', prevent: 't', fallback: 't', owner: 's', by: 's' }],
   preparedBy: 's', pmReview: 't', updatedAt: 0, lang: 's', pmAt: 0,
 };
-const CONFIG = { project: 's', site: 's', super: 's', pm: 's', floors: ['s'], crews: [{ name: 's', lead: 's', members: 't' }], checks: ['s'], pin: 's', at: 0 };
+// people is the roster (the source of truth); crews[].members is the derived name list older phones still read.
+const CONFIG = { project: 's', site: 's', super: 's', pm: 's', floors: ['s'], crews: [{ id: 's', name: 's', lead: 's', members: 't' }], people: [{ id: 's', name: 's', crewId: 's' }], checks: ['s'], pin: 's', at: 0 };
 const REPORT_STATUS = ['On plan', 'At risk', 'Behind plan', 'No work today'];
 
 // ---------- small helpers ----------
@@ -123,6 +130,9 @@ function stampText_(ms) { const d = new Date(ms); return d.getFullYear() + '-' +
 function clampStamp_(v, now) { return typeof v === 'number' && isFinite(v) && v > 0 ? Math.floor(v > now + SKEW_MS ? now : v) : 0; }
 function t12_(t) { const m = /^(\d{1,2}):(\d{2})/.exec(t || ''); if (!m) return ''; const h = +m[1]; return ((h + 11) % 12 + 1) + ':' + m[2] + (h < 12 ? ' AM' : ' PM'); }
 function clip_(s, n) { s = String(s == null ? '' : s); return s.length > n ? s.slice(0, n) : s; }
+// The same key as nameKey in shared.mjs: case, accents, spacing and punctuation do not matter. Only for matching a
+// typed name; once a person has an id, the id is the identity.
+function nameKey_(name) { return String(name == null ? '' : name).normalize('NFD').replace(/[\u0300-\u036f]/g, '').replace(/[^\p{L}\p{N}]+/gu, ' ').trim().toLowerCase(); }
 function digestHex_(value) {
   return Utilities.computeDigest(Utilities.DigestAlgorithm.SHA_256, value)
     .map(function (b) { return ('0' + ((b + 256) % 256).toString(16)).slice(-2); }).join('');
@@ -350,7 +360,8 @@ function handle_(e) {
   const rule = ACTIONS[req.action];
   if (rule.roles.indexOf(role) < 0) fail_('forbidden');
   if (req.action !== 'whoami' && !P.SHEET_ID) fail_('not_ready');
-  const dev = typeof req.dev === 'string' && FORMAT.uid.test(req.dev) ? req.dev : '';
+  // The phone is what its secret proves, never what it says: a `dev` in the request is ignored.
+  const dev = typeof req.devSecret === 'string' && FORMAT.key.test(req.devSecret) ? digestHex_(req.devSecret).slice(0, 32) : '';
   const ctx = { req: req, role: role, dev: dev, now: now, P: P, id: P.SHEET_ID, cache: cache, memo: {}, state: { rev: Number(P.REV) || 0 } };
   if (req.action === 'push' && (bump_(cache, 'pk:' + role, now) > PUSH_CAP_KEY || bump_(cache, 'pd:' + role + ':' + dev, now) > PUSH_CAP_DEV)) fail_('busy');
   const out = rule.write ? locked_(ctx, req.key, rule.run) : rule.run(ctx);
@@ -582,7 +593,7 @@ function taskRow_(t, rev, now, json) {
 function shiftRow_(s, rev, now, json) {
   const out = s.gone ? '' : s.out ? cents_(s) / 100 : '';
   return rowBase_(TABS.shifts, [s.who, monday_(s.date), s.date, weekday_(s.date), s.in, s.out, out,
-    s.edited.who || s.edited.in || s.edited.out ? 'Yes' : '', s.gone ? 'Removed' : s.out ? '' : 'No clock-out', s.crew, s.tasks.join(', ')], s.id, rev, json);
+    s.edited.who || s.edited.in || s.edited.out ? 'Yes' : '', s.gone ? 'Removed' : s.out ? '' : 'No clock-out', s.crew, s.tasks.map(function (x) { return x.id || x.uid; }).join(', ')], s.id, rev, json);
 }
 function reportRow_(r, rev, now, json) {
   const waiting = r.decisions.filter(function (d) { return d.q && !d.pm; }).length;
@@ -635,17 +646,33 @@ function normTask_(raw, now) {
   if (!FORMAT.uid.test(t.uid) || !isDay_(t.date)) return null;
   ['pStart', 'pStop', 'checkIn', 'aStart', 'aStop'].forEach(function (k) { if (!FORMAT.time.test(t[k])) t[k] = ''; });
   ['aLang', 'cLang'].forEach(function (k) { if (t[k] !== 'en' && t[k] !== 'es') t[k] = ''; });
+  if (!FORMAT.uid.test(t.crewId)) t.crewId = '';
+  t.memberIds = t.memberIds.map(function (id) { return FORMAT.uid.test(id) ? id : ''; }); // '' keeps the places: memberIds may run next to members
   ['assignAt', 'crewAt', 'replyAt', 'sentAt', 'resultAt'].forEach(function (k) { t[k] = clampStamp_(t[k], now); }); // never more than 5 minutes ahead
   t.items = listIds_(t.items, now); t.checks = listIds_(t.checks, now);
   return t;
 }
+// A task's short id as typed, kept only as a label: printable, at most 40 characters, never starting like a formula.
+function taskLabel_(v) { return clip_(v.replace(/\s+/g, ' ').replace(/[^\p{L}\p{M}\p{N}\p{P}\p{S} ]/gu, '').replace(/^[\s=+\-@]+/, ''), 40).trim(); }
 function normShift_(raw, now) {
   if (!isObj_(raw)) return null;
-  const s = shape_(SHIFT, raw);
+  const s = shape_(SHIFT, raw), seen = dict_(), linked = dict_();
   s.who = s.who.trim().slice(0, 60); s.crew = s.crew.trim().slice(0, 60);
-  s.tasks = s.tasks.map(function (x) { return x.trim().slice(0, 60); }).filter(Boolean).slice(0, 50);
+  ['device', 'pid', 'crewId'].forEach(function (k) { if (!FORMAT.uid.test(s[k])) s[k] = ''; });
+  // A task is linked by its uid; an older phone sends only the short id, which becomes {uid: '', id} and is dropped once
+  // the same number is there with its uid (as taskLinks in shared.mjs does). One link per uid, one per bare number.
+  const list = own_(raw, 'tasks') && Array.isArray(raw.tasks) ? raw.tasks.slice(0, MAX_LIST) : [];
+  const links = shape_(SHIFT.tasks, list.map(function (x) { return typeof x === 'string' ? { uid: '', id: x } : x; })).map(function (x) {
+    return { uid: FORMAT.uid.test(x.uid) ? x.uid : '', id: taskLabel_(x.id) };
+  });
+  links.forEach(function (x) { if (x.uid) linked[x.id] = true; });
+  s.tasks = links.filter(function (x) {
+    const k = x.uid || '#' + x.id;
+    if (k === '#' || seen[k] || (!x.uid && linked[x.id])) return false;
+    seen[k] = true;
+    return true;
+  }).slice(0, 50);
   ['in', 'out'].forEach(function (k) { if (!FORMAT.time.test(s[k])) s[k] = ''; });
-  if (!FORMAT.uid.test(s.device)) s.device = '';
   s.at = clampStamp_(s.at, now);
   return FORMAT.uid.test(s.id) && isDay_(s.date) && s.in ? s : null; // no id, day or clock-in: nothing to log
 }
@@ -660,8 +687,17 @@ function normReport_(raw, now) {
 }
 function normConfig_(raw, now) {
   if (!isObj_(raw)) return null;
-  const c = shape_(CONFIG, raw);
+  const c = shape_(CONFIG, raw), crews = dict_(), people = dict_();
   if (c.pin !== '' && !FORMAT.pin.test(c.pin)) return null;
+  // Ids are who people and crews are (a rename keeps them). A crew from an older phone has none yet: '' until it gets one.
+  c.crews.forEach(function (x) { if (!FORMAT.uid.test(x.id) || crews[x.id]) x.id = ''; else crews[x.id] = true; });
+  c.people = c.people.filter(function (p) {
+    p.name = p.name.trim().slice(0, 60);
+    if (!FORMAT.uid.test(p.crewId)) p.crewId = '';
+    if (!FORMAT.uid.test(p.id) || people[p.id]) return false; // a person with no usable id, or someone else's, is dropped
+    people[p.id] = true;
+    return true;
+  });
   c.at = clampStamp_(c.at, now);
   return c;
 }
@@ -709,31 +745,32 @@ function mergeTask_(ctx, stored, inc) {
 }
 
 // Shift. Worker rules for a phone's own plain shift (any key); PM rules for everything the PM touches.
+// The phone is ctx.dev, proven by its devSecret: the device a request or a shift claims never picks whose shifts it writes.
 const noEdits_ = { who: false, in: false, out: false };
 function edited_(s) { return s.edited.who || s.edited.in || s.edited.out; }
-// ponytail: ctx.dev is whatever the phone says it is: a device id is a name that keeps honest phones apart, not a secret.
+function samePerson_(a, b) { return a.pid && b.pid ? a.pid === b.pid : nameKey_(a.who) === nameKey_(b.who); } // two people may share a name
 function mergeShift_(ctx, stored, inc, state) {
-  const plain = inc.device !== '' && inc.device === ctx.dev && !inc.gone && !edited_(inc);
+  const plain = ctx.dev !== '' && inc.device === ctx.dev && !inc.gone && !edited_(inc);
   const ev = [], line = function (verb, s) { return verb + ' ' + (s.who || 'a worker') + ', ' + s.date; };
   let s;
   if (ctx.role !== 'pm' || plain) { // worker rules
-    if (inc.device === '') return { reason: 'forbidden' };       // a PM-added shift is the PM's alone
-    if (inc.device !== ctx.dev) return { reason: 'device' };     // a key only speaks for the phone it came from
+    if (ctx.dev === '') return { reason: 'device' };                       // no device secret: no phone to speak for
+    if (inc.device === '') return { reason: 'forbidden' };                 // a PM-added shift is the PM's alone
+    if (stored && stored.device !== ctx.dev) return { reason: 'device' };  // a key only speaks for the phone it came from
     if (!stored) {
       const twin = Object.keys(state.byKey).some(function (k) { // the PM already added this person's day by hand: it stands, this one is filed removed
         const x = state.byKey[k].obj;
-        return x && x.date === inc.date && !x.gone && !x.device && x.who.toLowerCase() === inc.who.toLowerCase();
+        return x && x.date === inc.date && !x.gone && !x.device && samePerson_(x, inc);
       });
-      s = Object.assign({}, inc, { edited: clone_(noEdits_), gone: twin }); // the client never sets edited or gone for itself
+      s = Object.assign({}, inc, { device: ctx.dev, edited: clone_(noEdits_), gone: twin }); // the client never sets edited or gone for itself
       if (!twin) ev.push([inc.out ? 'clock.out' : 'clock.in', s.who, s.who + (inc.out ? ' clocked out at ' + t12_(s.out) : ' clocked in at ' + t12_(s.in)) + ', ' + s.date, s.id]);
     } else {
-      if (stored.device !== inc.device) return { reason: 'device' };
       s = clone_(stored);
       if (!s.gone) { // a removed shift is never revived
         if (!s.edited.who && inc.at > s.at) { s.who = inc.who; s.at = inc.at; } // an older text keeps the newer name
         if (!s.edited.in) s.in = inc.in;
         if (!s.edited.out && inc.out) s.out = inc.out;                            // and never undoes a clock-out
-        if (!edited_(s)) { s.crew = inc.crew; s.tasks = inc.tasks; }              // once the PM has touched a shift, its crew and tasks stay
+        if (!edited_(s)) ['pid', 'crew', 'crewId', 'tasks'].forEach(function (k) { s[k] = inc[k]; }); // once the PM has touched a shift, these stay
         if (s.out && !stored.out) ev.push(['clock.out', s.who, s.who + ' clocked out at ' + t12_(s.out) + ', ' + s.date, s.id]);
       }
     }
@@ -826,7 +863,8 @@ function pushConfig_(ctx, b, raw) {
   // Config has no stamp in the contract: an optional `at` orders two office phones, otherwise the last push wins.
   n.at = n.at || ctx.now;
   const entry = loadEntries_(ctx, 'config', normConfig_, ['config'], null).config || { row: 0, rev: 0, obj: null, json: '' };
-  if (!entry.obj || n.at >= entry.obj.at) save_(ctx, b, 'config', entry, n, configRow_);
+  const roster = function (c) { return JSON.stringify(c ? [c.people, c.crews] : [[], []]); }, was = roster(entry.obj);
+  if ((!entry.obj || n.at >= entry.obj.at) && save_(ctx, b, 'config', entry, n, configRow_) && roster(n) !== was) b.hours = true; // Weekly totals show the roster's names
   const c = clone_(entry.obj);
   c.rev = entry.rev;
   return { config: c, configStatus: 'ok' };
@@ -879,14 +917,30 @@ function pruneTombstones_(ctx, b) { // tombstones live 90 days
   (vr.values || []).forEach(function (r, i) { const ms = Date.parse(String(r[3] || '').replace(' ', 'T')); if (r[0] && ms < cutoff) delRow_(b, 'deleted', i + 2); });
 }
 
-// ---------- weekly totals: rewritten from the Hours tab after every shift write ----------
-function weeklyRows_(hours) { // Hours rows (columns A..I) -> Weekly totals rows: Name, Week of, Hours, Shifts, Open shifts
+// ---------- weekly totals: rewritten from the Hours tab after every shift write and every roster change ----------
+// Config cells [key, rev, data] -> {person id: the name Weekly totals show}: the roster's current name, and the crew too
+// when two people share that name.
+function names_(ctx, rows) {
+  const out = dict_(), crew = dict_(), count = dict_(), row = rows.filter(function (r) { return cellText_(r[0]) === 'config'; })[0];
+  const c = row ? normConfig_(parseCell_(cellText_(row[2])), ctx.now) : null;
+  if (!c) return out;
+  c.crews.forEach(function (x) { if (x.id) crew[x.id] = x.name; });
+  c.people.forEach(function (p) { const k = nameKey_(p.name); count[k] = (count[k] || 0) + 1; });
+  c.people.forEach(function (p) { if (p.name) out[p.id] = p.name + (count[nameKey_(p.name)] > 1 && crew[p.crewId] ? ' (' + crew[p.crewId] + ')' : ''); });
+  return out;
+}
+function configCells_() { const t = TABS.config; return a1_(t, t.key, 2, t.data); }
+// Hours rows (every column, data last) -> Weekly totals rows: Name, Week of, Hours, Shifts, Open shifts. One row per person
+// per week: by person id when the shift has one (a rename keeps it, a shared name does not merge two people), else by the
+// name however it was typed. The label is the roster's current name for that id, else the first spelling seen.
+function weeklyRows_(hours, names) {
   const m = dict_();
   hours.forEach(function (r) {
-    const who = cellText_(r[0]), week = cellText_(r[1]), note = cellText_(r[8]);
+    const who = cellText_(r[0]), week = cellText_(r[1]), note = cellText_(r[8]), d = parseCell_(cellText_(r[TABS.shifts.data]));
     if (!week || note === 'Removed') return;
-    const k = week + '|' + who.toLowerCase(); // one timesheet per person, any capitalization
-    const g = m[k] || (m[k] = { who: who || 'Name not set', week: week, cents: 0, n: 0, open: 0 });
+    const pid = d && typeof d.pid === 'string' && FORMAT.uid.test(d.pid) ? d.pid : '';
+    const k = week + '|' + (pid ? '#' + pid : nameKey_(who)); // a name key never starts with '#'
+    const g = m[k] || (m[k] = { who: names[pid] || who || 'Name not set', week: week, cents: 0, n: 0, open: 0 });
     g.n++;
     if (note === 'No clock-out') g.open++; else g.cents += Math.round(Number(r[6]) * 100) || 0;
   });
@@ -895,10 +949,11 @@ function weeklyRows_(hours) { // Hours rows (columns A..I) -> Weekly totals rows
     return a.week < b.week ? 1 : a.week > b.week ? -1 : x < y ? -1 : x > y ? 1 : 0;
   }).map(function (g) { return [g.who, g.week, g.cents / 100, g.n, g.open]; });
 }
-// ponytail: reads the whole Hours tab on every shift write, O(shifts); archive keeps it small.
+// ponytail: reads the whole Hours tab (with its data column) on every shift write, O(shifts); archive keeps it small.
 // Upgrade: recompute only the person-weeks that changed.
 function rewriteWeekly_(ctx) {
-  const rows = weeklyRows_(apiValuesGet_(ctx.id, a1_(TABS.shifts, 0, 2, 8)).values || []);
+  const vr = apiValuesBatchGet_(ctx.id, [a1_(TABS.shifts, 0, 2, TABS.shifts.data), configCells_()]); // one request: hours and roster
+  const rows = weeklyRows_(vr[0].values || [], names_(ctx, vr[1].values || []));
   apiValuesClear_(ctx.id, a1_(TABS.weekly, 0, 2, 4));
   for (let i = 0; i < rows.length; i += 200) apiValuesAppend_(ctx.id, rowRange_('weekly', 1), rows.slice(i, i + 200));
 }
@@ -1147,7 +1202,7 @@ function archive_(ctx) {
     for (let i = 0; i < copy.length; i += 200) apiValuesAppend_(aid, rowRange_(n, 1), copy.slice(i, i + 200));
     if (n === 'shifts') hours = copy;
   });
-  const wk = weeklyRows_(hours);
+  const wk = weeklyRows_(hours, names_(ctx, apiValuesGet_(ctx.id, configCells_()).values || []));
   for (let i = 0; i < wk.length; i += 200) apiValuesAppend_(aid, rowRange_('weekly', 1), wk.slice(i, i + 200));
   const b = newBatch_();
   Object.keys(plan).forEach(function (n) { plan[n].forEach(function (row) { delRow_(b, n, row); }); });

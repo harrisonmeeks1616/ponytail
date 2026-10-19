@@ -338,3 +338,4 @@ details.rec-week > summary .rec-main { padding: 0; flex-direction: row; flex-wra
 .tx[data-state=done][data-view=t] .tx-o, .tx[data-state=done][data-view=o] .tx-t,
 .tx[data-state=done][data-view=t] .tx-c-o, .tx[data-state=done][data-view=o] .tx-c-t { display: none; }
 .tx-pre { grid-column: 1 / -1; margin: -4px 0 0; white-space: pre-wrap; overflow-wrap: anywhere; }
+.feed-crew { color: var(--muted); } /* the crew next to a name in the activity feed */

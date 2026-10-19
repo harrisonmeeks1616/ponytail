@@ -8,6 +8,7 @@ const test = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('fs');
 const path = require('path');
+const nodeCrypto = require('crypto');
 const lib = import('../docs/schwab/shared.mjs');
 const syncLib = import('../docs/schwab/sync.mjs');
 
@@ -20,8 +21,14 @@ const DAY = dayOf(T0);
 const ago = days => { const d = new Date(T0); d.setDate(d.getDate() - days); return dayOf(d.getTime()); };
 const settle = async (n = 4) => { for (let i = 0; i < n; i++) await new Promise(r => setImmediate(r)); };
 const clone = x => JSON.parse(JSON.stringify(x));
-const O_KEYS = ['id', 'date', 'by', 'floor', 'area', 'crew', 'members', 'size', 'scope', 'refs', 'allot', 'allotNote', 'est', 'estNote', 'pStart', 'pStop', 'checkIn', 'review', 'reviewer', 'followUp', 'reply', 'replyAt', 'replyBy', 'aLang', 'sentAt'];
+const O_KEYS = ['id', 'date', 'by', 'floor', 'area', 'crew', 'crewId', 'members', 'memberIds', 'size', 'scope', 'refs', 'allot', 'allotNote', 'est', 'estNote', 'pStart', 'pStop', 'checkIn', 'review', 'reviewer', 'followUp', 'reply', 'replyAt', 'replyBy', 'aLang', 'sentAt'];
 const C_KEYS = ['lead', 'aStart', 'aStop', 'delay', 'status', 'doneText', 'remain', 'comments', 'cLang', 'resultAt'];
+// A phone is its device secret; the device id is the first 32 hex characters of its SHA-256 (HUB.md, Identity).
+const devOf = secret => (typeof secret === 'string' && /^[A-Za-z0-9]{32}$/.test(secret) ? nodeCrypto.createHash('sha256').update(secret).digest('hex').slice(0, 32) : '');
+const ALNUM = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789';
+const newSecret = () => Array.from(nodeCrypto.randomBytes(32), b => ALNUM[b % 62]).join('');
+// What shared.mjs ensureDevice does, in a phone's own storage: makes the secret once and answers the id.
+const ensureIn = storage => async () => { let d = storage.get('schwab.device'); if (!d?.secret) storage.set('schwab.device', d = { secret: newSecret(), id: '' }); if (d.id !== devOf(d.secret)) storage.set('schwab.device', d = { ...d, id: devOf(d.secret) }); return d.id; };
 
 // ---------- the fake hub ----------
 
@@ -46,7 +53,8 @@ class FakeHub {
   handle(req) {
     const role = this.roleOf(req.key);
     if (!role) return this.err('unauthorized');
-    const dev = req.dev, A = req.action === 'keys' ? this.keysAction : this[req.action];
+    if ('dev' in req) this.violations.push(`${req.action} named a device`); // the phone proves itself with its secret, never says who it is
+    const dev = devOf(req.devSecret), A = req.action === 'keys' ? this.keysAction : this[req.action];
     if (typeof A !== 'function' || ['handle', 'fetch', 'bump', 'now', 'roleOf', 'err', 'count'].includes(req.action)) return this.err('bad_request');
     return A.call(this, role, dev, req);
   }
@@ -109,26 +117,28 @@ class FakeHub {
     if (applied) r.rev = this.bump();
     return { key: w.uid, status: 'ok', task: this.taskView(r) };
   }
-  // shifts: worker rules for the key's own device, PM rules for the pm key
+  // shifts: worker rules for the phone the device secret proves (its device is forced), PM rules for the pm key
   pushShift(role, dev, w) {
     if (!/^[\w-]{1,40}$/.test(w.id || '') || !/^\d{4}-\d{2}-\d{2}$/.test(w.date || '') || !/^\d\d:\d\d/.test(w.in || '')) return { key: w.id, status: 'rejected', reason: 'invalid' };
     if (this.tomb.some(t => t.kind === 'shifts' && t.key === w.id)) return { key: w.id, status: 'rejected', reason: 'deleted' };
-    const cur = this.shifts.get(w.id), own = w.device && w.device === dev && !w.gone && !(w.edited && (w.edited.who || w.edited.in || w.edited.out)) || (role !== 'pm' && w.device === dev);
-    if (own) {
+    const cur = this.shifts.get(w.id), plain = dev && w.device === dev && !w.gone && !(w.edited && (w.edited.who || w.edited.in || w.edited.out));
+    const same = (a, b) => a.date === b.date && (a.pid && b.pid ? a.pid === b.pid : a.who.toLowerCase() === b.who.toLowerCase());
+    if (role !== 'pm' || plain) {
+      if (!dev) return { key: w.id, status: 'rejected', reason: 'device' };
+      if (!w.device) return { key: w.id, status: 'rejected', reason: 'forbidden' };
+      if (cur && cur.device !== dev) return { key: w.id, status: 'rejected', reason: 'device' };
       if (!cur) {
-        const twin = [...this.shifts.values()].some(s => !s.gone && !s.device && s.who.toLowerCase() === w.who.toLowerCase() && s.date === w.date);
-        this.shifts.set(w.id, { ...w, edited: { who: false, in: false, out: false }, gone: twin, rev: this.bump() });
-      } else if (cur.device !== w.device) return { key: w.id, status: 'rejected', reason: 'forbidden' };
-      else if (!cur.gone) {
+        const twin = [...this.shifts.values()].some(s => !s.gone && !s.device && same(s, w));
+        this.shifts.set(w.id, { ...w, device: dev, edited: { who: false, in: false, out: false }, gone: twin, rev: this.bump() });
+      } else if (!cur.gone) {
         const before = JSON.stringify(cur);
         if (num(w.at) > num(cur.at) && !cur.edited.who) { cur.who = w.who; cur.at = w.at; }
         if (!cur.edited.in) cur.in = w.in;
         if (!cur.edited.out && w.out) cur.out = w.out;
-        if (!(cur.edited.who || cur.edited.in || cur.edited.out)) { cur.crew = w.crew; cur.tasks = w.tasks; }
+        if (!(cur.edited.who || cur.edited.in || cur.edited.out)) Object.assign(cur, { pid: w.pid, crew: w.crew, crewId: w.crewId, tasks: w.tasks });
         if (JSON.stringify(cur) !== before) cur.rev = this.bump();
       }
-    } else if (role !== 'pm') return { key: w.id, status: 'rejected', reason: 'forbidden' };
-    else { // PM rules: as sent, but a shift never changes phones and a clock-out is not erased by a phone that has not pulled it
+    } else { // PM rules: as sent, but a shift never changes phones and a clock-out is not erased by a phone that has not pulled it
       const s = { ...w, rev: this.bump() };
       if (cur) { s.device = cur.device; if (!s.out && !s.edited.out && cur.out) s.out = cur.out; s.at = Math.max(num(cur.at), num(w.at)); }
       this.shifts.set(w.id, s);
@@ -179,7 +189,7 @@ class FakeHub {
     const days = Math.min(Math.max(num(req.days) || 14, 1), 90), cut = (() => { const d = new Date(this.now()); d.setDate(d.getDate() - days); return dayOf(d.getTime()); })();
     const inWin = d => this.ignoreDays || d >= cut;
     const tasks = [...this.tasks.values()].filter(r => r.rev > since && inWin(r.a.date) && (role !== 'crew' || !req.crews || req.crews.includes(r.a.crew))).map(r => this.taskView(r));
-    const shifts = [...this.shifts.values()].filter(s => s.rev > since && inWin(s.date) && (role === 'pm' || s.device === dev)).map(clone);
+    const shifts = [...this.shifts.values()].filter(s => s.rev > since && inWin(s.date) && (role === 'pm' || (dev && s.device === dev))).map(clone); // no proven device: no hours
     const reports = role === 'crew' ? [] : [...this.reports.values()].filter(r => r.rev > since && inWin(r.date)).map(r => this.reportView(r));
     const config = this.config && this.configRev > since ? this.config : undefined;
     const deleted = this.tomb.filter(t => t.rev > since && (role !== 'crew' || t.kind !== 'reports')), events = role === 'crew' ? [] : this.events.filter(e => e.rev > since);
@@ -212,14 +222,16 @@ async function makePhone(hub, role, o = {}) {
   const storage = o.storage || memStorage(), timers = manualTimers(ms => tick(ms));
   const p = { k: 0, hub, role, storage, timers, changes: [], toasts: [], statuses: [], offset: o.offset || 0, n: ++seq };
   p.now = () => hub.clock() + p.offset;
-  const settings = { lang: '', worker: o.worker || '', device: o.device ?? `dev${p.n}`, role: role === 'pm' ? 'Project manager' : 'Superintendent', crews: [{ name: 'Crew A', lead: '', members: '' }], floors: ['Level 1'], checks: [], project: 'P', site: 'S', super: '', pm: '', pin: '',
+  if (!o.storage && !o.noDevice) { storage.set('schwab.device', { secret: o.secret || newSecret(), id: '' }); await ensureIn(storage)(); } // an up to date phone
+  Object.defineProperties(p, { secret: { get: () => storage.get('schwab.device')?.secret || '' }, dev: { get: () => storage.get('schwab.device')?.id || '' } });
+  const settings = { lang: '', worker: o.worker || '', device: o.device ?? p.dev, role: role === 'pm' ? 'Project manager' : 'Superintendent', crews: [{ name: 'Crew A', lead: '', members: '' }], floors: ['Level 1'], checks: [], project: 'P', site: 'S', super: '', pm: '', pin: '',
     hubUrl: o.url ?? URL_A, hubKey: o.key ?? KEYS[role], hubRole: o.noRole ? '' : role, hubCrew: o.crew || '' };
   if (!o.storage) storage.set('schwab.settings', settings);
   p.net = { down: false };
   p.attempts = 0;
   p.fetch = async (url, init) => { p.attempts++; if (p.net.down) throw new TypeError('down'); return hub.fetch(url, init); };
   const norm = o.norm || {};
-  p.sync = makeSync({ fetchImpl: o.fetchImpl || p.fetch, now: p.now, storage, timers, hidden: o.hidden || (() => false), norm, S: o.S,
+  p.sync = makeSync({ fetchImpl: o.fetchImpl || p.fetch, now: p.now, storage, timers, hidden: o.hidden || (() => false), norm, S: o.S, ensureDevice: o.ensureDevice || ensureIn(storage),
     onChange: kinds => p.changes.push({ kinds, tasks: clone(storage.get('schwab.tasks', [])) }), onStatus: s => p.statuses.push(s.state), toast: (m, tone) => p.toasts.push(m + (tone ? ` [${tone}]` : '')), linkTo: (pg, code) => `https://app.test/${pg}#p=${code}` });
   Object.assign(p, {
     tasks: () => storage.get('schwab.tasks', []),
@@ -235,8 +247,8 @@ async function makePhone(hub, role, o = {}) {
     editTask(uid, fn) { const l = storage.get('schwab.tasks', []), t = l.find(x => x.uid === uid); fn(t); t.updatedAt = p.now(); storage.set('schwab.tasks', l); return t; },
     tick(uid, id, list = 'items') { return p.editTask(uid, t => { const i = t[list].find(x => x.id === id); i.done = !i.done; i.at = i.done ? p.now() : 0; }); },
     hours: () => storage.get('schwab.hours', []), crewHours: () => storage.get('schwab.crewHours', []), reports: () => storage.get('schwab.reports', {}),
-    clockIn(who, over = {}) { // crew and tasks are on the shift too (HUB.md); the plain template may not know them yet
-      const s = Object.assign(shared.normShift({ id: `s${p.n}x${++p.k}`, device: storage.get('schwab.settings').device, who, date: DAY, in: '07:00', ...over }), { crew: over.crew || '', tasks: over.tasks || [] });
+    clockIn(who, over = {}) { // as report.mjs labels a shift: the derived device id, else the older settings.device
+      const s = shared.normShift({ id: `s${p.n}x${++p.k}`, device: p.dev || storage.get('schwab.settings').device, who, date: DAY, in: '07:00', ...over });
       storage.set('schwab.hours', [...p.hours(), s]); return s.id; },
     editHours(id, fn) { const l = p.hours(); fn(l.find(s => s.id === id)); storage.set('schwab.hours', l); },
     editCrewHours(id, fn) { const l = p.crewHours(); fn(l.find(s => s.id === id)); storage.set('schwab.crewHours', l); },
@@ -414,10 +426,10 @@ test('first contact: an old copy on a new phone cannot overwrite a newer hub cop
 test('hours: workers push their own shifts, only the PM phone pushes the timesheet, and PM edits come back to the worker', async () => {
   const hub = fresh(), shared = await lib;
   const w = await makePhone(hub, 'crew', { crew: 'Crew A', worker: 'Jose L' }), pm = await makePhone(hub, 'pm'), sp = await makePhone(hub, 'super');
-  const id = w.clockIn('Jose L', { crew: 'Crew A', tasks: ['T1019-02'] });
+  const id = w.clockIn('Jose L', { pid: 'p-jose', crew: 'Crew A', crewId: 'c-a', tasks: [{ uid: 'u-t2', id: 'T1019-02' }] });
   await w.cycle();
   const first = hub.shifts.get(id);
-  assert.deepEqual([first.who, first.in, first.crew, first.tasks, first.edited], ['Jose L', '07:00', 'Crew A', ['T1019-02'], { who: false, in: false, out: false }]);
+  assert.deepEqual([first.who, first.pid, first.in, first.crew, first.crewId, first.tasks, first.edited, first.device], ['Jose L', 'p-jose', '07:00', 'Crew A', 'c-a', [{ uid: 'u-t2', id: 'T1019-02' }], { who: false, in: false, out: false }, w.dev]);
   assert.equal(hub.calls.filter(c => c.action === 'push')[0].body.shifts[0].gone, false, 'a phone never sets gone or edited for itself');
   await pm.cycle();
   assert.deepEqual(pm.crewHours().map(s => [s.id, s.who, s.crew]), [[id, 'Jose L', 'Crew A']], 'the timesheet fills from the hub');
@@ -448,7 +460,7 @@ test('hours: workers push their own shifts, only the PM phone pushes the timeshe
   const tre = await makePhone(hub, 'crew', { crew: 'Crew A', worker: 'tre w' });
   tre.clockIn('tre w');
   await tre.cycle();
-  assert.equal([...hub.shifts.values()].find(s => s.device === tre.settings().device).gone, true);
+  assert.equal([...hub.shifts.values()].find(s => s.device === tre.dev).gone, true);
   await tre.cycle();
   assert.equal(tre.hours().length, 0, 'the PM entry stands: the twin leaves the worker phone');
   // the PM removes a shift: it leaves the worker's phone too
@@ -464,7 +476,7 @@ test('first contact on the PM phone keeps a worker clock-out the hub already has
   const id = w.clockIn('Jose L'); w.editHours(id, s => { s.out = '15:00'; });
   await w.cycle();
   const pm = await makePhone(hub, 'pm');
-  pm.save('schwab.crewHours', [shared.normShift({ id, device: w.settings().device, who: 'Jose L', date: DAY, in: '07:00' })]); // an old text opened on the PM phone: no clock-out yet
+  pm.save('schwab.crewHours', [shared.normShift({ id, device: w.dev, who: 'Jose L', date: DAY, in: '07:00' })]); // an old text opened on the PM phone: no clock-out yet
   await stable(pm);
   assert.equal(hub.shifts.get(id).out, '15:00', 'the PM-ruled push did not wipe the clock-out');
   assert.equal(pm.crewHours()[0].out, '15:00');
@@ -636,14 +648,14 @@ test('a refused sheet is reported once and left alone until it changes', async (
 test('joining: an invite link sets a phone up only when the hub agrees, never replaces another hub, and never echoes a key', async () => {
   const hub = fresh(), { unpack } = await lib;
   const link = (over = {}) => ({ v: 1, kind: 'join', hub: { url: URL_A, key: KEYS.crew }, role: 'crew', crew: 'Crew A', ...over });
-  const blank = () => makePhone(hub, 'crew', { url: '', key: '', noRole: true });
+  const blank = () => makePhone(hub, 'crew', { url: '', key: '', noRole: true, noDevice: true }); // a phone that has never made its device secret
   let p = await blank();
   assert.equal(p.sync.hubStatus().state, 'off');
   const ok = await p.sync.joinFrom(link());
   assert.deepEqual([ok.ok, ok.role, ok.crew, ok.needsName, ok.needsCrew], [true, 'crew', 'Crew A', true, false]);
   const s = p.settings();
   assert.deepEqual([s.hubUrl, s.hubKey, s.hubRole, s.hubCrew], [URL_A, KEYS.crew, 'crew', 'Crew A']);
-  assert.ok(s.device, 'a device id exists before the first request');
+  assert.ok(p.secret && hub.calls.find(c => c.action === 'whoami').body.devSecret === p.secret, 'the device secret exists before the first request and goes with it');
   await p.cycle();
   assert.equal(p.sync.hubStatus().state, 'live');
   // bad links change nothing and ask nothing of the network
@@ -827,7 +839,7 @@ test('whatever the hub sends is normalized: hostile or damaged data cannot break
   hub.fail = req => (req.action === 'pull' ? { ok: true, rev: 5, now: hub.now(),
     tasks: [evil, { uid: 'bad uid!', date: DAY }, { uid: 'ok1', date: '2026-02-30', scope: 'bad date', crewAt: 'soon', items: 'nope' }, 'junk', null],
     reports: [{ date: 'nope' }, { date: DAY, status: 'Hacked', decisions: 'x' }],
-    shifts: [{ id: 's1', device: cp.settings().device, who: 'x', date: DAY, in: '25:99' }, { id: 's2', device: cp.settings().device, who: 'Zed', date: DAY, in: '07:00', edited: 'yes' }],
+    shifts: [{ id: 's1', device: cp.dev, who: 'x', date: DAY, in: '25:99' }, { id: 's2', device: cp.dev, who: 'Zed', date: DAY, in: '07:00', edited: 'yes', tasks: ['T1', { uid: 'bad uid!', id: '<b>' }, 7], pid: { x: 1 } }],
     config: { floors: 'no', crews: [{ name: 5 }], project: { a: 1 }, pin: 'not a pin' }, deleted: [null, { kind: 'task' }, { kind: 'galaxy', key: 'x' }] } : null);
   await cp.cycle();
   assert.equal(cp.sync.hubStatus().state, 'live');
@@ -840,7 +852,7 @@ test('whatever the hub sends is normalized: hostile or damaged data cannot break
   assert.match(ts.find(t => t.uid === 'ok1').date, /^\d{4}-\d{2}-\d{2}$/);
   assert.deepEqual(Object.keys(cp.reports()), [DAY]);
   assert.equal(cp.reports()[DAY].status, '');
-  assert.deepEqual(cp.hours().map(s => s.id), ['s2']);
+  assert.deepEqual(cp.hours().map(s => [s.id, s.pid, s.tasks]), [['s2', '', [{ uid: '', id: 'T1' }]]]);
   assert.equal(cp.settings().pin, '', 'a pin that is not a salted hash is never adopted');
   assert.equal(cp.settings().project, 'P');
 });
@@ -853,7 +865,7 @@ test('transport: a plain-text post to the hub address, the key only in the body,
     assert.match(c.init.headers['Content-Type'], /^text\/plain/);
     assert.equal(c.init.method, 'POST');
     assert.equal(c.init.credentials, 'omit');
-    assert.deepEqual([c.body.v, c.body.key, c.body.dev], [1, KEYS.crew, cp.settings().device]);
+    assert.deepEqual([c.body.v, c.body.key, c.body.devSecret, 'dev' in c.body], [1, KEYS.crew, cp.secret, false], 'the device secret goes with every request, a device id never does');
     assert.ok(!c.url.includes(KEYS.crew));
   }
   // a reply that is a web page (wrong address, or access not set to anyone)
@@ -910,7 +922,7 @@ test('shared settings: the office pushes them, every phone adopts them, secrets 
   sp.save('schwab.settings', { ...sp.settings(), floors: ['Basement', 'Level 1'], crews: [{ name: 'Crew A', lead: 'Mike', members: 'Mike, Jose' }], checks: ['Labeling'], pin: pinA,
     folderUrl: 'https://script.google.com/macros/s/FOLDER/exec', siteCode: 'SITESECRET'.padEnd(32, 'x'), me: 'Sue', worker: 'Sue' });
   await sp.cycle();
-  assert.deepEqual(Object.keys(hub.config).sort(), ['at', 'checks', 'crews', 'floors', 'pin', 'pm', 'project', 'site', 'super']);
+  assert.deepEqual(Object.keys(hub.config).sort(), ['at', 'checks', 'crews', 'floors', 'people', 'pin', 'pm', 'project', 'site', 'super']);
   assert.ok(!JSON.stringify(hub.config).includes('SITESECRET') && !JSON.stringify(hub.config).includes(KEYS.super), 'folder code and hub key never leave a phone');
   const S = {}, cp = await makePhone(hub, 'crew', { crew: 'Crew A', S, worker: 'Jose L' });
   await cp.cycle();
@@ -946,7 +958,6 @@ test('daily report: the super part and the PM part are separate and each side ke
   assert.equal(hub.reports.get(DAY).results, 'Pulled wire');
   assert.equal(pm.reports()[DAY].results, 'Pulled wire');
   assert.deepEqual(cp.reports(), {}, 'a crew phone neither gets nor sends reports');
-  assert.ok(!hub.calls.some(c => c.action === 'pull' && c.init && c.body.dev === cp.settings().device && false));
   tick(60e3);
   pm.editReport(DAY, r => { r.decisions[0].pm = 'Approved'; r.decisions[0].pmNote = 'ok'; r.pmReview = 'PM 5 PM'; });
   await pm.cycle();
@@ -997,7 +1008,7 @@ test('the app hears about every change after it is saved, and a first-time role 
   assert.equal(cp.changes.length, 1);
   assert.deepEqual(cp.changes[0].kinds, ['tasks']);
   assert.equal(cp.changes[0].tasks[0].uid, uid, 'the store already holds the new data when onChange runs');
-  assert.deepEqual(hub.calls.filter(c => c.action === 'pull' && c.body.dev === cp.settings().device).map(c => c.body.since), [0, hub.rev], 'first contact: a full pull, then (after the push) only what changed');
+  assert.deepEqual(hub.calls.filter(c => c.action === 'pull' && c.body.devSecret === cp.secret).map(c => c.body.since), [0, hub.rev], 'first contact: a full pull, then (after the push) only what changed');
   await cp.cycle();
   assert.ok(hub.calls.filter(c => c.action === 'pull').at(-1).body.since > 0, 'then only what changed');
   assert.equal(cp.changes.length, 1);
@@ -1010,8 +1021,9 @@ test('the app hears about every change after it is saved, and a first-time role 
 test('every phrase sync.mjs shows has Spanish with the same placeholders, and no Spanish entry is left over', async () => {
   const dir = path.join(__dirname, '..', 'docs', 'schwab'), src = fs.readFileSync(path.join(dir, 'sync.mjs'), 'utf8');
   const file = process.env.ES_SYNC_JSON || '/tmp/claude-0/-home-user-ponytail/a49885c6-54fd-5839-a3da-110b17505f82/scratchpad/es/es-sync.json'; // until integration folds it into es.mjs
-  const extra = fs.existsSync(file) ? JSON.parse(fs.readFileSync(file, 'utf8')) : {};
-  const ES = { ...(await import('../docs/schwab/es.mjs')).default, ...extra };
+  const idFile = file.replace(/es-sync\.json$/, 'es-identity-client.json'); // this round's new phrases, the same way
+  const read = f => (fs.existsSync(f) ? JSON.parse(fs.readFileSync(f, 'utf8')) : {}), extra = read(file);
+  const ES = { ...(await import('../docs/schwab/es.mjs')).default, ...read(idFile), ...extra };
   const used = new Set();
   for (const m of src.matchAll(/\b(?:L|x)\(\s*(['"])((?:\\.|(?!\1)[^\\])*)\1/g)) used.add(m[2].replace(/\\(.)/g, '$1'));
   assert.ok(used.size >= 15, 'the scan found the phrases');
@@ -1201,7 +1213,7 @@ test('connect keeps the shared settings object the app holds in step', async () 
   const hub = fresh(), S = {}, p = await makePhone(hub, 'crew', { url: '', key: '', noRole: true, S });
   const r = await p.sync.connect(URL_A, KEYS.crew);
   assert.equal(r.ok, true);
-  assert.deepEqual([S.hubUrl, S.hubKey, S.hubRole, typeof S.device], [URL_A, KEYS.crew, 'crew', 'string']);
+  assert.deepEqual([S.hubUrl, S.hubKey, S.hubRole], [URL_A, KEYS.crew, 'crew']);
   p.sync.disconnect();
   assert.deepEqual([S.hubUrl, S.hubKey, S.hubRole], ['', '', '']);
 });
@@ -1211,7 +1223,7 @@ test('the PM phone keeps a clock-out it holds that the hub does not have yet', a
   const id = w.clockIn('Jose L');
   await w.cycle();
   assert.equal(hub.shifts.get(id).out, '');
-  pm.save('schwab.crewHours', [shared.normShift({ id, device: w.settings().device, who: 'Jose L', date: DAY, in: '07:00', out: '15:00' })]); // the clock-out text was opened on the PM phone first
+  pm.save('schwab.crewHours', [shared.normShift({ id, device: w.dev, who: 'Jose L', date: DAY, in: '07:00', out: '15:00' })]); // the clock-out text was opened on the PM phone first
   await stable(pm, w);
   assert.equal(hub.shifts.get(id).out, '15:00', 'the clock-out reached the hub through the PM phone');
   assert.equal(w.hours()[0].out, '15:00');
@@ -1249,7 +1261,7 @@ test('a big hub is read in pages and nothing between them is skipped', async () 
   await sp.cycle();
   await cp.cycle();
   assert.deepEqual(cp.tasks().map(t => t.uid).sort(), ids.slice().sort());
-  const pulls = hub.calls.filter(c => c.action === 'pull' && c.body.dev === cp.settings().device);
+  const pulls = hub.calls.filter(c => c.action === 'pull' && c.body.devSecret === cp.secret);
   assert.ok(pulls.length >= 3 && pulls.every(c => c.body.since >= 0));
   assert.ok(pulls[1].body.since > 0 && pulls[1].body.since < hub.rev, 'the next page starts where the last stopped');
 });
@@ -1308,7 +1320,7 @@ test('initHub: the browser events run cycles, a second call replaces the first, 
   g.document = { hidden: false, addEventListener: (t, f) => (on['d:' + t] = f), removeEventListener: (t, f) => { if (on['d:' + t] === f) delete on['d:' + t]; } };
   g.addEventListener = (t, f) => (on['w:' + t] = f); g.removeEventListener = (t, f) => { if (on['w:' + t] === f) delete on['w:' + t]; };
   try {
-    const opts = { storage, fetchImpl: hub.fetch, now: clock, timers, hidden: () => g.document.hidden };
+    const opts = { storage, fetchImpl: hub.fetch, now: clock, timers, hidden: () => g.document.hidden, ensureDevice: ensureIn(storage) };
     mod.initHub(opts);
     assert.deepEqual(Object.keys(on).sort(), ['d:visibilitychange', 'w:focus', 'w:online']);
     await timers.fire(); // start(): the first cycle
@@ -1333,7 +1345,7 @@ test('initHub: the browser events run cycles, a second call replaces the first, 
 });
 
 test('against the real hub/Code.gs (through the Google mock): a crew, a superintendent and the PM through a working day', async () => {
-  const { createHub } = require('./helpers/google-mock'), { unpack } = await lib;
+  const { createHub } = require('./helpers/google-mock'), shared = await lib, { unpack } = shared;
   const mock = createHub({ now: T0 }), k = mock.setup();
   let pushes = 0;
   const real = { clock: () => mock.now(), fetch: async (url, init) => { if (JSON.parse(init.body).action === 'push') pushes++; const text = mock.raw(init.body); return { ok: true, status: 200, json: async () => JSON.parse(text) }; } };
@@ -1350,6 +1362,9 @@ test('against the real hub/Code.gs (through the Google mock): a crew, a superint
   mock.advance(60e3); await cp.cycle();
   assert.equal(cp.task(uid)?.origin, 'link');
   assert.deepEqual(cp.settings().floors, ['Basement', 'Level 3']);
+  const roster = p => { const s = shared.normSettings(clone(p.settings())); return [s.crews.map(c => [c.id, c.name]), s.people.map(x => [x.id, x.name, x.crewId])]; };
+  assert.deepEqual(roster(cp), roster(sp), 'the roster came through the real hub with its ids');
+  assert.deepEqual(roster(cp)[1].map(x => x[1]), ['Mike', 'Jose L']);
   cp.tick(uid, 'i1'); cp.editTask(uid, t => { t.aStart = '07:00'; t.status = 'Partial'; t.doneText = 'Pulled 4 of 12'; });
   mock.advance(20e3); await cp.cycle();
   assert.equal(cp.sync.hubStatus().state, 'live', cp.sync.hubStatus().message);
@@ -1360,7 +1375,7 @@ test('against the real hub/Code.gs (through the Google mock): a crew, a superint
   assert.deepEqual([sp.task(uid).status, sp.task(uid).items[0].done, sp.task(uid).scope], ['Partial', true, 'Pull 12 AWG to E-301']);
   assert.ok(pm.sync.liveData().events.some(e => e.text.includes('marked Partial')), 'the PM feed has it');
   // hours: the worker clocks in, the PM fixes the time, the worker clocks out
-  const id = cp.clockIn('Jose L', { crew: 'Crew A', tasks: ['T1019-01'] });
+  const id = cp.clockIn('Jose L', { crew: 'Crew A', tasks: [{ uid, id: 'T1019-01' }] });
   await settleAll(cp, pm);
   assert.equal(pm.crewHours().length, 1);
   pm.editCrewHours(id, s => { s.in = '07:30'; s.edited.in = true; });
@@ -1416,7 +1431,7 @@ test('against the real hub/Code.gs (through the Google mock): a crew, a superint
 test('edits tapped while a pull is in flight are kept: a clock-out over a PM edit, a settings change over a hub one', async () => {
   const hub = fresh(), pm = await makePhone(hub, 'pm'), w = await makePhone(hub, 'crew', { crew: 'Crew A', worker: 'Jose L' });
   const a = await makePhone(hub, 'super'), b = await makePhone(hub, 'super');
-  const id = w.clockIn('Jose L', { crew: 'Crew A', tasks: ['T1'] });
+  const id = w.clockIn('Jose L', { crew: 'Crew A', tasks: [{ uid: 'u-t1', id: 'T1' }] });
   await stable(w, pm, a, b);
   tick(60e3);
   pm.editCrewHours(id, s => { s.in = '07:30'; s.edited.in = true; s.crew = 'Crew B'; });
@@ -1427,19 +1442,280 @@ test('edits tapped while a pull is in flight are kept: a clock-out over a PM edi
   // while the worker's and b's pulls are on the wire, each person taps something
   hub.before = async req => {
     if (req.action !== 'pull') return;
-    if (req.dev === w.settings().device) { hub.before = null; w.editHours(id, s => { s.out = '15:30'; s.crew = 'Crew A'; }); }
+    if (req.devSecret === w.secret) { hub.before = null; w.editHours(id, s => { s.out = '15:30'; s.crew = 'Crew A'; }); }
   };
   await w.cycle();
   assert.deepEqual([w.hours()[0].in, w.hours()[0].out], ['07:30', '15:30'], "the PM's fix and the clock-out both stand");
   assert.equal(w.hours()[0].crew, 'Crew B', "the PM touched the shift: its crew is the PM's");
   await stable(w, pm);
   assert.deepEqual([hub.shifts.get(id).in, hub.shifts.get(id).out, hub.shifts.get(id).crew], ['07:30', '15:30', 'Crew B']);
-  hub.before = async req => { if (req.action === 'pull' && req.dev === b.settings().device) { hub.before = null; b.save('schwab.settings', { ...b.settings(), floors: ['typed on b meanwhile'] }); } };
+  hub.before = async req => { if (req.action === 'pull' && req.devSecret === b.secret) { hub.before = null; b.save('schwab.settings', { ...b.settings(), floors: ['typed on b meanwhile'] }); } };
   tick(10e3);
   await b.cycle();
   assert.deepEqual(b.settings().floors, ['typed on b meanwhile'], 'a newer unsynced edit is not replaced by the hub copy');
   await stable(b, a);
   assert.deepEqual([hub.config.floors, a.settings().floors], [['typed on b meanwhile'], ['typed on b meanwhile']]);
+  // a worker picks which Jose they are and the sheet they are on while their clock-out's echo is on the wire: both are kept
+  const j = w.clockIn('Jose L', { crew: 'Crew A' });
+  await stable(w);
+  tick(60e3);
+  w.editHours(j, s => { s.out = '16:00'; });
+  hub.before = async req => { if (req.action === 'pull' && req.devSecret === w.secret) { hub.before = null; w.editHours(j, s => Object.assign(s, { pid: 'p2', crewId: 'cA', tasks: [{ uid: 'u-late', id: 'T9' }] })); } };
+  await w.cycle();
+  assert.deepEqual([w.hours().find(s => s.id === j).out, w.hours().find(s => s.id === j).pid, w.hours().find(s => s.id === j).tasks], ['16:00', 'p2', [{ uid: 'u-late', id: 'T9' }]]);
+  await stable(w);
+  assert.deepEqual([hub.shifts.get(j).pid, hub.shifts.get(j).tasks], ['p2', [{ uid: 'u-late', id: 'T9' }]]);
+});
+
+// ---------- identity (HUB.md, Identity): devices by secret, people and crews by id, sheets by uid ----------
+
+// shared.mjs keeps its own storage (ensureDevice, backupData, restoreData read and write localStorage): point it at a phone's.
+async function withLocal(storage, fn) {
+  globalThis.localStorage = { getItem: k => (storage.m.has(k) ? storage.m.get(k) : null), setItem: (k, v) => { storage.m.set(k, String(v)); }, removeItem: k => { storage.m.delete(k); } };
+  try { return await fn(); } finally { delete globalThis.localStorage; }
+}
+
+test('a phone from before device secrets makes one when it connects, and its own shifts take the id the hub derives', async () => {
+  const hub = fresh(), shared = await lib;
+  const w = await makePhone(hub, 'crew', { crew: 'Crew A', worker: 'Jose L', noDevice: true, device: 'oldrandom1', ensureDevice: shared.ensureDevice });
+  const today = w.clockIn('Jose L'), before = w.clockIn('Jose L', { date: ago(1), out: '15:00' });
+  assert.deepEqual(w.hours().map(s => s.device), ['oldrandom1', 'oldrandom1'], 'clocked in under the older random id');
+  await withLocal(w.storage, () => w.cycle());
+  const d = w.storage.get('schwab.device');
+  assert.match(d.secret, /^[A-Za-z0-9]{32}$/);
+  assert.equal(d.id, devOf(d.secret), 'the id is the first 32 hex characters of SHA-256 of the secret (shared.mjs ensureDevice)');
+  assert.deepEqual(w.hours().map(s => s.device), [d.id, d.id], "the phone's own shifts are relabeled");
+  assert.equal(w.settings().device, d.id);
+  assert.ok(w.changes.some(x => x.kinds.includes('hours')), 'the app is told to reload its time clock');
+  assert.deepEqual([hub.shifts.get(today)?.device, hub.shifts.get(before)?.device], [d.id, d.id], "they reach the hub as this phone's");
+  assert.equal(hub.calls[0].body.devSecret, d.secret, 'from the very first request');
+  assert.deepEqual([w.sync.hubStatus().state, w.toasts], ['live', []]);
+  // an old tab that still holds the old id saves a shift with it: the next cycle relabels that one too, and nothing else changes
+  const n = w.changes.length;
+  w.save('schwab.settings', { ...w.settings(), device: 'oldrandom1' });
+  w.save('schwab.hours', [...w.hours(), shared.normShift({ id: 'oldtab1', device: 'oldrandom1', who: 'Jose L', date: DAY, in: '12:00' })]);
+  await withLocal(w.storage, () => w.cycle());
+  assert.equal(w.storage.get('schwab.device').secret, d.secret, 'the secret is made once');
+  assert.deepEqual([w.hours().every(s => s.device === d.id), hub.shifts.get('oldtab1')?.device], [true, d.id]);
+  assert.ok(w.changes.slice(n).some(x => x.kinds.includes('hours')));
+  const m = w.changes.length;
+  await withLocal(w.storage, () => w.cycle());
+  assert.equal(w.changes.length, m, 'then nothing more to relabel');
+});
+
+test('against the real hub/Code.gs: a crew phone that sends another phone\'s device id can neither read nor change its hours; its own sync and the PM\'s edits still work', async () => {
+  const { createHub } = require('./helpers/google-mock');
+  const mock = createHub({ now: T0 }), k = mock.setup();
+  const real = { clock: () => mock.now(), fetch: async (url, init) => { const text = mock.raw(init.body); return { ok: true, status: 200, json: async () => JSON.parse(text) }; } };
+  const b = await makePhone(real, 'crew', { key: k.crew, crew: 'Crew A', worker: 'Ben B' }), pm = await makePhone(real, 'pm', { key: k.pm });
+  // phone A puts B's device id on every request (it is no secret: it is in texts and in the Sheet)
+  const forged = (url, init) => real.fetch(url, { ...init, body: JSON.stringify({ ...JSON.parse(init.body), dev: b.dev }) });
+  const a = await makePhone(real, 'crew', { key: k.crew, crew: 'Crew A', worker: 'Al A', fetchImpl: forged });
+  const step = async (...ps) => { for (let i = 0; i < 2; i++) for (const p of ps) { mock.advance(25e3); await p.cycle(); } };
+  const sb = b.clockIn('Ben B', { crew: 'Crew A', tasks: [{ uid: 'u-b', id: 'T1019-01' }] });
+  await step(b, pm);
+  const onHub = id => pm.crewHours().find(s => s.id === id);
+  assert.equal(onHub(sb)?.device, b.dev);
+  const sa = a.clockIn('Al A', { crew: 'Crew A' });
+  await step(a);
+  assert.equal(a.sync.hubStatus().state, 'live', a.sync.hubStatus().message);
+  assert.deepEqual(a.hours().map(s => s.id), [sa], "A holds its own shift and none of B's");
+  // by hand, every way of naming B's phone: with A's secret, with no secret, with B's id on the shift itself
+  const send = body => mock.send({ v: 1, key: k.crew, tasks: [], shifts: [], reports: [], deleted: [], ...body });
+  const theirs = onHub(sb);
+  for (const creds of [{ devSecret: a.secret, dev: b.dev }, { dev: b.dev }, {}]) {
+    const tag = Object.keys(creds).join('+') || 'nothing';
+    mock.advance(2e3);
+    const pull = send({ action: 'pull', since: 0, days: 14, ...creds });
+    assert.equal(pull.ok, true, tag);
+    assert.ok(!pull.shifts.some(s => s.id === sb || s.device === b.dev), `${tag}: a pull shows none of B's hours`);
+    const push = send({ action: 'push', ...creds, shifts: [{ ...theirs, out: '23:59', who: 'Changed by A', at: mock.now() }] });
+    assert.deepEqual([tag, push.ok, push.shifts[0].status, push.shifts[0].reason], [tag, true, 'rejected', 'device'], `${tag}: B's shift cannot be changed`);
+  }
+  const claim = send({ action: 'push', devSecret: a.secret, dev: b.dev, shifts: [{ id: 'claimed1', device: b.dev, who: 'Ben B', date: DAY, in: '06:00', out: '', crew: 'Crew A', tasks: [], edited: { who: false, in: false, out: false }, gone: false, at: mock.now() }] });
+  assert.equal(claim.shifts[0].status, 'ok');
+  await step(pm, b);
+  assert.deepEqual([onHub(sb).out, onHub(sb).who], ['', 'Ben B'], "B's shift is as B left it");
+  assert.equal(onHub('claimed1').device, a.dev, "a shift A sends is A's, whatever device it names");
+  assert.ok(!b.hours().some(s => s.id === 'claimed1'), "and it never shows on B's clock");
+  // the PM edits both, both phones get the edit, and their clock-outs still go up
+  pm.editCrewHours(sb, s => { s.in = '07:15'; s.edited.in = true; });
+  pm.editCrewHours(sa, s => { s.in = '07:20'; s.edited.in = true; });
+  await step(pm, a, b);
+  assert.deepEqual([b.hours().find(s => s.id === sb).in, a.hours().find(s => s.id === sa).in], ['07:15', '07:20']);
+  b.editHours(sb, s => { s.out = '15:00'; });
+  a.editHours(sa, s => { s.out = '15:30'; });
+  await step(a, b, pm);
+  assert.deepEqual([onHub(sb).in, onHub(sb).out, onHub(sa).in, onHub(sa).out], ['07:15', '15:00', '07:20', '15:30']);
+  assert.deepEqual(onHub(sb).tasks, [{ uid: 'u-b', id: 'T1019-01' }], 'the task link came through by uid');
+  assert.deepEqual([a.toasts, b.toasts, pm.toasts], [[], [], []], 'no refusals for anything a phone did with its own hours');
+});
+
+test('two office phones offline give two sheets one number: every phone ends with both, and every shift points at its own sheet', async () => {
+  const hub = fresh(), shared = await lib, { duplicateShortIds } = await syncLib;
+  const s1 = await makePhone(hub, 'super'), pm = await makePhone(hub, 'pm');
+  const ca = await makePhone(hub, 'crew', { crew: 'Crew A', worker: 'Jose L' }), cb = await makePhone(hub, 'crew', { crew: 'Crew B', worker: 'Jose L' });
+  await stable(s1, pm, ca, cb);
+  s1.net.down = pm.net.down = true;
+  tick(60e3);
+  const no = shared.nextId(s1.tasks(), DAY);
+  const a = s1.addTask({ id: no, crew: 'Crew A', crewId: 'cA', members: ['Jose L'], memberIds: ['pA'], sentAt: s1.now() });
+  const b = pm.addTask({ id: shared.nextId(pm.tasks(), DAY), crew: 'Crew B', crewId: 'cB', members: ['Jose L'], memberIds: ['pB'], sentAt: pm.now() });
+  assert.equal(pm.task(b).id, no, 'the same number on both phones');
+  // each sheet was texted to its crew, and each Jose clocks in on his own crew's phone (assignmentFor finds his sheet by his id)
+  ca.save('schwab.tasks', [{ ...s1.task(a), origin: 'link' }]);
+  cb.save('schwab.tasks', [{ ...pm.task(b), origin: 'link' }]);
+  const on = (p, pid) => { const x = shared.assignmentFor(p.tasks(), 'Jose L', DAY, pid); return { pid, crew: x.crew, crewId: x.crewId, tasks: x.tasks }; };
+  const ja = ca.clockIn('Jose L', on(ca, 'pA')), jb = cb.clockIn('Jose L', on(cb, 'pB'));
+  // and tomorrow's plan, made on both phones and never texted: the same number again
+  const TOM = shared.addDays(DAY, 1), no2 = shared.nextId(s1.tasks(), TOM);
+  const c2 = s1.addTask({ id: no2, date: TOM, crew: 'Crew A' }), d2 = pm.addTask({ id: shared.nextId(pm.tasks(), TOM), date: TOM, crew: 'Crew B' });
+  tick(60e3);
+  s1.net.down = pm.net.down = false;
+  await stable(s1, pm, ca, cb);
+  // both reached the hub before either phone saw the other's, so the crews may have them: neither is renumbered
+  assert.deepEqual([s1.task(c2).id, pm.task(d2).id, s1.task(d2).id, pm.task(c2).id, hub.tasks.get(c2).a.id, hub.tasks.get(d2).a.id], Array(6).fill(no2));
+  assert.deepEqual([duplicateShortIds(pm.tasks()).get(c2), s1.toasts, pm.toasts], [[d2], [], []]);
+  // both were sent, so both keep the number; every office phone holds both, as the hub does, and marks them
+  assert.deepEqual([hub.tasks.get(a).a.id, hub.tasks.get(b).a.id], [no, no]);
+  for (const p of [s1, pm]) {
+    for (const u of [a, b]) assert.deepEqual(view(p.task(u)), view(hub.taskView(hub.tasks.get(u))), `${p.role} has ${u} as the hub does`);
+    assert.deepEqual([...duplicateShortIds(p.tasks().filter(t => t.date === DAY))].sort(), [[a, [b]], [b, [a]]].sort(), `${p.role}: both are marked`);
+  }
+  for (const [id, u, crew, pid] of [[ja, a, 'Crew A', 'pA'], [jb, b, 'Crew B', 'pB']]) {
+    const mine = [ca, cb].flatMap(p => p.hours()).find(s => s.id === id), timesheet = pm.crewHours().find(s => s.id === id);
+    for (const [where, s] of [['hub', hub.shifts.get(id)], ['worker', mine], ['timesheet', timesheet]]) assert.deepEqual([s.tasks, s.pid, s.crewId], [[{ uid: u, id: no }], pid, crew === 'Crew A' ? 'cA' : 'cB'], `${where} ${id}`);
+    assert.equal(pm.task(timesheet.tasks[0].uid).crew, crew, "the PM's timesheet opens this Jose's sheet, not the other one");
+  }
+  // an office phone that made a sheet before it ever connected: its number never got out, so it takes the next free one
+  const s3 = await makePhone(hub, 'super');
+  const c = s3.addTask({ id: no, crew: 'Crew A' }), e = s3.addTask({ id: no2, date: TOM, crew: 'Crew A', sentAt: s3.now() }); // e was texted: its crew has that number
+  await s3.cycle();
+  assert.deepEqual([s3.task(e).id, duplicateShortIds(s3.tasks()).get(e)?.sort()], [no2, [c2, d2].sort()], 'a texted sheet keeps its number and is marked');
+  const moved = s3.task(c).id;
+  assert.notEqual(moved, no);
+  assert.equal(moved, shared.nextId([s1.task(a), s1.task(b)], DAY));
+  assert.equal(hub.tasks.get(c).a.id, moved, 'the hub only ever had the new number');
+  assert.deepEqual(s3.toasts, [`Your sheet ${no} is now ${moved}: another sheet has that number.`]);
+  await stable(s1, pm, s3);
+  for (const p of [s1, pm, s3]) assert.deepEqual([p.task(c).id, duplicateShortIds(p.tasks()).has(c)], [moved, false]);
+  const pushes = hub.count('push');
+  await stable(s1, pm, ca, cb, s3);
+  assert.equal(hub.count('push'), pushes, 'and it all settles: nothing renumbers back and forth');
+});
+
+test('a phone that connects again reads its own sheets back before it judges a number taken, however many pages that takes', async () => {
+  const hub = fresh(); hub.cap = 1;
+  const s1 = await makePhone(hub, 'super'), pm = await makePhone(hub, 'pm');
+  await stable(s1, pm);
+  s1.net.down = pm.net.down = true;
+  const x = s1.addTask({ id: 'T1019-01' }), t = pm.addTask({ id: 'T1019-01' }); // neither texted
+  s1.net.down = pm.net.down = false;
+  await stable(s1, pm);
+  assert.deepEqual([hub.tasks.get(x).a.id, hub.tasks.get(t).a.id, hub.tasks.get(x).rev < hub.tasks.get(t).rev], ['T1019-01', 'T1019-01', true]);
+  pm.sync.disconnect(); // forgets what it synced
+  assert.equal((await pm.sync.connect(URL_A, KEYS.pm)).ok, true);
+  await stable(pm);
+  assert.ok(hub.calls.filter(c => c.action === 'pull' && c.body.devSecret === pm.secret).some(c => c.body.since > 0 && c.body.since < hub.rev), 'read in pages');
+  assert.deepEqual([pm.task(t).id, hub.tasks.get(t).a.id, pm.toasts], ['T1019-01', 'T1019-01', []], 'its own sheet, on the hub all along, keeps its number');
+});
+
+test('people and crews keep their ids through the hub and a reload; a rename keeps the id everywhere, and a crew phone follows its crew', async () => {
+  const hub = fresh(), shared = await lib;
+  const roster = { crews: [{ id: 'cA', name: 'Crew A', lead: '', members: '' }, { id: 'cB', name: 'Crew B', lead: '', members: '' }],
+    people: [{ id: 'p1', name: 'Jose L', crewId: 'cA' }, { id: 'p2', name: 'Jose L', crewId: 'cB' }, { id: 'p3', name: 'Ann R', crewId: 'cA' }] };
+  const sp = await makePhone(hub, 'super');
+  sp.save('schwab.settings', { ...sp.settings(), ...roster });
+  await sp.cycle();
+  assert.deepEqual(hub.config.people, roster.people, 'the roster with its ids, two people sharing a name included');
+  assert.deepEqual(hub.config.crews.map(c => [c.id, c.name, c.members]), [['cA', 'Crew A', 'Jose L, Ann R'], ['cB', 'Crew B', 'Jose L']], 'member lists rebuilt from the roster for older phones');
+  const S = {}, cp = await makePhone(hub, 'crew', { crew: 'Crew B', S }), sp2 = await makePhone(hub, 'super');
+  await stable(cp, sp2);
+  const reload = p => shared.normSettings(JSON.parse(JSON.stringify(p.settings()))); // what loadSettings makes of the stored copy
+  for (const p of [cp, sp2]) {
+    const s = reload(p);
+    assert.deepEqual(s.people, roster.people, `${p.role}: every person keeps their id`);
+    assert.deepEqual(s.crews.map(c => c.id), ['cA', 'cB']);
+    assert.deepEqual(shared.people(s).filter(x => x.name === 'Jose L').map(x => [x.id, x.crew]), [['p1', 'Crew A'], ['p2', 'Crew B']], 'two people, told apart by crew');
+  }
+  // the second office phone renames a person and a crew
+  tick(30e3);
+  const s2 = reload(sp2);
+  assert.ok(shared.renamePerson(s2, 'p2', 'José Luis') && shared.renameCrew(s2, 'cB', 'Crew Bravo'));
+  sp2.save('schwab.settings', { ...sp2.settings(), crews: s2.crews, people: s2.people });
+  await stable(sp2, sp, cp);
+  for (const p of [sp, cp, sp2]) {
+    const s = reload(p);
+    assert.deepEqual(s.people.map(x => [x.id, x.name, x.crewId]), [['p1', 'Jose L', 'cA'], ['p2', 'José Luis', 'cB'], ['p3', 'Ann R', 'cA']], `${p.role}: same ids, new name`);
+    assert.equal(shared.crewById(s, 'cB').name, 'Crew Bravo');
+  }
+  assert.deepEqual([cp.settings().hubCrew, S.hubCrew], ['Crew Bravo', 'Crew Bravo'], 'the crew phone follows its crew by id');
+  assert.deepEqual(hub.calls.filter(c => c.action === 'pull' && c.body.devSecret === cp.secret).at(-1).body.crews, ['Crew Bravo'], 'and asks for its sheets by the new name');
+  // a tab still on an older version saves the settings with no roster: the roster is rebuilt from the member lists, never emptied
+  tick(30e3);
+  const { people, ...oldTab } = reload(sp);
+  sp.save('schwab.settings', { ...oldTab, crews: oldTab.crews.map(({ id, ...c }) => c) });
+  await stable(sp, sp2, cp);
+  assert.deepEqual(hub.config.people.map(p => p.name).sort(), ['Ann R', 'Jose L', 'José Luis']);
+  // a hub config an older office phone wrote (the hub stores its missing roster as none at all) rebuilds it from the member lists
+  tick(30e3);
+  hub.config = { ...hub.config, people: [], crews: [{ id: 'cA', name: 'Crew A', lead: '', members: 'Jose L, Ann R' }, { id: 'cB', name: 'Crew Bravo', lead: '', members: 'Kim T' }], at: hub.now() };
+  hub.configRev = hub.bump();
+  await cp.cycle();
+  assert.deepEqual(shared.people(reload(cp)).map(p => [p.name, p.crew]), [['Jose L', 'Crew A'], ['Ann R', 'Crew A'], ['Kim T', 'Crew Bravo']], 'never an empty roster');
+});
+
+test('every synced field survives the hub, a reload and a backup restored on another phone: hub settings, merge stamps, replies, shift links', async () => {
+  const hub = fresh(), shared = await lib;
+  const sp = await makePhone(hub, 'super'), pm = await makePhone(hub, 'pm'), cp = await makePhone(hub, 'crew', { crew: 'Crew A', worker: 'Jose L' });
+  sp.save('schwab.settings', { ...sp.settings(), crews: [{ id: 'cA', name: 'Crew A', lead: 'Mike', members: '' }], people: [{ id: 'p1', name: 'Jose L', crewId: 'cA' }] });
+  const uid = sp.addTask({ crewId: 'cA', members: ['Jose L'], memberIds: ['p1'], aLang: 'es', by: 'Sue', floor: 'Level 1', area: 'East', size: 2, scope: 'Jale cable', refs: 'E-301',
+    allot: 90, allotNote: 'noon', est: 2, estNote: 'two', pStart: '07:00', pStop: '15:00', checkIn: '11:00', sentAt: sp.now() });
+  await stable(sp, cp, pm);
+  tick(60e3);
+  cp.tick(uid, 'i1');
+  cp.editTask(uid, t => Object.assign(t, { lead: 'Mike', aStart: '07:05', aStop: '14:00', delay: 15, status: 'Partial', doneText: 'Medio', remain: 'Resto', comments: 'Falta material', cLang: 'es', resultAt: cp.now() }));
+  const sid = cp.clockIn('Jose L', { pid: 'p1', crew: 'Crew A', crewId: 'cA', tasks: [{ uid, id: 'T1019-01' }] });
+  sp.editReport(DAY, r => Object.assign(r, { status: 'On plan', results: 'Bien', lang: 'es', submittedAt: sp.now(), decisions: [{ q: 'OT?', rec: 'Yes', by: DAY, pm: '', pmNote: '' }] }));
+  await stable(cp, sp, pm);
+  tick(60e3);
+  pm.editTask(uid, t => Object.assign(t, { reply: 'Bring the lift', replyAt: pm.now(), replyBy: 'Pat', review: 'Follow-up needed', reviewer: 'Pat', followUp: 'Finish Monday' }));
+  pm.editReport(DAY, r => { r.decisions[0].pm = 'Approved'; r.decisions[0].pmNote = 'ok'; r.pmReview = 'Seen'; });
+  await stable(pm, sp, cp);
+  // the phone that wrote a part keeps that part's stamp in its sync state (so its own push coming back changes nothing);
+  // every other phone holds the hub's stamp on the sheet itself
+  const local = ['origin', 'from', 'gotAt', 'filedAt', 'updatedAt'], strip = (t, also = []) => Object.fromEntries(Object.entries(t).filter(([k]) => !local.includes(k) && !also.includes(k)));
+  const want = strip(pm.task(uid), ['assignAt', 'crewAt']), hubT = hub.taskView(hub.tasks.get(uid));
+  assert.deepEqual([want.reply, want.replyBy, want.aLang, want.cLang, want.crewId, want.memberIds, want.items[0].done], ['Bring the lift', 'Pat', 'es', 'es', 'cA', ['p1'], true]);
+  assert.ok(want.replyAt > 0 && want.resultAt > 0 && hubT.assignAt > 0 && hubT.crewAt > 0);
+  for (const p of [sp, cp]) assert.deepEqual(strip(p.task(uid), ['assignAt', 'crewAt']), want, `${p.role} holds every field of the sheet`);
+  assert.deepEqual([sp.task(uid).assignAt, cp.task(uid).assignAt, sp.task(uid).crewAt, pm.task(uid).crewAt], [hubT.assignAt, hubT.assignAt, hubT.crewAt, hubT.crewAt], "the hub's merge stamps");
+  const shiftWant = { pid: 'p1', crew: 'Crew A', crewId: 'cA', tasks: [{ uid, id: 'T1019-01' }] }, shiftOf = s => ({ pid: s.pid, crew: s.crew, crewId: s.crewId, tasks: s.tasks });
+  assert.deepEqual([shiftOf(cp.hours()[0]), shiftOf(pm.crewHours().find(s => s.id === sid))], [shiftWant, shiftWant]);
+  const rep = sp.reports()[DAY];
+  assert.deepEqual([rep.lang, rep.decisions[0].pm, rep.decisions[0].pmNote, rep.pmReview, rep.pmAt > 0], ['es', 'Approved', 'ok', 'Seen', true]);
+  // a reload: what each phone's load makes of its stores is what is stored
+  for (const p of [sp, pm, cp]) {
+    for (const t of p.tasks()) assert.deepEqual(shared.normTask(clone(t)), t, `${p.role} task`);
+    for (const s of [...p.hours(), ...p.crewHours()]) assert.deepEqual(shared.normShift(clone(s)), s, `${p.role} shift`);
+    for (const r of Object.values(p.reports())) assert.deepEqual(shared.normReport(clone(r)), r, `${p.role} report`);
+    const s = shared.normSettings(clone(p.settings()));
+    assert.deepEqual([s.hubUrl, s.hubKey, s.hubRole, s.hubCrew, s.people], [URL_A, KEYS[p.role], p.role, p.role === 'crew' ? 'Crew A' : '', [{ id: 'p1', name: 'Jose L', crewId: 'cA' }]], `${p.role} settings`);
+  }
+  // a backup of the PM phone (shared.mjs backupData) restored on another phone (restoreData): all of it but the hub key
+  const data = clone(await withLocal(pm.storage, () => shared.backupData())), other = memStorage();
+  assert.equal(await withLocal(other, () => shared.restoreData(data)), true);
+  for (const key of ['schwab.tasks', 'schwab.hours', 'schwab.crewHours', 'schwab.reports', 'schwab.device']) assert.deepEqual(other.get(key), pm.storage.get(key), key);
+  const rs = other.get('schwab.settings');
+  assert.deepEqual([rs.hubUrl, rs.hubRole, rs.hubCrew, rs.hubKey, rs.people], [URL_A, 'pm', '', '', [{ id: 'p1', name: 'Jose L', crewId: 'cA' }]], 'the hub key stays behind, the rest comes along');
+  // with the key typed in again it is the same phone: its device, every field, nothing to send again, the hub's stamps
+  const back = await makePhone(hub, 'pm', { storage: other }), pushes = hub.count('push');
+  assert.equal((await back.sync.connect(URL_A, KEYS.pm)).ok, true);
+  await stable(back);
+  assert.deepEqual([back.secret, back.sync.hubStatus().state, hub.count('push'), back.toasts], [pm.secret, 'live', pushes, []]);
+  assert.deepEqual(strip(back.task(uid)), strip(sp.task(uid)));
+  assert.deepEqual(back.crewHours(), pm.crewHours());
+  assert.deepEqual(back.reports()[DAY].decisions, pm.reports()[DAY].decisions);
 });
 
 test('the field lists here are the lists in hub/Code.gs, so the two cannot drift apart unnoticed', () => {
@@ -1447,12 +1723,19 @@ test('the field lists here are the lists in hub/Code.gs, so the two cannot drift
   const list = (src, name) => { const m = new RegExp(`const ${name} = (\\[[^\\]]*\\])`).exec(src); assert.ok(m, `${name} found`); return JSON.parse(m[1].replace(/'/g, '"')); };
   assert.deepEqual(list(mine, 'A_KEYS'), [...list(hubSrc, 'ASSIGN'), ...list(hubSrc, 'OFFICE_EXTRA')], 'office part');
   assert.deepEqual(list(mine, 'C_KEYS'), list(hubSrc, 'CREW'), 'crew part');
-  const keysOf = (src, name) => { const m = new RegExp(`const ${name} = \\{([^}]*)\\}`).exec(src); assert.ok(m, `${name} found`); return [...m[1].matchAll(/(\w+):/g)].map(x => x[1]); };
-  assert.deepEqual(keysOf(mine, 'X_TASK').sort(), ['aLang', 'assignAt', 'crewAt', 'reply', 'replyAt', 'replyBy'], 'the task fields shared.mjs still has to learn');
-  const hubTask = new Set(keysOf(hubSrc.slice(hubSrc.indexOf('const TASK =')), 'TASK'));
-  for (const k of [...list(mine, 'A_KEYS'), ...list(mine, 'C_KEYS'), ...keysOf(mine, 'X_TASK')]) assert.ok(hubTask.has(k), `the hub stores task field ${k}`);
-  const cfgMine = keysOf(mine, 'CFG_TPL'), cfgHub = keysOf(hubSrc, 'CONFIG');
-  assert.deepEqual(cfgMine.sort(), cfgHub.filter(k => k !== 'at').sort(), 'settings the hub shares');
-  assert.deepEqual(keysOf(mine, 'X_REPORT').sort(), ['lang', 'pmAt']);
-  assert.ok(/lang: 's', pmAt: 0/.test(hubSrc), 'the hub stores report lang and pmAt');
+  // every key of a template object literal, nested ones too ({ a: [{ b: '' }] } gives a, b): the source is the judge, so a field
+  // named in one file and missing from the other fails here
+  const keysOf = (src, name) => { const i = src.indexOf(`const ${name} = {`); assert.ok(i >= 0, `${name} found`); let d = 0, j = src.indexOf('{', i); for (; j < src.length; j++) { d += src[j] === '{' ? 1 : src[j] === '}' ? -1 : 0; if (!d) break; } return [...new Set([...src.slice(i, j).matchAll(/(\w+):/g)].map(x => x[1]))].sort(); };
+  const shared = fs.readFileSync(path.join(dir, 'shared.mjs'), 'utf8'), hubTask = new Set(keysOf(hubSrc, 'TASK')), tpl = new Set(keysOf(shared, 'TASK_TPL'));
+  for (const k of [...list(mine, 'A_KEYS'), ...list(mine, 'C_KEYS'), 'assignAt', 'crewAt']) {
+    assert.ok(hubTask.has(k), `the hub stores task field ${k}`);
+    assert.ok(tpl.has(k), `TASK_TPL keeps task field ${k}, so no normTask strips it`);
+  }
+  assert.deepEqual(keysOf(mine, 'CFG_TPL'), keysOf(hubSrc, 'CONFIG').filter(k => k !== 'at'), 'settings the hub shares, crews and people with their ids');
+  const sTpl = new Set(keysOf(shared, 'SETTINGS_TPL'));
+  for (const k of keysOf(mine, 'CFG_TPL')) assert.ok(sTpl.has(k), `SETTINGS_TPL keeps ${k}`);
+  assert.deepEqual(keysOf(shared, 'SHIFT_TPL'), keysOf(hubSrc, 'SHIFT'), 'a shift has the same fields on both sides');
+  const wire = /const wireShift = [^\n]*\n[^\n]*/.exec(mine)[0];
+  for (const k of keysOf(shared, 'SHIFT_TPL')) if (k !== 'uid') assert.match(wire, new RegExp(`\\b${k}:`), `a pushed shift carries ${k}`); // uid: inside tasks
+  for (const k of ['lang', 'pmAt']) assert.ok(new Set(keysOf(shared, 'REPORT_TPL')).has(k) && new Set(keysOf(hubSrc, 'REPORT')).has(k), `both sides store report ${k}`);
 });

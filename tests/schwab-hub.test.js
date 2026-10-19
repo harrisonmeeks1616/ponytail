@@ -23,10 +23,14 @@ function setup(opts = {}) {
   const hub = createHub({ now: T0, ...opts });
   return { hub, k: hub.setup() };
 }
-function phone(env, role, dev = role + '-dev') {
+// A phone is its device secret: the hub derives the device id from it and ignores any id a request claims (HUB.md,
+// Identity). Tests name phones by a label; ID(label) is the device id that phone's shifts carry.
+const secretOf = label => sha('device secret ' + label).slice(0, 32);
+const ID = label => sha(secretOf(label)).slice(0, 32);
+function phone(env, role, label = role + '-dev') {
   const p = {
-    role, dev, key: env.k[role],
-    call: (action, extra = {}) => env.hub.call(p.key, action, { dev, ...extra }),
+    role, label, secret: secretOf(label), dev: ID(label), key: env.k[role],
+    call: (action, extra = {}) => env.hub.call(p.key, action, { devSecret: p.secret, ...extra }),
     push: body => p.call('push', body),
     pull: extra => p.call('pull', { since: 0, ...extra }),
   };
@@ -34,7 +38,7 @@ function phone(env, role, dev = role + '-dev') {
 }
 const task = (o = {}) => ({ uid: 'u1', id: 'T1019-01', date: '2026-10-19', by: 'Sam', crew: 'Crew A', floor: 'Level 3', scope: 'Pull 12 AWG',
   items: [{ id: 'i1', text: 'Pull' }, { id: 'i2', text: 'Terminate' }], checks: [{ id: 'c1', text: 'Labeling' }], assignAt: T0 - 5000, ...o });
-const shift = (o = {}) => ({ id: 's1', device: 'crew-dev', who: 'Dana R', date: '2026-10-19', in: '07:00', out: '', at: T0 - 4000, ...o });
+const shift = (o = {}) => ({ id: 's1', device: ID('crew-dev'), who: 'Dana R', date: '2026-10-19', in: '07:00', out: '', at: T0 - 4000, ...o });
 const report = (o = {}) => ({ date: '2026-10-19', super: 'Sam', status: 'On plan', results: 'Good day',
   decisions: [{ q: 'Which panel?', rec: 'LP-1' }, { q: 'Fire stop?', rec: 'Yes' }], updatedAt: T0 - 3000, ...o });
 const one = (r, kind) => { const x = r[kind + 's'][0]; return x[kind] ? { ...x[kind], _status: x.status } : x; };
@@ -231,8 +235,8 @@ test('the HUB.md role table, cell by cell: what each key can actually do, judged
     const env = setup(), sup = office(env), pm = phone(env, 'pm', 'pm-dev');
     ok(sup.push({ tasks: [task()], reports: [report()], config: { project: 'P', floors: ['L1'] } }));
     ok(pm.push({ shifts: [shift({ id: 'by-pm', device: '', who: 'Ana P' })] }));
-    for (const [role, dev] of [['crew', 'crew-dev'], ['super', 'super-dev'], ['pm', 'pm-dev']]) ok(env.hub.call(env.k[role], 'push', { dev, shifts: [shift({ id: 'own-' + role, device: dev, who: role + ' person' })] }));
-    ok(env.hub.call(env.k.crew, 'push', { dev: 'other-dev', shifts: [shift({ id: 'other', device: 'other-dev', who: 'Someone Else' })] }));
+    for (const role of ROLES) ok(phone(env, role).push({ shifts: [shift({ id: 'own-' + role, device: ID(role + '-dev'), who: role + ' person' })] }));
+    ok(phone(env, 'crew', 'other-dev').push({ shifts: [shift({ id: 'other', device: ID('other-dev'), who: 'Someone Else' })] }));
     return env;
   };
   const at = (env, role) => phone(env, role, role + '-dev');
@@ -246,7 +250,7 @@ test('the HUB.md role table, cell by cell: what each key can actually do, judged
     'pull events': (env, role) => at(env, role).pull().events.length > 0,
     'pull all hours': (env, role) => at(env, role).pull().shifts.length === 5,
     'pull own hours': (env, role) => at(env, role).pull().shifts.some(s => s.id === 'own-' + role),
-    'pull no one else\'s hours': (env, role) => at(env, role).pull().shifts.every(s => s.device === role + '-dev') && at(env, role).pull().shifts.length === 1,
+    'pull no one else\'s hours': (env, role) => at(env, role).pull().shifts.every(s => s.device === ID(role + '-dev')) && at(env, role).pull().shifts.length === 1,
     'pull who is on site': (env, role) => (at(env, role).pull().onsite || []).length === 5,
     'push crew part of a task': (env, role) => { at(env, role).push({ tasks: [task({ status: 'Partial', crewAt: T0 - 5 })] }); return stored1(env).status === 'Partial'; },
     'push assign part': (env, role) => { at(env, role).push({ tasks: [task({ scope: 'by ' + role, assignAt: T0 - 5 })] }); return stored1(env).scope === 'by ' + role; },
@@ -254,7 +258,7 @@ test('the HUB.md role table, cell by cell: what each key can actually do, judged
     'push reply': (env, role) => { at(env, role).push({ tasks: [task({ reply: 'by ' + role, replyAt: T0 - 5, assignAt: T0 - 5 })] }); return stored1(env).reply === 'by ' + role; },
     'create a task': (env, role) => { at(env, role).push({ tasks: [task({ uid: 'brand-new' })] }); return env.hub.entities('Tasks').some(t => t.uid === 'brand-new'); },
     'push config': (env, role) => { at(env, role).push({ config: { project: 'by ' + role } }); return env.hub.entities('Config')[0].project === 'by ' + role; },
-    'push own shifts': (env, role) => { at(env, role).push({ shifts: [shift({ id: 'fresh', device: role + '-dev', who: 'Fresh' })] }); return !!stored(env.hub, 'fresh'); },
+    'push own shifts': (env, role) => { at(env, role).push({ shifts: [shift({ id: 'fresh', device: ID(role + '-dev'), who: 'Fresh' })] }); return !!stored(env.hub, 'fresh'); },
     'PM rules: edit': (env, role) => { at(env, role).push({ shifts: [{ ...stored(env.hub, 'other'), out: '11:00', edited: { who: false, in: false, out: true } }] }); return stored(env.hub, 'other').out === '11:00'; },
     'PM rules: add': (env, role) => { at(env, role).push({ shifts: [shift({ id: 'added', device: '', who: 'Hand' })] }); return !!stored(env.hub, 'added'); },
     'PM rules: rename': (env, role) => { at(env, role).push({ shifts: [{ ...stored(env.hub, 'other'), who: 'Renamed', edited: { who: true, in: false, out: false } }] }); return stored(env.hub, 'other').who === 'Renamed'; },
@@ -522,7 +526,7 @@ test('pull: crew sees tasks and config; hours of its own phone only; no reports,
   const env = setup(), sup = office(env), pm = phone(env, 'pm', 'pm-dev'), crew = phone(env, 'crew', 'crew-dev'), other = phone(env, 'crew', 'other-dev');
   ok(sup.push({ tasks: [task()], reports: [report()], config: { project: 'Schwab', site: 'Charlotte', floors: ['L1'], crews: [{ name: 'Crew A', lead: 'Mike', members: 'Mike, Jose' }], checks: ['Labeling'], pin: 'a'.repeat(16) + ':' + 'b'.repeat(64) } }));
   ok(crew.push({ shifts: [shift()] }));
-  ok(other.push({ shifts: [shift({ id: 's2', device: 'other-dev', who: 'Eli T' })] }));
+  ok(other.push({ shifts: [shift({ id: 's2', device: other.dev, who: 'Eli T' })] }));
   ok(pm.push({ shifts: [shift({ id: 's3', device: '', who: 'Ana P' })] }));
   const r = crew.pull();
   assert.deepEqual([r.tasks.length, r.reports, r.events, r.onsite], [1, [], [], undefined]);
@@ -530,13 +534,13 @@ test('pull: crew sees tasks and config; hours of its own phone only; no reports,
   assert.equal(r.config.project, 'Schwab');
   assert.equal(r.config.pin, 'a'.repeat(16) + ':' + 'b'.repeat(64));
   assert.deepEqual(other.pull().shifts.map(s => s.id), ['s2']);
-  const stranger = env.hub.call(env.k.crew, 'pull', { since: 0 }); // no dev given: no hours at all
+  const stranger = env.hub.call(env.k.crew, 'pull', { since: 0, dev: crew.dev }); // no device secret: no hours at all, whatever id it names
   assert.deepEqual(stranger.shifts, []);
 });
 
 test('pull: super reads reports, events, its own hours and who is on site; the PM reads everything', () => {
   const env = setup(), sup = office(env), pm = phone(env, 'pm', 'pm-dev'), crew = phone(env, 'crew', 'crew-dev');
-  ok(sup.push({ tasks: [task()], reports: [report()], shifts: [shift({ id: 'mine', device: 'sup-dev', who: 'Sam S' })] }));
+  ok(sup.push({ tasks: [task()], reports: [report()], shifts: [shift({ id: 'mine', device: sup.dev, who: 'Sam S' })] }));
   ok(crew.push({ shifts: [shift({ id: 'open1', in: '06:30' }), shift({ id: 'done1', who: 'Old Done', in: '05:00', out: '06:00', date: '2026-10-18' })] }));
   const s = sup.pull();
   assert.deepEqual([s.reports.length, s.events.length > 0], [1, true]);
@@ -612,12 +616,15 @@ test('shift, worker rules: add, complete, never undo a clock-out, own phone only
   assert.deepEqual([r.shifts[0].shift.out, r.shifts[0].shift.who], ['15:30', 'Dana R'], 'an older text opened late keeps the clock-out and the newer name');
   r = ok(crew.push({ shifts: [shift({ id: 'a', out: '15:30', at: T0 - 1000, who: 'Dana Ruiz' })] }));
   assert.equal(r.shifts[0].shift.who, 'Dana Ruiz', 'a newer text renames');
-  // Another phone cannot touch it, whatever device it claims; the owning phone may still complete it.
-  for (const [dev, device] of [['other-dev', 'crew-dev'], ['other-dev', 'other-dev'], ['crew-dev', 'other-dev']]) {
-    const x = ok(env.hub.call(env.k.crew, 'push', { dev, shifts: [shift({ id: 'a', device, out: '23:00', who: 'Evil', at: T0 })] }));
-    assert.deepEqual([x.shifts[0].status, x.shifts[0].reason], ['rejected', 'device'], dev + ' claims ' + device);
+  // Another phone cannot touch it, whatever device the shift names (the focused device identity test tries the rest).
+  for (const device of [crew.dev, ID('other-dev')]) {
+    const x = ok(phone(env, 'crew', 'other-dev').push({ shifts: [shift({ id: 'a', device, out: '23:00', who: 'Evil', at: T0 })] }));
+    assert.deepEqual([x.shifts[0].status, x.shifts[0].reason], ['rejected', 'device'], 'other-dev names ' + device);
   }
   assert.deepEqual([stored(env.hub, 'a').out, stored(env.hub, 'a').who], ['15:30', 'Dana Ruiz']);
+  // The device a shift names is not believed even from a real phone: a new shift is filed under the phone that sent it.
+  r = ok(crew.push({ shifts: [shift({ id: 'claims', device: ID('other-dev') })] }));
+  assert.deepEqual([r.shifts[0].status, r.shifts[0].shift.device], ['ok', crew.dev]);
   // A PM-added shift (no device) is the PM's alone.
   r = ok(crew.push({ shifts: [shift({ id: 'hand', device: '' })] }));
   assert.deepEqual([r.shifts[0].status, r.shifts[0].reason], ['rejected', 'forbidden']);
@@ -630,16 +637,18 @@ test('shift, worker rules: add, complete, never undo a clock-out, own phone only
 
 test('shift, PM rules: edits, renames and removals stick; stored as sent; the clock-out is not erased by a stale PM phone', () => {
   const env = setup(), crew = phone(env, 'crew', 'crew-dev'), pm = phone(env, 'pm', 'pm-dev'), sup = office(env);
-  ok(crew.push({ shifts: [shift({ id: 'a', out: '15:30', crew: 'Crew A', tasks: ['T1019-01'] })] }));
+  ok(crew.push({ shifts: [shift({ id: 'a', pid: 'p-typo', crew: 'Crew B', crewId: 'c-b' })] }));
+  ok(crew.push({ shifts: [shift({ id: 'a', out: '15:30', pid: 'p-dana', crew: 'Crew A', crewId: 'c-a', tasks: [{ uid: 'u1', id: 'T1019-01' }] })] }));
   const base = stored(env.hub, 'a');
+  assert.deepEqual([base.pid, base.crew, base.crewId, base.tasks], ['p-dana', 'Crew A', 'c-a', [{ uid: 'u1', id: 'T1019-01' }]], 'until the PM touches it, person, crew and tasks follow the phone');
   // The PM fixes the out time and renames.
   let r = ok(pm.push({ shifts: [{ ...base, out: '15:00', who: 'Dana Ruiz', edited: { who: true, in: false, out: true } }] }));
   assert.deepEqual([r.shifts[0].shift.out, r.shifts[0].shift.who, r.shifts[0].shift.edited], ['15:00', 'Dana Ruiz', { who: true, in: false, out: true }]);
   // The worker's phone, with its own newer text, cannot undo either.
-  r = ok(crew.push({ shifts: [shift({ id: 'a', out: '15:30', who: 'Dana R', at: T0 + 1000, in: '06:00', crew: 'Crew B', tasks: ['X'] })] }));
+  r = ok(crew.push({ shifts: [shift({ id: 'a', out: '15:30', who: 'Dana R', at: T0 + 1000, in: '06:00', pid: 'p-other', crew: 'Crew B', crewId: 'c-b', tasks: [{ uid: 'x', id: 'X' }] })] }));
   const s = r.shifts[0].shift;
   assert.deepEqual([s.out, s.who, s.in], ['15:00', 'Dana Ruiz', '06:00'], 'edited out and who stick, in follows the phone');
-  assert.deepEqual([s.crew, s.tasks], ['Crew A', ['T1019-01']], 'once the PM has touched a shift its crew and tasks stay');
+  assert.deepEqual([s.pid, s.crew, s.crewId, s.tasks], ['p-dana', 'Crew A', 'c-a', [{ uid: 'u1', id: 'T1019-01' }]], 'once the PM has touched a shift its person, crew and tasks stay');
   // Nor can a PM phone that has not pulled yet undo a newer name from the worker's phone.
   ok(crew.push({ shifts: [shift({ id: 'n1', who: 'Dana R', at: T0 - 800 })] }));
   const stale = stored(env.hub, 'n1');
@@ -655,21 +664,24 @@ test('shift, PM rules: edits, renames and removals stick; stored as sent; the cl
   assert.deepEqual([r.shifts[0].shift.in, r.shifts[0].shift.out], ['06:45', '14:00']);
   // The device never changes after the shift exists.
   r = ok(pm.push({ shifts: [{ ...stored(env.hub, 'b'), device: 'someone-else', who: 'Renamed', edited: { who: true, in: true, out: false } }] }));
-  assert.equal(r.shifts[0].shift.device, 'crew-dev');
+  assert.equal(r.shifts[0].shift.device, crew.dev);
   // Remove, then add one by hand, then bring the removed one back: PM rules store what was sent.
   r = ok(pm.push({ shifts: [{ ...stored(env.hub, 'b'), gone: true }, shift({ id: 'hand1', device: '', who: 'Ana P', in: '07:00', out: '15:30', edited: { who: true, in: true, out: true } })] }));
   assert.deepEqual([r.shifts[0].shift.gone, r.shifts[1].shift.device, r.shifts[1].shift.edited.out], [true, '', true]);
   assert.equal(ok(pm.push({ shifts: [{ ...stored(env.hub, 'b'), gone: false }] })).shifts[0].shift.gone, false);
   // Only the PM key gets PM rules: a super sending edited or somebody else's shift is refused.
-  for (const bad of [{ ...stored(env.hub, 'a'), out: '01:00' }, shift({ id: 'x1', device: '' }), shift({ id: 'x2', device: 'pm-dev' }), { ...stored(env.hub, 'a'), gone: true, device: 'sup-dev' }]) {
+  for (const bad of [{ ...stored(env.hub, 'a'), out: '01:00' }, shift({ id: 'x1', device: '' }), { ...stored(env.hub, 'a'), gone: true, device: sup.dev }]) {
     const x = ok(sup.push({ shifts: [bad] }));
     assert.equal(x.shifts[0].status, 'rejected', JSON.stringify(bad).slice(0, 80));
   }
   assert.equal(stored(env.hub, 'a').out, '15:00');
+  // A super naming the PM's phone on a new shift gets a plain shift of its own phone, never one on the PM's.
+  const claimed = ok(sup.push({ shifts: [shift({ id: 'x2', device: pm.dev, edited: { who: true, in: true, out: true } })] })).shifts[0];
+  assert.deepEqual([claimed.status, claimed.shift.device, claimed.shift.edited.out], ['ok', sup.dev, false]);
   // The PM's own clock-in goes through worker rules, so a stale copy cannot undo a PM edit.
-  ok(pm.push({ shifts: [shift({ id: 'pm1', device: 'pm-dev', who: 'Pat M', in: '08:00', out: '16:00' })] }));
+  ok(pm.push({ shifts: [shift({ id: 'pm1', device: pm.dev, who: 'Pat M', in: '08:00', out: '16:00' })] }));
   ok(pm.push({ shifts: [{ ...stored(env.hub, 'pm1'), out: '16:30', edited: { who: false, in: false, out: true } }] }));
-  r = ok(pm.push({ shifts: [shift({ id: 'pm1', device: 'pm-dev', who: 'Pat M', in: '08:00', out: '16:00' })] }));
+  r = ok(pm.push({ shifts: [shift({ id: 'pm1', device: pm.dev, who: 'Pat M', in: '08:00', out: '16:00' })] }));
   assert.equal(r.shifts[0].shift.out, '16:30');
 });
 
@@ -724,11 +736,11 @@ test('shift rules match the client importShifts on random histories (worker text
         for (const date of days) {
           if (rnd(3) === 0) continue;
           const id = `${p.dev}-${date}`;
-          shifts.push(normShift({ id, device: rnd(12) === 0 ? 'intruder' : p.dev, who: rnd(4) === 0 ? pick(['dana r', 'Dana Ruiz', p.who]) : p.who, date, in: pick(['07:00', '06:45']), out: pick(['', '', '15:30', '15:45']) }));
+          shifts.push(normShift({ id, device: rnd(12) === 0 ? ID('intruder') : ID(p.dev), who: rnd(4) === 0 ? pick(['dana r', 'Dana Ruiz', p.who]) : p.who, date, in: pick(['07:00', '06:45']), out: pick(['', '', '15:30', '15:45']) }));
         }
         importShifts(log, shifts, at);
         for (const s of shifts) {
-          const r = ok(device(s.device === 'intruder' ? 'intruder' : p.dev).push({ shifts: [{ ...s, at }] }));
+          const r = ok(device(s.device === ID('intruder') ? 'intruder' : p.dev).push({ shifts: [{ ...s, at }] }));
           void r;
         }
       } else if (kind < 9 && log.length) { // the PM edits one entry
@@ -750,6 +762,190 @@ test('shift rules match the client importShifts on random histories (worker text
       compare('step ' + step);
     }
   }
+});
+
+// ---------- identity: devices, people, crews, task links (HUB.md, Identity) ----------
+test('device identity: phone A cannot read or change phone B\'s hours by naming B\'s device id (as dev, as devSecret, in the shift); A\'s own sync and the PM\'s edits still work', () => {
+  const env = setup(), A = phone(env, 'crew', 'phone-A'), B = phone(env, 'crew', 'phone-B'), pm = phone(env, 'pm', 'pm-phone'), sup = phone(env, 'super', 'sup-phone');
+  ok(B.push({ shifts: [shift({ id: 'b1', device: B.dev, who: 'Bea B', in: '06:30', pid: 'p-bea', tasks: [{ uid: 'u1', id: 'T1019-01' }] })] }));
+  ok(A.push({ shifts: [shift({ id: 'a1', device: A.dev, who: 'Al A', in: '07:00' })] }));
+  const bBefore = stored(env.hub, 'b1');
+  assert.equal(bBefore.device, B.dev, 'a shift carries the id derived from its phone\'s secret');
+  const ids = r => ok(r).shifts.map(s => s.id).sort();
+  // Reading: only the phone the secret proves.
+  assert.deepEqual(ids(A.pull()), ['a1']);
+  assert.deepEqual(ids(B.pull()), ['b1']);
+  const asCrew = extra => env.hub.call(env.k.crew, 'pull', { since: 0, ...extra });
+  assert.deepEqual(ids(asCrew({ devSecret: A.secret, dev: B.dev })), ['a1'], 'B\'s id as dev, next to A\'s own secret: still A');
+  assert.deepEqual(ids(asCrew({ devSecret: B.dev })), [], 'B\'s id as the secret is some other phone, with no hours');
+  assert.deepEqual(ids(asCrew({ dev: B.dev })), [], 'B\'s id and no secret: no phone at all');
+  for (const bad of ['', 'short', B.dev + 'x', B.dev.slice(0, 31) + '-', 42, null, [A.secret], { s: A.secret }]) assert.deepEqual(ids(asCrew({ devSecret: bad, dev: B.dev })), [], 'a malformed secret is no secret: ' + JSON.stringify(bad));
+  assert.deepEqual(ids(env.hub.call(env.k.super, 'pull', { since: 0, devSecret: sup.secret, dev: B.dev })), [], 'the superintendent key does not open it either');
+  // Writing: B's shift, sent every way, from A's phone, from no phone, and from the superintendent's key.
+  const evil = { ...bBefore, out: '23:00', who: 'Evil', in: '05:00', pid: 'p-evil', crew: 'Evil crew', tasks: [{ uid: 'x', id: 'X' }], at: T0 };
+  const tries = [['crew', { devSecret: A.secret, dev: B.dev }], ['crew', { devSecret: B.dev, dev: B.dev }], ['crew', { dev: B.dev }], ['super', { devSecret: sup.secret, dev: B.dev }], ['super', { dev: B.dev }]];
+  for (const [role, extra] of tries) {
+    const r = ok(env.hub.call(env.k[role], 'push', { ...extra, shifts: [evil, { ...evil, device: A.dev }] }));
+    assert.deepEqual(r.shifts.map(x => [x.status, x.reason]), [['rejected', 'device'], ['rejected', 'device']], role + ' sending ' + Object.keys(extra).join(' and '));
+  }
+  assert.deepEqual(stored(env.hub, 'b1'), bBefore, 'B\'s shift is exactly as B left it');
+  // With no secret there is no phone: not even a brand-new shift can be filed (it would look like one the PM added by hand).
+  for (const role of ['crew', 'super']) {
+    const r = ok(env.hub.call(env.k[role], 'push', { dev: A.dev, shifts: [shift({ id: 'new-' + role, device: A.dev, who: 'Nobody' })] }));
+    assert.deepEqual([r.shifts[0].status, r.shifts[0].reason], ['rejected', 'device'], role);
+  }
+  assert.ok(!env.hub.entities('Hours').some(x => x.who === 'Nobody'));
+  assert.ok(!env.hub.entities('Activity').some(e => /Evil/.test(e.who + e.text)), 'and nothing was logged in its name');
+  // A new shift that names B's device is A's own: it never shows up on B's phone.
+  const claim = ok(A.push({ shifts: [shift({ id: 'a2', device: B.dev, who: 'Al A', date: '2026-10-18' })] })).shifts[0];
+  assert.deepEqual([claim.status, claim.shift.device], ['ok', A.dev]);
+  assert.deepEqual(ids(B.pull()), ['b1']);
+  // A's own sync is untouched: clock out, read it back.
+  const out = ok(A.push({ shifts: [{ ...stored(env.hub, 'a1'), out: '15:30', at: T0 - 100 }] })).shifts[0];
+  assert.deepEqual([out.status, out.shift.out], ['ok', '15:30']);
+  assert.deepEqual(A.pull().shifts.map(s => [s.id, s.out]).sort(), [['a1', '15:30'], ['a2', '']]);
+  // The PM still edits B's shift (PM rules); B's phone sees the edit and cannot undo it.
+  const fix = ok(pm.push({ shifts: [{ ...bBefore, out: '14:00', edited: { who: false, in: false, out: true } }] })).shifts[0];
+  assert.deepEqual([fix.status, fix.shift.out, fix.shift.device, fix.shift.pid, fix.shift.tasks], ['ok', '14:00', B.dev, 'p-bea', [{ uid: 'u1', id: 'T1019-01' }]]);
+  assert.deepEqual(B.pull().shifts.map(s => [s.id, s.out, s.edited.out]), [['b1', '14:00', true]]);
+  ok(B.push({ shifts: [{ ...bBefore, out: '16:00', at: T0 }] }));
+  assert.equal(stored(env.hub, 'b1').out, '14:00');
+  // A PM phone with no secret still edits by PM rules (it speaks for no phone, so a plain shift of its own is refused).
+  const noPhone = ok(env.hub.call(env.k.pm, 'push', { dev: pm.dev, shifts: [{ ...stored(env.hub, 'b1'), in: '06:15', edited: { who: false, in: true, out: true } }] })).shifts[0];
+  assert.deepEqual([noPhone.status, noPhone.shift.in, noPhone.shift.device], ['ok', '06:15', B.dev]);
+  // The secrets themselves are kept nowhere: not in the Sheet, the log, the properties, the cache or a reply.
+  const everything = JSON.stringify([...env.hub.spreadsheets.values()].map(ss => ss.sheets.map(sh => sh.rows))) + env.hub.logs.join('\n') + JSON.stringify(env.hub.props) + JSON.stringify([...env.hub.cache.values()]);
+  for (const p of [A, B, pm, sup]) assert.ok(!everything.includes(p.secret), p.label + ': a device secret is stored nowhere');
+  assert.ok(!JSON.stringify(A.pull()).includes(A.secret) && !JSON.stringify(A.push({ shifts: [evil] })).includes(A.secret), 'nor answered');
+});
+
+test('task links: two offline office phones make sheets with the same date and short id; every shift still points to its own sheet', () => {
+  const env = setup(), office1 = phone(env, 'super', 'office-1'), office2 = phone(env, 'pm', 'office-2'), x = phone(env, 'crew', 'phone-X'), y = phone(env, 'crew', 'phone-Y');
+  // Offline, each office phone numbered its new sheet T1019-02 for the same day.
+  const a = task({ uid: 'uid-office1', id: 'T1019-02', crew: 'Crew A', crewId: 'c-a', members: ['Jose L'], memberIds: ['p-jose-a'], scope: 'Office 1 sheet' });
+  const b = task({ uid: 'uid-office2', id: 'T1019-02', crew: 'Crew B', crewId: 'c-b', members: ['Jose L'], memberIds: ['p-jose-b'], scope: 'Office 2 sheet' });
+  // The workers clocked in against them, then everyone came back online in some order.
+  const sx = shift({ id: 'sx', device: x.dev, who: 'Jose L', pid: 'p-jose-a', crew: 'Crew A', crewId: 'c-a', tasks: [{ uid: a.uid, id: 'T1019-02' }] });
+  const sy = shift({ id: 'sy', device: y.dev, who: 'Jose L', pid: 'p-jose-b', crew: 'Crew B', crewId: 'c-b', tasks: [{ uid: b.uid, id: 'T1019-02' }] });
+  ok(x.push({ shifts: [sx] }));
+  ok(office2.push({ tasks: [b] }));
+  ok(y.push({ shifts: [sy] }));
+  ok(office1.push({ tasks: [a] }));
+  assert.deepEqual(rowsOf(env.hub, 'Tasks').map(r => [r.key, r['Task ID'], r.Crew]).sort(), [['uid-office1', 'T1019-02', 'Crew A'], ['uid-office2', 'T1019-02', 'Crew B']], 'both sheets, side by side');
+  // Whoever reads them resolves each shift's task by uid to the right sheet.
+  const view = office2.pull(), byUid = Object.fromEntries(view.tasks.map(t => [t.uid, t]));
+  assert.deepEqual(view.shifts.map(s => [s.id, s.tasks]).sort(), [['sx', [{ uid: 'uid-office1', id: 'T1019-02' }]], ['sy', [{ uid: 'uid-office2', id: 'T1019-02' }]]]);
+  for (const s of view.shifts) assert.deepEqual([byUid[s.tasks[0].uid].crewId, byUid[s.tasks[0].uid].memberIds], [s.crewId, [s.pid]], s.id + ' points at its own sheet');
+  assert.deepEqual(x.pull().tasks.map(t => [t.uid, t.scope]).sort(), [['uid-office1', 'Office 1 sheet'], ['uid-office2', 'Office 2 sheet']]);
+  // One office renumbers its sheet: the link does not move; only the label kept next to it is the old one.
+  ok(office1.push({ tasks: [{ ...a, id: 'T1019-03', assignAt: T0 - 10 }] }));
+  const later = office2.pull();
+  assert.deepEqual(Object.fromEntries(later.tasks.map(t => [t.uid, t.id])), { 'uid-office1': 'T1019-03', 'uid-office2': 'T1019-02' });
+  assert.deepEqual(later.shifts.find(s => s.id === 'sx').tasks, [{ uid: 'uid-office1', id: 'T1019-02' }]);
+  // Each phone's clock-out keeps its own link; the Hours tab shows the crew and the label each shift was made with.
+  ok(x.push({ shifts: [{ ...sx, out: '15:30', at: T0 - 100 }] }));
+  ok(y.push({ shifts: [{ ...sy, out: '15:00', at: T0 - 100 }] }));
+  assert.deepEqual(env.hub.entities('Hours').map(s => [s.id, s.tasks.map(t => t.uid)]).sort(), [['sx', ['uid-office1']], ['sy', ['uid-office2']]]);
+  assert.deepEqual(rowsOf(env.hub, 'Hours').map(r => [r.key, r.Crew, r.Tasks]).sort(), [['sx', 'Crew A', 'T1019-02'], ['sy', 'Crew B', 'T1019-02']]);
+});
+
+test('shift task links: a short id alone becomes {uid: "", id}; labels are printable, short and never start like a formula', () => {
+  const env = setup(), crew = phone(env, 'crew');
+  const s = ok(crew.push({ shifts: [shift({ id: 'v1', pid: 'bad pid', crewId: 'c-1', tasks: ['T1019-01', { uid: 'u-2', id: 'T1019-02' }, { uid: 'bad uid', id: 'T3' }, { uid: 'u-2', id: 'dup' }, '=SUM(A1)', '+1', '-2', '@x', 'y'.repeat(60),
+    'a\u0000b\u202ec\u200bd', '', '   ', { uid: '', id: '' }, { uid: 'u-9' }, 'T1019-01', 'T1019-02', 7, null, [] ] })] })).shifts[0].shift;
+  assert.deepEqual([s.pid, s.crewId], ['', 'c-1'], 'ids keep the uid format or are empty');
+  // One link per uid and one per bare number; a bare number also sent with its uid is that link (as taskLinks in shared.mjs).
+  assert.deepEqual(s.tasks, [{ uid: '', id: 'T1019-01' }, { uid: 'u-2', id: 'T1019-02' }, { uid: '', id: 'T3' }, { uid: '', id: 'SUM(A1)' }, { uid: '', id: '1' }, { uid: '', id: '2' }, { uid: '', id: 'x' },
+    { uid: '', id: 'y'.repeat(40) }, { uid: '', id: 'a bcd' }, { uid: 'u-9', id: '' }]);
+  assert.equal(rowsOf(env.hub, 'Hours')[0].Tasks, 'T1019-01, T1019-02, T3, SUM(A1), 1, 2, x, ' + 'y'.repeat(40) + ', a bcd, u-9', 'the Sheet shows the label, else the uid');
+  const many = ok(crew.push({ shifts: [shift({ id: 'v2', tasks: Array.from({ length: 60 }, (_, i) => ({ uid: 'u' + i, id: 'T' + i })) })] })).shifts[0].shift;
+  assert.equal(many.tasks.length, 50);
+});
+
+test('people and crews: ids survive config round trips, two people may share a name, renames keep the ids', () => {
+  const env = setup(), sup = office(env), pm = phone(env, 'pm', 'pm-dev'), crew = phone(env, 'crew', 'crew-dev');
+  const cfg = { project: 'Schwab', floors: ['L1'], at: T0 - 1000,
+    crews: [{ id: 'c-a', name: 'Crew A', lead: 'Mike', members: 'Jose L, Mike' }, { id: 'c-b', name: 'Crew B', lead: '', members: 'Jose L' }],
+    people: [{ id: 'p-jose-a', name: 'Jose L', crewId: 'c-a' }, { id: 'p-mike', name: 'Mike', crewId: 'c-a' }, { id: 'p-jose-b', name: 'Jose L', crewId: 'c-b' }] };
+  const roster = c => ({ crews: c.crews, people: c.people });
+  assert.deepEqual(roster(ok(sup.push({ config: cfg })).config), roster(cfg));
+  for (const p of [crew, sup, pm]) assert.deepEqual(roster(p.pull().config), roster(cfg), p.role + ' reads the same roster, ids and all');
+  // The copy a phone pulled goes back unchanged: nothing is written.
+  const rev = Number(env.hub.props.REV);
+  assert.equal(ok(pm.push({ config: pm.pull().config })).rev, rev, 'a round trip writes nothing');
+  // Renames keep the ids; a crew phone sees the new names under the same ids.
+  ok(pm.push({ config: { ...cfg, at: T0 - 500, crews: [{ ...cfg.crews[0], name: 'Electric A' }, cfg.crews[1]], people: [{ ...cfg.people[0], name: 'Jos\u00e9 Luis' }, cfg.people[1], cfg.people[2]] } }));
+  const after = crew.pull().config;
+  assert.deepEqual(after.people.map(p => [p.id, p.name, p.crewId]), [['p-jose-a', 'Jos\u00e9 Luis', 'c-a'], ['p-mike', 'Mike', 'c-a'], ['p-jose-b', 'Jose L', 'c-b']]);
+  assert.deepEqual(after.crews.map(c => [c.id, c.name]), [['c-a', 'Electric A'], ['c-b', 'Crew B']]);
+  // Validation: ids keep their format; a person needs a usable id of their own; names are trimmed and clipped; a crew
+  // from an older phone (no id yet) is kept.
+  const v = ok(pm.push({ config: { ...cfg, at: T0 - 100,
+    crews: [{ id: 'bad id', name: 'X' }, { id: 'c-a', name: 'A' }, { id: 'c-a', name: 'A again' }, { name: 'Old phone crew', members: 'Ana' }],
+    people: [{ id: 'p-1', name: '  Ana   P ', crewId: 'bad id' }, { id: 'p-1', name: 'Taken id' }, { id: '', name: 'No id' }, { id: 'p 2', name: 'Bad id' }, { id: 'p-3', name: 'n'.repeat(100), crewId: 'c-a' }, 'junk', { id: '__proto__', name: 'Odd but fine' }] } })).config;
+  assert.deepEqual(v.crews.map(c => [c.id, c.name, c.members]), [['', 'X', ''], ['c-a', 'A', ''], ['', 'A again', ''], ['', 'Old phone crew', 'Ana']]);
+  assert.deepEqual(v.people.map(p => [p.id, p.name, p.crewId]), [['p-1', 'Ana   P', ''], ['p-3', 'n'.repeat(60), 'c-a'], ['__proto__', 'Odd but fine', '']]);
+  const many = ok(pm.push({ config: { ...cfg, at: T0, people: Array.from({ length: 600 }, (_, i) => ({ id: 'p' + i, name: 'P ' + i, crewId: 'c-a' })) } })).config;
+  assert.equal(many.people.length, 500, 'capped at 500 like every list');
+  assert.equal({}.polluted, undefined);
+});
+
+test('Weekly totals go by person id: two people named Jose L stay apart, and a renamed person keeps their hours', () => {
+  const env = setup(), pm = phone(env, 'pm', 'pm-dev'), x = phone(env, 'crew', 'phone-X'), y = phone(env, 'crew', 'phone-Y');
+  const cfg = { at: T0 - 9000, crews: [{ id: 'c-a', name: 'Crew A', members: 'Jose L' }, { id: 'c-b', name: 'Crew B', members: 'Jose L' }],
+    people: [{ id: 'p-a', name: 'Jose L', crewId: 'c-a' }, { id: 'p-b', name: 'Jose L', crewId: 'c-b' }] };
+  ok(pm.push({ config: cfg }));
+  ok(x.push({ shifts: [shift({ id: 'x1', device: x.dev, who: 'Jose L', pid: 'p-a', crewId: 'c-a', in: '07:00', out: '15:00' }), shift({ id: 'x2', device: x.dev, who: 'jose l', pid: 'p-a', date: '2026-10-20', in: '07:00', out: '11:00' })] }));
+  ok(y.push({ shifts: [shift({ id: 'y1', device: y.dev, who: 'Jos\u00e9 L.', pid: 'p-b', crewId: 'c-b', in: '06:00', out: '16:30' })] }));
+  ok(pm.push({ shifts: [shift({ id: 'old', device: '', who: 'JOSE  L', date: '2026-10-21', in: '07:00', out: '08:00' })] })); // an older shift with no person id: by name
+  const weekly = () => rowsOf(env.hub, 'Weekly totals').map(r => [r.Name, r['Week of'], r.Hours, r.Shifts]);
+  assert.deepEqual(weekly(), [['JOSE  L', '2026-10-19', 1, 1], ['Jose L (Crew A)', '2026-10-19', 12, 2], ['Jose L (Crew B)', '2026-10-19', 10.5, 1]], 'the same name, three timesheets; the roster names two of them, with their crews');
+  // Rename p-a: the roster push itself rewrites the totals: the new name, the same hours; the other Jose L is alone now.
+  ok(pm.push({ config: { ...cfg, at: T0 - 8000, people: [{ ...cfg.people[0], name: 'Jose Luis' }, cfg.people[1]] } }));
+  assert.deepEqual(weekly(), [['JOSE  L', '2026-10-19', 1, 1], ['Jose L', '2026-10-19', 10.5, 1], ['Jose Luis', '2026-10-19', 12, 2]]);
+  // Shifts keep the name they were made with; a new one under the new name joins the same timesheet.
+  assert.deepEqual(rowsOf(env.hub, 'Hours').filter(r => r.key[0] === 'x').map(r => r.Name), ['Jose L', 'jose l']);
+  ok(x.push({ shifts: [shift({ id: 'x3', device: x.dev, who: 'Jose Luis', pid: 'p-a', date: '2026-10-22', in: '07:00', out: '09:00' })] }));
+  assert.deepEqual(weekly().find(r => r[0] === 'Jose Luis'), ['Jose Luis', '2026-10-19', 14, 3]);
+  // Rename a crew: where two people share a name again, the label carries the crew's current name.
+  ok(pm.push({ config: { ...cfg, at: T0 - 7000, crews: [{ ...cfg.crews[0], name: 'Electric A' }, cfg.crews[1]] } }));
+  assert.deepEqual(weekly().map(r => r[0]), ['JOSE  L', 'Jose L (Crew B)', 'Jose L (Electric A)']);
+  // A person the roster does not know (yet) keeps the first spelling seen.
+  ok(phone(env, 'crew', 'phone-Z').push({ shifts: [shift({ id: 'z1', device: ID('phone-Z'), who: 'New Guy', pid: 'p-new', in: '07:00', out: '08:00' })] }));
+  assert.ok(weekly().some(r => r[0] === 'New Guy'));
+});
+
+test('a day the PM added by hand is matched by person id first: a namesake\'s clock-in is kept, the person\'s own is filed removed', () => {
+  const env = setup(), pm = phone(env, 'pm', 'pm-dev'), x = phone(env, 'crew', 'phone-X'), y = phone(env, 'crew', 'phone-Y'), old = phone(env, 'crew', 'old-phone');
+  ok(pm.push({ shifts: [shift({ id: 'hand', device: '', who: 'Jose L', pid: 'p-a', date: '2026-10-14', in: '07:00', out: '15:00', edited: { who: true, in: true, out: true } })] }));
+  const gone = (p, o) => ok(p.push({ shifts: [shift({ date: '2026-10-14', device: p.dev, ...o })] })).shifts[0].shift.gone;
+  assert.equal(gone(y, { id: 'y14', who: 'Jose L', pid: 'p-b' }), false, 'another Jose L');
+  assert.equal(gone(x, { id: 'x14', who: 'Jose Luis', pid: 'p-a' }), true, 'the same person under a new name');
+  assert.equal(gone(old, { id: 'o14', who: 'jos\u00e9  l' }), true, 'a phone with no person id is matched by the name, however typed');
+});
+
+test('round trip: every field of every template survives a push and a pull, and sending the pulled copy back writes nothing', () => {
+  const env = setup(), pm = phone(env, 'pm', 'pm-dev'), crew = phone(env, 'crew', 'crew-dev');
+  const tpl = name => JSON.parse(JSON.stringify(env.hub.eval(name)));
+  // Every field set to something that is not its default: text 'x', numbers 5, booleans flipped, lists of one.
+  const one = v => (Array.isArray(v) ? [one(v[0])] : v && typeof v === 'object' ? fill(v) : typeof v === 'string' ? 'x' : typeof v === 'number' ? 5 : !v);
+  const fill = (t, over = {}) => Object.fromEntries(Object.entries(t).map(([k, v]) => [k, k in over ? over[k] : one(v)]));
+  const time = '07:00', pin = 'a'.repeat(16) + ':' + 'b'.repeat(64);
+  const t = fill(tpl('TASK'), { uid: 'rt-task', date: '2026-10-19', pStart: time, pStop: time, checkIn: time, aStart: time, aStop: time, aLang: 'es', cLang: 'es' });
+  const s = fill(tpl('SHIFT'), { id: 'rt-shift', device: ID('crew-dev'), date: '2026-10-19', in: time, out: '15:00' });
+  const r = fill(tpl('REPORT'), { date: '2026-10-19', status: 'At risk', lang: 'es' });
+  const c = fill(tpl('CONFIG'), { pin });
+  const first = ok(pm.push({ tasks: [t], shifts: [s], reports: [r], config: c }));
+  assert.deepEqual([first.tasks[0].status, first.shifts[0].status, first.reports[0].status, first.configStatus], ['ok', 'ok', 'ok', 'ok']);
+  const got = pm.pull(), strip = ({ rev, ...x }) => x;
+  assert.deepEqual(strip(got.tasks[0]), t, 'every task field, both parts, the stamps, the reply and the ids');
+  assert.deepEqual(strip(got.shifts[0]), s, 'every shift field: person, crew and task links included');
+  assert.deepEqual(strip(got.reports[0]), r, 'every report field, the PM part and its stamp included');
+  assert.deepEqual(strip(got.config), c, 'every config field: people and crews with their ids');
+  const rev = got.rev;
+  assert.equal(ok(pm.push({ tasks: got.tasks, shifts: got.shifts, reports: got.reports, config: got.config })).rev, rev, 'the PM sends it all back: nothing to write');
+  const mine = ok(crew.push({ tasks: got.tasks, shifts: got.shifts }));
+  assert.deepEqual([mine.rev, mine.shifts[0].status], [rev, 'ok'], 'nor from the phone the shift belongs to');
 });
 
 // ---------- hours math ----------
@@ -803,32 +999,37 @@ test('weekly totals: three 7h20m shifts are 21.99 hours, one row per person per 
 });
 
 // ---------- the field lists the server and the app share ----------
-test('ASSIGN and CREW equal the lists in shared.mjs; entity templates cover the client templates', async () => {
+// HUB.md, Round trip: every synced field exists in the templates on both sides, so normalization (a sync, a reload, a
+// backup restore) never strips one. The comparison is by field and type, nested lists and objects included.
+test('ASSIGN and CREW agree with shared.mjs; the entity templates are the client templates, field for field', async () => {
   const src = fs.readFileSync(path.join(DIR, 'shared.mjs'), 'utf8');
   const list = name => { const m = new RegExp(`const ${name} = (\\[[^\\]]*\\])`).exec(src); assert.ok(m, name + ' found in shared.mjs'); return JSON.parse(m[1].replace(/'/g, '"')); };
   const hub = createHub({ now: T0 });
   const get = expr => JSON.parse(JSON.stringify(hub.eval(expr)));
-  assert.deepEqual(get('ASSIGN'), list('ASSIGN'));
-  assert.deepEqual(get('CREW'), list('CREW'));
+  const sorted = a => a.slice().sort();
+  // The parts are what HUB.md fixes, not how each side splits its lists: the app's assignment fields are the hub's office part.
+  const office = get('ASSIGN').concat(get('OFFICE_EXTRA'));
+  assert.deepEqual(list('ASSIGN').filter(k => !office.includes(k)), [], 'every field the app treats as the assignment is the office part on the hub');
+  assert.deepEqual(list('ASSIGN').filter(k => get('CREW').includes(k)), [], 'and none of them is the crew part');
+  for (const k of ['crewId', 'memberIds']) assert.ok(list('ASSIGN').includes(k) && get('ASSIGN').includes(k), k + ' travels with crew and members');
+  assert.deepEqual(sorted(get('CREW')), sorted(list('CREW')), 'the crew part of a task');
   const shared = await import('../docs/schwab/shared.mjs');
-  const LOCAL = ['origin', 'from', 'gotAt', 'filedAt', 'updatedAt']; // HUB.md: never synced
+  // A template's shape: field names and value types, all the way down ('s' and 't' on the server are both strings).
+  const sig = t => (Array.isArray(t) ? [sig(t[0])] : t && typeof t === 'object' ? Object.fromEntries(Object.keys(t).sort().map(k => [k, sig(t[k])])) : typeof t);
+  const omit = (o, keys) => Object.fromEntries(Object.entries(o).filter(([k]) => !keys.includes(k)));
+  const LOCAL = ['origin', 'from', 'gotAt', 'filedAt', 'updatedAt']; // HUB.md: task fields that never leave a phone
   const server = { TASK: get('TASK'), SHIFT: get('SHIFT'), REPORT: get('REPORT'), CONFIG: get('CONFIG') };
-  const clientTask = Object.keys(shared.TASK_TPL).filter(k => !LOCAL.includes(k));
-  for (const k of clientTask) assert.ok(k in server.TASK, 'task field ' + k);
-  const NEW_TASK_FIELDS = ['aLang', 'assignAt', 'crewAt', 'reply', 'replyAt', 'replyBy']; // HUB.md: new or server-side
-  assert.deepEqual(Object.keys(server.TASK).filter(k => !clientTask.includes(k)).sort(), NEW_TASK_FIELDS.filter(k => !clientTask.includes(k)).sort(), 'only the documented new task fields');
-  assert.deepEqual(Object.keys(get('ITEM')).sort(), Object.keys(shared.TASK_TPL.items[0]).sort());
-  for (const k of Object.keys(shared.SHIFT_TPL)) assert.ok(k in server.SHIFT, 'shift field ' + k);
-  assert.deepEqual(Object.keys(server.SHIFT).filter(k => !(k in shared.SHIFT_TPL)).sort(), ['crew', 'tasks'].filter(k => !(k in shared.SHIFT_TPL)).sort());
-  for (const k of Object.keys(shared.REPORT_TPL)) if (k !== 'filedAt') assert.ok(k in server.REPORT, 'report field ' + k);
-  assert.deepEqual(Object.keys(server.REPORT).filter(k => !(k in shared.REPORT_TPL)).sort(), ['lang', 'pmAt']);
-  assert.deepEqual(Object.keys(server.REPORT.decisions[0]), Object.keys(shared.REPORT_TPL.decisions[0]));
+  assert.deepEqual(sig(server.TASK), sig(omit(shared.TASK_TPL, LOCAL)), 'TASK_TPL holds every synced task field: crewId, memberIds, reply, replyAt, replyBy, aLang and the part stamps assignAt, crewAt');
+  assert.deepEqual(sig(get('ITEM')), sig(shared.TASK_TPL.items[0]));
+  assert.deepEqual(sig(server.SHIFT), sig(shared.SHIFT_TPL), 'SHIFT_TPL: pid, crewId and tasks as [{uid, id}]');
+  assert.deepEqual(Object.keys(server.SHIFT.tasks[0]).sort(), ['id', 'uid']);
+  assert.deepEqual(sig(server.REPORT), sig(omit(shared.REPORT_TPL, ['filedAt'])), 'REPORT_TPL: lang and the PM part stamp pmAt');
   assert.deepEqual(Object.keys(server.REPORT.floors[0].crews[0]), Object.keys(shared.CREW_TPL));
-  for (const k of ['needs', 'next', 'risks']) assert.deepEqual(Object.keys(server.REPORT[k][0]), Object.keys(shared.REPORT_TPL[k][0]), k);
-  const settings = Object.keys(shared.SETTINGS_TPL);
-  for (const k of Object.keys(server.CONFIG).filter(k => k !== 'at')) assert.ok(settings.includes(k), 'config field ' + k + ' is a setting');
-  for (const k of ['folderUrl', 'siteCode', 'hubKey', 'worker', 'device', 'me', 'role', 'lang']) assert.ok(!(k in server.CONFIG), k + ' is never synced');
-  assert.deepEqual(Object.keys(server.CONFIG.crews[0]), Object.keys(shared.SETTINGS_TPL.crews[0]));
+  // Config is the shared part of the settings: each field has the setting's shape; secrets and personal settings stay out.
+  for (const k of Object.keys(server.CONFIG).filter(k => k !== 'at')) assert.deepEqual(sig(server.CONFIG[k]), sig(shared.SETTINGS_TPL[k]), 'config field ' + k + ' is a setting of the same shape');
+  assert.deepEqual(Object.keys(server.CONFIG.crews[0]).sort(), ['id', 'lead', 'members', 'name']);
+  assert.deepEqual(Object.keys(server.CONFIG.people[0]).sort(), ['crewId', 'id', 'name']);
+  for (const k of ['folderUrl', 'siteCode', 'hubKey', 'hubUrl', 'hubRole', 'hubCrew', 'worker', 'device', 'me', 'role', 'lang']) assert.ok(!(k in server.CONFIG), k + ' is never synced');
 });
 
 // ---------- what the owner reads in the Sheet ----------
@@ -1223,7 +1424,7 @@ test('pull cache: the first phone after a change costs one or two Sheets request
   const env = setup(), sup = office(env), pm = phone(env, 'pm', 'pm-dev'), a = phone(env, 'crew', 'a'), b = phone(env, 'crew', 'b');
   seed(sup, 'tasks', Array.from({ length: 12 }, (_, i) => task({ uid: 'k' + i, id: 'K' + i })));
   ok(sup.push({ reports: [report()] }));
-  ok(a.push({ shifts: [shift({ id: 'sa', device: 'a' })] }));
+  ok(a.push({ shifts: [shift({ id: 'sa', device: a.dev })] }));
   let n = env.hub.calls.length;
   const first = a.pull();
   assert.ok(sheetCalls(env.hub, n) <= 2, 'cold, even for 12 tasks plus hours: ' + sheetCalls(env.hub, n));
@@ -1582,8 +1783,8 @@ test('a Sheets failure mid-push: a fixed server error, nothing echoed, the lock 
   // Reading failures are server errors too, and also leave nothing locked.
   env.hub.failNext('sheets.spreadsheets.values.batchGet');
   assert.equal(sup.pull().error, 'server');
-  env.hub.failNext('sheets.spreadsheets.values.get');
-  assert.equal(sup.push({ shifts: [shift({ device: 'sup-dev' })] }).error, 'server');
+  env.hub.failNext('sheets.spreadsheets.values.batchGet');
+  assert.equal(sup.push({ shifts: [shift({ device: sup.dev })] }).error, 'server');
   assert.equal(sup.pull().ok, true);
 });
 
@@ -1674,8 +1875,8 @@ test('stats: rows per tab, cells against the 10 million limit, the Sheet link', 
 test('fuzz: corrupted and garbage requests never cause a server error, a stuck lock, a formula or an unreadable row', () => {
   const env = setup();
   const rand = rng(777), pick = a => a[Math.floor(rand() * a.length)];
-  const pool = [null, true, false, 0, -1, 1e308, 2 ** 53, 'x', '', ' ', 'a'.repeat(300), '=1+1', '__proto__', 'constructor', '2026-13-45', '25:61', [], {}, [null], [[]], { a: 1 }, { __proto__: null }, [{}], 'é', '\u0000', '\ud800', { uid: 'u9' }, [1, 2, 3], -0, 1.5];
-  const seedTask = task({ uid: 'seed1' }), seedShift = shift({ id: 'seed-s', device: 'pm-dev' }), seedReport = report();
+  const pool = [null, true, false, 0, -1, 1e308, 2 ** 53, 'x', '', ' ', 'a'.repeat(300), '=1+1', '__proto__', 'constructor', '2026-13-45', '25:61', [], {}, [null], [[]], { a: 1 }, { __proto__: null }, [{}], '\u00e9', '\u0000', '\ud800', { uid: 'u9' }, [1, 2, 3], -0, 1.5];
+  const seedTask = task({ uid: 'seed1' }), seedShift = shift({ id: 'seed-s', device: ID('pm-dev') }), seedReport = report();
   ok(phone(env, 'super', 'sup-dev').push({ tasks: [seedTask], reports: [seedReport], config: { project: 'P', floors: ['L1'] } }));
   ok(phone(env, 'pm', 'pm-dev').push({ shifts: [seedShift, shift({ id: 'seed-h', device: '' })] }));
   const corrupt = (o, n = 3) => { const c = JSON.parse(JSON.stringify(o)); const ks = Object.keys(c); for (let i = 0; i < n; i++) c[pick(ks)] = pick(pool); return c; };
@@ -1692,8 +1893,8 @@ test('fuzz: corrupted and garbage requests never cause a server error, a stuck l
   const allowed = new Set(['bad_request', 'too_large', 'forbidden', 'busy', 'quota']);
   const seen = new Set();
   for (let i = 0; i < 700; i++) {
-    const role = pick(ROLES), dev = pick([role + '-dev', 'pm-dev', 'sup-dev', 'crew-dev', '', 'bad dev', pick(pool)]);
-    const body = { v: 1, key: env.k[role], dev, ...pick(bodies)() };
+    const role = pick(ROLES), devSecret = pick([secretOf(role + '-dev'), secretOf('pm-dev'), secretOf('sup-dev'), secretOf('crew-dev'), ID('crew-dev'), '', 'bad dev', pick(pool)]);
+    const body = { v: 1, key: env.k[role], devSecret, dev: pick([ID('pm-dev'), ID('crew-dev'), pick(pool)]), ...pick(bodies)() };
     const raw = JSON.stringify(body);
     const r = JSON.parse(env.hub.raw(raw));
     assert.ok(r.ok === true || allowed.has(r.error), `request ${i} (${role}): ${JSON.stringify(r).slice(0, 200)} <- ${raw.slice(0, 300)}`);
@@ -1729,7 +1930,10 @@ function convergence(seed, steps) {
   const get = expr => JSON.parse(JSON.stringify(hub.eval(expr)));
   const blankOf = tpl => (Array.isArray(tpl) ? [] : tpl && typeof tpl === 'object' ? Object.fromEntries(Object.entries(tpl).map(([k, v]) => [k, blankOf(v)])) : typeof tpl === 'string' ? '' : tpl);
   const OFFICE = get('ASSIGN').concat(get('OFFICE_EXTRA')), CREWF = get('CREW'), REPORT_KEYS = Object.keys(get('REPORT')), TASK_TPL = get('TASK'), TASK_BLANK = blankOf(TASK_TPL), REPORT_BLANK = blankOf(get('REPORT'));
-  const clients = [['crew', 'cA'], ['crew', 'cB'], ['super', 'sA'], ['pm', 'pA']].map(([role, dev]) => ({ role, dev, ph: phone(env, role, dev), tasks: {}, shifts: {}, reports: {}, base: {}, since: 0, online: true }));
+  const clients = [['crew', 'cA'], ['crew', 'cB'], ['super', 'sA'], ['pm', 'pA']].map(([role, label]) => {
+    const ph = phone(env, role, label);
+    return { role, label, dev: ph.dev, ph, tasks: {}, shifts: {}, reports: {}, base: {}, since: 0, online: true };
+  });
   const by = role => clients.filter(c => c.role === role);
   const led = { tasks: {}, reports: {}, workerOut: {}, pmOut: {}, pmWho: {}, removed: {}, device: {}, hand: {} };
   const unexpected = [];
@@ -1809,7 +2013,7 @@ function convergence(seed, steps) {
       const open = Object.values(c.shifts).filter(s => s.device === c.dev && !s.out && !s.gone);
       if (open.length && chance(0.6)) { const s = pickOf(open); s.out = hm(); led.workerOut[s.id] = s.out; }
       else if (!open.length || chance(0.3)) {
-        const id = `${c.dev}-${++n}`;
+        const id = `${c.label}-${++n}`;
         c.shifts[id] = { id, device: c.dev, who: pickOf(['Dana R', 'dana r', 'Eli T']), date: today, in: hm(), out: '', crew: pickOf(['Crew A', 'Crew B']), tasks: [], edited: { who: false, in: false, out: false }, gone: false, at: stamp };
         led.device[id] = c.dev;
       }

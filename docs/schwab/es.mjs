@@ -229,7 +229,24 @@ export default {
   'Floors / levels': 'Pisos / niveles',
   'One per line. They show up as quick picks; you can still type any floor.': 'Uno por línea. Aparecen como opciones rápidas; también puede escribir cualquier piso.',
   'Crews': 'Cuadrillas',
-  'Members are separated by commas. Picking a crew on a task fills these in.': 'Separe los integrantes con comas. Al escoger una cuadrilla en una tarea se llenan solos.',
+  'Tap a name to rename the person or move them to another crew. Picking a crew on a task fills in its people.': 'Toque un nombre para cambiarlo o para pasar a la persona a otra cuadrilla. Al escoger una cuadrilla en una tarea se llenan sus integrantes.',
+  'Not on a crew': 'Sin cuadrilla',
+  'No one on this crew yet.': 'Todavía no hay nadie en esta cuadrilla.',
+  'Add people': 'Agregar personas',
+  'Add people to {crew}': 'Agregar personas a {crew}',
+  'Move to another crew': 'Pasar a otra cuadrilla',
+  '{name} is already on {crew}. Add a second person with the same name?': '{name} ya está en {crew}. ¿Agregar a otra persona con el mismo nombre?',
+  'Add a second {name}': 'Agregar otra persona llamada {name}',
+  '{name} is already on {crew}. Is that the same person?': '{name} ya está en {crew}. ¿Es la misma persona?',
+  'the list': 'la lista',
+  'Same person: move to {crew}': 'La misma persona: pasarla a {crew}',
+  'Someone else: add a second {name}': 'Otra persona: agregar una nueva llamada {name}',
+  '{name} moved to {crew}': '{name} pasó a {crew}',
+  'Take {name} off the list? Sheets and hours keep the name.': '¿Quitar a {name} de la lista? Las hojas y las horas conservan el nombre.',
+  // two office phones that numbered sheets offline
+  'Your sheet {old} is now {id}: another sheet has that number.': 'Su hoja {old} ahora es {id}: otra hoja tiene ese número.',
+  'Same number as another sheet': 'Mismo número que otra hoja',
+  'Change the Task ID on one of them.': 'Cambie el número de tarea en una de ellas.',
   'Crew name': 'Nombre de la cuadrilla',
   'Crew {x}': 'Cuadrilla {x}',
   'Lead': 'Líder',
@@ -298,6 +315,10 @@ export default {
   'Send your hours to the PM': 'Enviar sus horas al gerente',
   'Send my hours to the PM again': 'Enviar mis horas al gerente otra vez',
   "This name isn't on a crew list yet. Check the spelling, or ask your superintendent.": 'Este nombre todavía no está en la lista de ninguna cuadrilla. Revise cómo lo escribió o pregúntele a su superintendente.',
+  'More than one person has this name. Tap yours:': 'Hay más de una persona con este nombre. Toque la que es usted:',
+  '{name} on {crew} already has that name. Is that the same person?': '{name}, de {crew}, ya tiene ese nombre. ¿Es la misma persona?',
+  'Same person: move these hours to {name}': 'La misma persona: pasar estas horas a {name}',
+  'Someone else: keep two people named {name}': 'Otra persona: dejar dos personas llamadas {name}',
   'No task sheet on this phone has your name today.': 'Hoy ninguna hoja de tarea en este teléfono tiene su nombre.',
 
   // daily report, crew hours and worker clock
@@ -679,4 +700,7 @@ export default {
   'Archived': 'Archivado',
   'The hub could not be reached.': 'No se pudo conectar con el sistema central.',
   'Delete this report': 'Borrar este reporte',
+
+  // identity: people, devices, duplicate numbers (hub screens)
+
 };

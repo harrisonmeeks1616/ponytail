@@ -179,7 +179,7 @@ test('onSite: open shifts under 16 hours, one line per person, newest shift wins
 test('openShifts keeps open shifts that were not removed', () => {
   const got = live.openShifts([shift({ out: '' }), shift({ out: '15:00' }), shift({ out: '', gone: true })]);
   assert.equal(got.length, 1);
-  assert.deepEqual(Object.keys(got[0]).sort(), ['crew', 'date', 'in', 'who']);
+  assert.deepEqual(Object.keys(got[0]).sort(), ['crew', 'crewId', 'date', 'in', 'pid', 'who']);
 });
 
 // ---------- hours by person ----------
@@ -230,8 +230,8 @@ test('weekCsv is the accountant spreadsheet for that week (or one person)', () =
   assert.match(csv, /Mike R,Crew A,2026-10-12,Mon,7:00 AM,2:45 PM,7.75/);
   assert.ok(!csv.includes('Gone G') && !csv.includes('2026-10-19'), 'removed shifts and other weeks stay out');
   assert.ok(csv.includes("'=cmd|calc") && !/(^|,)=cmd/m.test(csv), 'a name that looks like a formula is quoted');
-  const one = live.weekCsv(shifts, LASTMON, S, 'ANA p');
-  assert.ok(one.includes('Ana P') && !one.includes('Mike R'), 'one person, found however the name is typed');
+  const one = live.weekCsv(shifts, LASTMON, S, live.peopleWeeks(shifts, S, NOW).find(p => p.who === 'Ana P').key);
+  assert.ok(one.includes('Ana P') && !one.includes('Mike R'), 'one person: the timesheet the By person screen shows');
   assert.match(one, /All crew,,,,,Week total,8.50/);
 });
 
@@ -493,11 +493,12 @@ test('recordsView people: people, then weeks with totals, then shifts, and the w
   const ctx = mkCtx({ shifts: () => shifts });
   const list = live.recordsView(ctx, 'people');
   assert.match(list, /<h2 class="group-h"><span>Hours by person<\/span><span>2<\/span><\/h2>/, 'the list says what it is');
-  assert.match(list, /data-act="recPerson" data-v="Ana P"/);
+  const key = who => live.peopleWeeks(shifts, ctx.S, NOW).find(p => p.who === who).key;
+  assert.match(list, new RegExp(`data-act="recPerson" data-v="${key('Ana P')}"`));
   assert.match(list, /On the clock/);
   assert.match(list, /No clock-out/, "Ana's shift from two weeks ago was never closed");
   assert.match(list, /<b>0.00<\/b><small>This week<\/small>/);
-  live.act(ctx, 'recPerson', { dataset: { v: 'mike R' } });
+  live.act(ctx, 'recPerson', { dataset: { v: key('Mike R') } });
   const detail = live.recordsView(ctx, 'people');
   assert.match(detail, /<h2>Mike R<\/h2><b class="total">7.75 hrs<\/b>/);
   assert.match(detail, /Mon, Oct 12 to Sun, Oct 18/);
@@ -511,7 +512,7 @@ test('recordsView people: people, then weeks with totals, then shifts, and the w
   assert.match(removed, /No hours logged yet/);
 });
 test('recordsView people: a shift names its tasks as ids or as {uid, id}', () => {
-  const mk = tasks => { const ctx = mkCtx({ shifts: () => [Object.assign(shift({ id: 'h1', who: 'Mike R', date: '2026-10-12', out: '15:00' }), { tasks })] }); live.resetUi(); live.recordsView(ctx, 'people'); live.act(ctx, 'recPerson', { dataset: { v: 'Mike R' } }); return live.recordsView(ctx, 'people'); };
+  const mk = tasks => { const ctx = mkCtx({ shifts: () => [Object.assign(shift({ id: 'h1', who: 'Mike R', date: '2026-10-12', out: '15:00' }), { tasks })] }); live.resetUi(); live.recordsView(ctx, 'people'); live.act(ctx, 'recPerson', { dataset: { v: live.peopleWeeks(ctx.shifts(), ctx.S, NOW)[0].key } }); return live.recordsView(ctx, 'people'); };
   assert.match(mk(['T1019-02', 'T1019-03']), /Tasks T1019-02, T1019-03/);
   assert.match(mk([{ uid: 'u1', id: 'T1019-02' }]), /Task T1019-02/);
   assert.doesNotMatch(mk([{ uid: 'u1', id: 'T1019-02' }, null, { uid: 'u2' }]), /object|undefined|null/);
@@ -837,6 +838,81 @@ test('messageSheet and reviewSheet act on the sheet as it is now', async () => {
     assert.match(opened[1].innerHTML, /Review T1019-01/);
     assert.match(opened[1].innerHTML, /data-r="Accepted"/);
   } finally { globalThis.document = prev; }
+});
+
+// ---------- identity: people by id, sheets by uid (HUB.md, Identity) ----------
+
+// Two people named Jose L, one on each crew, and the hours of each.
+function twoJoses() {
+  const ctx = mkCtx();
+  Object.assign(ctx.S, { crews: [{ id: 'cA', name: 'Crew A', lead: '', members: 'Jose L' }, { id: 'cB', name: 'Crew B', lead: '', members: 'Jose L' }],
+    people: [{ id: 'p1', name: 'Jose L', crewId: 'cA' }, { id: 'p2', name: 'Jose L', crewId: 'cB' }] });
+  const shifts = [shift({ id: 'j1', who: 'Jose L', pid: 'p1', crew: 'Crew A', crewId: 'cA', date: '2026-10-13', in: '07:00', out: '15:00' }),
+    shift({ id: 'j2', who: 'Jose L', pid: 'p1', crew: 'Crew A', crewId: 'cA', date: '2026-10-14', in: '07:00', out: '11:00' }),
+    shift({ id: 'j3', who: 'jose l', pid: 'p2', crew: 'Crew B', crewId: 'cB', date: '2026-10-13', in: '06:00', out: '16:00' })];
+  ctx.shifts = () => shifts;
+  return { ctx, shifts };
+}
+const personRows = html => [...html.matchAll(/data-act="recPerson" data-v="([^"]+)"[^>]*><span class="rec-main"><b class="tid">([^<]+)<\/b>\s*<small>(.*?)<\/small>/gs)]
+  .map(m => [m[1], m[2], (/<\/i> ([^<]+)<\/span>/.exec(m[3]) || [])[1] || '']);
+
+test('By person: two people with one name are two people, each with their crew and only their own hours', () => {
+  const { ctx } = twoJoses();
+  assert.deepEqual(personRows(live.recordsView(ctx, 'people')), [['p1', 'Jose L', 'Crew A'], ['p2', 'Jose L', 'Crew B']]);
+  live.act(ctx, 'recPerson', { dataset: { v: 'p2' } });
+  const d = live.recordsView(ctx, 'people');
+  assert.match(d, /<h2>Jose L<\/h2><b class="total">10.00 hrs<\/b>/, 'the second Jose: his 10 hours, not 22');
+  assert.match(d, /Crew B/);
+  assert.doesNotMatch(d, /Crew A/);
+  assert.match(d, /data-act="recWeekCsv" data-mon="2026-10-12" data-v="p2" data-name="Jose L"/);
+  const csv = live.weekCsv(ctx.shifts(), LASTMON, ctx.S, 'p2');
+  assert.ok(csv.includes('Jose L,Crew B') && !csv.includes('Crew A'), "the week's file for him is his alone");
+  assert.equal(live.peopleWeeks(ctx.shifts(), ctx.S, NOW).length, 2);
+});
+test('By person: renaming a person or a crew keeps the history together under the new names; a shift keeps its own label', () => {
+  const { ctx, shifts } = twoJoses();
+  assert.ok(lib.renamePerson(ctx.S, 'p1', 'José Luis') && lib.renameCrew(ctx.S, 'cB', 'Crew Bravo'));
+  assert.deepEqual(live.peopleWeeks(shifts, ctx.S, NOW).map(p => [p.key, p.who, p.crew, p.shifts, p.hours]), [['p2', 'Jose L', 'Crew Bravo', 1, 1000], ['p1', 'José Luis', 'Crew A', 2, 1200]]);
+  assert.deepEqual(personRows(live.recordsView(ctx, 'people')), [['p2', 'Jose L', 'Crew Bravo'], ['p1', 'José Luis', 'Crew A']]);
+  live.act(ctx, 'recPerson', { dataset: { v: 'p1' } });
+  assert.match(live.recordsView(ctx, 'people'), /<h2>José Luis<\/h2><b class="total">12.00 hrs<\/b>/, 'both of his shifts, clocked in as Jose L');
+  assert.equal(shifts[0].who, 'Jose L', 'the shift itself keeps the name it was made with');
+});
+test('On site and the activity feed name people as the roster has them now, with their crew, and never merge two people', () => {
+  const { ctx } = twoJoses();
+  const open = [shift({ id: 'o1', who: 'Jose L', pid: 'p1', crewId: 'cA', crew: 'Crew A', in: '07:00', out: '' }), shift({ id: 'o2', who: 'Jose L', pid: 'p2', crewId: 'cB', crew: 'Crew B', in: '07:30', out: '' })];
+  const hubList = [{ who: 'Jose L', in: '07:30', date: DAY }]; // the hub's own list names people only
+  ctx.shifts = () => open;
+  ctx.sync.data.onsite = hubList;
+  assert.deepEqual(live.onSite([...live.openShifts(open), ...hubList], NOW, ctx.S).map(p => [p.key, p.who, p.crew]), [['p1', 'Jose L', 'Crew A'], ['p2', 'Jose L', 'Crew B']], 'two people; the line with a name only is one of them');
+  lib.renamePerson(ctx.S, 'p1', 'José Luis');
+  lib.renameCrew(ctx.S, 'cB', 'Crew Bravo');
+  assert.deepEqual(live.onSite([...live.openShifts(open), ...hubList], NOW, ctx.S).map(p => [p.who, p.crew]), [['Jose L', 'Crew Bravo'], ['José Luis', 'Crew A']]);
+  ctx.sync.data.events = [{ rev: 2, ts: NOW - min(5), who: 'Jose L', role: 'crew', kind: 'clock.in', text: '', ref: 'o1' }, { rev: 1, ts: NOW - min(9), who: 'Jose L', role: 'crew', kind: 'clock.in', text: '', ref: 'o2' }];
+  const v = live.liveView(ctx);
+  assert.match(v, /<b>José Luis<\/b>/);
+  assert.match(v, /Crew Bravo · 1/);
+  assert.match(v, /José Luis clocked in <span class="feed-crew">· Crew A<\/span>/, 'the feed line follows the roster through the shift it is about');
+  assert.match(v, /Jose L clocked in <span class="feed-crew">· Crew Bravo<\/span>/);
+});
+test('sheets go by uid: two sheets with one number both show, each opens itself, both say so; a shift opens the sheet it was on', () => {
+  const a = task({ uid: 'ua', id: 'T1019-01', crew: 'Crew A' }), b = task({ uid: 'ub', id: 'T1019-01', crew: 'Crew B' }), c = task({ uid: 'uc', id: 'T1019-02' }), old = task({ uid: 'uo', id: 'T1019-03', date: '2026-10-12' });
+  const ctx = mkCtx({ tasks: () => [a, b, c, old] });
+  const rec = live.recordsView(ctx, 'sheets');
+  for (const u of ['ua', 'ub', 'uc', 'uo']) assert.match(rec, new RegExp(`href="#task/${u}/assign"`));
+  assert.equal((rec.match(/Same number as another sheet/g) || []).length, 2, 'the two sheets that share a number, and no other');
+  assert.equal((live.liveView(ctx).match(/Same number as another sheet/g) || []).length, 2, 'the live board says so too');
+  // the feed: a uid opens that sheet (shown by its number); a number two sheets of the day share opens neither; one only one has opens it
+  ctx.sync.data.events = [{ rev: 3, ts: NOW, kind: 'task.started', who: 'Mike', ref: 'ub', text: '' }, { rev: 2, ts: NOW, kind: 'task.started', who: 'Mike', ref: 'T1019-01', text: '' }, { rev: 1, ts: NOW, kind: 'task.started', who: 'Mike', ref: 'T1019-02', text: '' }];
+  const feed = live.liveView(ctx).split('class="feed"')[1];
+  assert.deepEqual([...feed.matchAll(/href="#task\/(\w+)\//g)].map(m => m[1]), ['ub', 'uc']);
+  assert.match(feed, /Mike started T1019-01/);
+  assert.doesNotMatch(feed, /started ub/, 'a uid is never shown as the number');
+  const s = shift({ id: 'h1', who: 'Mike R', date: '2026-10-12', out: '15:00', tasks: [{ uid: 'uo', id: 'T1019-09' }, { uid: 'gone', id: 'T1019-07' }] });
+  const pctx = mkCtx({ tasks: () => [old], shifts: () => [s] });
+  live.recordsView(pctx, 'people'); // on the By person tab first, as a tap would be
+  live.act(pctx, 'recPerson', { dataset: { v: live.peopleWeeks([s], pctx.S, NOW)[0].key } });
+  assert.match(live.recordsView(pctx, 'people'), /Tasks <a href="#task\/uo\/assign">T1019-03<\/a>, T1019-07/, 'the number the sheet has now; one not on this phone keeps its label');
 });
 
 // ---------- house rules ----------
