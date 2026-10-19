@@ -731,6 +731,55 @@ test("time clock: crew and task ids follow the worker's texts and never undo the
     "one timesheet per person however typed, under the crew list's spelling when it has one; the week's latest crew, else the crew lists, else none");
 });
 
+test('Undo lasts 6 seconds, runs once, and a removal turns final exactly once', async () => {
+  const { undoOffer, UNDO_MS } = await lib;
+  assert.equal(UNDO_MS, 6000);
+  const fake = () => { const t = { fns: new Map(), n: 0 }; return Object.assign(t, { set: (f, ms) => (t.fns.set(++t.n, [f, ms]), t.n), clear: id => t.fns.delete(id), run: () => [...t.fns.values()].forEach(([f]) => f()) }); };
+  let clock = fake(), undone = 0, ends = [];
+  const o = undoOffer(() => undone++, { set: clock.set, clear: clock.clear, done: u => ends.push(u) });
+  assert.deepEqual([...clock.fns.values()].map(([, ms]) => ms), [6000], 'one timer, 6 seconds');
+  assert.equal(o.tap(), true);
+  assert.equal(o.tap(), false, 'a second tap does nothing');
+  clock.run();
+  assert.deepEqual([undone, ends, o.open], [1, [true], false], 'undone once; done(true) once; the timer is cleared');
+  clock = fake(); undone = 0; ends = [];
+  const late = undoOffer(() => undone++, { set: clock.set, clear: clock.clear, done: u => ends.push(u) });
+  clock.run(); // 6 seconds pass
+  assert.equal(late.tap(), false, 'too late: Undo is gone');
+  late.end();
+  assert.deepEqual([undone, ends], [0, [false]], 'final once, when the time ran out');
+  clock = fake(); ends = [];
+  const replaced = undoOffer(() => undone++, { set: clock.set, clear: clock.clear, done: u => ends.push(u) });
+  replaced.end(); // another message took its place
+  assert.deepEqual([ends, clock.fns.size], [[false], 0]);
+  ends = [];
+  const broken = undoOffer(() => { throw new Error('restore failed'); }, { set: clock.set, clear: clock.clear, done: u => ends.push(u) });
+  assert.throws(() => broken.tap());
+  assert.deepEqual([ends, broken.open], [[true], false], 'an undo that throws still ends the offer, so nothing turns final later');
+});
+
+test('busy: a second tap while the work runs does nothing, and the button comes back', async () => {
+  const { busy } = await lib;
+  const button = act => { const b = { dataset: { act }, disabled: false, attrs: {} }; b.setAttribute = (k, v) => { b.attrs[k] = v; }; b.removeAttribute = k => { delete b.attrs[k]; }; return b; };
+  let release, runs = 0;
+  const send = () => { runs++; return new Promise(r => { release = r; }); };
+  const b = button('sendTask'), redrawn = button('sendTask');
+  const first = busy(b, send);
+  assert.deepEqual([b.disabled, b.attrs['aria-busy']], [true, 'true'], 'off and busy while it works');
+  assert.equal(await busy(b, send), undefined, 'a double tap is refused');
+  assert.equal(await busy(redrawn, send), undefined, 'so is a tap on the same action drawn again');
+  assert.equal(runs, 1, 'the work started once');
+  release('sent');
+  assert.equal(await first, 'sent');
+  assert.deepEqual([b.disabled, b.attrs['aria-busy']], [false, undefined], 'and the button is back');
+  assert.equal(await busy(b, () => 'again'), 'again', 'a later tap works');
+  await assert.rejects(busy(b, async () => { throw new Error('no signal'); }));
+  assert.equal(await busy(b, () => 'after a failure'), 'after a failure', 'a failed send never leaves the button stuck');
+  const off = Object.assign(button('x'), { disabled: true });
+  await busy(off, () => 1);
+  assert.equal(off.disabled, true, 'a button that was off stays off');
+});
+
 test('a tab still on the old version cannot wipe the passcode', async () => {
   const { KEYS, loadSettings, setPin, pinHash, PIN_FORMAT } = await lib;
   const store = new Map();
