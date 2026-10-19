@@ -824,9 +824,10 @@ test('messageSheet and reviewSheet act on the sheet as it is now', async () => {
   // the dialogs need a browser; their pure parts are withMessage and withReview above. Here: the action finds the live copy.
   const t = task({ uid: 'live1' });
   const ctx = mkCtx({ tasks: () => [t] });
-  const prev = globalThis.document;
+  const prev = globalThis.document, prevLoc = globalThis.location;
   const opened = [];
-  globalThis.document = { getElementById: () => null, createElement: () => { const d = { innerHTML: '', addEventListener() {}, showModal() { opened.push(this); }, querySelector: () => ({ focus() {}, onclick: null, hidden: false, value: '' }), querySelectorAll: () => [] }; return d; }, body: { append() {} } };
+  globalThis.location = { hash: '#live' };
+  globalThis.document = { getElementById: () => null, querySelector: () => null, createElement: () => { const d = { innerHTML: '', dataset: {}, firstElementChild: { append() {}, focus() {} }, addEventListener() {}, showModal() { opened.push(this); }, querySelector: () => ({ focus() {}, onclick: null, hidden: false, value: '' }), querySelectorAll: () => [] }; return d; }, body: { append() {} } };
   try {
     await live.act(ctx, 'liveMsg', { dataset: { u: 'live1' } });
     assert.equal(opened.length, 1);
@@ -837,7 +838,7 @@ test('messageSheet and reviewSheet act on the sheet as it is now', async () => {
     await live.act(ctx, 'liveReview', { dataset: { u: 'live1' } });
     assert.match(opened[1].innerHTML, /Review T1019-01/);
     assert.match(opened[1].innerHTML, /data-r="Accepted"/);
-  } finally { globalThis.document = prev; }
+  } finally { globalThis.document = prev; globalThis.location = prevLoc; }
 });
 
 // ---------- identity: people by id, sheets by uid (HUB.md, Identity) ----------

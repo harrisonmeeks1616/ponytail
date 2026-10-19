@@ -4,8 +4,8 @@
 // the cutoff timer in clockView, and the foreground redraw in tasks.html's visibilitychange handler).
 //
 // Run (needs Playwright and a Chromium; not part of `npm test`, which is node-only):
-//   cd docs/schwab && python3 -m http.server 8765 &        # serve the app
-//   BASE=http://localhost:8765/ node tests/browser/schwab-clock-stale.e2e.js
+//   cd docs/schwab && python3 -m http.server 8765 --bind 127.0.0.1 &        # serve the app
+//   BASE=http://127.0.0.1:8765/ node tests/browser/schwab-clock-stale.e2e.js
 //   (if Playwright is installed globally: NODE_PATH=$(npm root -g) ...)
 // Exit 0 = all checks passed.
 //
@@ -20,7 +20,7 @@
 // ("if (shown && shown !== now)" made false), case 1 failed: the stale tap started a new shift and opened a
 // clock-in text. With only the foreground redraw disabled, case 3 failed. With the fix in place: 11 of 11 pass.
 const { chromium, devices } = require('playwright');
-const BASE = process.env.BASE || 'http://localhost:8765/';
+const BASE = process.env.BASE || 'http://127.0.0.1:8765/';
 const fails = [], check = (ok, what) => { console.log(ok ? '  ok  ' : '  FAIL', what); if (!ok) fails.push(what); };
 (async () => {
   const browser = await chromium.launch();
@@ -31,13 +31,18 @@ const fails = [], check = (ok, what) => { console.log(ok ? '  ok  ' : '  FAIL', 
     p.on('pageerror', e => errors.push(`${name}: ${e.message}`));
     await p.clock.install({ time: new Date(start) });
     await p.goto(BASE + 'tasks.html#clock/' + start.slice(0, 10));
+    // A new phone asks its first-run questions first: English, a crew member, the worker's name.
+    await p.click('dialog.firstrun [data-fr=lang][data-v=en]');
+    await p.click('dialog.firstrun [data-fr=role][data-v="Crew member"]');
+    await p.fill('#frName', name);
+    await p.click('dialog.firstrun [data-fr=next]');
     await p.waitForSelector('[data-k="s.worker"]');
-    await p.fill('[data-k="s.worker"]', name);
+    check(await p.inputValue('[data-k="s.worker"]') === name, `${name}: the first run's name is the time clock name`);
     return p;
   };
-  const label = p => p.textContent('.bar .primary').then(t => t.trim());
+  const label = p => p.textContent('[data-act=hTap]').then(t => t.trim());
   const shifts = p => p.evaluate(() => JSON.parse(localStorage.getItem('schwab.hours') || '[]'));
-  const clockIn = async p => { await p.click('.bar >> text=Clock in'); await p.waitForSelector('dialog .linkbox'); await p.locator('dialog .sheet-x').click(); };
+  const clockIn = async p => { await p.click('[data-act=hTap]:has-text("Clock in")'); await p.waitForSelector('dialog .linkbox'); await p.locator('dialog .sheet-x').click(); };
 
   console.log('1. Asleep past the cutoff: no timer ran, the screen still says Clock out');
   const a = await worker('Raul Q', '2026-10-14T05:00:00');
@@ -46,7 +51,7 @@ const fails = [], check = (ok, what) => { console.log(ok ? '  ok  ' : '  FAIL', 
   check(await label(a) === 'Clock out', 'at 15h59m the button says Clock out');
   await a.clock.setSystemTime(new Date('2026-10-14T21:01:00')); // 16h01m, and no timer has fired (the phone slept)
   check(await label(a) === 'Clock out', 'stale screen: the button still shows Clock out (setup)');
-  await a.click('.bar >> text=Clock out');
+  await a.click('[data-act=hTap]:has-text("Clock out")');
   await a.waitForTimeout(200);
   const after = await shifts(a);
   check(after.length === 1 && !after[0].out, 'the stale tap neither clocked out nor started a new shift');
@@ -78,7 +83,7 @@ const fails = [], check = (ok, what) => { console.log(ok ? '  ok  ' : '  FAIL', 
   await d.evaluate(() => document.dispatchEvent(new Event('visibilitychange', { bubbles: true }))); // the new day redraws today's clock
   await d.waitForTimeout(150);
   check(await label(d) === 'Clock out', 'after midnight the overnight shift still shows Clock out');
-  await d.click('.bar >> text=Clock out');
+  await d.click('[data-act=hTap]:has-text("Clock out")');
   await d.waitForSelector('dialog .linkbox');
   const s = (await shifts(d))[0];
   check(s.date === '2026-10-14' && s.out === '06:00' && (await shifts(d)).length === 1, 'clocked out 06:00 on the shift that began 22:00 the day before');

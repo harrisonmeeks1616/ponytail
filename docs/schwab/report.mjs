@@ -8,7 +8,7 @@ import {
   KEYS, COMPANIES, esc, uid, load, save, normTask, normReport, normShift, blank, newFloor, fillFromTasks, mergeAnswers, CREW_TPL, pack, linkTo,
   today, addDays, niceDate, nowHM, span, fmtMin, t12, stamp, hrs, field, datalist, seg, setPath, getPath, readInput,
   toast, sheet, ask, sendSheet, pasteSheet, makePdf, savePdf, download, fileAway, dateBar, crewVar, letterhead, L, getLang, unlocked,
-  nameKey, cleanName, people, findPerson, personById, crewById, addPerson, renamePerson, assignmentFor, taskLinks, deviceId, choose,
+  nameKey, cleanName, people, findPerson, personById, crewById, addPerson, renamePerson, assignmentFor, taskLinks, deviceId, choose, screenHead, icon,
 } from './shared.mjs';
 
 const obj = x => (x && typeof x === 'object' && !Array.isArray(x) ? x : {});
@@ -93,10 +93,11 @@ const nameHint = (S, known) => {
 // sheet: the crew view on a crew phone, the task on an office phone; a locked office phone shows only the crew's sheets.
 function todayCard(S) {
   const day = onShift()?.date || today(), all = sheetsHere().filter(t => unlocked() || t.origin === 'link'), { sheets } = assignmentFor(all, S.worker, day, S.workerId);
-  if (!sheets.length) return S.worker.trim() && all.some(t => t.date === day) ? `<section class="card"><h2>${L('Today')}</h2><p class="hint">${L('No task sheet on this phone has your name today.')}</p></section>` : '';
-  return `<section class="card"><h2>${L('Today')}</h2>${sheets.map(t => `<a class="tcard" href="#task/${esc(t.uid)}/assign" style="${crewVar(S, t.crew)}">
-    <span class="tid">${esc(t.id ? L('Task {id}', { id: t.id }) : L('New task'))}</span>
-    <div class="meta"><span><i class="dot"></i> ${esc(t.crew || L('No crew yet'))}</span><span>${esc([t.floor || L('Floor not set'), t.area].filter(Boolean).join(' · '))}</span></div></a>`).join('')}</section>`;
+  const head = `<h3 class="section-h">${L('Today')}</h3>`;
+  if (!sheets.length) return S.worker.trim() && all.some(t => t.date === day) ? `${head}<p class="hint">${L('No task sheet on this phone has your name today.')}</p>` : '';
+  return `${head}<div class="list today-list">${sheets.map(t => `<a class="row tcard" href="#task/${esc(t.uid)}/assign" style="${crewVar(S, t.crew)}">
+    <span class="row-main"><span class="row-title">${t.area ? `<span class="area">${esc(t.area)}</span> ` : ''}<span class="tid">${esc(t.id || L('New task'))}</span></span>
+      <span class="row-sub meta"><i class="dot"></i> ${esc([t.crew || L('No crew yet'), t.floor || L('Floor not set')].join(' · '))}</span></span>${icon('chev', 'chev')}</a>`).join('')}</div>`;
 }
 // Leaving the name box: a known name typed with other capitals, accents or spacing takes its known spelling, and the
 // roster person it is becomes this phone's workerId (among people sharing the name, the one the worker tapped).
@@ -113,30 +114,43 @@ export function workerChange(S) {
   if (card.dataset.name !== who) { card.dataset.name = who; card.innerHTML = todayCard(S); }
 }
 
+// The hero: the time now, where the shift stands, and one big round button. It sits above everything that redraws
+// when the name box loses focus (the hint, the Today list), so the tap that closes the keyboard still lands on it.
 function clockView(S) {
   const on = onShift(), mon = monday(today()), known = knownNames(S);
   const week = MY.filter(s => s.date >= mon).sort(byTime), last = MY.filter(s => s.date >= addDays(mon, -7) && s.date < mon);
   const missed = MY.filter(s => !s.out && s !== on && s.date >= addDays(mon, -7)).sort(byTime).at(-1);
-  const row = s => `<dt>${esc(niceDate(s.date))}</dt><dd>${s.out ? `${esc(L('{start} to {stop}', { start: t12(s.in), stop: t12(s.out) }))} · ${esc(L('{n} hrs', { n: h2(cents(s)) }))}`
-    : `${esc(t12(s.in))} · ${s === on ? L('On the clock') : `<span class="pill" data-tone="warn">${L('No clock-out')}</span>`}`}</dd>`;
-  $('app').innerHTML = `<section class="card"><h2>${L('Time clock')}</h2>
-      ${field(L('Your name'), 's.worker', S.worker, { ph: L('First and last name'), list: 'knownNames' })}${datalist('knownNames', known)}
-      <div id="nameHint" role="status">${nameHint(S, known)}</div>
-      <p class="clock-now${on ? ' on' : ''}">${esc(on ? L('Clocked in since {time}', { time: t12(on.in) }) : L('Not clocked in'))}</p>
-      ${missed ? `<p class="hint">${esc(L('No clock-out on {date}. The PM will fix that shift.', { date: niceDate(missed.date) }))}</p>` : ''}</section>
-    <div id="todayCard" data-name="${esc(`${nameKey(S.worker)}|${S.workerId}`)}">${todayCard(S)}</div>
-    <section class="card"><h2>${L('This week')}</h2>
-      ${week.length ? `<dl class="kv">${week.map(row).join('')}</dl>` : `<p class="hint">${L('No hours yet this week.')}</p>`}
-      <p class="out">${esc(L('Week total: {n} hrs', { n: h2(total(week)) }))} · ${esc(L('Last week: {n} hrs', { n: h2(total(last)) }))}</p></section>
-    <p class="hint">${L('Each Clock in and Clock out opens a text to the PM. Send it every time: it carries your last two weeks, so a missed text catches up. Only the PM can change hours.')}</p>`;
+  const row = s => `<div class="row"><span class="row-main"><span class="row-title">${esc(niceDate(s.date))}</span>
+      <span class="row-sub">${esc(s.out ? L('{start} to {stop}', { start: t12(s.in), stop: t12(s.out) }) : t12(s.in))}</span></span>
+    <span class="row-end">${s.out ? esc(L('{n} hrs', { n: h2(cents(s)) })) : `<span class="pill" data-tone="${s === on ? 'good' : 'warn'}">${s === on ? L('On the clock') : L('No clock-out')}</span>`}</span></div>`;
+  screenHead(L('Time clock'), { sub: niceDate(today()), more: 'hMenu' });
   // The button carries what it shows, so a tap on a screen gone stale (past the 16 hour cutoff while the phone
   // slept, or clocked in from another tab) is refused instead of doing the other thing.
-  $('bar').innerHTML = `<div class="bar-in"><button class="btn primary big" data-act="hTap" data-v="${on ? `out:${on.id}` : 'in'}">${on ? L('Clock out') : L('Clock in')}</button>
-    <button class="btn more" data-act="hMenu" aria-label="${L('More actions')}">⋯</button></div>`;
+  $('app').innerHTML = `<section class="clock-hero${on ? ' on' : ''}">
+      <p class="clock-time" id="clockTime">${t12(nowHM())}</p>
+      <p class="clock-now${on ? ' on' : ''}">${esc(on ? L('Clocked in since {time}', { time: t12(on.in) }) : L('Not clocked in'))}</p>
+      <button class="btn primary clock-btn" data-act="hTap" data-v="${on ? `out:${on.id}` : 'in'}">${on ? L('Clock out') : L('Clock in')}</button>
+      ${missed ? `<p class="clock-missed">${esc(L('No clock-out on {date}. The PM will fix that shift.', { date: niceDate(missed.date) }))}</p>` : ''}</section>
+    <div class="fgroup">${field(L('Your name'), 's.worker', S.worker, { ph: L('First and last name'), list: 'knownNames' })}</div>${datalist('knownNames', known)}
+    <div id="nameHint" role="status">${nameHint(S, known)}</div>
+    <div id="todayCard" data-name="${esc(`${nameKey(S.worker)}|${S.workerId}`)}">${todayCard(S)}</div>
+    <h3 class="section-h">${L('This week')}</h3>
+    ${week.length ? `<div class="list kv clock-week">${week.map(row).join('')}</div>` : `<p class="hint">${L('No hours yet this week.')}</p>`}
+    <p class="clock-total"><b class="out">${esc(L('Week total: {n} hrs', { n: h2(total(week)) }))}</b><span class="out">${esc(L('Last week: {n} hrs', { n: h2(total(last)) }))}</span></p>
+    <p class="hint">${L('Each Clock in and Clock out opens a text to the PM. Send it every time: it carries your last two weeks, so a missed text catches up. Only the PM can change hours.')}</p>`;
   clearTimeout(cutoff); // redraw the moment the open shift turns into a missed clock-out
   if (on) cutoff = setTimeout(() => location.hash.startsWith('#clock') && go(location.hash.slice(1)), started(on) + 16 * 36e5 - Date.now() + 1000);
+  tickClock();
 }
-let cutoff = 0;
+let cutoff = 0, tick = 0;
+// The hero's time moves on each minute while the clock is on screen; it stops by itself once the clock is gone.
+function tickClock() {
+  clearTimeout(tick);
+  const el = $('clockTime');
+  if (!el) return;
+  el.textContent = t12(nowHM());
+  tick = setTimeout(tickClock, 60000 - (Date.now() % 60000) + 50);
+}
 
 // The text to the PM: this phone's last two weeks, each shift under the name it was clocked in with, so a
 // borrowed phone never moves its owner's hours to someone else. at orders texts opened out of turn.
@@ -232,7 +246,8 @@ export function byPerson(shifts, l, S) { // l: 'en' for the accountant's copy; t
   }).sort((a, b) => a.who.localeCompare(b.who) || a.crew.localeCompare(b.crew));
 }
 const edited = s => s.edited.in || s.edited.out;
-const shiftLine = s => `${s.out ? L('{n} hrs', { n: h2(cents(s)) }) : L('No clock-out')}${edited(s) ? ` · ${L('edited')}` : ''}`;
+// A shift's hours, or an amber No clock-out; and whether the PM changed its times (the changed box also carries a dot).
+const shiftLine = s => `${s.out ? esc(L('{n} hrs', { n: h2(cents(s)) })) : `<span class="pill" data-tone="warn">${L('No clock-out')}</span>`}${edited(s) ? ` · ${L('edited')}` : ''}`;
 const taskIds = s => s.tasks.map(x => x.id).filter(Boolean);
 const crewStats = (week, S) => `<div class="stat"><b>${byPerson(week, undefined, S).length}</b><span>${L('People')}</span></div>
   <div class="stat"><b>${h2(total(week))}</b><span>${L('Hours')}</span></div>
@@ -240,26 +255,25 @@ const crewStats = (week, S) => `<div class="stat"><b>${byPerson(week, undefined,
 
 function crewView(S, day) {
   const mon = monday(day), week = weekOf(day), people = byPerson(week, undefined, S);
-  const shiftRow = s => `<div class="shift"><div class="row1"><b>${esc(niceDate(s.date))}</b><span class="out" data-out="shift" data-id="${s.id}">${shiftLine(s)}</span>
+  const time = (s, f) => `<label class="field${s.edited[f] ? ' edited' : ''}"><span>${f === 'in' ? L('In') : L('Out')}</span><input type="time" data-k="h.${s.id}.${f}" value="${s[f]}"></label>`;
+  const shiftRow = s => `<div class="shift${s.out ? '' : ' open'}"><div class="shift-top"><span class="shift-day"><b>${esc(niceDate(s.date))}</b>
+      ${taskIds(s).length ? `<span class="hint">${esc(taskIds(s).length === 1 ? L('Task {id}', { id: taskIds(s)[0] }) : L('Tasks {ids}', { ids: taskIds(s).join(', ') }))}</span>` : ''}</span>
+      <span class="out" data-out="shift" data-id="${s.id}">${shiftLine(s)}</span>
       <button class="x" data-act="hDel" data-id="${s.id}" aria-label="${esc(L('Remove the {date} shift', { date: niceDate(s.date) }))}">✕</button></div>
-    ${taskIds(s).length ? `<p class="hint">${esc(taskIds(s).length === 1 ? L('Task {id}', { id: taskIds(s)[0] }) : L('Tasks {ids}', { ids: taskIds(s).join(', ') }))}</p>` : ''}
-    <div class="grid two"><label class="field"><span>${L('In')}</span><input type="time" data-k="h.${s.id}.in" value="${s.in}"></label>
-      <label class="field"><span>${L('Out')}</span><input type="time" data-k="h.${s.id}.out" value="${s.out}"></label></div></div>`;
-  $('app').innerHTML = `<div class="datebar">
-      <button class="nav-btn" data-go="clock/${addDays(mon, -7)}" aria-label="${L('Previous week')}">‹</button>
-      <label class="day">${esc(niceDate(mon))}<small>${mon === monday(today()) ? L('This week') : mon < today() ? L('Past week') : L('Week ahead')} · ${esc(L('to {date}', { date: niceDate(addDays(mon, 6)) }))}</small>
-        <input type="date" value="${mon}" data-pick="clock" aria-label="${L('Pick a week')}"></label>
-      <button class="nav-btn" data-go="clock/${addDays(mon, 7)}" aria-label="${L('Next week')}">›</button></div>
+    <div class="grid two">${time(s, 'in')}${time(s, 'out')}</div></div>`;
+  screenHead(L('Crew hours'), { more: 'hPmMenu',
+    sub: `${mon === monday(today()) ? L('This week') : mon < today() ? L('Past week') : L('Week ahead')} · ${L('to {date}', { date: niceDate(addDays(mon, 6)) })}` });
+  $('app').innerHTML = `${dateBar(mon, 'clock', { week: true, here: monday(today()) })}
     <div class="stats three" id="hoursStats">${crewStats(week, S)}</div>
-    ${people.map((p, i) => `<section class="card person"><div class="row1"><h2>${esc(p.who)}</h2><b class="total" data-out="who" data-i="${i}">${L('{n} hrs', { n: h2(p.hours) })}</b></div>
-      ${crewLine(S, p)}
-      ${p.shifts.map(shiftRow).join('')}
-      <div class="row1"><button class="link" data-act="hAdd" data-v="${esc(p.key)}">${esc(L('+ Add a shift for {name}', { name: p.who }))}</button>
+    ${people.map((p, i) => `<section class="card person"><div class="person-h"><div class="person-who"><h2>${esc(p.who)}</h2>${crewLine(S, p)}</div>
+        <b class="total" data-out="who" data-i="${i}">${L('{n} hrs', { n: h2(p.hours) })}</b></div>
+      <div class="shifts">${p.shifts.map(shiftRow).join('')}</div>
+      <div class="person-acts"><button class="link" data-act="hAdd" data-v="${esc(p.key)}">${esc(L('+ Add a shift for {name}', { name: p.who }))}</button>
         <button class="link" data-act="hRename" data-v="${esc(p.key)}">${L('Rename')}</button></div></section>`).join('')
-    || `<div class="empty"><h2>${L('No hours logged this week')}</h2><p>${L("Each worker's Clock in and Clock out texts you a link. Tap it on this phone to log their hours here.")}</p></div>`}
+    || `<div class="empty"><h2>${L('No hours logged this week')}</h2><p>${L("Each worker's Clock in and Clock out texts you a link. Tap it on this phone to log their hours here.")}</p>
+      <button class="btn primary" data-act="hAdd">${L('Add a shift')}</button></div>`}
     <p class="hint">${L("Only this phone changes hours. Times you change are marked edited and stay as you set them when that worker's next text comes in.")}</p>`;
-  $('bar').innerHTML = `<div class="bar-in"><button class="btn primary big" data-act="hSend">${L('Send to accountant')}</button>
-    <button class="btn more" data-act="hPmMenu" aria-label="${L('More actions')}">⋯</button></div>`;
+  $('bar').innerHTML = week.length ? `<div class="bar-in"><button class="btn primary big" data-act="hSend">${L('Send to accountant')}</button></div>` : '';
 }
 
 // Under the name: the person's crew, so two people with one name are told apart, and for a name on no crew list
@@ -304,10 +318,12 @@ export function hoursInput(el, S, day) {
   if (!s || !['in', 'out'].includes(f) || (f === 'in' && !el.value)) return;
   s[f] = el.value;
   s.edited[f] = true;
+  el.closest('.field')?.classList.add('edited'); // the dot on the box the PM changed
+  el.closest('.shift')?.classList.toggle('open', !s.out);
   keep(KEYS.crewHours, CREW);
   const week = weekOf(day), people = byPerson(week, undefined, S); // the same order as the cards' data-i
   for (const o of $('app').querySelectorAll('[data-out]')) {
-    if (o.dataset.out === 'shift') o.textContent = shiftLine(CREW.find(x => x.id === o.dataset.id));
+    if (o.dataset.out === 'shift') o.innerHTML = shiftLine(CREW.find(x => x.id === o.dataset.id));
     if (o.dataset.out === 'who') o.textContent = L('{n} hrs', { n: h2(people[o.dataset.i]?.hours ?? 0) });
   }
   $('hoursStats').innerHTML = crewStats(week, S);
@@ -387,7 +403,7 @@ const timesheetPdf = (S, mon, people) => makePdf('Weekly timesheet', letterhead(
 async function toAccountant(S, day) {
   const mon = monday(day), week = weekOf(day), people = byPerson(week, 'en', S), gaps = week.filter(s => !s.out).length;
   if (!week.length) return toast(L('No hours logged this week'), 'bad');
-  if (gaps && !await ask(gaps === 1 ? L('1 shift has no clock-out and count as 0 hours. Fill in the out times first, or send anyway?')
+  if (gaps && !await ask(gaps === 1 ? L('1 shift has no clock-out and counts as 0 hours. Fill in the out times first, or send anyway?')
     : L('{n} shifts have no clock-out and count as 0 hours. Fill in the out times first, or send anyway?', { n: gaps }), L('Send anyway'))) return;
   const name = `Timesheet week of ${mon}`;
   const files = [new File(['﻿' + timesheetCsv(people)], `${name}.csv`, { type: 'text/csv' }), new File([timesheetPdf(S, mon, people)], `${name}.pdf`, { type: 'application/pdf' })];
@@ -410,107 +426,111 @@ export const OUT = {
 
 // ---------- daily report ----------
 
-const sec = (id, num, title, body, badge = '') => `<details class="card sec" id="sec-${id}" data-sec="${id}"${open.has(id) ? ' open' : ''}>
-  <summary><h2>${num ? `<span class="num">${num}</span>` : ''}${title}</h2>${badge}</summary><div class="sec-body">${body}</div></details>`;
+// The report opens as an overview: a row per section, checked once it has what it needs, with the count that needs a
+// look; a tap opens the section in place. Fields sit in grouped lists, like the phone's own Settings.
+function secStates(r) {
+  const late = r.next.filter(isLate).length, pend = waiting(r).length, cur = STATUS().find(s => s[0] === r.status);
+  const unconfirmed = r.needs.filter(n => n.item && !n.confirmed).length, bare = active(r).filter(c => !c.done).length;
+  return {
+    sum: [r.status && (r.results || r.status === 'No work today'), r.status ? `<span class="pill" data-tone="${cur?.[1] || ''}">${esc(cur?.[2] || r.status)}</span>` : ''],
+    wins: [r.wins.trim()], issues: [r.issues.trim() || r.notified.trim()],
+    needs: [r.needs.some(n => n.item) && !unconfirmed, count(unconfirmed, L('{n} unconfirmed', { n: unconfirmed }), 'warn')],
+    pm: [r.decisions.some(d => d.q) && !pend, count(pend, L('{n} waiting', { n: pend }), 'warn')],
+    floors: [active(r).length && active(r).every(c => c.done), count(bare, L('{n} need notes', { n: bare }), 'warn')],
+    next: [r.next.some(x => x.step) && !late, count(late, L('{n} late', { n: late }), 'bad')],
+    risks: [r.risks.some(x => x.risk)], sign: [!!(r.preparedBy.trim() && (r.submittedAt || r.pmReview.trim()))], // signed off once it has gone out or been reviewed
+  };
+}
+const mark = (num, done) => (done ? `<span class="sec-mark done" role="img" aria-label="${L('Done')}">${icon('check')}</span>` : `<span class="sec-mark" aria-hidden="true">${num || ''}</span>`);
+const sec = (st, id, num, title, body) => `<details class="sec" id="sec-${id}" data-sec="${id}" data-num="${num}"${open.has(id) ? ' open' : ''}>
+  <summary><span class="sec-lead">${mark(num, st[id][0])}</span><h2>${title}</h2><span class="sec-end">${st[id][1] || ''}</span>${icon('chev', 'chev')}</summary>
+  <div class="sec-body">${body}</div></details>`;
+const grp = (...rows) => `<div class="fgroup">${rows.join('')}</div>`;
 const remove = (list, i, label) => `<button class="link danger" data-act="del" data-list="${list}" data-i="${i}">${label}</button>`;
+const addTo = (list, label) => `<button class="link" data-act="add" data-v="${list}">${label}</button>`;
 const count = (n, text, tone = '') => (n ? `<span class="pill" data-tone="${tone}">${text}</span>` : '');
+const totals = r => `<span><b>${hrs(laborHrs(r))}</b> ${L('Labor-hrs')}</span><span><b>${active(r).length}</b> ${L('Crew sections')}</span>`;
 
 function reportView(S, day) {
-  const r = rep(S, day), late = r.next.filter(isLate).length, pend = waiting(r).length;
-  const unconfirmed = r.needs.filter(n => n.item && !n.confirmed).length, bare = active(r).filter(c => !c.done).length;
-  const cur = STATUS().find(s => s[0] === r.status);
-  $('app').innerHTML = dateBar(day, 'report') + `<div id="summary" class="stack">${summary(r)}</div>
-    <section class="card"><div class="grid">
-      ${field(L('Superintendent'), 'r.super', r.super)}${field(L('Shift start'), 'r.shiftStart', r.shiftStart, { type: 'time' })}${field(L('Shift end'), 'r.shiftEnd', r.shiftEnd, { type: 'time' })}
-    </div><p class="hint">${r.submittedAt ? esc(L('Sent to the PM {time}', { time: stamp(r.submittedAt) })) : L('Not sent to the PM yet')}${r.pmReview ? ` · ${esc(L('PM reviewed: {note}', { note: r.pmReview }))}` : ''}</p></section>
-    ${sec('sum', 1, L('Overall status & today’s results'), `${seg('r.status', r.status, STATUS())}
-      ${field(L('Most important results today, planned work missed, and effect on the job'), 'r.results', r.results, { rows: 4 })}`,
-      r.status ? `<span class="pill" data-tone="${cur?.[1] || ''}">${esc(cur?.[2] || r.status)}</span>` : '')}
-    ${sec('wins', 2, L('Good results & lessons to repeat'), field(L('Crew wins, quality improvements, faster methods, repeat-floor lessons'), 'r.wins', r.wins, { rows: 3 }))}
-    ${sec('issues', 3, L('Site issues, concerns & coordination'), field(L('Safety / quality issues, other trades, access, inspections, scope changes'), 'r.issues', r.issues, { rows: 3 })
-      + field(L('Who was notified / when'), 'r.notified', r.notified))}
-    ${sec('needs', 4, L('Material, equipment & manpower'), r.needs.map((n, i) => `<div class="item"><div class="grid">
+  const r = rep(S, day), st = secStates(r);
+  screenHead(L('Daily report'), { more: 'menu', sub: (r.submittedAt ? L('Sent to the PM {time}', { time: stamp(r.submittedAt) }) : L('Not sent to the PM yet'))
+    + (r.pmReview ? ` · ${L('PM reviewed: {note}', { note: r.pmReview })}` : '') });
+  $('app').innerHTML = dateBar(day, 'report') + `<p id="summary" class="rep-sum">${totals(r)}</p>
+    ${grp(field(L('Superintendent'), 'r.super', r.super), field(L('Shift start'), 'r.shiftStart', r.shiftStart, { type: 'time' }), field(L('Shift end'), 'r.shiftEnd', r.shiftEnd, { type: 'time' }))}
+    <div class="secs">
+    ${sec(st, 'sum', 1, L('Overall status & today’s results'), seg('r.status', r.status, STATUS())
+      + grp(field(L('Most important results today, planned work missed, and effect on the job'), 'r.results', r.results, { rows: 4 })))}
+    ${sec(st, 'wins', 2, L('Good results & lessons to repeat'), grp(field(L('Crew wins, quality improvements, faster methods, repeat-floor lessons'), 'r.wins', r.wins, { rows: 3 })))}
+    ${sec(st, 'issues', 3, L('Site issues, concerns & coordination'), grp(field(L('Safety / quality issues, other trades, access, inspections, scope changes'), 'r.issues', r.issues, { rows: 3 }),
+      field(L('Who was notified / when'), 'r.notified', r.notified)))}
+    ${sec(st, 'needs', 4, L('Material, equipment & manpower'), r.needs.map((n, i) => `<div class="item fgroup">
         ${field(L('Item / resource'), `r.needs.${i}.item`, n.item, { wide: true, ph: L('e.g. 2" EMT, scissor lift, 2 more journeymen') })}
         ${field(L('Quantity'), `r.needs.${i}.qty`, n.qty)}${field(L('Floor / crew'), `r.needs.${i}.where`, n.where, { list: 'floors' })}
-        ${field(L('Needed by'), `r.needs.${i}.by`, n.by, { type: 'datetime-local' })}</div>
+        ${field(L('Needed by'), `r.needs.${i}.by`, n.by, { type: 'datetime-local' })}
         <label class="switch"><input type="checkbox" data-k="r.needs.${i}.confirmed"${n.confirmed ? ' checked' : ''}> ${L('Availability confirmed')}</label>
-        ${remove('needs', i, L('Remove need'))}</div>`).join('') + `<button class="btn" data-act="add" data-v="needs">${L('+ Add a need')}</button>`,
-      count(unconfirmed, L('{n} unconfirmed', { n: unconfirmed }), 'warn'))}
-    ${sec('pm', 5, L('Project manager decision help'), `<p class="hint">${L('State the decision, your recommendation, and when you need an answer. The PM answers right here.')}</p>`
-      + r.decisions.map((d, i) => `<div class="item">
+        ${remove('needs', i, L('Remove need'))}</div>`).join('') + addTo('needs', L('+ Add a need')))}
+    ${sec(st, 'pm', 5, L('Project manager decision help'), `<p class="hint">${L('State the decision, your recommendation, and when you need an answer. The PM answers right here.')}</p>`
+      + r.decisions.map((d, i) => `<div class="item fgroup">
         ${field(L('Decision / support needed'), `r.decisions.${i}.q`, d.q, { rows: 2 })}
-        <div class="grid">${field(L('Recommendation'), `r.decisions.${i}.rec`, d.rec, { wide: true })}${field(L('Needed by'), `r.decisions.${i}.by`, d.by, { type: 'datetime-local' })}</div>
-        ${d.by && !d.pm && new Date(d.by) < new Date() ? `<span class="pill" data-tone="bad">${L('Past due')}</span>` : ''}
+        ${field(L('Recommendation'), `r.decisions.${i}.rec`, d.rec, { wide: true })}${field(L('Needed by'), `r.decisions.${i}.by`, d.by, { type: 'datetime-local' })}
+        ${d.by && !d.pm && new Date(d.by) < new Date() ? `<p class="frow"><span class="pill" data-tone="bad">${L('Past due')}</span></p>` : ''}
         <div class="field"><span>${L('PM response')}</span>${seg(`r.decisions.${i}.pm`, d.pm, [['Approved', 'good', L('Approved')], ['Declined', 'bad', L('Declined')], ['Discuss', 'info', L('Discuss')]])}</div>
         ${field(L('PM note'), `r.decisions.${i}.pmNote`, d.pmNote)}
-        ${remove('decisions', i, L('Remove decision'))}</div>`).join('') + `<button class="btn" data-act="add" data-v="decisions">${L('+ Add a decision')}</button>`,
-      count(pend, L('{n} waiting', { n: pend }), 'warn'))}
-    ${sec('floors', '', L('Floor reports · crew detail'), r.floors.map((f, fi) => `<div class="floor">
-        <div class="edit-row">${field(L('Actual floor / level'), `r.floors.${fi}.floor`, f.floor, { list: 'floors' })}<button class="x" data-act="delFloor" data-i="${fi}" aria-label="${L('Remove floor')}">✕</button></div>
+        ${remove('decisions', i, L('Remove decision'))}</div>`).join('') + addTo('decisions', L('+ Add a decision')))}
+    ${sec(st, 'floors', 6, L('Floor reports · crew detail'), r.floors.map((f, fi) => `<div class="floor">
+        <div class="fgroup"><div class="edit-row">${field(L('Actual floor / level'), `r.floors.${fi}.floor`, f.floor, { list: 'floors' })}<button class="x" data-act="delFloor" data-i="${fi}" aria-label="${L('Remove floor')}">✕</button></div></div>
         ${f.crews.map((c, ci) => crewBlock(S, r, fi, ci, c)).join('')}
         <button class="link" data-act="addCrewTo" data-i="${fi}">${L('+ Add another crew to this floor')}</button></div>`).join('')
       + `${r.floors.length ? '' : `<p class="hint">${L('Add each floor worked today, or fill them in from the crews’ task sheets on this phone.')}</p>`}
-        <div class="btns"><button class="btn" data-act="addFloor">${L('+ Add floor')}</button><button class="btn primary" data-act="fill">${L('Fill from task sheets')}</button></div>
-        ${datalist('floors', S.floors)}`,
-      count(bare, L('{n} need notes', { n: bare }), 'warn'))}
-    ${sec('next', '', L('Next steps & completion forecast'), r.next.map((s, i) => `<div class="item">
-        ${field(L('Next step / floor / crew'), `r.next.${i}.step`, s.step, { rows: 2 })}
-        ${field(L('Prerequisites / resources'), `r.next.${i}.prereq`, s.prereq)}
-        <div class="grid">${field(L('Planned start'), `r.next.${i}.start`, s.start, { type: 'datetime-local' })}${field(L('Estimated duration'), `r.next.${i}.dur`, s.dur, { ph: L('e.g. 2 days') })}
-        ${field(L('Expected finish'), `r.next.${i}.finish`, s.finish, { type: 'datetime-local' })}${field(L('Required deadline'), `r.next.${i}.deadline`, s.deadline, { type: 'datetime-local' })}
-        ${field(L('Responsible lead'), `r.next.${i}.lead`, s.lead)}${field(L('Confirm / check-in by'), `r.next.${i}.checkin`, s.checkin, { type: 'datetime-local' })}</div>
-        <p class="out ${isLate(s) ? 'late' : ''}" data-out="late" data-i="${i}">${lateLine(s)}</p>
-        ${remove('next', i, L('Remove step'))}</div>`).join('') + `<button class="btn" data-act="add" data-v="next">${L('+ Add next step')}</button>`,
-      count(late, L('{n} late', { n: late }), 'bad'))}
-    ${sec('risks', '', L('Potential delays & workarounds'), r.risks.map((x, i) => `<div class="item">
+        <div class="btns"><button class="btn" data-act="addFloor">${L('+ Add floor')}</button><button class="btn" data-act="fill">${L('Fill from task sheets')}</button></div>
+        ${datalist('floors', S.floors)}`)}
+    ${sec(st, 'next', 7, L('Next steps & completion forecast'), r.next.map((x, i) => `<div class="item fgroup">
+        ${field(L('Next step / floor / crew'), `r.next.${i}.step`, x.step, { rows: 2 })}
+        ${field(L('Prerequisites / resources'), `r.next.${i}.prereq`, x.prereq)}
+        ${field(L('Planned start'), `r.next.${i}.start`, x.start, { type: 'datetime-local' })}${field(L('Estimated duration'), `r.next.${i}.dur`, x.dur, { ph: L('e.g. 2 days') })}
+        ${field(L('Expected finish'), `r.next.${i}.finish`, x.finish, { type: 'datetime-local' })}${field(L('Required deadline'), `r.next.${i}.deadline`, x.deadline, { type: 'datetime-local' })}
+        ${field(L('Responsible lead'), `r.next.${i}.lead`, x.lead)}${field(L('Confirm / check-in by'), `r.next.${i}.checkin`, x.checkin, { type: 'datetime-local' })}
+        <p class="out ${isLate(x) ? 'late' : ''}" data-out="late" data-i="${i}">${lateLine(x)}</p>
+        ${remove('next', i, L('Remove step'))}</div>`).join('') + addTo('next', L('+ Add next step')))}
+    ${sec(st, 'risks', 8, L('Potential delays & workarounds'), r.risks.map((x, i) => `<div class="item fgroup">
         ${field(L('Risk / affected floor & crew'), `r.risks.${i}.risk`, x.risk, { rows: 2 })}
         ${field(L('Expected impact / time at risk'), `r.risks.${i}.impact`, x.impact)}
         ${field(L('Prevention / workaround'), `r.risks.${i}.prevent`, x.prevent, { rows: 2 })}
         ${field(L('Fallback work if blocked'), `r.risks.${i}.fallback`, x.fallback)}
-        <div class="grid">${field(L('Action owner'), `r.risks.${i}.owner`, x.owner)}${field(L('Action needed by'), `r.risks.${i}.by`, x.by, { type: 'datetime-local' })}</div>
-        ${remove('risks', i, L('Remove risk'))}</div>`).join('') + `<button class="btn" data-act="add" data-v="risks">${L('+ Add a risk')}</button>`
+        ${field(L('Action owner'), `r.risks.${i}.owner`, x.owner)}${field(L('Action needed by'), `r.risks.${i}.by`, x.by, { type: 'datetime-local' })}
+        ${remove('risks', i, L('Remove risk'))}</div>`).join('') + addTo('risks', L('+ Add a risk'))
       + `<p class="hint">${L('Escalate urgent issues when you find them, and note who you told in section 3.')}</p>`)}
-    ${sec('sign', '', L('Sign-off'), `<div class="grid">${field(L('Prepared by'), 'r.preparedBy', r.preparedBy)}${field(L('PM review / time'), 'r.pmReview', r.pmReview)}</div>
-      ${isPM(S) ? `<button class="btn" data-act="stampPM">${L('Stamp my review now')}</button>` : ''}`)}
+    ${sec(st, 'sign', 9, L('Sign-off'), grp(field(L('Prepared by'), 'r.preparedBy', r.preparedBy), field(L('PM review / time'), 'r.pmReview', r.pmReview))
+      + (isPM(S) ? `<button class="btn" data-act="stampPM">${L('Stamp my review now')}</button>` : ''))}
+    </div>
     <p class="hint">${L('Changes save on this phone as you type.')}${S.folderUrl ? ` ${L('Sending the report also files a PDF in the review folder.')}` : ''}</p>`;
-  $('bar').innerHTML = `<div class="bar-in"><button class="btn primary big" data-act="send">${isPM(S) ? L('Send back to Supt.') : L('Send to PM')}</button>
-    <button class="btn more" data-act="menu" aria-label="${L('More actions')}">⋯</button></div>`;
+  $('bar').innerHTML = `<div class="bar-in"><button class="btn primary big" data-act="send">${isPM(S) ? L('Send back to Supt.') : L('Send to PM')}</button></div>`;
 }
 
-// Totals and section check marks, redrawn as the superintendent types.
-function summary(r) {
-  const late = r.next.filter(isLate).length, pend = waiting(r).length;
-  const ready = [
-    ['sum', L('Summary'), r.status && (r.results || r.status === 'No work today')],
-    ['floors', L('Floors'), active(r).length && active(r).every(c => c.done)],
-    ['next', L('Next steps'), r.next.some(s => s.step)],
-    ['risks', L('Risks'), r.risks.some(x => x.risk)],
-    ['sign', L('Sign-off'), r.preparedBy],
-  ];
-  return `<div class="stats">
-      <div class="stat"><b>${hrs(laborHrs(r))}</b><span>${L('Labor-hrs')}</span></div>
-      <div class="stat"><b>${active(r).length}</b><span>${L('Crew sections')}</span></div>
-      <div class="stat"><b class="${pend ? 'warn' : ''}">${pend}</b><span>${L('Decisions waiting')}</span></div>
-      <div class="stat"><b class="${late ? 'bad' : ''}">${late}</b><span>${L('Late forecasts')}</span></div>
-    </div>
-    <div class="chips" role="group" aria-label="${L('Jump to section')}">${ready.map(([id, label, ok]) => `<button class="chip${ok ? ' ok' : ''}" data-act="jump" data-v="${id}">${ok ? '✓ ' : ''}${label}</button>`).join('')}</div>`;
+// As the superintendent types: the totals, and each section's check and count.
+function refreshOverview(r) {
+  const st = secStates(r);
+  if ($('summary')) $('summary').innerHTML = totals(r);
+  for (const d of $('app').querySelectorAll('details[data-sec]')) {
+    const [done, badge] = st[d.dataset.sec] || [];
+    d.querySelector('.sec-lead').innerHTML = mark(d.dataset.num, done);
+    d.querySelector('.sec-end').innerHTML = badge || '';
+  }
 }
 
 function crewBlock(S, r, fi, ci, c) {
   const k = `r.floors.${fi}.crews.${ci}`;
   return `<div class="crew-edit" style="${crewVar(S, c.name)}">
-    <div class="row1"><strong>${esc(c.name === 'Crew not set' ? L('Crew not set') : c.name)}</strong>
+    <div class="crew-h"><strong><i class="dot"></i> ${esc(c.name === 'Crew not set' ? L('Crew not set') : c.name)}</strong>
       <button class="chip" data-act="na" data-f="${fi}" data-c="${ci}" aria-pressed="${!c.na}">${c.na ? L('N/A, tap to add') : L('Worked here')}</button></div>
-    ${c.na ? '' : `<div class="grid">
-      ${field(L('Crew / lead'), `${k}.lead`, c.lead)}${field(L('Worker count'), `${k}.workers`, c.workers, { type: 'number', mode: 'numeric' })}
-      ${field(L('Members'), `${k}.members`, c.members, { wide: true })}
-      ${field(L('Room / area'), `${k}.area`, c.area)}${field(L('Task / drawing ref.'), `${k}.ref`, c.ref)}
-      ${field(L('Work start'), `${k}.start`, c.start, { type: 'time' })}${field(L('Work stop'), `${k}.stop`, c.stop, { type: 'time' })}</div>
-      <p class="out" data-out="lh" data-f="${fi}" data-c="${ci}">${OUT.lh(r, { f: fi, c: ci })}</p>
-      ${field(L('Work completed: installation, quantities, exact locations, remaining work'), `${k}.done`, c.done, { rows: 3 })}
-      ${field(L('Quality / testing / accuracy'), `${k}.quality`, c.quality, { rows: 2 })}
-      ${field(L('Hold-ups / delays: cause, duration, workers affected, action taken'), `${k}.holdups`, c.holdups, { rows: 2 })}
-      ${field(L('Good results / improvements'), `${k}.good`, c.good, { rows: 2 })}`}</div>`;
+    ${c.na ? '' : grp(field(L('Crew / lead'), `${k}.lead`, c.lead), field(L('Worker count'), `${k}.workers`, c.workers, { type: 'number', mode: 'numeric' }),
+      field(L('Members'), `${k}.members`, c.members, { wide: true }), field(L('Room / area'), `${k}.area`, c.area), field(L('Task / drawing ref.'), `${k}.ref`, c.ref),
+      field(L('Work start'), `${k}.start`, c.start, { type: 'time' }), field(L('Work stop'), `${k}.stop`, c.stop, { type: 'time' }),
+      `<p class="out" data-out="lh" data-f="${fi}" data-c="${ci}">${OUT.lh(r, { f: fi, c: ci })}</p>`,
+      field(L('Work completed: installation, quantities, exact locations, remaining work'), `${k}.done`, c.done, { rows: 3 }),
+      field(L('Quality / testing / accuracy'), `${k}.quality`, c.quality, { rows: 2 }),
+      field(L('Hold-ups / delays: cause, duration, workers affected, action taken'), `${k}.holdups`, c.holdups, { rows: 2 }),
+      field(L('Good results / improvements'), `${k}.good`, c.good, { rows: 2 }))}</div>`;
 }
 
 // ---------- PDF and the review folder ----------
@@ -570,7 +590,7 @@ export async function openReport(data, S) {
 
 async function send(S, day) {
   const r = rep(S, day);
-  if (!r.status) { open.add('sum'); reportView(S, day); return toast(L('Set the overall status first'), 'bad'); }
+  if (!r.status) { open.add('sum'); reportView(S, day); $('sec-sum').scrollIntoView({ block: 'start' }); return toast(L('Set the overall status first'), 'bad'); }
   if (!isPM(S)) r.submittedAt = Date.now();
   r.updatedAt = Date.now();
   persist();
@@ -592,16 +612,26 @@ async function send(S, day) {
 export const renderOffice = (v, S, day) => (v === 'clock' ? (isPM(S) && unlocked() ? crewView : clockView)(S, day) : !unlocked() ? go('report/' + day) : reportView(S, day));
 
 const menu = items => sheet(`<h3>${L('More')}</h3><div class="menu">${items.filter(Boolean).map(([a, label, cls]) => `<button class="btn ${cls || ''}" data-act="${a}">${esc(label)}</button>`).join('')}</div>`);
+// An Undo: put back what a removal took (put), then redraw if that screen is still up, without moving it.
+const undoTo = (v, S, day, put) => () => { put(); const [hv, hd] = location.hash.slice(1).split('/'); if (hv === v && (!hd || hd === day)) renderOffice(v, S, day); };
 
 export async function reportAct(a, el, S, day, v) {
   const r = rep(S, day), val = el.dataset.v, i = +el.dataset.i;
   switch (a) {
     case 'set': { const ctx = { r, s: S }; setPath(ctx, el.dataset.k, getPath(ctx, el.dataset.k) === val ? '' : val); break; }
-    case 'jump': open.add(val); reportView(S, day); return $('sec-' + val).scrollIntoView({ behavior: 'smooth', block: 'start' });
     case 'add': r[val].push(blank(val)); open.add({ needs: 'needs', decisions: 'pm', next: 'next', risks: 'risks' }[val]); break;
-    case 'del': if (!await ask(L('Remove this entry?'), L('Remove'), 'danger')) return; r[el.dataset.list].splice(i, 1); break;
+    case 'del': { // gone at once; Undo puts the same entry back in its place for 6 seconds
+      const list = el.dataset.list, [gone] = r[list].splice(i, 1);
+      toast({ needs: L('Need removed'), decisions: L('Decision removed'), next: L('Next step removed'), risks: L('Risk removed') }[list], '',
+        { undo: undoTo(v, S, day, () => { const x = rep(S, day); x[list].splice(Math.min(i, x[list].length), 0, gone); x.updatedAt = Date.now(); persist(); }) });
+      break;
+    }
     case 'addFloor': r.floors.push(newFloor('', S.crews.map(c => c.name))); open.add('floors'); break;
-    case 'delFloor': if (!await ask(r.floors[i].floor ? L('Remove {floor} and its crew notes?', { floor: r.floors[i].floor }) : L('Remove this floor and its crew notes?'), L('Remove'), 'danger')) return; r.floors.splice(i, 1); break;
+    case 'delFloor': {
+      const [gone] = r.floors.splice(i, 1);
+      toast(L('Floor removed'), '', { undo: undoTo(v, S, day, () => { const x = rep(S, day); x.floors.splice(Math.min(i, x.floors.length), 0, gone); x.updatedAt = Date.now(); persist(); }) });
+      break;
+    }
     case 'addCrewTo': r.floors[i].crews.push({ ...CREW_TPL, na: false, name: L('Crew {x}', { x: String.fromCharCode(65 + r.floors[i].crews.length) }) }); break;
     case 'na': { const c = r.floors[+el.dataset.f].crews[+el.dataset.c]; c.na = !c.na; break; }
     case 'fill': {
@@ -634,11 +664,13 @@ export async function reportAct(a, el, S, day, v) {
     case 'fileNow': return fileReport(S, r);
     case 'paste': return pasteSheet(code => go('p=' + code));
     case 'settings': return go('settings');
-    case 'clear':
-      if (!await ask(L('Clear everything in the {date} report?', { date: niceDate(day) }), L('Clear'), 'danger')) return;
+    case 'clear': {
+      const was = R[day];
       delete R[day];
       persist();
-      return renderOffice(v, S, day);
+      renderOffice(v, S, day);
+      return toast(L('Report cleared'), '', { undo: undoTo(v, S, day, () => { R[day] = was; persist(); }) });
+    }
 
     // time clock: a worker's own phone
     case 'hTap': {
@@ -664,19 +696,19 @@ export async function reportAct(a, el, S, day, v) {
     }
     case 'hWho': S.workerId = val; keep(KEYS.settings, S); return renderOffice(v, S, day); // which of the people sharing this name
     case 'hResend': return S.worker.trim() ? sendMine(S, null, 'all') : toast(L('Type your name first'), 'bad');
-    case 'hMenu': return menu([MY.length && ['hResend', L('Send my hours to the PM again')], ['paste', L('Open a link someone sent you')], !unlocked() && ['lockBtn', L('Office sign-in')]]);
+    case 'hMenu': return menu([MY.length && ['hResend', L('Send my hours to the PM again')], ['paste', L('Open a link someone sent you')], !unlocked() && S.role !== 'Crew member' && ['lockBtn', L('Office sign-in')]]);
     // the PM's crew timesheet
     case 'hSend': return toAccountant(S, day);
     case 'hAdd': return addShift(S, day, val);
     case 'hCrew': return el.dataset.crew ? putOnCrew(S, day, val, el.dataset.crew) : joinCrew(S, day, val);
     case 'hRename': return renameWorker(S, day, val);
-    case 'hDel': {
+    case 'hDel': { // gone at once (and a later text won't bring it back); Undo restores it for 6 seconds
       const s = CREW.find(x => x.id === el.dataset.id);
-      if (!s || !await ask(s.who ? L("Remove {name}'s {date} shift? A later text from their phone won't bring it back.", { name: s.who, date: niceDate(s.date) })
-        : L("Remove this {date} shift? A later text from their phone won't bring it back.", { date: niceDate(s.date) }), L('Remove'), 'danger')) return;
+      if (!s) return;
       s.gone = true;
       keep(KEYS.crewHours, CREW);
-      return renderOffice(v, S, day);
+      renderOffice(v, S, day);
+      return toast(L('Shift removed'), '', { undo: undoTo(v, S, day, () => { const x = CREW.find(y => y.id === s.id); if (x) { x.gone = false; keep(KEYS.crewHours, CREW); } }) });
     }
     case 'hPmMenu': return menu([['hAdd', L('Add a shift')], ['paste', L('Open a link someone sent you')], ['settings', L('Settings, crews and backup')]]);
     default: return;
@@ -701,7 +733,7 @@ export function reportInput(el, S, day) {
   r.updatedAt = Date.now();
   persist();
   for (const o of $('app').querySelectorAll('[data-out]')) if (OUT[o.dataset.out]) o.textContent = OUT[o.dataset.out](r, o.dataset);
-  if ($('summary')) $('summary').innerHTML = summary(r);
+  refreshOverview(r);
 }
 
 // Remember which report sections are open across re-renders.

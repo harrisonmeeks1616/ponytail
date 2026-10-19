@@ -482,6 +482,38 @@ test('people: settings from before ids migrate the same way on every phone, on r
   assert.equal(new Set(bad.people.map(p => p.id)).size, 3);
 });
 
+test('people: a tab still on the old version saving settings keeps every person id, even two people with one name', async () => {
+  const { KEYS, normSettings, loadSettings, save, addPerson, people, backupData, restoreData } = await lib;
+  const store = new Map();
+  Object.defineProperty(globalThis, 'localStorage', { configurable: true, value: { getItem: k => store.get(k) ?? null, setItem: (k, v) => store.set(k, String(v)) } });
+  try {
+    const S = normSettings({ crews: [{ name: 'Crew A', members: 'Jose L, Ana P' }, { name: 'Crew B', members: '' }] });
+    addPerson(S, 'Ray K', S.crews[0].id); // a random id, not one a migration from the names would make
+    addPerson(S, 'Jose L', S.crews[1].id); // a second Jose L, on Crew B
+    save(KEYS.settings, S);
+    const before = people(loadSettings());
+    assert.equal(before.length, 4);
+    // The old version's save: no people, no crew ids, member lists only; that tab also typed a new name onto Crew B.
+    const oldTab = JSON.parse(store.get(KEYS.settings));
+    delete oldTab.people; oldTab.crews = oldTab.crews.map(({ id, ...c }) => c); oldTab.crews[1].members += ', Lee W';
+    store.set(KEYS.settings, JSON.stringify(oldTab));
+    const after = loadSettings();
+    assert.deepEqual(people(after).slice(0, 4), before, 'every person keeps their id, name and crew, both Jose L included');
+    assert.deepEqual(after.crews.map(c => c.id), S.crews.map(c => c.id), 'each crew keeps its id');
+    const lee = people(after)[4];
+    assert.deepEqual([lee.name, lee.crew, people(after).length], ['Lee W', 'Crew B', 5], 'a name typed in the old tab joins its crew');
+    assert.equal(people(loadSettings())[4].id, lee.id, 'with the same id on every reload');
+    store.set(KEYS.settings, JSON.stringify(oldTab)); // and a second old-tab save after this version saved again
+    save(KEYS.settings, after);
+    store.set(KEYS.settings, JSON.stringify(oldTab));
+    assert.deepEqual(people(loadSettings()).map(p => p.id), people(after).map(p => p.id));
+    // A backup made before people had ids brings its own lists, never this phone's roster.
+    const file = { ...backupData(), [KEYS.settings]: { crews: [{ name: 'Crew Z', members: 'Zed Q' }] }, [KEYS.roster]: null };
+    assert.ok(restoreData(file));
+    assert.deepEqual(people(loadSettings()).map(p => [p.name, p.crew]), [['Zed Q', 'Crew Z']]);
+  } finally { delete globalThis.localStorage; }
+});
+
 test('people: two people with one name stay two on sheets, the time clock and the timesheet', async () => {
   const { normSettings, addPerson, findPerson, people, normTask, normShift, assignmentFor } = await lib;
   const { byPerson, importShifts } = await import('../docs/schwab/report.mjs');
@@ -697,6 +729,55 @@ test("time clock: crew and task ids follow the worker's texts and never undo the
     shift({ id: 'p4', who: 'ana p', date: '2026-10-13' }), shift({ id: 'p5', who: 'Ray K', date: '2026-10-13' })], 'en', S);
   assert.deepEqual(ps.map(p => [p.who, p.shifts.length, p.crew]), [['Ana P', 1, 'Crew B'], ['José L', 3, 'Crew C'], ['Ray K', 1, '']],
     "one timesheet per person however typed, under the crew list's spelling when it has one; the week's latest crew, else the crew lists, else none");
+});
+
+test('Undo lasts 6 seconds, runs once, and a removal turns final exactly once', async () => {
+  const { undoOffer, UNDO_MS } = await lib;
+  assert.equal(UNDO_MS, 6000);
+  const fake = () => { const t = { fns: new Map(), n: 0 }; return Object.assign(t, { set: (f, ms) => (t.fns.set(++t.n, [f, ms]), t.n), clear: id => t.fns.delete(id), run: () => [...t.fns.values()].forEach(([f]) => f()) }); };
+  let clock = fake(), undone = 0, ends = [];
+  const o = undoOffer(() => undone++, { set: clock.set, clear: clock.clear, done: u => ends.push(u) });
+  assert.deepEqual([...clock.fns.values()].map(([, ms]) => ms), [6000], 'one timer, 6 seconds');
+  assert.equal(o.tap(), true);
+  assert.equal(o.tap(), false, 'a second tap does nothing');
+  clock.run();
+  assert.deepEqual([undone, ends, o.open], [1, [true], false], 'undone once; done(true) once; the timer is cleared');
+  clock = fake(); undone = 0; ends = [];
+  const late = undoOffer(() => undone++, { set: clock.set, clear: clock.clear, done: u => ends.push(u) });
+  clock.run(); // 6 seconds pass
+  assert.equal(late.tap(), false, 'too late: Undo is gone');
+  late.end();
+  assert.deepEqual([undone, ends], [0, [false]], 'final once, when the time ran out');
+  clock = fake(); ends = [];
+  const replaced = undoOffer(() => undone++, { set: clock.set, clear: clock.clear, done: u => ends.push(u) });
+  replaced.end(); // another message took its place
+  assert.deepEqual([ends, clock.fns.size], [[false], 0]);
+  ends = [];
+  const broken = undoOffer(() => { throw new Error('restore failed'); }, { set: clock.set, clear: clock.clear, done: u => ends.push(u) });
+  assert.throws(() => broken.tap());
+  assert.deepEqual([ends, broken.open], [[true], false], 'an undo that throws still ends the offer, so nothing turns final later');
+});
+
+test('busy: a second tap while the work runs does nothing, and the button comes back', async () => {
+  const { busy } = await lib;
+  const button = act => { const b = { dataset: { act }, disabled: false, attrs: {} }; b.setAttribute = (k, v) => { b.attrs[k] = v; }; b.removeAttribute = k => { delete b.attrs[k]; }; return b; };
+  let release, runs = 0;
+  const send = () => { runs++; return new Promise(r => { release = r; }); };
+  const b = button('sendTask'), redrawn = button('sendTask');
+  const first = busy(b, send);
+  assert.deepEqual([b.disabled, b.attrs['aria-busy']], [true, 'true'], 'off and busy while it works');
+  assert.equal(await busy(b, send), undefined, 'a double tap is refused');
+  assert.equal(await busy(redrawn, send), undefined, 'so is a tap on the same action drawn again');
+  assert.equal(runs, 1, 'the work started once');
+  release('sent');
+  assert.equal(await first, 'sent');
+  assert.deepEqual([b.disabled, b.attrs['aria-busy']], [false, undefined], 'and the button is back');
+  assert.equal(await busy(b, () => 'again'), 'again', 'a later tap works');
+  await assert.rejects(busy(b, async () => { throw new Error('no signal'); }));
+  assert.equal(await busy(b, () => 'after a failure'), 'after a failure', 'a failed send never leaves the button stuck');
+  const off = Object.assign(button('x'), { disabled: true });
+  await busy(off, () => 1);
+  assert.equal(off.disabled, true, 'a button that was off stays off');
 });
 
 test('a tab still on the old version cannot wipe the passcode', async () => {

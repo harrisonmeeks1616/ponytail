@@ -42,7 +42,7 @@ const ALLOW = [
   { why: 'example names in a placeholder; names need no translation', file: 'shared.mjs', decl: 'settingsView', text: 'Mike R, Jose L, Tre W' },
 
   // Stored values: kept in English in the data, compared in code, shown through L(...) (e.g. L(t.status)).
-  { why: 'stored role and status values are English keys in the data; the screen shows L(value)', text: /^(Project manager|Follow-up needed|On plan|At risk|Behind plan|No work today)$/ },
+  { why: 'stored role and status values are English keys in the data; the screen shows L(value)', text: /^(Project manager|Crew member|Follow-up needed|On plan|At risk|Behind plan|No work today)$/ },
   { why: 'stored default floor and crew names in the data; people rename them', text: /^(Floor not set|Crew not set)$/ },
   { why: 'default project and site names, finish checks and floors are settings data that people edit', file: 'shared.mjs', decl: 'DEFAULT_SETTINGS' },
 

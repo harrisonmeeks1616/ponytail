@@ -3,31 +3,36 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
-<meta name="theme-color" content="#1B4332">
+<meta name="theme-color" content="#FAFAFC" media="(prefers-color-scheme: light)">
+<meta name="theme-color" content="#121214" media="(prefers-color-scheme: dark)">
 <meta name="apple-mobile-web-app-title" content="H.A. Sack-Electrical">
 <title>H.A. Sack-Electrical · Sack Company-Electrical</title>
-<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@600;700&family=Barlow:wght@400;600&display=swap" media="print" onload="this.media='all'">
 <link rel="stylesheet" href="shared.css">
 </head>
 <body>
 <header class="top"><div class="top-in">
-  <svg class="mark" viewBox="0 0 24 24" width="32" height="32" aria-hidden="true"><rect width="24" height="24" rx="6" fill="var(--accent)"/><path d="M13.6 3.5 6.5 13.4h4.6l-1.2 7.1 7.6-10.4h-4.7z" fill="var(--brand)"/></svg>
-  <div class="grow brand"><h1>H.A. Sack-Electrical</h1><p>Sack Company-Electrical</p></div>
+  <svg class="mark" viewBox="0 0 24 24" width="30" height="30" aria-hidden="true"><rect width="24" height="24" rx="6.5"/><path d="M13.6 3.5 6.5 13.4h4.6l-1.2 7.1 7.6-10.4h-4.7z"/></svg>
+  <div class="brand"><h1>H.A. Sack-Electrical</h1><p>Sack Company-Electrical</p></div>
   <button class="icon-btn lang" id="langBtn" data-act="toggleLang" aria-label="Español">ES</button>
+  <button class="icon-btn" id="gearBtn" data-go="settings" hidden></button>
   <button class="icon-btn" id="lockBtn" data-act="lockBtn" aria-label="Office sign-in"></button>
-</div>
-<nav class="office-tabs" id="officeTabs" aria-label="Screens"></nav></header>
-<main><p class="proj" id="proj"></p><div id="app"></div></main>
+</div></header>
+<main>
+  <div class="screen-head" id="head"><span id="headBack"></span><p class="proj" id="proj"></p>
+    <div class="title-row"><h2 class="large-title" id="title"></h2><span id="titleMore"></span></div><p class="subtitle" id="subtitle"></p></div>
+  <div id="app"></div>
+  <div class="bar" id="bar"></div>
+</main>
+<nav class="tabbar" id="officeTabs" aria-label="Screens"></nav>
 <script>setTimeout(() => { const app = document.getElementById('app'); if (window.appStarted) return; let es = false; try { es = JSON.parse(localStorage.getItem('schwab.settings')).lang === 'es'; } catch {} app.innerHTML = es ? '<div class="empty"><h2>La app no termin\u00f3 de cargar</h2><p>Con se\u00f1al, vuelva a cargar.</p><button class="btn primary" onclick="location.reload()">Recargar</button></div>' : '<div class="empty"><h2>The app didn\u2019t finish loading</h2><p>Get signal, then reload. · La app no termin\u00f3 de cargar. Con se\u00f1al, vuelva a cargar.</p><button class="btn primary" onclick="location.reload()">Reload · Recargar</button></div>'; }, 6000); // a dropped file on the first open after an update; a Spanish phone gets Spanish only</script>
-<nav class="bar" id="bar"></nav>
 <script type="module">
 import {
   KEYS, esc, uid, load, save, loadSettings, nameKey, cleanName, people, findPerson, crewById, addPerson, normTask, newItem, mergeTask, cloneTask, pack, unpack, linkTo,
   nextId, renumberClashes, sameNumber, ensureDevice,
-  today, addDays, niceDate, nowHM, span, fmtMin, t12, stamp, hrs, timeOf, field, datalist, seg, setPath, getPath, readInput,
+  today, addDays, niceDate, nowHM, span, fmtMin, t12, stamp, hrs, timeOf, field, datalist, seg, setPath, getPath, readInput, dateBar,
   toast, sheet, ask, sendSheet, pasteSheet, makePdf, savePdf, fileAway, retryUploads, settingsView, settingsAct, restore,
-  registerSW, dateBar, crewVar as cv, L, setLang, getLang, COMPANIES, letterhead,
-  UNLOCK, hasPin, adoptPin, setPin, pinHash, tryPin, unlocked, signIn, signOut,
+  registerSW, crewVar as cv, L, setLang, getLang, COMPANY, COMPANY_ALT, COMPANIES, letterhead, icon, screenHead, busy,
+  UNLOCK, PIN_FORMAT, hasPin, adoptPin, setPin, pinHash, tryPin, unlocked, signIn, signOut,
 } from './shared.mjs';
 import { renderOffice, reportAct, reportInput, openReport, openHours, hoursInput, workerChange, fileReportIfChanged, reloadReports, sectionToggle, hasReports, attachShifts } from './report.mjs';
 
@@ -63,6 +68,7 @@ function stage(t) {
   if (t.review) return [L('Follow-up'), 'warn'];
   if (t.status) return [L(t.status), { Complete: 'good', Partial: 'warn', Blocked: 'bad' }[t.status]];
   if (t.aStart) return [L('Working'), 'info'];
+  if (t.origin === 'link') return [L('To do'), '']; // the crew's side: "Sent" would read as their own results sent
   if (t.sentAt) return [L('Sent'), 'info'];
   return [L('Draft'), ''];
 }
@@ -101,12 +107,15 @@ function enlist(t) {
 // timesheet, so it is guarded too. Crew sheets and everyone else's time clock are open.
 const VIEWS = ['clock', 'report', 'settings'];
 const isPM = () => S.role === 'Project manager';
+const crewPhone = () => S.role === 'Crew member'; // set on the first run: no office words on this phone unless Settings changes it
 const needsOffice = vw => ['report', 'settings'].includes(vw.v) || (vw.v === 'clock' && isPM()) || (vw.v === 'task' && find(vw.uid)?.origin !== 'link');
 
 function route() {
+  if (setup) return; // the first run is still asking; it routes when it's done
   // The sign-in pad guards one address: a repeat event for it changes nothing, moving on (back button, a link) closes it.
   const pad = document.querySelector('dialog.pin[open]');
   if (pad) { if (pad.dataset.want === location.hash) return; pad.close(); }
+  document.querySelectorAll('dialog.sheet[open]').forEach(x => x.dataset.at !== location.hash && x.close()); // a sheet left behind on the last screen would act on it
   fileIfChanged(current());
   fileReportIfChanged(S, day);
   const h = location.hash.slice(1);
@@ -189,29 +198,37 @@ const renumbered = moved => moved.map(([t, old]) => ' ' + L('Your sheet {old} is
 
 // ---------- views ----------
 
-const LOCK = { shut: '<rect x="5" y="11" width="14" height="10" rx="2"/><path d="M8 11V7.5a4 4 0 0 1 8 0V11"/>', open: '<rect x="5" y="11" width="14" height="10" rx="2"/><path d="M8 11V7.5a4 4 0 0 1 7.6-1.8"/>' };
-
+// The tab bar: a crew phone (or any phone signed out) has Today and its time clock; signed in, the office screens.
+// Live and Records join here when the hub is wired: [view, label] in the list, an icon name in TAB_ICON.
+const TAB_ICON = { day: 'today', clock: 'clock', report: 'report' };
 function header() {
-  const on = office(), lb = document.getElementById('langBtn'), lock = document.getElementById('lockBtn'), tabs = document.getElementById('officeTabs');
+  const on = office(), lb = document.getElementById('langBtn'), lock = document.getElementById('lockBtn'), gear = document.getElementById('gearBtn'), tabs = document.getElementById('officeTabs');
   document.body.classList.toggle('office', on);
   lb.textContent = getLang() === 'es' ? 'EN' : 'ES';
   lb.setAttribute('aria-label', getLang() === 'es' ? 'English' : 'Español');
-  lock.innerHTML = `<svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true">${on ? LOCK.open : LOCK.shut}</svg>`;
+  lock.innerHTML = icon(on ? 'unlock' : 'lock');
   lock.setAttribute('aria-label', on ? L('Lock the office screens') : L('Office sign-in'));
+  gear.hidden = !on;
+  gear.innerHTML = icon('gear');
+  gear.setAttribute('aria-label', L('Settings'));
   document.getElementById('proj').textContent = [S.project, S.site].filter(Boolean).join(' · ');
   tabs.setAttribute('aria-label', L('Screens'));
   const here = { clock: 'clock', report: 'report', settings: '' }[view.v] ?? 'day';
-  const locked = `<svg class="lock" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" aria-hidden="true">${LOCK.shut}</svg>`;
-  tabs.innerHTML = [['day', L('Tasks')], ['clock', isPM() && on ? L('Crew hours') : L('Time clock')], ['report', L('Daily report')]]
-    .map(([v, label]) => `<a href="#${v}/${day}"${v === here ? ' aria-current="page"' : ''}${(v === 'report' || (v === 'clock' && isPM())) && !on ? ` aria-label="${esc(`${label}, ${L('needs the office passcode')}`)}">${label}${locked}` : `>${label}`}</a>`).join('');
+  const list = on ? [['day', L('Tasks')], ['clock', isPM() ? L('Hours') : L('Time clock')], ['report', L('Report')]] : [['day', L('Today')], ['clock', L('Time clock')]];
+  tabs.innerHTML = list.map(([v, label]) => {
+    const locked = v === 'clock' && isPM() && !on; // the PM's time clock is the crew timesheet, behind the passcode
+    return `<a href="#${v}/${day}"${v === here ? ' aria-current="page"' : ''}${locked ? ` aria-label="${esc(`${label}, ${L('needs the office passcode')}`)}"` : ''}>${icon(TAB_ICON[v])}<span>${label}${locked ? icon('lock', 'lock') : ''}</span></a>`;
+  }).join('');
 }
 
 let drawnOn = today(); // the day the screen was last drawn, to notice midnight
 function render() {
   drawnOn = today();
   header();
+  screenHead(''); // each screen sets its own title
   bar.hidden = view.v === 'settings';
-  if (view.v === 'settings') app.innerHTML = `<button class="link" data-go="day/${day}">‹ ${L('Back to task sheets')}</button>${settingsView(S)}`;
+  bar.innerHTML = ''; // and puts its one primary action here
+  if (view.v === 'settings') { screenHead(L('Settings'), { back: { go: `day/${day}`, label: L('Back to task sheets') } }); app.innerHTML = settingsView(S); }
   else if (view.v === 'clock' || view.v === 'report') renderOffice(view.v, S, day);
   else if (view.v === 'task') renderTask(current());
   else renderBoard();
@@ -221,7 +238,7 @@ function renderBoard() {
   const all = dayTasks();
   const list = all.filter(t => !crewFilter || t.crew === crewFilter)
     .sort((a, b) => floorRank(a.floor) - floorRank(b.floor) || a.floor.localeCompare(b.floor) || a.pStart.localeCompare(b.pStart));
-  // Finished sheets wait in their own group for review; accepted ones fold away at the bottom.
+  // Finished sheets wait in their own group for review; accepted ones fold away at the bottom, like Things' Logbook.
   const toReview = list.filter(t => t.origin !== 'link' && t.status && !t.review);
   const accepted = list.filter(t => t.review === 'Accepted');
   const active = list.filter(t => !toReview.includes(t) && !accepted.includes(t));
@@ -229,50 +246,56 @@ function renderBoard() {
   const est = all.reduce((n, t) => n + t.est * (t.size || 1), 0);
   const act = all.reduce((n, t) => n + worked(t) / 60 * (t.size || 1), 0);
   const done = all.filter(t => !isOpen(t)).length, blocked = all.filter(t => t.status === 'Blocked').length;
-  const crews = [...new Set([...S.crews.map(c => c.name), ...all.map(t => t.crew)].filter(Boolean))];
+  // The office can pick any crew (the + then starts a sheet for it); a crew phone only the crews it has sheets from.
+  const crews = [...new Set([...(office() ? S.crews.map(c => c.name) : []), ...all.map(t => t.crew)].filter(Boolean))];
   const prev = prevDay();
-  app.innerHTML = dateBar(day) + (all.length ? `
-    <div class="stats">
+  const rows = ts => `<div class="list lead">${ts.map(row).join('')}</div>`;
+  const head = (text, n, cls = '') => `<h3 class="section-h${cls}">${text}<small>${n}</small></h3>`;
+  screenHead(day === today() ? L('Today') : niceDate(day), { sub: day === today() ? '' : day < today() ? L('Past day') : L('Planning ahead'), more: 'boardMenu' });
+  app.innerHTML = `<div class="board">${dateBar(day)}${all.length ? `
+    ${office() ? `<div class="stats board-stats">
       <div class="stat"><b>${all.length}</b><span>${L('Task sheets')}</span></div>
       <div class="stat"><b>${done}</b><span>${L('Complete')}</span></div>
       <div class="stat"><b class="${blocked ? 'bad' : ''}">${blocked}</b><span>${L('Blocked')}</span></div>
       <div class="stat"><b>${hrs(act)}<small> / ${hrs(est)}</small></b><span>${L('Crew-hrs actual / est.')}</span></div>
-    </div>
-    <div class="chips" role="group" aria-label="${L('Show crew')}">
+    </div>` : ''}
+    ${crews.length > 1 || crewFilter ? `<div class="chips scroll crew-filter" role="group" aria-label="${L('Show crew')}">
       <button class="chip" data-act="filter" data-v="" aria-pressed="${!crewFilter}">${L('All crews')}</button>
       ${crews.map(c => `<button class="chip" data-act="filter" data-v="${esc(c)}" aria-pressed="${crewFilter === c}" style="${crewVar(c)}"><i class="dot"></i>${esc(c)}</button>`).join('')}
-    </div>
-    ${toReview.length ? `<h2 class="group-h review-h"><span>${L('Finished · ready for review')}</span><span>${toReview.length}</span></h2>${toReview.map(card).join('')}` : ''}
-    ${floors.map(f => {
-      const ts = active.filter(t => t.floor === f);
-      return `<h2 class="group-h"><span>${f ? esc(f) : esc(L('Floor not set'))}</span><span>${ts.length}</span></h2>${ts.map(card).join('')}`;
-    }).join('')}
-    ${accepted.length ? `<details class="done-group"><summary class="group-h"><span>${L('Accepted')}</span><span>${accepted.length}</span></summary><div class="stack">${accepted.map(card).join('')}</div></details>` : ''}
-    ${list.length ? '' : `<p class="hint">${L('No sheets for this crew on this day.')}</p>`}`
+    </div>` : ''}
+    ${toReview.length ? head(L('Finished · ready for review'), toReview.length, ' review-h') + rows(toReview) : ''}
+    ${floors.map(f => { const ts = active.filter(t => t.floor === f); return head(esc(f || L('Floor not set')), ts.length) + rows(ts); }).join('')}
+    ${accepted.length ? `<details class="done-group logbook"><summary>${icon('check', 'logbook-ic')}<span>${L('Accepted')}</span><small>${accepted.length}</small>${icon('chev', 'chev')}</summary>${rows(accepted)}</details>` : ''}
+    ${list.length ? '' : `<p class="hint board-none">${L('No sheets for this crew on this day.')}</p>`}
+    ${office() ? '' : `<button class="btn wide open-link" data-act="paste">${L('Open a link')}</button>`}
+    ${office() || crewPhone() ? '' : `<button class="link sign-in" data-act="lockBtn">${L('Office sign-in')}</button>`}`
     : !office()
-      ? `<div class="empty"><h2>${L('No task sheets for {date}', { date: niceDate(day) })}</h2>
+      ? `<div class="empty">${icon('today', 'empty-ic')}<h2>${L('No task sheets for {date}', { date: niceDate(day) })}</h2>
         <p>${L('Open the link your superintendent texted you, or paste it here.')}</p>
         <button class="btn primary" data-act="paste">${L('Open a link someone sent you')}</button>
-        <button class="link" data-act="lockBtn">${L('Superintendent or PM? Sign in to the office screens')}</button></div>`
-      : `<div class="empty"><h2>${L('No task sheets for {date}', { date: niceDate(day) })}</h2>
-        <p>${L("Build the day's assignments here and send each crew its sheet. Crews check off steps on their phones and send results back to you.")}</p>
-        <div class="btns"><button class="btn primary" data-act="new">${L('+ New task')}</button>
-        ${prev ? `<button class="btn" data-act="carryDay">${L('Copy unfinished from {date}', { date: niceDate(prev) })}</button>` : ''}</div></div>`);
-  bar.innerHTML = `<div class="bar-in">${!office()
-    ? `<button class="btn primary big" data-act="paste">${L('Open a link')}</button>`
-    : `<button class="btn primary big" data-act="new">${L('+ New task')}</button>`}
-    <button class="btn more" data-act="boardMenu" aria-label="${L('More actions')}">⋯</button></div>`;
+        ${crewPhone() ? '' : `<button class="link" data-act="lockBtn">${L('Superintendent or PM? Sign in to the office screens')}</button>`}</div>`
+      : `<div class="empty">${icon('today', 'empty-ic')}<h2>${L('No task sheets for {date}', { date: niceDate(day) })}</h2>
+        <p>${L('Tap + to make one sheet for each crew, then send it to their phones.')}</p>
+        ${prev ? `<button class="link" data-act="carryDay">${L('Copy unfinished from {date}', { date: niceDate(prev) })}</button>` : ''}</div>`}</div>`;
+  bar.innerHTML = office() ? `<button class="fab" data-act="new" aria-label="${L('New task')}">${icon('plus')}</button>` : ''; // the + floats over the list
+  if (crewFilter) app.querySelector('.crew-filter [aria-pressed=true]')?.scrollIntoView({ inline: 'nearest', block: 'nearest' }); // the chosen crew stays in sight
 }
 
-function card(t) {
+// One sheet on the board: a progress pie (a check once it is done), the area and number, then a quiet line with the
+// crew, the time and the status word in its color. .tcard and .tid are what the browser checks read.
+function row(t) {
   const [label, tone] = stage(t), n = t.items.length, d = doneCount(t);
-  return `<a class="tcard" href="#task/${esc(t.uid)}/${t.status && !t.review ? 'review' : 'assign'}" style="${crewVar(t.crew, t.crewId)}">
-    <div class="row1"><span class="tid">${esc(t.id || L('New task'))}</span><span class="pill" data-tone="${tone}">${esc(label)}</span></div>
-    ${clash(t)}
-    <div class="meta"><span><i class="dot"></i> ${esc(t.crew || L('No crew yet'))}${t.size ? ' · ' + esc(L(t.size === 1 ? '1 person' : '{n} people', { n: t.size })) : ''}</span>
-      ${t.area ? `<span>${esc(t.area)}</span>` : ''}${t.pStart ? `<span>${esc(t.pStop ? fromTo(t.pStart, t.pStop) : t12(t.pStart))}</span>` : ''}${t.est ? `<span>${esc(L('Est. {n} hrs', { n: t.est }))}</span>` : ''}</div>
-    ${t.scope ? `<p class="scope">${esc(t.scope)}</p>` : ''}
-    ${n ? `<div class="progress" role="img" aria-label="${esc(L('{d} of {n} steps done', { d, n }))}"><i style="width:${d / n * 100}%"></i></div>` : ''}
+  const lead = !isOpen(t) ? `<span class="pie full" role="img" aria-label="${esc(label)}">${icon('check')}</span>`
+    : n ? `<span class="pie" style="--p:${(d / n).toFixed(3)}" role="img" aria-label="${esc(L('{d} of {n} steps done', { d, n }))}"></span>`
+      : '<span class="pie none" aria-hidden="true"></span>';
+  const when = t12(t.pStart);
+  return `<a class="row tcard${!isOpen(t) ? ' is-done' : ''}" href="#task/${esc(t.uid)}/${t.status && !t.review ? 'review' : 'assign'}" style="${crewVar(t.crew, t.crewId)}">
+    <span class="row-lead">${lead}</span>
+    <span class="row-main"><span class="row-title">${t.area ? `<span class="area">${esc(t.area)}</span> ` : ''}<span class="tid">${esc(t.id || L('New task'))}</span></span>
+      <span class="row-sub">${[`<span class="who"><i class="dot"></i> ${esc(t.crew || L('No crew yet'))}</span>`, when && `<span class="nw">${esc(when)}</span>`,
+        `<span class="stage" data-tone="${tone}">${esc(label)}</span>`].filter(Boolean).join(' ·&nbsp;')}</span>
+      ${sameNumber(T, t) ? `<span class="pill" data-tone="warn">${L('Same number as another sheet')}</span>` : ''}</span>
+    ${t.est ? `<span class="row-end">${esc(L('{n} hrs', { n: t.est }))}</span>` : ''}${icon('chev', 'chev')}
   </a>`;
 }
 
@@ -282,26 +305,41 @@ const clash = (t, more = '') => (sameNumber(T, t) ? `<p class="hint"><span class
 function renderTask(t) {
   const crewSide = t.origin === 'link';
   const tabs = [['assign', L('Assign')], ['results', L('Crew results')], ['review', L('Review')]];
-  app.innerHTML = `<button class="link" data-go="day/${esc(t.date)}">‹ ${esc(L('{date} task sheets', { date: niceDate(t.date) }))}</button>`
-    + clash(t, crewSide ? '' : ' ' + L('Change the Task ID on one of them.')) + (crewSide
-    ? brief(t) + results(t)
-    : `<nav class="tabs">${tabs.map(([k, l]) => `<a href="#task/${esc(t.uid)}/${k}" data-act="tab" data-v="${k}"${k === view.tab ? ' aria-current="page"' : ''}>${l}</a>`).join('')}</nav>`
-      + (view.tab === 'results' ? brief(t) + results(t) : view.tab === 'review' ? review(t) : assign(t)))
-    + `<p class="hint">${L('Changes save on this phone as you type.')}</p>`;
-  bar.innerHTML = `<div class="bar-in">${crewSide
-    ? `<button class="btn primary big" data-act="sendResults">${L('Send results')}</button>
-       <button class="btn more" data-act="crewMenu" aria-label="${L('More actions')}">⋯</button>`
-    : `<button class="btn primary big" data-act="sendTask">${t.sentAt ? L('Resend to crew') : L('Send to crew')}</button>
-       <button class="btn more" data-act="taskMenu" aria-label="${L('More actions')}">⋯</button>`}</div>`;
+  screenHead(t.area || (t.id ? L('Task {id}', { id: t.id }) : L('New task')), {
+    sub: [t.floor, t.area && t.id && L('Task {id}', { id: t.id })].filter(Boolean).join(' · '), more: crewSide ? 'crewMenu' : 'taskMenu',
+    back: { go: `day/${t.date}`, label: L('{date} task sheets', { date: niceDate(t.date) }) },
+  });
+  app.innerHTML = `<div class="tsheet">${crewSide
+    ? banner(t, true) + clash(t) + brief(t) + results(t)
+    : `<nav class="tabs" aria-label="${L('Task sheet')}">${tabs.map(([k, l]) => `<a href="#task/${esc(t.uid)}/${k}" data-act="tab" data-v="${k}"${k === view.tab ? ' aria-current="page"' : ''}>${l}</a>`).join('')}</nav>`
+      + banner(t, false) + clash(t, ' ' + L('Change the Task ID on one of them.'))
+      + (view.tab === 'results' ? brief(t) + results(t) : view.tab === 'review' ? review(t) : assign(t))}
+    <p class="hint saved">${L('Changes save on this phone as you type.')}</p></div>`;
+  bar.innerHTML = !crewSide && view.tab === 'review' ? '' : `<div class="bar-in">${crewSide
+    ? `<button class="btn primary big" data-act="sendResults">${L('Send results')}</button>`
+    : `<button class="btn primary big" data-act="sendTask">${t.sentAt ? L('Resend to crew') : L('Send to crew')}</button>`}</div>`;
+}
+
+// The calm note at the top of a sheet: on a crew phone, the office's message; on the office phone, where review stands.
+function banner(t, crewSide) {
+  const box = (tone, title, text, foot, more = '') => `<div class="banner" data-tone="${tone}" role="note"><b>${esc(title)}</b>${text ? `<p>${esc(text)}</p>` : ''}${foot ? `<small>${esc(foot)}</small>` : ''}${more}</div>`;
+  if (crewSide) return t.reply ? box('info', L('Message from the office'), t.reply, [t.replyBy, t.replyAt && stamp(t.replyAt)].filter(Boolean).join(' · ')) : '';
+  if (t.review) return box(t.review === 'Accepted' ? 'good' : 'warn', L(t.review), t.followUp, t.reviewer && L('by {name}', { name: t.reviewer }));
+  if (t.status && view.tab !== 'review') return box('info', L('Finished · ready for review'), '', [L(t.status), t.gotAt && stamp(t.gotAt)].filter(Boolean).join(' · '),
+    `<button class="link" data-act="tab" data-v="review">${L('Review')}${icon('chev')}</button>`);
+  return '';
 }
 
 const crewHrsLine = t => L('Crew of {size}: {allot} crew-hrs allotted, {est} estimated.', { size: t.size || 1, allot: hrs(t.allot * (t.size || 1)), est: hrs(t.est * (t.size || 1)) })
   + (t.pStart && t.pStop ? ' ' + L('Planned window {time}.', { time: fmtMin(span(t.pStart, t.pStop)) }) : '');
 
-const addRow = (id, ph, a) => `<div class="edit-row"><input id="${id}" placeholder="${esc(ph)}" enterkeyhint="done" data-enter="${a}"><button class="x add" data-act="${a}" aria-label="${esc(ph)}">+</button></div>`;
+const addRow = (id, ph, a) => `<div class="edit-row"><input id="${id}" aria-label="${esc(ph)}" placeholder="${esc(ph)}" enterkeyhint="done" data-enter="${a}"><button class="x add" data-act="${a}" aria-label="${esc(ph)}">+</button></div>`;
 
 // The member on the sheet that is this person: by id when both have one, else by name.
 const memberAt = (t, pid, name) => t.members.findIndex((m, i) => (pid && t.memberIds[i] ? t.memberIds[i] === pid : nameKey(m) === nameKey(name)));
+
+// The office's form: grouped inset lists (label left, box right; stacked on a narrow phone), a small heading over each.
+const group = (title, body) => `<h3 class="caption group-caption">${title}</h3><section class="card form">${body}</section>`;
 
 function assign(t) {
   // One chip a person: the crew's people, then anyone else on the sheet.
@@ -309,48 +347,43 @@ function assign(t) {
   t.members.forEach((name, i) => { if (memberAt({ members: chips.map(c => c.name), memberIds: chips.map(c => c.id) }, t.memberIds[i], name) < 0) chips.push({ id: t.memberIds[i], name }); });
   const on = p => memberAt(t, p.id, p.name) >= 0;
   const checks = [...new Set([...S.checks, ...t.checks.map(c => c.text)])];
-  return `<section class="card"><h2>${L('Assignment')}</h2><div class="grid">
+  return group(L('Assignment'), `
       ${field(L('Date'), 't.date', t.date, { type: 'date' })}${field(L('Assigned by'), 't.by', t.by)}
       ${field(L('Floor / level'), 't.floor', t.floor, { list: 'floors' })}${field(L('Task ID'), 't.id', t.id)}
       ${field(L('Room / area'), 't.area', t.area, { list: 'areas', wide: true, ph: L('e.g. Elec room 3E, east corridor') })}
-    </div>
-    <div class="field"><span>${L('Crew')}</span><div class="chips">${S.crews.map(c => `<button class="chip" data-act="crew" data-v="${esc(c.id)}" aria-pressed="${t.crewId ? t.crewId === c.id : t.crew === c.name}" style="${crewVar(c.name, c.id)}"><i class="dot"></i>${esc(c.name)}</button>`).join('')}</div></div>
-    <div class="field"><span>${L('Crew members on this task')}</span>
+      ${datalist('floors', S.floors)}${datalist('areas', T.map(x => x.area))}`)
+  + group(L('Crew'), `
+    <div class="field wide"><span>${L('Crew')}</span><div class="chips">${S.crews.map(c => `<button class="chip" data-act="crew" data-v="${esc(c.id)}" aria-pressed="${t.crewId ? t.crewId === c.id : t.crew === c.name}" style="${crewVar(c.name, c.id)}"><i class="dot"></i>${esc(c.name)}</button>`).join('')}</div></div>
+    <div class="field wide"><span>${L('Crew members on this task')}</span>
       ${chips.length ? `<div class="chips">${chips.map(p => `<button class="chip" data-act="member" data-v="${esc(p.name)}" data-pid="${esc(p.id)}" aria-pressed="${on(p)}">${esc(p.name)}</button>`).join('')}</div>` : ''}
       ${addRow('newMember', L('Add a name'), 'addMember')}</div>
-    <div class="grid">${field(L('Crew lead'), 't.lead', t.lead)}${field(L('Crew size'), 't.size', t.size, { type: 'number', mode: 'numeric' })}</div>
-    ${datalist('floors', S.floors)}${datalist('areas', T.map(x => x.area))}
-  </section>
-  <section class="card"><h2><span class="num">1</span>${L('Assigned task & required finish')}</h2>
+    ${field(L('Crew lead'), 't.lead', t.lead)}${field(L('Crew size'), 't.size', t.size, { type: 'number', mode: 'numeric' })}`)
+  + group(L('Assigned task & required finish'), `
     ${field(L('Work, quantities and limits of scope'), 't.scope', t.scope, { rows: 4, ph: L('e.g. Pull and terminate 12 AWG for lighting circuits L3-14 to L3-18, east corridor. Stop at grid line 7.') })}
-    ${field(L('Drawing / detail references'), 't.refs', t.refs, { ph: L('e.g. E-301, detail 4/E-502') })}
-    <div class="field"><span>${L('Steps the crew checks off')}</span><div class="checklist">
+    ${field(L('Drawing / detail references'), 't.refs', t.refs, { wide: true, ph: L('e.g. E-301, detail 4/E-502') })}
+    <div class="field wide"><span>${L('Steps the crew checks off')}</span><div class="checklist steps-edit">
       ${t.items.map((it, i) => `<div class="edit-row"><input data-k="t.items.${i}.text" value="${esc(it.text)}" aria-label="${esc(L('Step {n}', { n: i + 1 }))}"><button class="x" data-act="delItem" data-i="${i}" aria-label="${esc(L('Remove step {n}', { n: i + 1 }))}">✕</button></div>`).join('')}
       ${addRow('newItem', L('Add a step'), 'addItem')}</div></div>
-    <div class="field"><span>${L('Required finish / accuracy checks')}</span>
+    <div class="field wide"><span>${L('Required finish / accuracy checks')}</span>
       <div class="chips">${checks.map(p => `<button class="chip" data-act="check" data-v="${esc(p)}" aria-pressed="${t.checks.some(c => c.text === p)}">${esc(p)}</button>`).join('')}</div>
-      ${addRow('newCheck', L('Add another check'), 'addCheck')}</div>
-  </section>
-  <section class="card"><h2><span class="num">2</span>${L('Assigned work time & estimate')}</h2>
-    <div class="grid">
+      ${addRow('newCheck', L('Add another check'), 'addCheck')}</div>`)
+  + group(L('Assigned work time & estimate'), `
       ${field(L('Allotted time (hrs)'), 't.allot', t.allot, { type: 'number', mode: 'decimal' })}
       ${field(L('Your estimate (hrs)'), 't.est', t.est, { type: 'number', mode: 'decimal' })}
       ${field(L('Allotted notes'), 't.allotNote', t.allotNote)}${field(L('Estimate notes'), 't.estNote', t.estNote)}
-    </div>
-    <p class="hint out" data-out="crewHrs">${crewHrsLine(t)}</p>
-    <div class="grid">${field(L('Planned start'), 't.pStart', t.pStart, { type: 'time' })}${field(L('Planned stop'), 't.pStop', t.pStop, { type: 'time' })}${field(L('Check-in at'), 't.checkIn', t.checkIn, { type: 'time' })}</div>
-  </section>`;
+      ${field(L('Planned start'), 't.pStart', t.pStart, { type: 'time' })}${field(L('Planned stop'), 't.pStop', t.pStop, { type: 'time' })}${field(L('Check-in at'), 't.checkIn', t.checkIn, { type: 'time' })}
+    <p class="hint out form-foot" data-out="crewHrs">${crewHrsLine(t)}</p>`);
 }
 
+// What the crew reads first: who it's for and where it stands, the scope in plain words, then the details.
 function brief(t) {
   const [label, tone] = stage(t);
   const row = (k, html) => (html ? `<dt>${esc(k)}</dt><dd>${html}</dd>` : ''); // html: already escaped
   const note = n => (n ? ' · ' + esc(n) : '');
-  return `<section class="card brief" style="${crewVar(t.crew, t.crewId)}">
-    <div class="row1"><span class="label">${esc(t.crew || L('Crew'))} · ${esc(L('Task {id}', { id: t.id }))}</span><span class="pill" data-tone="${tone}">${esc(label)}</span></div>
-    <div class="big">${t.floor ? esc(t.floor) : esc(L('Floor not set'))}${t.area ? ' · ' + esc(t.area) : ''}</div>
+  return `<section class="brief" style="${crewVar(t.crew, t.crewId)}">
+    <div class="brief-top"><span class="who"><i class="dot"></i> ${esc(t.crew || L('Crew'))}</span><span class="pill" data-tone="${tone}">${esc(label)}</span></div>
     ${t.scope ? `<p class="scope-text">${esc(t.scope)}</p>` : ''}
-    <dl class="kv">${row(L('Drawings'), esc(t.refs))}${row(L('Planned'), t.pStart && esc(fromTo(t.pStart, t.pStop)))}${row(L('Check in at'), esc(t12(t.checkIn)))}
+    <dl class="kv info">${row(L('Drawings'), esc(t.refs))}${row(L('Planned'), t.pStart && esc(fromTo(t.pStart, t.pStop)))}${row(L('Check in at'), esc(t12(t.checkIn)))}
       ${row(L('Allotted'), t.allot && esc(L('{n} hrs', { n: t.allot })) + note(t.allotNote))}${row(L('Estimate'), t.est && esc(L('{n} hrs', { n: t.est })) + note(t.estNote))}
       ${row(L('Crew'), t.members.map(m => esc(m) + (nameKey(m) && nameKey(m) === nameKey(S.worker) ? ` (${esc(L('you'))})` : '')).join(', '))}${row(L('Assigned'), esc(niceDate(t.date) + (t.by ? ' · ' + L('by {name}', { name: t.by }) : '')))}</dl></section>`;
 }
@@ -364,51 +397,50 @@ function workedLine(t) {
     + (t.est ? ` · ${L('{sign}{n} hrs vs estimate', { sign: w / 60 > t.est ? '+' : '', n: hrs(w / 60 - t.est) })}` : '');
 }
 
+// The crew's part: big round checkboxes, one Time & status card (Start and Stop, the status), then the notes.
 function results(t) {
-  const d = doneCount(t), n = t.items.length;
+  const d = doneCount(t), n = t.items.length, c = t.checks.filter(x => x.done).length;
   const tick = (list, it, i) => `<button class="tick" data-act="tick" data-list="${list}" data-i="${i}" aria-pressed="${it.done}"><span class="box">✓</span><span class="txt">${esc(it.text)}</span>${it.at ? `<small>${timeOf(it.at)}</small>` : ''}</button>`;
-  const clock = (k, label, now, primary) => t[k]
+  // Start and Stop: a big button until tapped, then the time it took, which can be fixed by hand.
+  const clock = (k, label, now, primary) => `<div class="clockslot"><span>${label}</span>${t[k]
     ? `<input type="time" data-k="t.${k}" value="${esc(t[k])}" aria-label="${label}">`
-    : `<button class="btn${primary ? ' primary' : ''}" data-act="clock" data-v="${k}">${now}</button>`;
-  return `${n || t.checks.length ? `<section class="card"><h2>${L('Check off as you go')}</h2>
-      ${n ? `<div class="label">${L('Steps · {d} of {n} done', { d, n })}</div><div class="progress"><i style="width:${d / n * 100}%"></i></div>
-        <div class="checklist">${t.items.map((it, i) => tick('items', it, i)).join('')}</div>` : ''}
-      ${t.checks.length ? `<div class="label">${L('Required finish checks')}</div><div class="checklist">${t.checks.map((it, i) => tick('checks', it, i)).join('')}</div>` : ''}
-    </section>` : ''}
-  <section class="card"><h2><span class="num">3</span>${L('Actual time & progress')}</h2>
-    <div class="grid"><div class="field"><span>${L('Actual start')}</span>${clock('aStart', L('Actual start'), L('▶ Start now'), true)}</div>
-      <div class="field"><span>${L('Actual stop')}</span>${clock('aStop', L('Actual stop'), L('■ Stop now'), !!t.aStart)}</div></div>
-    <div class="field"><span>${L('Delay / interruption (minutes)')}</span><div class="edit-row">
+    : `<button class="btn big${primary ? ' primary' : ''}" data-act="clock" data-v="${k}">${now}</button>`}</div>`;
+  return `${n ? `<section class="steps"><h3 class="section-h">${L('Check off as you go')}<small>${L('{d} of {n} done', { d, n })}</small></h3>
+      <div class="checklist">${t.items.map((it, i) => tick('items', it, i)).join('')}</div></section>` : ''}
+    ${t.checks.length ? `<section class="steps"><h3 class="section-h">${L('Required finish checks')}<small>${L('{d} of {n} done', { d: c, n: t.checks.length })}</small></h3>
+      <div class="checklist">${t.checks.map((it, i) => tick('checks', it, i)).join('')}</div></section>` : ''}
+  <section class="card timecard"><h2>${L('Time & status')}</h2>
+    <div class="startstop">${clock('aStart', L('Actual start'), icon('play') + L('Start now'), true)}${clock('aStop', L('Actual stop'), icon('stop') + L('Stop now'), !!t.aStart)}</div>
+    <p class="out" data-out="worked">${workedLine(t)}</p>
+    <div class="field"><span>${L('Delay / interruption (minutes)')}</span><div class="edit-row stepper">
       <button class="x" data-act="delay" data-v="-15" aria-label="${L('15 minutes less')}">−</button>
       <input type="number" inputmode="numeric" min="0" step="any" data-k="t.delay" value="${t.delay || ''}" placeholder="0" aria-label="${L('Delay minutes')}">
       <button class="x" data-act="delay" data-v="15" aria-label="${L('15 minutes more')}">+</button></div></div>
-    <p class="out" data-out="worked">${workedLine(t)}</p>
     <div class="field"><span>${L('Status')}</span>${seg('t.status', t.status, [['Complete', 'good', L('Complete')], ['Partial', 'warn', L('Partial')], ['Blocked', 'bad', L('Blocked')]])}</div>
+  </section>
+  <section class="card notes"><h2>${L('Notes')}</h2>
     ${field(L('Work / quantity completed (locations and details)'), 't.doneText', t.doneText, { rows: 3 })}
     ${field(L('Work remaining'), 't.remain', t.remain, { rows: 2 })}
-  </section>
-  <section class="card"><h2><span class="num">4</span>${L('Crew comments / concerns')}</h2>
-    ${field(L('What helped or slowed the work? Quality, rework, support needed'), 't.comments', t.comments, { rows: 3 })}
+    ${field(L('Crew comments / concerns'), 't.comments', t.comments, { rows: 3, ph: L('What helped or slowed the work? Quality, rework, support needed') })}
     ${field(L('Crew / lead'), 't.lead', t.lead)}
   </section>`;
 }
 
 function review(t) {
   const [label, tone] = stage(t), w = worked(t);
-  const row = (k, html) => (html ? `<dt>${esc(k)}</dt><dd>${html}</dd>` : '');
-  return `<section class="card brief" style="${crewVar(t.crew, t.crewId)}"><div class="row1"><span class="label">${esc(t.crew || L('Crew'))} · ${esc(L('Task {id}', { id: t.id }))} · ${t.floor ? esc(t.floor) : ''}</span><span class="pill" data-tone="${tone}">${esc(label)}</span></div>
-    ${t.status || t.aStart ? `<dl class="kv">${row(L('Status'), esc(t.status ? L(t.status) : L('In progress')))}${row(L('Steps'), t.items.length && esc(L('{d} of {n} done', { d: doneCount(t), n: t.items.length })))}
+  const row = (k, html, cls = '') => (html ? `<dt${cls}>${esc(k)}</dt><dd${cls}>${html}</dd>` : ''), long = ' class="long"'; // long: typed text, stacked
+  return `<section class="brief" style="${crewVar(t.crew, t.crewId)}"><div class="brief-top"><span class="who"><i class="dot"></i> ${esc(t.crew || L('Crew'))}</span><span class="pill" data-tone="${tone}">${esc(label)}</span></div>
+    ${t.status || t.aStart ? `<dl class="kv info">${row(L('Status'), esc(t.status ? L(t.status) : L('In progress')))}${row(L('Steps'), t.items.length && esc(L('{d} of {n} done', { d: doneCount(t), n: t.items.length })))}
       ${row(L('Checks'), t.checks.length && esc(L('{d} of {n} done', { d: t.checks.filter(c => c.done).length, n: t.checks.length })))}
       ${row(L('Worked'), w && esc(`${fmtMin(w)} · ${L('{n} crew-hrs', { n: hrs(w / 60 * (t.size || 1)) })}`))}${row(L('Estimate'), t.est && esc(`${L('{n} hrs', { n: t.est })} · ${L('{n} crew-hrs', { n: hrs(t.est * (t.size || 1)) })}`))}
-      ${row(L('Delays'), t.delay && esc(L('{n} min', { n: t.delay })))}${row(L('Completed'), t.doneText && esc(t.doneText))}${row(L('Remaining'), t.remain && esc(t.remain))}${row(L('Crew notes'), t.comments && esc(t.comments))}
+      ${row(L('Delays'), t.delay && esc(L('{n} min', { n: t.delay })))}${row(L('Completed'), t.doneText && esc(t.doneText), long)}${row(L('Remaining'), t.remain && esc(t.remain), long)}${row(L('Crew notes'), t.comments && esc(t.comments), long)}
       ${row(L('Received'), esc(stamp(t.gotAt)))}</dl>`
-    : `<p class="hint">${L("No results from the crew yet. They'll show here when the crew sends them, or fill them in yourself on the Crew results tab.")}</p>`}</section>
-  <section class="card"><h2><span class="num">5</span>${L('Lead / superintendent review')}</h2>
-    ${seg('t.review', t.review, [['Accepted', 'good', L('Accepted')], ['Follow-up needed', 'warn', L('Follow-up needed')]])}
+    : `<p class="hint">${L("No results from the crew yet. They'll show here when the crew sends them, or fill them in yourself on the Crew results tab.")}</p>`}</section>`
+  + group(L('Lead / superintendent review'), `
+    <div class="field wide">${seg('t.review', t.review, [['Accepted', 'good', L('Accepted')], ['Follow-up needed', 'warn', L('Follow-up needed')]])}</div>
     ${field(L('Reviewed by'), 't.reviewer', t.reviewer)}
     ${field(L('Follow-up / next step'), 't.followUp', t.followUp, { rows: 3 })}
-    <button class="btn" data-act="carry">${L('Carry open work to {date}', { date: niceDate(addDays(t.date, 1)) })}</button>
-  </section>`;
+    <div class="form-foot"><button class="btn wide" data-act="carry">${L('Carry open work to {date}', { date: niceDate(addDays(t.date, 1)) })}</button></div>`);
 }
 
 const OUT = { crewHrs: crewHrsLine, worked: workedLine };
@@ -451,7 +483,7 @@ function passcode(mode = hasPin(S) ? 'enter' : 'create') {
       <p class="pin-msg" role="status"></p>
       <div class="pin-dots" aria-hidden="true">${'<i></i>'.repeat(4)}</div><span class="sr" aria-live="polite"></span>
       <div class="keypad">${[1, 2, 3, 4, 5, 6, 7, 8, 9].map(n => `<button type="button" data-pin="${n}">${n}</button>`).join('')}
-        <span></span><button type="button" data-pin="0">0</button><button type="button" data-pin="back" aria-label="${L('Delete a digit')}">⌫</button></div>`);
+        <span></span><button type="button" data-pin="0">0</button><button type="button" data-pin="back" aria-label="${L('Delete a digit')}">${icon('del')}</button></div>`);
     d.classList.add('pin');
     d.dataset.want = location.hash;
     const msg = d.querySelector('.pin-msg'), dots = d.querySelector('.pin-dots');
@@ -491,6 +523,102 @@ function passcode(mode = hasPin(S) ? 'enter' : 'create') {
     d.addEventListener('keydown', e => { if (/^\d$/.test(e.key)) press(e.key); else if (e.key === 'Backspace') press('back'); });
     d.addEventListener('close', () => done(false));
     ask4();
+  });
+}
+
+// ---------- first run: a new phone asks one question per screen, once ----------
+
+// A new phone: nothing saved yet. A phone with settings (a role, a name), sheets, reports or hours never sees it.
+const isNewPhone = () => [KEYS.settings, KEYS.tasks, KEYS.reports, KEYS.hours, KEYS.crewHours, KEYS.pin].every(k => load(k, null) == null);
+let setup = false; // the first run is up: nothing routes behind it
+
+// Language, then who is using this phone, then their name; office roles then create or enter the passcode. Nothing is
+// saved until the last answer, so a phone that reloads half way starts over, and it can't be skipped except by answering.
+async function firstRun() {
+  setup = true;
+  const crew = 'Crew member', a = { lang: '', role: '', name: '' };
+  let step = 'lang', msg = '';
+  // Opened from a texted link: its names to pick from, and the office code it carries (kept in memory until the end).
+  let linked = [];
+  const readLink = async () => {
+    if (!location.hash.startsWith('#p=')) return;
+    try {
+      const data = await unpack(location.hash.slice(3));
+      linked = [data.task, ...(Array.isArray(data.tasks) ? data.tasks : [])].filter(Boolean).flatMap(x => normTask(x).members);
+      if (['task', 'result', 'day', 'report'].includes(data.kind) && !hasPin(S) && PIN_FORMAT.test(data.pin)) S.pin = data.pin;
+    } catch {} // a damaged link says so once the phone is set up
+  };
+  const names = () => [...new Map([...people(S).map(p => p.name), ...(a.role === crew ? linked : [])].filter(n => nameKey(n)).map(n => [nameKey(n), n])).values()];
+  const d = document.createElement('dialog');
+  d.className = 'firstrun';
+  d.setAttribute('aria-labelledby', 'frQ');
+  d.addEventListener('cancel', e => e.preventDefault()); // Escape doesn't skip it
+  const brand = `<div class="fr-brand">${document.querySelector('.top .mark').outerHTML}<div><b>${COMPANY}</b><span>${COMPANY_ALT}</span></div></div>`;
+  const back = to => `<button class="link fr-back" data-fr="back" data-v="${to}">${icon('back')}<span>${L('Back')}</span></button>`;
+  const dots = () => { const n = a.role && a.role !== crew ? 4 : 3, at = ['lang', 'role', 'name', 'pin'].indexOf(step); return `<div class="fr-dots" aria-hidden="true">${Array.from({ length: n }, (_, i) => `<i${i <= at ? ' class="on"' : ''}></i>`).join('')}</div>`; };
+  const option = (fr, v, title, sub = '') => `<button class="fr-opt" data-fr="${fr}" data-v="${esc(v)}"><span><b>${esc(title)}</b>${sub ? `<small>${esc(sub)}</small>` : ''}</span>${icon('chev', 'chev')}</button>`;
+  const screens = {
+    lang: () => `<h2 class="large-title" id="frQ" tabindex="-1">Language · Idioma</h2>
+      <div class="fr-opts">${option('lang', 'en', 'English')}${option('lang', 'es', 'Español')}</div>`,
+    role: () => `${back('lang')}<h2 class="large-title" id="frQ" tabindex="-1">${L('Who is using this phone?')}</h2>
+      <div class="fr-opts">${option('role', crew, L('Crew member'), L('Task sheets and the time clock'))}
+        ${option('role', 'Superintendent', L('Superintendent'), L("Builds the day's task sheets and the daily report"))}
+        ${option('role', 'Project manager', L('Project manager'), L('Reports and crew hours'))}</div>`,
+    name: () => `${back('role')}<h2 class="large-title" id="frQ" tabindex="-1">${L('What is your name?')}</h2>
+      <p class="secondary">${a.role === crew ? L('It goes on your time clock and your task sheets.') : L('It goes on the sheets you assign and sign off.')}</p>
+      ${names().length ? `<div class="chips fr-names">${names().map(n => `<button class="chip" data-fr="pick" data-v="${esc(n)}" aria-pressed="${nameKey(n) === nameKey(a.name)}">${esc(n)}</button>`).join('')}</div>` : ''}
+      <label class="field"><span>${names().length ? L('Or type it') : L('Your name')}</span><input id="frName" value="${esc(a.name)}" autocomplete="name" autocapitalize="words" enterkeyhint="done" maxlength="60"></label>
+      <p class="fr-msg" role="alert">${esc(msg)}</p>
+      <button class="btn primary big wide" data-fr="next">${a.role === crew ? L('Done') : L('Next')}</button>`,
+    pin: () => `<h2 class="large-title" id="frQ" tabindex="-1">${L('Office passcode')}</h2>`, // the pad over it says what to do
+  };
+  const draw = focus => {
+    d.innerHTML = `<div class="fr-in">${brand}${dots()}<div class="fr-step">${screens[step]()}</div></div>`;
+    (focus && d.querySelector(focus) || d.querySelector('#frQ')).focus?.({ preventScroll: true });
+  };
+  return new Promise(done => {
+    const finish = () => {
+      S.lang = a.lang;
+      S.role = a.role;
+      const name = cleanName(a.name), match = findPerson(S, name);
+      if (a.role === crew) { S.worker = names().find(n => nameKey(n) === nameKey(name)) || name; S.workerId = match?.id || ''; }
+      if (a.role === 'Superintendent') { S.worker = match?.name || name; S.workerId = match?.id || ''; } // their own time clock, without asking again
+      S.me = a.role === crew ? '' : name; // a name typed for an office role, then backed out of, doesn't stay
+      save(KEYS.settings, S) || toast(L("This phone wouldn't save. Open Settings and download a backup."), 'bad');
+      if (hasPin(S)) save(KEYS.pin, S.pin);
+      setup = false;
+      d.close();
+      d.remove();
+      done();
+    };
+    const next = async () => {
+      a.name = d.querySelector('#frName').value;
+      if (!nameKey(a.name)) { msg = L('Type your name first'); draw('#frName'); return; }
+      msg = '';
+      if (a.role === crew) return finish();
+      Object.assign(S, { lang: a.lang, role: a.role, me: cleanName(a.name) }); // so a passcode saved now carries them
+      step = 'pin';
+      draw();
+      if (await passcode()) return finish();
+      step = 'name';
+      draw('#frName');
+    };
+    d.addEventListener('click', async e => {
+      const b = e.target.closest('[data-fr]');
+      if (!b) return;
+      const v = b.dataset.v;
+      switch (b.dataset.fr) {
+        case 'lang': a.lang = v; setLang(v); step = 'role'; return draw();
+        case 'role': a.role = v; await readLink(); step = 'name'; return draw('#frName');
+        case 'back': step = v; msg = ''; return draw();
+        case 'pick': d.querySelector('#frName').value = v; return next(); // one tap on a known name answers
+        case 'next': return next();
+      }
+    });
+    d.addEventListener('keydown', e => { if (e.key === 'Enter' && e.target.id === 'frName') { e.preventDefault(); next(); } });
+    document.body.append(d);
+    d.showModal();
+    draw();
   });
 }
 
@@ -550,6 +678,7 @@ async function act(a, el) {
       S.lang = v;
       save(KEYS.settings, S);
       setLang(v);
+      if (!document.querySelector('#toast .toast-undo')) document.getElementById('toast')?.classList.remove('show');
       return render();
     case 'filter': crewFilter = v; break;
     case 'tab': history.replaceState(null, '', `#task/${t.uid}/${v}`); view.tab = v; render(); return scrollTo(0, 0);
@@ -585,7 +714,21 @@ async function act(a, el) {
       render();
       return document.getElementById(input.id).focus(); // keep the keyboard up for the next entry
     }
-    case 'delItem': t.items.splice(+el.dataset.i, 1); break;
+    case 'delItem': { // gone at once; Undo puts the same step back in its place for 6 seconds
+      const i = +el.dataset.i, [gone] = t.items.splice(i, 1);
+      if (!gone) return;
+      t.updatedAt = Date.now();
+      persist();
+      render();
+      return toast(L('Step removed'), '', { undo: () => {
+        const s = find(t.uid); // the list may have been reloaded from storage since
+        if (!s || s.items.some(x => x.id === gone.id)) return;
+        s.items.splice(Math.min(i, s.items.length), 0, gone);
+        s.updatedAt = Date.now();
+        persist();
+        render();
+      } });
+    }
     case 'check': t.checks = t.checks.some(c => c.text === v) ? t.checks.filter(c => c.text !== v) : [...t.checks, newItem(v)]; break;
     case 'tick': {
       const it = t[el.dataset.list][+el.dataset.i];
@@ -601,7 +744,13 @@ async function act(a, el) {
       if (!t.crew || !(t.scope || t.items.length)) return toast(L('Pick a crew and describe the work first'), 'bad');
       return send('task', t);
     case 'sendResults': {
-      if (!t.status) return toast(L('Pick Complete, Partial or Blocked first'), 'bad');
+      if (!t.status) {
+        const s = app.querySelector('.timecard .seg');
+        s?.scrollIntoView({ block: 'center' });
+        s?.querySelector('button')?.focus({ preventScroll: true });
+        s?.classList.remove('need'); void s?.offsetWidth; s?.classList.add('need'); // a short shake draws the eye (off with reduced motion)
+        return toast(L('Pick Complete, Partial or Blocked first'), 'bad');
+      }
       t.cLang = getLang();
       t.resultAt = Date.now(); // the office phone keeps these over an older results text
       persist();
@@ -614,7 +763,7 @@ async function act(a, el) {
       return menu(office()
         ? [dayTasks().length && ['sendDay', L('Send day plan')], prev && ['carryDay', L('Copy unfinished work from {date}', { date: niceDate(prev) })], ['paste', L('Open a link someone sent you')],
           dayTasks().length && ['pdfDay', L("Save this day's sheets as one PDF")], ['settings', L('Settings, crews and backup')]]
-        : [['paste', L('Open a link someone sent you')], dayTasks().length && ['pdfDay', L("Save this day's sheets as one PDF")], ['lockBtn', L('Office sign-in')]]);
+        : [['paste', L('Open a link someone sent you')], dayTasks().length && ['pdfDay', L("Save this day's sheets as one PDF")], !crewPhone() && ['lockBtn', L('Office sign-in')]]);
     }
     case 'taskMenu':
       return menu([['dup', L('Duplicate for another crew or floor')], ['carry', L('Carry open work to {date}', { date: niceDate(addDays(t.date, 1)) })],
@@ -641,17 +790,24 @@ async function act(a, el) {
       toast(a === 'carry' ? L('Carried to {date}', { date: niceDate(date) }) : L('Duplicated. Change the crew or floor.'));
       return go(`task/${c.uid}/assign`);
     }
-    case 'del':
-      if (!await ask(L("Delete task {id}? This can't be undone.", { id: t.id }), L('Delete'), 'danger')) return;
+    case 'del': { // gone at once, with Undo for 6 seconds instead of an "are you sure?"
+      const at = T.indexOf(t);
       T = T.filter(x => x !== t);
       persist();
-      return go('day/' + t.date);
+      go('day/' + t.date);
+      return toast(L('Task {id} deleted', { id: t.id || L('New task') }), '', { undo: () => {
+        if (find(t.uid)) return;
+        T.splice(Math.min(at, T.length), 0, t);
+        persist();
+        render();
+      } });
+    }
     case 'pdfTask': return savePdf(`${fileName(t)}.pdf`, record(t));
     case 'pdfDay': return savePdf(`Task sheets ${day}.pdf`, makePdf(`Electrical task sheets · ${niceDate(day, 'en')}`, letterhead(S), dayTasks().flatMap(recordRows), `${COMPANIES} · ${niceDate(day, 'en')}`));
     case 'fileNow': return fileTask(t);
     case 'paste': return pasteSheet(code => go('p=' + code));
     case 'settings': return go('settings');
-    case 'addCrew': case 'delCrew': case 'backup': case 'testFolder': case 'pEdit': case 'pDel': await settingsAct(a, S, el); break;
+    case 'addCrew': case 'delCrew': case 'backup': case 'testFolder': case 'pEdit': case 'pDel': await settingsAct(a, S, el, f => { f(S); save(KEYS.settings, S); render(); }); break; // f: a removal's Undo, on the settings as they are by then
     case 'pAdd': { // keep the keyboard up in that crew's box for the next name
       const crew = el.dataset.crew;
       await settingsAct(a, S, el);
@@ -671,10 +827,14 @@ document.addEventListener('click', e => {
   e.preventDefault();
   el.closest('dialog')?.close();
   if (stale()) return;
-  if (el.dataset.go) go(el.dataset.go);
-  else if ((view.v === 'clock' || view.v === 'report') && !SHELL.has(el.dataset.act)) reportAct(el.dataset.act, el, S, day, view.v);
-  else act(el.dataset.act, el);
+  if (el.dataset.go) return go(el.dataset.go);
+  const a = el.dataset.act;
+  // A second tap on an action still running (sending, sharing, saving) does nothing; then the redrawn control plays its animation.
+  busy(el, () => ((view.v === 'clock' || view.v === 'report') && !SHELL.has(a) ? reportAct(a, el, S, day, view.v) : act(a, el)))
+    .then(() => twin(el)?.classList.add('just'));
 });
+// The control as drawn again after a tap (a checkbox, a segment), found by its data attributes.
+const twin = el => (el.isConnected ? el : app.querySelector(['act', 'v', 'i', 'list', 'k'].filter(k => el.dataset[k] != null).map(k => `[data-${k}="${CSS.escape(el.dataset[k])}"]`).join('')));
 const SHELL = new Set(['toggleLang', 'lang', 'lockBtn']); // header buttons work on every screen
 
 // The sign-in ran out (or another tab locked) while this screen was up: office screens and the office board
@@ -710,7 +870,7 @@ document.addEventListener('input', e => {
 document.addEventListener('change', e => {
   if (stale()) return;
   if (e.target.matches('[data-pick]') && e.target.value) go(`${e.target.dataset.pick || 'day'}/${e.target.value}`);
-  if (e.target.matches('[data-restore]') && e.target.files[0]) restore(e.target.files[0]);
+  if (e.target.matches('[data-restore]') && e.target.files[0]) { const f = e.target.files[0]; e.target.value = ''; busy(e.target.closest('label'), () => restore(f)); } // cleared, so the same file can be picked again after a Cancel
   if (e.target.dataset.k === 't.date' && /^\d{4}-\d{2}-\d{2}$/.test(e.target.value)) day = e.target.value; // moved to another day
   if (e.target.dataset.k === 's.worker') workerChange(S);
 });
@@ -738,7 +898,7 @@ addEventListener('visibilitychange', () => {
 });
 addEventListener('pagehide', () => { fileIfChanged(current()); fileReportIfChanged(S, day); }); // queued even if the upload can't finish; retried on next open
 app.addEventListener('toggle', sectionToggle, true);
-route();
+if (isNewPhone()) firstRun().then(route); else route();
 retryUploads(S);
 </script>
 </body>
