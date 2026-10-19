@@ -363,7 +363,7 @@ function summary(r) {
 function crewBlock(S, r, fi, ci, c) {
   const k = `r.floors.${fi}.crews.${ci}`;
   return `<div class="crew-edit" style="${crewVar(S, c.name)}">
-    <div class="row1"><strong>${esc(c.name)}</strong>
+    <div class="row1"><strong>${esc(c.name === 'Crew not set' ? L('Crew not set') : c.name)}</strong>
       <button class="chip" data-act="na" data-f="${fi}" data-c="${ci}" aria-pressed="${!c.na}">${c.na ? L('N/A, tap to add') : L('Worked here')}</button></div>
     ${c.na ? '' : `<div class="grid">
       ${field(L('Crew / lead'), `${k}.lead`, c.lead)}${field(L('Worker count'), `${k}.workers`, c.workers, { type: 'number', mode: 'numeric' })}

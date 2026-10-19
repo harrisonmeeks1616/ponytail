@@ -92,7 +92,7 @@ Schwab Field Records/
 ## Spanish mode (crew screens and the time clock)
 
 - Tap **ES** in the header, or Settings → Language. A crew phone asks "English / Español" the first time it opens a sheet.
-- Every crew label, button and message, the sign-in pad and the time clock switch to Spanish (wording in `es.mjs`; a bilingual foreman can fix any phrase there). The daily report form and the PM's crew hours stay in English, the office's record; only the app around it (tabs, dates, menus) follows the phone's language.
+- Every crew label, button and message, the sign-in pad and the time clock switch to Spanish (wording in `es.mjs`; a bilingual foreman can fix any phrase there). The daily report and the PM's crew hours are fully bilingual on screen too. What stays English is the office record: PDFs, the accountant's CSV, and the text messages sent to the office.
 - What people type is never translated. Notes show and print exactly as written, so a note typed in Spanish stays in Spanish for whoever reads it.
 - PDFs and review-folder copies are always the English form, with the notes as typed. The text message a Spanish-mode crew sends carries a Spanish line and an English line.
 

@@ -18,7 +18,7 @@
 </div>
 <nav class="office-tabs" id="officeTabs" aria-label="Screens"></nav></header>
 <main><p class="proj" id="proj"></p><div id="app"></div></main>
-<script>setTimeout(() => { const app = document.getElementById('app'); if (!window.appStarted) app.innerHTML = '<div class="empty"><h2>The app didn\u2019t finish loading</h2><p>Get signal, then reload. · La app no termin\u00f3 de cargar. Con se\u00f1al, vuelva a cargar.</p><button class="btn primary" onclick="location.reload()">Reload · Recargar</button></div>'; }, 6000); // a dropped file on the first open after an update</script>
+<script>setTimeout(() => { const app = document.getElementById('app'); if (window.appStarted) return; let es = false; try { es = JSON.parse(localStorage.getItem('schwab.settings')).lang === 'es'; } catch {} app.innerHTML = es ? '<div class="empty"><h2>La app no termin\u00f3 de cargar</h2><p>Con se\u00f1al, vuelva a cargar.</p><button class="btn primary" onclick="location.reload()">Recargar</button></div>' : '<div class="empty"><h2>The app didn\u2019t finish loading</h2><p>Get signal, then reload. · La app no termin\u00f3 de cargar. Con se\u00f1al, vuelva a cargar.</p><button class="btn primary" onclick="location.reload()">Reload · Recargar</button></div>'; }, 6000); // a dropped file on the first open after an update; a Spanish phone gets Spanish only</script>
 <nav class="bar" id="bar"></nav>
 <script type="module">
 import {
@@ -148,7 +148,8 @@ async function openCode(code) {
   persist();
   location.replace(`#task/${t.uid}/${data.kind === 'result' ? 'review' : 'assign'}`);
   if (firstSheet) { // first sheet on a new crew phone: ask the language once
-    sheet(`<h3>Language · Idioma</h3><div class="btns"><button class="btn big" data-act="lang" data-v="en">English</button><button class="btn big primary" data-act="lang" data-v="es">Español</button></div>`);
+    sheet(`<h3>Language · Idioma</h3><div class="btns"><button class="btn big" data-act="lang" data-v="en">English</button><button class="btn big primary" data-act="lang" data-v="es">Español</button></div>`)
+      .querySelector('.sheet-x').setAttribute('aria-label', 'Close · Cerrar'); // no language chosen yet
   }
 }
 
