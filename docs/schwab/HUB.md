@@ -96,6 +96,28 @@ Synced by super or pm: `project site super pm floors crews checks pin` (`pin` is
 
 `rev` is one global counter in Script Properties, bumped by every write; a no-change `pull` costs one property read.
 
+## Protocol details, as built (wave 1)
+
+- `purge` names the record as `target` (the request's `key` is always the credential). Kinds are plural on output (`tasks shifts reports`, `events` in records), singular accepted on input.
+- Push results carry `i` (index in the request list); `key` is '' when the sent key had an unsafe shape. Refusal reasons are a fixed list: `forbidden invalid too_large device deleted archived`. Caps apply per kind (200 each) plus the 1,000,000 character body cap.
+- A part stamp of 0 means "not sent" and never replaces a stored part. A key writing the other role's part (an office key editing the crew part, the PM editing the super part of a report) needs a strictly newer stamp; ties go to the incoming copy only for the part's own role.
+- Every task push carries `uid` and `date`. A crew phone's push carries only those plus crew fields and ticks.
+- Shift `crew`, `tasks` (and `pid`, `crewId`) follow the phone only until the PM has touched the shift (any `edited` flag).
+- Config carries an `at` stamp; first contact adopts the hub's config instead of pushing a phone's defaults.
+- Pulls cap lists at 500 and then return `more: true` with the `rev` actually covered. First cycle after connect (or a role, crew or window change) is pull, push, pull.
+- Deletion is only ever an explicit `purge` (never inferred from a missing local copy); a tombstone reaches other phones on their next pull.
+- Archive moves hours in whole Monday to Sunday weeks; a later push of an archived record is refused with `archived`.
+- Rate caps: 40 pushes a minute per phone, 300 per key (`busy`). A wrong key is retried every 10 minutes, not on the short backoff. A join link must carry the role `whoami` reports; PM links are refused (the PM key never travels).
+
+## Client identity API (shared.mjs) used by sync.mjs, live.mjs and report.mjs
+
+- Device: `ensureDevice()` (async; creates `schwab.device` = `{secret, id}` once: secret 32 characters `[A-Za-z0-9]` from `crypto.getRandomValues`, id = first 32 hex characters of SHA-256(secret)); `deviceId()` and `deviceSecret()` read it synchronously ('' until ensured). A phone with an older random `settings.device` keeps working without a hub (texted links); when it first connects, its own local shifts are relabeled from the old id to the new one.
+- Requests to the hub carry `devSecret`; the hub derives the device. Shifts store the derived id in `device`.
+- People and crews: `SETTINGS_TPL.crews = [{id, name, lead, members}]`, `SETTINGS_TPL.people = [{id, name, crewId}]`. On load, settings without `people` are migrated from the crews' `members` strings and every crew gets an id; `members` stays derived (comma list of that crew's people) for older versions. Helpers: `people(S)` -> `[{id, name, crewId, crew}]`, `personById(S, id)`, `crewById(S, id)`, `findPerson(S, name)` (nameKey match; among duplicates it prefers the given crewId), `addPerson(S, name, crewId)`, and renames that keep ids.
+- Tasks: `crewId`, `memberIds` next to `crew`, `members`. Shifts: `pid`, `crewId`, `tasks: [{uid, id}]` (a legacy string id becomes `{uid: '', id}`).
+- `byPerson(shifts, l, S)` groups by `pid` when present, else by nameKey of `who`; the label is the roster's current name for that pid, else the first spelling seen.
+- Hub config carries `people` and `crews` with their ids.
+
 ## Google Sheet (created by `setupHub()`, drive.file scope, written with the Sheets advanced service, `valueInputOption: RAW` so typed text can never run as a formula)
 
 Readable tabs, each with a bold frozen header; the machine copy is the last column `data` (JSON), before it `key` and `rev`:

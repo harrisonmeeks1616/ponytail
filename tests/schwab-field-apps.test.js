@@ -192,7 +192,7 @@ test('Spanish mode has a Spanish version of every on-screen phrase', async () =>
   const ES = (await import('../docs/schwab/es.mjs')).default;
   const dir = path.join(__dirname, '..', 'docs', 'schwab');
   const used = new Set(['Complete', 'Partial', 'Blocked', 'Accepted', 'Follow-up needed', 'Superintendent', 'Project manager', 'Crew lead', '1 person', '{n} people']); // looked up from data, not literals
-  for (const f of ['tasks.html', 'shared.mjs', 'report.mjs']) {
+  for (const f of ['tasks.html', 'shared.mjs', 'report.mjs', 'sync.mjs', 'live.mjs']) {
     const src = fs.readFileSync(path.join(dir, f), 'utf8');
     for (const m of src.matchAll(/\b(?:L|x)\(\s*(['"])((?:\\.|(?!\1)[^\\])*)\1/g)) used.add(m[2].replace(/\\(.)/g, '$1'));
   }

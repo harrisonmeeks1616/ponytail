@@ -134,6 +134,7 @@ const byStart = (a, b) => at(a.date, a.in) - at(b.date, b.in);
 const missed = (s, now) => !s.out && now - at(s.date, s.in) >= SHIFT_MS;
 // Each person (by name however typed), their Monday to Sunday weeks newest first, and the shifts in each. hours: hundredths.
 // open: shifts with no clock-out that are past a real shift's length; live: clocked in now.
+// ponytail: recomputed on every draw and keystroke; about 40 ms at 3,600 shifts (60 people, 60 days). Cache by length if the timesheet outgrows that.
 export function peopleWeeks(shifts, S, now = Date.now()) {
   return byPerson(shifts.filter(s => !s.gone), undefined, S).map(p => {
     const weeks = new Map();
@@ -189,7 +190,8 @@ export function eventLine(e, l = getLang()) {
 // ---------- the header dot ----------
 
 export function hubLabel(state, l = getLang()) {
-  return L({ live: 'Live', syncing: 'Syncing', offline: 'Offline', error: 'Problem' }[state] || 'Not connected', {}, l);
+  // literal L() calls, so the Spanish test sees every key
+  return state === 'live' ? L('Live', {}, l) : state === 'syncing' ? L('Syncing', {}, l) : state === 'offline' ? L('Offline', {}, l) : state === 'error' ? L('Problem', {}, l) : L('Not connected', {}, l);
 }
 // The small header indicator: nothing without a hub. go: where a tap leads ('live' on office phones, 'settings' on crew phones).
 export function statusDot(status, l = getLang(), go = 'settings') {
@@ -338,6 +340,8 @@ function sheetCard(ctx, t, now) {
 }
 
 // What a message or a review writes into a sheet (office fields only), stamped so the newest wins on every phone.
+// ponytail: HUB.md has no language field for a reply, so it is read as the sheet's aLang. An office phone that types Spanish
+// on an English sheet gets its reply shown untranslated (or mistranslated); add replyLang to the contract when that happens.
 export function withMessage(t, text, ms, by) {
   const stamp = Math.max(ms, (t.assignAt || 0) + 1);
   return { ...t, reply: text.trim().slice(0, MSG_MAX), replyAt: stamp, replyBy: by, assignAt: stamp };
