@@ -614,15 +614,20 @@ export function toast(msg, tone = '', { undo, done } = {}) {
 }
 
 // A double tap is one tap. When a finger's first tap changed what is under it (opened or closed a sheet, moved to
-// another screen, redrew the control it set), the second one, at the same spot within 350 ms, does nothing: it would
-// land on something the person never saw (Copy link, Send anyway, a crew to move to, a tab, the next question) or undo
-// the toggle it just set. The same key tapped twice (the passcode pad, a text box) still counts twice. A mouse (a
-// deliberate double-click) and a keyboard's click (detail 0) always count; a tap that turns into a scroll is forgotten.
+// another screen), the second one, at the same spot within 350 ms, does nothing: it would land on something the person
+// never saw (Copy link, Send anyway, a crew to move to, a tab, the next question). A toggle (a checkbox, a segment, a
+// chip) keeps the first tap too, as the second would undo it. Any other control tapped again counts every time (a
+// stepper, the date arrows, the passcode pad, a text box), even when it was drawn again under the finger: a control is
+// known by its hooks, not its node, and a data-go without its date (the arrow names the next day each time). A mouse
+// (a deliberate double-click) and a keyboard's click (detail 0) always count; a tap that turns into a scroll is forgotten.
+const HOOKS = ['act', 'go', 'v', 'i', 'list'];
+const tapKey = c => (HOOKS.some(k => c.dataset?.[k] != null) ? HOOKS.map(k => (k === 'go' ? c.dataset.go?.replace(/\d{4}-\d{2}-\d{2}/g, '') : c.dataset[k])).join('|') : c);
 let lastTap = null, dropTap = false;
 globalThis.document?.addEventListener('pointerdown', e => {
   if (e.pointerType === 'mouse') { lastTap = null; dropTap = false; return; }
-  const tap = { at: e.timeStamp, x: e.clientX, y: e.clientY, el: e.target };
-  dropTap = !!lastTap && tap.at - lastTap.at < 350 && Math.hypot(tap.x - lastTap.x, tap.y - lastTap.y) < 30 && tap.el !== lastTap.el;
+  const c = e.target.closest?.('[data-act], [data-go], button, a, input, select, textarea, label') || e.target;
+  const tap = { at: e.timeStamp, x: e.clientX, y: e.clientY, key: tapKey(c) };
+  dropTap = !!lastTap && tap.at - lastTap.at < 350 && Math.hypot(tap.x - lastTap.x, tap.y - lastTap.y) < 30 && (tap.key !== lastTap.key || !!c.matches?.('[aria-pressed]'));
   if (!dropTap) lastTap = tap;
 }, true);
 globalThis.document?.addEventListener('pointercancel', () => { lastTap = null; dropTap = false; }, true);

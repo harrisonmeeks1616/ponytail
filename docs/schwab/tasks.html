@@ -268,7 +268,7 @@ function renderBoard() {
     ${accepted.length ? `<details class="done-group logbook"><summary>${icon('check', 'logbook-ic')}<span>${L('Accepted')}</span><small>${accepted.length}</small>${icon('chev', 'chev')}</summary>${rows(accepted)}</details>` : ''}
     ${list.length ? '' : `<p class="hint board-none">${L('No sheets for this crew on this day.')}</p>`}
     ${office() ? '' : `<button class="btn wide open-link" data-act="paste">${L('Open a link')}</button>`}
-    ${office() || crewPhone() ? '' : `<button class="link sign-in" data-act="lockBtn">${L('Superintendent or PM? Sign in to the office screens')}</button>`}`
+    ${office() || crewPhone() ? '' : `<button class="link sign-in" data-act="lockBtn">${L('Office sign-in')}</button>`}`
     : !office()
       ? `<div class="empty">${icon('today', 'empty-ic')}<h2>${L('No task sheets for {date}', { date: niceDate(day) })}</h2>
         <p>${L('Open the link your superintendent texted you, or paste it here.')}</p>

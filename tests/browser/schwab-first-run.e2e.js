@@ -70,7 +70,7 @@ const fails = [], check = (ok, what) => { console.log(ok ? '  ok  ' : '  FAIL', 
   await sup.click('#toast .toast-undo');
   check(await steps() === 'One,Two' && await sup.locator('.tcard').count() === 1, 'Undo brings the sheet back to the board');
 
-  console.log("4. A finger's double tap is one tap; Back closes a menu");
+  console.log("4. A finger's double tap is one tap, a stepper counts every tap; Back closes a menu");
   const tap2 = async (p, sel) => { const b = await p.locator(sel).first().boundingBox(), x = b.x + b.width / 2, y = b.y + b.height / 2; await p.touchscreen.tap(x, y); await p.waitForTimeout(150); await p.touchscreen.tap(x, y); await p.waitForTimeout(500); };
   const fresh = await open(); await fresh.waitForSelector(fr('lang'));
   await tap2(fresh, fr('lang', 'es'));
@@ -80,6 +80,16 @@ const fails = [], check = (ok, what) => { console.log(ok ? '  ok  ' : '  FAIL', 
     'a double tap on + opens one new sheet, and the second tap does not land on Send to crew');
   await sup.click('[data-act=taskMenu]'); await sup.waitForSelector('dialog .menu'); await sup.goBack(); await sup.waitForTimeout(300);
   check(/#day\//.test(sup.url()) && await sup.locator('dialog[open]').count() === 0, 'Back with the ⋯ menu open closes the menu with its screen');
+  // A control drawn again under the finger is still the same control: fast taps on a stepper or an arrow all count.
+  const tap4 = async (p, sel) => { const b = await p.locator(sel).first().boundingBox(), x = b.x + b.width / 2, y = b.y + b.height / 2; for (let i = 0; i < 4; i++) { await p.touchscreen.tap(x, y); await p.waitForTimeout(200); } await p.waitForTimeout(300); };
+  await sup.goto(BASE + 'tasks.html#day/2026-10-19'); await sup.waitForSelector('.datebar .nav-btn');
+  await tap4(sup, '.datebar .nav-btn');
+  check(sup.url().endsWith('#day/2026-10-15'), 'four fast finger taps on the previous-day arrow go back exactly 4 days: ' + sup.url().split('#')[1]);
+  await crew.goto(BASE + 'tasks.html#task/u1/assign'); await crew.waitForSelector('[data-act=delay][data-v="15"]');
+  await crew.locator('[data-act=delay][data-v="15"]').scrollIntoViewIfNeeded(); await crew.waitForTimeout(200);
+  await tap4(crew, '[data-act=delay][data-v="15"]');
+  const delay = await crew.evaluate(() => JSON.parse(localStorage.getItem('schwab.tasks')).find(t => t.uid === 'u1').delay);
+  check(delay === 60, 'four fast finger taps on Delay + add exactly 60 minutes: ' + delay);
 
   check(!errors.length, 'no page errors ' + errors.join(' | '));
   await browser.close();

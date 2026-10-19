@@ -193,9 +193,11 @@ main:has(.fab) { padding-bottom: calc(var(--tabbar-h) + env(safe-area-inset-bott
   display: inline-flex; align-items: center; gap: 6px; min-height: 44px; padding: 0; border: 0; background: none;
   color: var(--tint); font: 600 1.0625rem/1.25 var(--font); text-align: left; text-decoration: none; cursor: pointer;
 }
-.link.danger { color: var(--bad); }
 .x { width: 44px; height: 44px; flex: none; display: grid; place-items: center; padding: 0; border: 0; border-radius: 50%; background: var(--fill); color: var(--tint); font-size: 1.1rem; cursor: pointer; }
-.x[data-act^=del]:not([data-act=delay]), .x[data-act$=Del] { color: var(--bad); } /* a remove button is red; a step up or down (delay) is not */
+/* a remove (a step, a shift, a floor, a crew): quiet on every row, red only while pressed, as Undo takes it back; a step
+   up or down (delay) is not a remove. The real destructive confirm (.acts .btn.danger) stays red. */
+.link.danger, .x[data-act^=del]:not([data-act=delay]), .x[data-act$=Del] { color: var(--muted); }
+.link.danger:active, .x[data-act^=del]:not([data-act=delay]):active, .x[data-act$=Del]:active { color: var(--bad); }
 .x.add { background: var(--accent); color: var(--on-accent); font-size: 1.5rem; }
 
 /* ---- lists: rows on the page, or grouped inset on a gray block ---- */
@@ -284,7 +286,7 @@ textarea { resize: vertical; min-height: 88px; field-sizing: content; max-height
 .seg button, .tabs a {
   min-height: 44px; padding: 4px 6px; border: 0; border-radius: 9px; background: none; color: var(--ink);
   font: 600 .9375rem/1.15 var(--font); text-align: center; text-decoration: none; cursor: pointer; display: grid; place-items: center;
-  min-width: 0; overflow-wrap: anywhere; -webkit-hyphens: auto; hyphens: auto;
+  min-width: 0; -webkit-hyphens: auto; hyphens: auto; /* no overflow-wrap: a word never splits mid-word (Terminad/o) */
   transition: background-color .2s var(--ease), box-shadow .2s var(--ease);
 }
 .seg button[aria-pressed=true], .tabs a[aria-current=page] { background: var(--seg-on); box-shadow: 0 1px 3px rgba(0, 0, 0, .14), 0 0 0 .5px rgba(0, 0, 0, .05); font-weight: 700; }
@@ -296,6 +298,7 @@ textarea { resize: vertical; min-height: 88px; field-sizing: content; max-height
 @keyframes seg-in { from { transform: scale(.94); opacity: .5; } }
 .seg.need { animation: shake .35s; } /* Send results without a status: the control it needs */
 @media (max-width: 520px) { .seg:has(> :nth-child(4)) { grid-auto-flow: row; grid-template-columns: 1fr 1fr; } }
+@media (max-width: 359px) { .seg button { font-size: .85rem; } } /* Terminado and Bloqueado fit their third at 320 px */
 .chips { display: flex; flex-wrap: wrap; gap: 8px; }
 .chip {
   min-height: 44px; padding: 0 16px; border: 0; border-radius: 999px; background: var(--fill); color: var(--ink);
@@ -523,7 +526,7 @@ dialog.pin h3 { text-align: center; padding: 0 44px; }
 .rec-controls { display: flex; flex-direction: column; gap: 10px; }
 .chips.scroll { flex-wrap: nowrap; overflow-x: auto; padding-bottom: 4px; scrollbar-width: thin; }
 .chips.scroll > .chip { flex: none; }
-.tabs a { text-align: center; }
+.tabs a { text-align: center; overflow-wrap: anywhere; }
 @media (max-width: 359px) { .tabs a { font-size: .85rem; } }
 input[type=search] { -webkit-appearance: none; appearance: none; }
 .rec-row { display: flex; align-items: stretch; gap: 8px; width: 100%; min-width: 0; min-height: 56px; text-align: left; color: inherit; text-decoration: none; cursor: pointer; background: var(--surface); border: 1px solid var(--line); border-left: 6px solid var(--crew, var(--accent)); border-radius: var(--r); padding: 0; box-shadow: 0 1px 2px rgb(15 23 18 / .06); }
@@ -613,7 +616,6 @@ details.rec-week > summary .rec-main { padding: 0; flex-direction: row; flex-wra
 .shift-day b { font-weight: 600; }
 .shift-top .out { font-size: 1rem; text-align: right; overflow-wrap: anywhere; min-width: 0; }
 .shift .x { background: none; margin-right: -10px; }
-.shift .x[data-act=hDel] { color: var(--box); } .shift .x[data-act=hDel]:active { color: var(--bad); } /* Undo takes it back: no red on every row */
 .shift .grid.two { gap: 12px; }
 .shift .field { gap: 4px; }
 .shift .field > span { font-size: .8125rem; }
@@ -732,7 +734,7 @@ svg.empty-ic { width: 56px; height: 56px; color: var(--box); stroke-width: 1.4; 
 .board .empty .link { justify-content: center; text-align: center; }
 .board-none { padding: 16px 0; }
 .board .open-link { margin-top: 20px; }
-.board .sign-in { align-self: center; justify-content: center; text-align: center; }
+.board .sign-in { align-self: center; justify-content: center; text-align: center; color: var(--muted); font: 400 .9375rem/1.25 var(--font); } /* quiet, under Open a link */
 /* <<< section: board */
 
 /* >>> section: tasksheet */
