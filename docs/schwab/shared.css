@@ -247,7 +247,9 @@ dialog.sheet::backdrop { background: rgb(0 0 0 / .45); }
 .person { border-left: 6px solid var(--accent); }
 .person .total { font: 700 1.3rem var(--display); font-variant-numeric: tabular-nums; white-space: nowrap; }
 .person .chips { align-items: center; }
-.person h2, .person .link, .person .chips .hint, .tcard .meta span { overflow-wrap: anywhere; min-width: 0; } /* a long unbroken name or crew wraps */
+.person h2, .person .link { overflow-wrap: break-word; min-width: 0; } /* a long unbroken name or crew wraps between words first */
+.person [data-act=hRename] { flex: none; } /* a one-word button never splits mid-word */
+.person .chips .hint, .tcard .meta span { overflow-wrap: anywhere; min-width: 0; }
 .shift { display: flex; flex-direction: column; gap: 6px; padding-top: 10px; border-top: 1px solid var(--line); }
 .shift .row1 .out { margin-left: auto; }
 .shift input[type=time] { padding-inline: 8px; min-width: 0; }
@@ -267,9 +269,8 @@ dialog.sheet::backdrop { background: rgb(0 0 0 / .45); }
 .hub-dot[data-state=syncing] { background: var(--info); }
 .hub-dot[data-state=offline], .hub-dot[data-state=off] { background: transparent; box-shadow: inset 0 0 0 2px var(--muted); }
 .hub-dot[data-state=error] { background: var(--bad); }
-.live-state { display: inline-flex; align-items: center; font: 700 1.25rem var(--display); letter-spacing: .02em; text-transform: uppercase; }
-.live-head .row1 { gap: 12px; }
-.stats.three .stat span { overflow-wrap: anywhere; }
+.live-state { display: inline-flex; align-items: center; min-width: 0; font: 700 1.15rem var(--display); letter-spacing: .02em; text-transform: uppercase; }
+.live-head .row1, .live-state + small { flex-wrap: wrap; gap: 8px 12px; }
 
 .onsite-g { display: flex; flex-direction: column; gap: 6px; }
 .onsite { display: grid; grid-template-columns: repeat(auto-fill, minmax(128px, 1fr)); gap: 6px; }

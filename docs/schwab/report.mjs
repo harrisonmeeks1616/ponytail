@@ -288,7 +288,7 @@ function renameWorker(S, day, who) {
     <div class="btns"><button class="btn primary" data-save>${L('Rename')}</button></div>`);
   d.querySelector('[data-save]').onclick = () => {
     const name = d.querySelector('[name=who]').value.trim().slice(0, 60);
-    if (!name) return toast(L('Type the name'), 'bad');
+    if (!nameKey(name)) return toast(L('Type the name'), 'bad'); // punctuation alone is no name: it would drop them from their crew
     for (const s of CREW) if (!s.gone && nameKey(s.who) === nameKey(who)) Object.assign(s, { who: name, edited: { ...s.edited, who: true } });
     keep(KEYS.crewHours, CREW);
     const p = findPerson(S, who), c = p && (nameKey(name) === nameKey(who) || !findPerson(S, name)) && S.crews.find(x => x.name === p.crew);
