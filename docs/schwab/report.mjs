@@ -711,9 +711,10 @@ export async function reportAct(a, el, S, day, v) {
       keep(KEYS.hours, MY);
       navigator.vibrate?.(12);
       renderOffice(v, S, day);
-      // At once, not after the usual short wait. The text to the PM opens unless that round got through (signal gone, hub busy, key replaced).
-      // ponytail: a round already running at the tap can answer for it before the shift went; its follow-up round sends it.
-      if (hubAnswers() && (await cycle()).state === 'live') return toast(L('Saved. Your hours go to the PM through the hub.'));
+      // At once, not after the usual short wait. The text to the PM opens unless the tap's own round got through (signal gone, hub busy,
+      // key replaced). A round already running (opening the app starts one) read the hours before the tap, so the tap's is the next one.
+      const late = hubStatus().state === 'syncing';
+      if (hubAnswers() && (await cycle()).state === 'live' && (!late || (await cycle()).state === 'live')) return toast(L('Saved. Your hours go to the PM through the hub.'));
       return sendMine(S, s, on ? 'out' : 'in'); // no hub, or no answer from it lately: the text to the PM
     }
     case 'hWho': S.workerId = val; keep(KEYS.settings, S); return renderOffice(v, S, day); // which of the people sharing this name

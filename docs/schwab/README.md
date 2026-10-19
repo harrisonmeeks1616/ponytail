@@ -165,7 +165,8 @@ and live updates. It is one Google Apps Script web app plus one Google Sheet, bo
   wait on the phone and go when it is back. The status dot in the header shows Live, Syncing, Offline or Problem.
 - The Sheet keeps everything. **Records → Load older records** shows what the phone no longer keeps, without storing it.
 - The hub key stays on the phone it was typed on. A backup leaves it out: after a restore, open a new invite (or paste
-  the key again). Invite links carry a crew or superintendent key, so send each only to its person.
+  the key again). A backup made on a hub also notes what the hub had then, so restoring it does not roll back work that
+  reached the hub later. Invite links carry a crew or superintendent key, so send each only to its person.
 - Each role changes only its own part: crews their results, ticks and hours; the office the assignment, the review and
   messages; only the PM edits hours, deletes records (from every phone at once: the delete can be undone for 6 seconds,
   then it leaves the hub), exports and manages the keys.
