@@ -474,6 +474,29 @@ test('task text is clipped, control characters become spaces, aLang and cLang ar
   assert.equal(t.cLang, '', 'cLang is crew part and the office stamp 0 does not set it');
 });
 
+// PHONE-UX-08: the PM and the superintendent (or two crew phones) type in different languages. Each text keeps the language
+// it was typed in, merged key by key like the fields, so a push that did not touch a text never relabels it.
+test('aLangs and cLangs: each typed text keeps its own language, when two phones write at once', () => {
+  const env = setup(), sup = phone(env, 'super'), pm = phone(env, 'pm'), ana = phone(env, 'crew', 'crew-ana'), jose = phone(env, 'crew', 'crew-jose');
+  const made = task({ scope: 'Pull wire to the panel', aLang: 'en', aLangs: { scope: 'en', i1: 'en', i2: 'en' } });
+  const base = ok(pm.push({ tasks: [made] })).tasks[0].task, { rev, ...was } = base; // what both office phones last pulled
+  // the Spanish superintendent adds a step while the English PM, not pulled since, sends a message
+  const step = { id: 'i3', text: 'Etiquete el tablero' };
+  ok(sup.push({ tasks: [{ ...was, items: [...was.items, step], aLangs: { ...was.aLangs, i3: 'es' }, assignAt: T0 - 4000, assignBase: was }] }));
+  ok(pm.push({ tasks: [{ ...was, reply: 'Start on level 4', replyAt: T0 - 3000, replyBy: 'Pat', aLangs: { ...was.aLangs, reply: 'en' }, assignAt: T0 - 3000, assignBase: was }] }));
+  let t = pm.pull().tasks[0];
+  assert.deepEqual([t.items.map(i => i.id), t.reply, t.aLangs], [['i1', 'i2', 'i3'], 'Start on level 4', { scope: 'en', i1: 'en', i2: 'en', i3: 'es', reply: 'en' }], 'the Spanish step stays Spanish under the PM\'s newer push');
+  // two phones on one crew: Ana types what is done in Spanish, Jose what remains in English
+  const c0 = { uid: was.uid, date: was.date, items: [], checks: [], crewAt: 0 };
+  ok(ana.push({ tasks: [{ ...c0, doneText: 'Jalamos cable', cLang: 'es', cLangs: { doneText: 'es' }, crewAt: T0 - 2000, crewBase: { items: [], checks: [] } }] }));
+  ok(jose.push({ tasks: [{ ...c0, remain: 'Labels left', cLang: 'en', cLangs: { remain: 'en' }, crewAt: T0 - 1000, crewBase: { items: [], checks: [] } }] }));
+  t = pm.pull().tasks[0];
+  assert.deepEqual([t.doneText, t.remain, t.cLangs], ['Jalamos cable', 'Labels left', { doneText: 'es', remain: 'en' }]);
+  // only en and es, under a field name or a step id
+  t = ok(pm.push({ tasks: [task({ uid: 'u2', aLangs: { scope: 'fr', __proto__x: 'es', i1: 'es', 'bad key': 'en' } })] })).tasks[0].task;
+  assert.deepEqual(t.aLangs, { i1: 'es' });
+});
+
 test('push: one rev per row written, entity rows carry theirs, events only for real changes', () => {
   const env = setup(), sup = office(env), crew = phone(env, 'crew', 'crew-dev');
   const a = ok(sup.push({ tasks: [task()] }));
@@ -1024,9 +1047,9 @@ test('round trip: every field of every template survives a push and a pull, and 
   const one = v => (Array.isArray(v) ? [one(v[0])] : v && typeof v === 'object' ? fill(v) : typeof v === 'string' ? 'x' : typeof v === 'number' ? 5 : !v);
   const fill = (t, over = {}) => Object.fromEntries(Object.entries(t).map(([k, v]) => [k, k in over ? over[k] : one(v)]));
   const time = '07:00', pin = 'a'.repeat(16) + ':' + 'b'.repeat(64);
-  const t = fill(tpl('TASK'), { uid: 'rt-task', date: '2026-10-19', pStart: time, pStop: time, checkIn: time, aStart: time, aStop: time, aLang: 'es', cLang: 'es' });
+  const t = fill(tpl('TASK'), { uid: 'rt-task', date: '2026-10-19', pStart: time, pStop: time, checkIn: time, aStart: time, aStop: time, aLang: 'es', cLang: 'es', aLangs: { scope: 'es', x: 'en' }, cLangs: { remain: 'en' } });
   const s = fill(tpl('SHIFT'), { id: 'rt-shift', device: ID('crew-dev'), date: '2026-10-19', in: time, out: '15:00' });
-  const r = fill(tpl('REPORT'), { date: '2026-10-19', status: 'At risk', lang: 'es' });
+  const r = fill(tpl('REPORT'), { date: '2026-10-19', status: 'At risk', lang: 'es', pmLang: 'en' });
   const c = fill(tpl('CONFIG'), { pin });
   const first = ok(pm.push({ tasks: [t], shifts: [s], reports: [r], config: c }));
   assert.deepEqual([first.tasks[0].status, first.shifts[0].status, first.reports[0].status, first.configStatus], ['ok', 'ok', 'ok', 'ok']);
@@ -2192,7 +2215,7 @@ function convergence(seed, steps) {
     for (const k of OFFICE) assert.equal(J(t[k]), J(o.fields[k]), `seed ${seed}: ${uid}.${k} follows the newest assignment`);
     assert.equal(t.assignAt, o.stamp);
     const cr = L.crew.length ? L.crew.reduce((a, b) => (b.stamp > a.stamp ? b : a)) : null;
-    for (const k of CREWF) assert.equal(J(t[k]), J(cr ? cr.fields[k] : typeof TASK_TPL[k] === 'number' ? 0 : ''), `seed ${seed}: ${uid}.${k} follows the newest crew result`);
+    for (const k of CREWF) assert.equal(J(t[k]), J(cr ? cr.fields[k] : TASK_BLANK[k]), `seed ${seed}: ${uid}.${k} follows the newest crew result`);
     assert.equal(t.crewAt, cr ? cr.stamp : 0);
     for (const list of ['items', 'checks']) {
       assert.deepEqual(t[list].map(i => [i.id, i.text]), o[list].map(i => [i.id, i.text]), `seed ${seed}: ${uid} ${list} structure is the office's`);

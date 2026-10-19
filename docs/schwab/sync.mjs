@@ -33,8 +33,8 @@ const sheetUrl = u => (typeof u === 'string' && SHEET_OK.test(u) ? u : '');
 const CFG_TPL = { project: '', site: '', super: '', pm: '', floors: [''], crews: [{ id: '', name: '', lead: '', members: '' }], people: [{ id: '', name: '', crewId: '' }], checks: [''], pin: '' };
 
 export const A_KEYS = ['id', 'date', 'by', 'floor', 'area', 'crew', 'crewId', 'members', 'memberIds', 'size', 'scope', 'refs', 'allot', 'allotNote', 'est', 'estNote', 'pStart', 'pStop', 'checkIn',
-  'review', 'reviewer', 'followUp', 'reply', 'replyAt', 'replyBy', 'aLang', 'sentAt'];
-export const C_KEYS = ['lead', 'aStart', 'aStop', 'delay', 'status', 'doneText', 'remain', 'comments', 'cLang', 'resultAt'];
+  'review', 'reviewer', 'followUp', 'reply', 'replyAt', 'replyBy', 'aLang', 'aLangs', 'sentAt'];
+export const C_KEYS = ['lead', 'aStart', 'aStop', 'delay', 'status', 'doneText', 'remain', 'comments', 'cLang', 'cLangs', 'resultAt'];
 const ticks = l => l.filter(i => i.done || i.at).map(i => [i.id, i.done, i.at]); // unticked steps are left out, so a new step is not an edit
 const aPart = t => ({ ...pick(t, A_KEYS), items: t.items.map(i => [i.id, i.text]), checks: t.checks.map(i => [i.id, i.text]) });
 const cPart = t => ({ ...pick(t, C_KEYS), items: ticks(t.items), checks: ticks(t.checks) });
@@ -42,8 +42,8 @@ const cPart = t => ({ ...pick(t, C_KEYS), items: ticks(t.items), checks: ticks(t
 const aBase = t => { const l = x => x.map(i => ({ id: i.id, text: i.text })); return { ...pick(t, A_KEYS), items: l(t.items), checks: l(t.checks) }; };
 const cBase = t => { const l = x => x.filter(i => i.done || i.at).map(i => ({ id: i.id, done: i.done, at: i.at })); return { ...pick(t, C_KEYS), items: l(t.items), checks: l(t.checks) }; };
 const TPARTS = [['assign', aPart, 'assignAt', aBase], ['crew', cPart, 'crewAt', cBase]];
-const supPart = r => { const { pmReview, pmAt, updatedAt, filedAt, decisions, ...rest } = r; return { ...rest, decisions: decisions.map(d => [d.q, d.rec, d.by]) }; };
-const pmPart = r => ({ pmReview: r.pmReview, answers: r.decisions.filter(d => d.pm || d.pmNote).map(d => [d.q, d.pm, d.pmNote]) });
+const supPart = r => { const { pmReview, pmLang, pmAt, updatedAt, filedAt, decisions, ...rest } = r; return { ...rest, decisions: decisions.map(d => [d.q, d.rec, d.by]) }; };
+const pmPart = r => ({ pmReview: r.pmReview, pmLang: r.pmLang, answers: r.decisions.filter(d => d.pm || d.pmNote).map(d => [d.q, d.pm, d.pmNote]) });
 const RPARTS = [['sup', supPart, 'updatedAt'], ['pm', pmPart, 'pmAt']];
 const PARTS = { t: TPARTS, r: RPARTS, g: [['v', s => cfgPart(s), 'at', s => cfgPart(s)]] };
 // A worker's shift is the phone's own words (never edited or gone); a PM-ruled one is everything.
@@ -110,7 +110,7 @@ export function makeSync(o = {}) {
   }
   function loadState() {
     const s = obj(store.get(ST, null)), st = { rev: num(s.rev), sig: String(s.sig || ''), skew: num(s.skew), ok: num(s.ok) };
-    for (const k of ['t', 'h', 'm', 'r', 'g', 'told']) st[k] = dict(s[k]);
+    for (const k of ['t', 'h', 'm', 'r', 'g', 'told', 'del']) st[k] = dict(s[k]);
     return st;
   }
   let meta = null; // what hubStatus shows, so a screen can ask on every draw without reading the whole state
@@ -222,8 +222,8 @@ export function makeSync(o = {}) {
   const wireReport = (r, sent) => {
     const { filedAt, ...w } = r;
     if (sent.sup && sent.pm) return { ...w, updatedAt: sent.sup.at, pmAt: sent.pm.at };
-    if (sent.sup) return { ...w, decisions: r.decisions.map(d => ({ ...d, pm: '', pmNote: '' })), pmReview: '', pmAt: 0, updatedAt: sent.sup.at };
-    return { date: r.date, decisions: r.decisions.filter(d => d.q || d.pm || d.pmNote).map(d => ({ q: d.q, pm: d.pm, pmNote: d.pmNote })), pmReview: r.pmReview, pmAt: sent.pm.at, updatedAt: 0 }; // every question, so an answer the PM took back is taken back on the hub too
+    if (sent.sup) return { ...w, decisions: r.decisions.map(d => ({ ...d, pm: '', pmNote: '' })), pmReview: '', pmLang: '', pmAt: 0, updatedAt: sent.sup.at };
+    return { date: r.date, decisions: r.decisions.filter(d => d.q || d.pm || d.pmNote).map(d => ({ q: d.q, pm: d.pm, pmNote: d.pmNote })), pmReview: r.pmReview, pmLang: r.pmLang, pmAt: sent.pm.at, updatedAt: 0 }; // every question, so an answer the PM took back is taken back on the hub too
   };
   const wireShift = (s, full, at) => ({ id: s.id, device: s.device, who: s.who, pid: s.pid, date: s.date, in: s.in, out: s.out, crew: s.crew, crewId: s.crewId, tasks: s.tasks,
     edited: full ? s.edited : { who: false, in: false, out: false }, gone: full ? s.gone : false, at: full ? s.at : at });
@@ -405,10 +405,10 @@ export function makeSync(o = {}) {
     if (!Object.keys(took).length) return loc;
     const out = loc ? structuredClone(loc) : { ...inc, filedAt: 0 };
     if (loc) {
-      if (took.sup) { for (const k of Object.keys(inc)) if (!['pmReview', 'pmAt', 'updatedAt', 'filedAt', 'decisions'].includes(k)) out[k] = inc[k]; out.updatedAt = inc.updatedAt; }
-      const tmp = { decisions: (took.sup ? inc : loc).decisions.map(d => ({ ...d, pm: '', pmNote: '' })), pmReview: '' }, from = took.pm ? inc : loc;
-      mergeAnswers(tmp, { decisions: from.decisions.filter(d => d.pm || d.pmNote).map(d => ({ ...d })), pmReview: from.pmReview }); // an answer to a reworded question stays as its own entry
-      Object.assign(out, { decisions: tmp.decisions, pmReview: tmp.pmReview });
+      if (took.sup) { for (const k of Object.keys(inc)) if (!['pmReview', 'pmLang', 'pmAt', 'updatedAt', 'filedAt', 'decisions'].includes(k)) out[k] = inc[k]; out.updatedAt = inc.updatedAt; }
+      const tmp = { decisions: (took.sup ? inc : loc).decisions.map(d => ({ ...d, pm: '', pmNote: '' })), pmReview: '', pmLang: '' }, from = took.pm ? inc : loc;
+      mergeAnswers(tmp, { decisions: from.decisions.filter(d => d.pm || d.pmNote).map(d => ({ ...d })), pmReview: from.pmReview, pmLang: from.pmLang }); // an answer to a reworded question stays as its own entry
+      Object.assign(out, { decisions: tmp.decisions, pmReview: tmp.pmReview, pmLang: tmp.pmLang });
       if (took.pm) out.pmAt = inc.pmAt;
     }
     for (const [p, fn, at] of RPARTS) if (took[p]) {
@@ -609,6 +609,11 @@ export function makeSync(o = {}) {
     if (!c) return setStatus('off');
     relabel(c);
     if (!c.role) { const rep = await whoami(c); if (ep !== epoch) throw err('aborted'); patchSettings({ hubRole: rep.role }); c = hub(); }
+    for (const [k, due] of Object.entries(loadState().del)) if (due <= now() && !mine.has(k)) { // a delete whose Undo ran out with the app closed
+      const [kind, key] = k.split('|'), r = await purge(kind, key);
+      if (ep !== epoch) throw err('aborted');
+      if (['forbidden', 'bad_request'].includes(r.error)) purgeLater(kind, key, 0); // the hub will never take it (not the PM key any more)
+    }
     // First contact (or a new role, crew or window): merge what the hub has before pushing anything, so old local copies cannot overwrite newer ones.
     const first = loadState().sig !== [c.role, c.crew, winDays(c.role)].join('|');
     if (first) await pullPhase(c, ep);
@@ -710,7 +715,7 @@ export function makeSync(o = {}) {
     setStatus('off');
     notify(new Set(['settings']));
   }
-  async function invite(role, crew = '', crews = []) {
+  async function invite(role, crew = '', crews = [], people = []) {
     const c = hub();
     if (!['crew', 'super'].includes(role)) return bad('bad_join');
     if (!c || c.role !== 'pm') return bad('forbidden');
@@ -718,7 +723,8 @@ export function makeSync(o = {}) {
       const rep = await call('keys');
       if (!KEY_OK.test(rep[role])) return bad('bad_reply');
       const pick = role === 'crew' && !crew ? arr(crews).filter(x => typeof x === 'string' && x.trim()).slice(0, 50).map(x => x.trim().slice(0, 60)) : []; // the person picks from the job's crews
-      const data = { v: 1, kind: 'join', hub: { url: c.url, key: rep[role] }, role, ...(role === 'crew' && crew && { crew: String(crew).slice(0, 60) }), ...(pick.length && { crews: pick }) };
+      const who = role === 'crew' ? arr(people).filter(p => isObj(p) && typeof p.name === 'string' && p.name.trim()).slice(0, 100).map(p => ({ name: p.name.trim().slice(0, 60), crew: str(p.crew, 60) })) : []; // the joining phone taps its name (joinSheet)
+      const data = { v: 1, kind: 'join', hub: { url: c.url, key: rep[role] }, role, ...(role === 'crew' && crew && { crew: String(crew).slice(0, 60) }), ...(pick.length && { crews: pick }), ...(who.length && { people: who }) };
       return { ok: true, url: linkFn('tasks.html', await packFn(data)) };
     } catch (e) { return lost(e); }
   }
@@ -772,12 +778,22 @@ export function makeSync(o = {}) {
     const r = await act('purge', { kind: str(kind, 20), target: str(key, 60) });
     const c = r.ok && hub();
     if (c) { // the tombstone comes back on the next pull; the sheet leaves this phone now, before a push could bring it back
+      purgeLater(kind, key, 0);
       const st = loadState(), lc = readLocal(c), dirty = {}, kinds = new Set();
       dropKey(lc, st, dirty, kind, str(key, 60));
       try { flush(lc, dirty, kinds); saveState(st); } catch { /* full phone: the pull's tombstone retries it */ }
       notify(kinds);
     }
     return r.ok ? { ok: true, rev: num(r.rev) } : r;
+  }
+  // A PM delete waiting out its Undo (live.mjs deleteRecord) is stored, so it still reaches the hub if the app is closed
+  // first: a later start sends it once due (when the Undo runs out). This page's own Undo offer sends its own (mine).
+  // due 0 takes it back (the Undo, or the purge went).
+  const mine = new Set();
+  function purgeLater(kind, key, due) {
+    const st = loadState(), k = `${kind}|${key}`;
+    if (due) { st.del[k] = num(due); mine.add(k); } else { delete st.del[k]; mine.delete(k); }
+    return saveState(st);
   }
 
   // ---------- translation ----------
@@ -854,8 +870,8 @@ export function makeSync(o = {}) {
     return out;
   }
 
-  return { hubStatus, poke, cycle, wake, start, joinFrom, connect, disconnect, invite, translate, records, stats, purge, rotate, archive, selftest, fromText,
-    liveData: () => ({ ...live, info }), onHub: uid => loadState().t[uid]?.assign?.v !== undefined }; // onHub: the hub has this sheet, so its number is known
+  return { hubStatus, poke, cycle, wake, start, joinFrom, connect, disconnect, invite, translate, records, stats, purge, purgeLater, rotate, archive, selftest, fromText,
+    liveData: () => ({ ...live, info }), onHub: (key, kind = 'task') => (kind === 'report' ? loadState().r[key]?.sup : loadState().t[key]?.assign)?.v !== undefined }; // onHub: the hub has this sheet (so its number is known) or report
 }
 
 // Sheets that share a day and a short id with another sheet: uid -> the uids of the others. Pure, for any list of sheets.
@@ -887,14 +903,15 @@ export const cycle = () => get().cycle();
 export const joinFrom = (data, opt) => get().joinFrom(data, opt);
 export const connect = (url, key) => get().connect(url, key);
 export const disconnect = () => get().disconnect();
-export const invite = (role, crew, crews) => get().invite(role, crew, crews);
+export const invite = (role, crew, crews, people) => get().invite(role, crew, crews, people);
 export const translate = (items, from, to) => get().translate(items, from, to);
 export const records = q => get().records(q);
 export const stats = () => get().stats();
 export const purge = (kind, key) => get().purge(kind, key);
+export const purgeLater = (kind, key, due) => get().purgeLater(kind, key, due);
 export const rotate = role => get().rotate(role);
 export const archive = before => get().archive(before);
 export const selftest = () => get().selftest();
 export const liveData = () => get().liveData();
-export const onHub = uid => get().onHub(uid);
+export const onHub = (key, kind) => get().onHub(key, kind);
 export const fromText = (kind, key, part, at, skew) => get().fromText(kind, key, part, at, skew);

@@ -75,16 +75,24 @@ const KINDS = { task: 'tasks', tasks: 'tasks', shift: 'shifts', shifts: 'shifts'
 // 's' = short text (200 chars), 't' = long text (8000), 0 = number >= 0, false/true = boolean (the default is kept).
 // Local-only task fields (origin, from, gotAt, filedAt, updatedAt) are not here: they never leave a phone.
 const ASSIGN = ['id', 'date', 'by', 'floor', 'area', 'crew', 'crewId', 'members', 'memberIds', 'size', 'scope', 'refs', 'allot', 'allotNote', 'est', 'estNote', 'pStart', 'pStop', 'checkIn'];
-const CREW = ['lead', 'aStart', 'aStop', 'delay', 'status', 'doneText', 'remain', 'comments', 'cLang', 'resultAt'];
-const OFFICE_EXTRA = ['review', 'reviewer', 'followUp', 'reply', 'replyAt', 'replyBy', 'aLang', 'sentAt'];
+const CREW = ['lead', 'aStart', 'aStop', 'delay', 'status', 'doneText', 'remain', 'comments', 'cLang', 'cLangs', 'resultAt'];
+const OFFICE_EXTRA = ['review', 'reviewer', 'followUp', 'reply', 'replyAt', 'replyBy', 'aLang', 'aLangs', 'sentAt'];
 const ITEM = { id: 's', text: 's', done: false, at: 0 };
 const TASK = {
   uid: 's', id: 's', date: 's', by: 's', floor: 's', area: 's', crew: 's', crewId: 's', members: ['s'], memberIds: ['s'], size: 0, scope: 't', refs: 't',
   allot: 0, allotNote: 't', est: 0, estNote: 't', pStart: 's', pStop: 's', checkIn: 's',
   items: [ITEM], checks: [ITEM],
-  review: 's', reviewer: 's', followUp: 't', reply: 't', replyAt: 0, replyBy: 's', aLang: 's', sentAt: 0, assignAt: 0,
-  lead: 's', aStart: 's', aStop: 's', delay: 0, status: 's', doneText: 't', remain: 't', comments: 't', cLang: 's', resultAt: 0, crewAt: 0,
+  review: 's', reviewer: 's', followUp: 't', reply: 't', replyAt: 0, replyBy: 's', aLang: 's', aLangs: {}, sentAt: 0, assignAt: 0,
+  lead: 's', aStart: 's', aStop: 's', delay: 0, status: 's', doneText: 't', remain: 't', comments: 't', cLang: 's', cLangs: {}, resultAt: 0, crewAt: 0,
 };
+// aLangs (office part) and cLangs (crew part): the language each typed text is in, by its field or a step's id ({scope: 'es',
+// reply: 'en', <step id>: 'es'}), so a PM and a superintendent, or two crew phones, can type in different languages.
+const LANG_KEY = /^[A-Za-z0-9][\w-]{0,39}$/;
+function langs_(m) {
+  const out = {};
+  if (isObj_(m)) Object.keys(m).slice(0, 300).forEach(function (k) { if (LANG_KEY.test(k) && (m[k] === 'en' || m[k] === 'es')) out[k] = m[k]; });
+  return out;
+}
 // A shift names the person (pid), the crew (crewId) and the task sheets (uid) by id; who, crew and tasks[].id are the labels
 // they had then, for reading.
 const SHIFT = { id: 's', device: 's', who: 's', pid: 's', date: 's', in: 's', out: 's', crew: 's', crewId: 's', tasks: [{ uid: 's', id: 's' }], edited: { who: false, in: false, out: false }, gone: false, at: 0 };
@@ -96,7 +104,7 @@ const REPORT = {
   floors: [{ floor: 's', crews: [CREW_BLOCK] }],
   next: [{ step: 't', prereq: 't', start: 's', dur: 's', finish: 's', deadline: 's', lead: 's', checkin: 's' }],
   risks: [{ risk: 't', impact: 't', prevent: 't', fallback: 't', owner: 's', by: 's' }],
-  preparedBy: 's', pmReview: 't', updatedAt: 0, lang: 's', pmAt: 0,
+  preparedBy: 's', pmReview: 't', updatedAt: 0, lang: 's', pmLang: 's', pmAt: 0,
 };
 // people is the roster (the source of truth); crews[].members is the derived name list older phones still read.
 const CONFIG = { project: 's', site: 's', super: 's', pm: 's', floors: ['s'], crews: [{ id: 's', name: 's', lead: 's', members: 't' }], people: [{ id: 's', name: 's', crewId: 's' }], checks: ['s'], pin: 's', at: 0 };
@@ -648,6 +656,7 @@ function normTask_(raw, now) {
   if (!FORMAT.uid.test(t.uid) || !isDay_(t.date)) return null;
   ['pStart', 'pStop', 'checkIn', 'aStart', 'aStop'].forEach(function (k) { if (!FORMAT.time.test(t[k])) t[k] = ''; });
   ['aLang', 'cLang'].forEach(function (k) { if (t[k] !== 'en' && t[k] !== 'es') t[k] = ''; });
+  t.aLangs = langs_(raw.aLangs); t.cLangs = langs_(raw.cLangs);
   if (!FORMAT.uid.test(t.crewId)) t.crewId = '';
   t.memberIds = t.memberIds.map(function (id) { return FORMAT.uid.test(id) ? id : ''; }); // '' keeps the places: memberIds may run next to members
   ['assignAt', 'crewAt', 'replyAt', 'sentAt', 'resultAt'].forEach(function (k) { t[k] = clampStamp_(t[k], now); }); // never more than 5 minutes ahead
@@ -685,7 +694,7 @@ function normReport_(raw, now) {
   const r = shape_(REPORT, raw);
   if (!isDay_(r.date)) return null;
   if (REPORT_STATUS.indexOf(r.status) < 0) r.status = '';
-  if (r.lang !== 'en' && r.lang !== 'es') r.lang = '';
+  ['lang', 'pmLang'].forEach(function (k) { if (r[k] !== 'en' && r[k] !== 'es') r[k] = ''; });
   ['submittedAt', 'updatedAt', 'pmAt'].forEach(function (k) { r[k] = clampStamp_(r[k], now); });
   return r;
 }
@@ -736,6 +745,12 @@ function list3_(stored, mine, base, newer) {
   });
   return out;
 }
+function map3_(stored, mine, base, newer) { // a text-language map key by key the same way: each text keeps the language of the phone whose words it has
+  if (!base) return mine;
+  const out = langs_(stored);
+  Object.keys(mine).concat(Object.keys(base)).forEach(function (k) { if (takes_(base, newer, mine[k], base[k], stored[k])) { if (mine[k]) out[k] = mine[k]; else delete out[k]; } });
+  return out;
+}
 function ticks_(stored, incoming, base, newer) { // the crew ticks items that exist; it cannot add, remove or reword one
   return stored.map(function (s) {
     const i = incoming.find(function (x) { return x.id === s.id; }), b = base && (base.find(function (x) { return x.id === s.id; }) || { done: false, at: 0 });
@@ -755,13 +770,17 @@ function mergeTask_(ctx, stored, inc) {
   // one, the newer stamp takes the whole part.
   const anew = inc.assignAt > 0 && inc.assignAt >= t.assignAt, abase = stored && inc.assignAt > 0 ? inc.assignBase : null;
   if (office && (!stored || anew || abase)) {
+    const langs = map3_(t.aLangs, inc.aLangs, abase && abase.aLangs, anew); // key by key, not as one field
     ASSIGN.concat(OFFICE_EXTRA).forEach(function (k) { if (takes_(abase, anew, inc[k], abase && abase[k], t[k])) t[k] = inc[k]; });
+    t.aLangs = langs;
     t.items = structure_(list3_(t.items, inc.items, abase && abase.items, anew), t.items); t.checks = structure_(list3_(t.checks, inc.checks, abase && abase.checks, anew), t.checks);
     t.assignAt = Math.max(t.assignAt, inc.assignAt);
   }
   const newer = ctx.role === 'crew' ? inc.crewAt > 0 && inc.crewAt >= t.crewAt : inc.crewAt > t.crewAt, base = stored && inc.crewAt > 0 ? inc.crewBase : null;
   if (newer || base) {
+    const langs = map3_(t.cLangs, inc.cLangs, base && base.cLangs, newer);
     CREW.forEach(function (k) { if (takes_(base, newer, inc[k], base && base[k], t[k])) t[k] = inc[k]; });
+    t.cLangs = langs;
     t.items = ticks_(t.items, inc.items, base && base.items, newer); t.checks = ticks_(t.checks, inc.checks, base && base.checks, newer);
     t.crewAt = Math.max(t.crewAt, inc.crewAt);
   }
@@ -826,7 +845,7 @@ function mergeReport_(ctx, stored, inc) {
   const r = stored ? clone_(stored) : shape_(REPORT, { date: inc.date }), was = stored ? clone_(stored) : null, pm = ctx.role === 'pm';
   if (!stored || (pm ? inc.updatedAt > r.updatedAt : inc.updatedAt > 0 && inc.updatedAt >= r.updatedAt)) {
     const answers = r.decisions;
-    Object.keys(REPORT).forEach(function (k) { if (k !== 'decisions' && k !== 'pmReview' && k !== 'pmAt') r[k] = inc[k]; });
+    Object.keys(REPORT).forEach(function (k) { if (k !== 'decisions' && k !== 'pmReview' && k !== 'pmLang' && k !== 'pmAt') r[k] = inc[k]; });
     const kept = inc.decisions.map(function (d) {
       const a = d.q ? answers.find(function (x) { return x.q === d.q; }) : null;
       return { q: d.q, rec: d.rec, by: d.by, pm: a ? a.pm : '', pmNote: a ? a.pmNote : '' };
@@ -839,7 +858,7 @@ function mergeReport_(ctx, stored, inc) {
       const m = d.q ? r.decisions.find(function (x) { return x.q === d.q; }) : null;
       if (m) { m.pm = d.pm; m.pmNote = d.pmNote; } else if (d.pm || d.pmNote) r.decisions.push({ q: d.q, rec: d.rec, by: d.by, pm: d.pm, pmNote: d.pmNote });
     });
-    r.pmReview = inc.pmReview; r.pmAt = inc.pmAt;
+    r.pmReview = inc.pmReview; r.pmLang = inc.pmLang; r.pmAt = inc.pmAt;
   }
   const ev = r.submittedAt > (was ? was.submittedAt : 0) ? [['report.sent', r.super, 'Daily report for ' + r.date + ' sent' + (r.super ? ' by ' + r.super : ''), r.date]] : [];
   return { obj: r, events: ev };

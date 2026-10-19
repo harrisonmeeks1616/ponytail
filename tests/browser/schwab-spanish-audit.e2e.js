@@ -987,7 +987,7 @@ async function hubSettings(h) {
   await click(p, 'dialog [data-crew="Crew A"]'); await p.waitForSelector('dialog .linkbox'); await h.snap(p, 'Share sheet: hub invite for a crew'); await esc1(p);
   await click(p, '[data-act=hubInvite][data-v=super]'); await p.waitForSelector('dialog .linkbox'); await h.snap(p, 'Share sheet: hub invite for the superintendent', { office: true }); await esc1(p);
   for (const v of ['crew', 'super']) { await click(p, `[data-act=hubRotate][data-v=${v}]`); await p.waitForSelector('dialog .ask'); await h.snap(p, 'Replace a hub key ask'); await click(p, 'dialog [data-a="0"]'); }
-  await click(p, '[data-act=hubDisconnect]'); await p.waitForSelector('dialog .ask'); await h.snap(p, 'Disconnect from the hub ask'); await click(p, 'dialog [data-a="0"]');
+  await click(p, '[data-act=hubDisconnect]'); await p.waitForSelector('dialog .ask'); await h.snap(p, 'Disconnect from the hub ask'); await click(p, 'dialog [data-a="1"]'); await h.after(p, 'Settings, the PM key copied'); // the PM's: copy the key first
   const c = await h.open({ role: 'crew', hash: '#hub' });
   await h.snap(c, 'Hub page, crew phone, not connected');
   // The hub down, and a key it refuses: the status line, the dot and the message.
@@ -1018,6 +1018,9 @@ async function liveBoard(h) {
   await h.step('live: refresh', async () => { await click(p, '[data-act=liveRefresh]'); await settle(p, 900); await h.after(p, 'Live, with data'); });
   const s = await h.open({ role: 'super', hash: '#live', hub: hubOf('super'), tasks: hubData().tasks });
   await synced(s); await h.snap(s, 'Live, superintendent');
+  await h.step('a sheet the hub has: the superintendent cannot delete it', async () => {
+    await nav(s, '#task/zqh0/assign'); await click(s, '#titleMore [data-act=taskMenu]'); await click(s, 'dialog [data-act=del]'); await h.after(s, 'Delete on the hub, superintendent');
+  });
   const none = await h.open({ role: 'pm', hash: '#live', tasks: hubData().tasks.slice(0, 3) });
   await h.snap(none, 'Live, no hub');
   const empty = await h.open({ role: 'pm', hash: '#live', now: '2026-12-01T10:00:00Z' });
@@ -1035,15 +1038,16 @@ async function recordsScreens(h) {
   await nav(p, '#records/sheets'); await h.snap(p, 'Records, task sheets');
   for (const v of ['review', 'Blocked', 'Accepted', 'Follow-up needed']) { await click(p, `[data-act=recFilter][data-f=status][data-v="${v}"]`); await h.snap(p, 'Records, task sheets, filtered'); }
   await click(p, '[data-act=recFilter][data-f=status][data-v=""]'); await click(p, '[data-act=recFilter][data-f=crew][data-v="Crew B"]'); await h.snap(p, 'Records, task sheets, filtered');
+  await click(p, '[data-act=recFilter][data-f=crew][data-v=""]'); // all crews again: this phone's own sheets have no Crew B one, so the sheet menu below needs the filter off (else it waits on what earlier screens left on the hub)
   await p.fill('#recQ', 'zzzz'); await settle(p); await h.snap(p, 'Records, task sheets, no match'); await p.fill('#recQ', ''); await settle(p);
   await click(p, '[data-act=recOlder]'); await settle(p, 900); await openAll(p); await settle(p, 600); await h.snap(p, 'Records, older task sheets from the hub');
   await click(p, '.rec-more[data-kind=task]'); await p.waitForSelector('dialog [data-del]'); await h.snap(p, 'Records, sheet menu');
-  await click(p, 'dialog [data-del]'); await p.waitForSelector('dialog .ask'); await h.snap(p, 'Delete a sheet ask, on the hub'); await click(p, 'dialog [data-a="0"]');
+  await click(p, 'dialog [data-del]'); await p.waitForSelector('#toast .toast-undo'); await h.snap(p, 'Sheet deleted, with Undo, on the hub'); await click(p, '#toast .toast-undo'); // gone at once with Undo, no ask (DESIGN.md)
   await nav(p, '#records/reports'); await h.snap(p, 'Records, reports');
   await p.fill('#recQ', 'zzzz'); await settle(p); await h.snap(p, 'Records, reports, no match'); await p.fill('#recQ', ''); await settle(p);
   await click(p, '[data-act=recOlder]'); await settle(p, 900); await openAll(p); await h.snap(p, 'Records, older reports from the hub');
   await click(p, '.rec-more[data-kind=report]'); await p.waitForSelector('dialog [data-del]'); await h.snap(p, 'Records, report menu');
-  await click(p, 'dialog [data-del]'); await p.waitForSelector('dialog .ask'); await h.snap(p, 'Delete a report ask, on the hub'); await click(p, 'dialog [data-a="0"]');
+  await click(p, 'dialog [data-del]'); await p.waitForSelector('#toast .toast-undo'); await h.snap(p, 'Report deleted, with Undo, on the hub'); await click(p, '#toast .toast-undo');
   await click(p, '[data-act=recStats]'); await settle(p, 900); await h.snap(p, 'Records, hub storage');
   await p.fill('#recArch', TODAY); await click(p, '[data-act=recArchive]'); await h.after(p, 'Records, archive');
   await p.fill('#recArch', '2026-07-01'); await click(p, '[data-act=recArchive]'); await p.waitForSelector('dialog .ask'); await h.snap(p, 'Archive older records ask'); await click(p, 'dialog [data-a="0"]');

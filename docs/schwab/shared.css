@@ -337,7 +337,7 @@ textarea { resize: vertical; min-height: 88px; field-sizing: content; max-height
 .tick[aria-pressed=true] .box::after { transform: rotate(45deg) scale(1); }
 .tick[aria-pressed=true] .txt { color: var(--muted); }
 .tick .txt { flex: 1; min-width: 0; overflow-wrap: anywhere; transition: color .2s; }
-.tick small { color: var(--muted); font-size: .9375rem; font-variant-numeric: tabular-nums; white-space: nowrap; }
+.tick > small { color: var(--muted); font-size: .9375rem; font-variant-numeric: tabular-nums; white-space: nowrap; } /* the time it was ticked; not the translation caption inside .txt */
 .tick.just[aria-pressed=true] .box { animation: pop .3s var(--spring); }
 .tick.just[aria-pressed=true] .box::after { animation: draw .28s var(--spring) .04s backwards; }
 @keyframes pop { from { transform: scale(.72); } }

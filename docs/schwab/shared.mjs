@@ -204,13 +204,14 @@ export function assignmentFor(tasks, name, day, pid = '') {
 
 const ITEM = { id: '', text: '', done: false, at: 0 };
 // crewId and memberIds (one per name in members, '' for a name typed before people had ids) are who the sheet is for;
-// crew and members are the names it was made with. aLang and cLang: the language the office and the crew typed in.
+// crew and members are the names it was made with. aLangs and cLangs: the language each office and crew text was typed in, by
+// its field ('scope', 'remain') or a step's id (typedIn, langOf); aLang and cLang: each part's first one, for text typed before those.
 // reply: the office's message to the crew. assignAt and crewAt: when the office part and the crew part last changed (the hub's merge stamps).
 export const TASK_TPL = {
   uid: '', origin: '', from: '', id: '', date: '', by: '', floor: '', area: '', crew: '', crewId: '', lead: '', members: [''], memberIds: [''], size: 0,
-  scope: '', refs: '', items: [ITEM], checks: [ITEM], aLang: '',
+  scope: '', refs: '', items: [ITEM], checks: [ITEM], aLang: '', aLangs: {},
   allot: 0, allotNote: '', est: 0, estNote: '', pStart: '', pStop: '', checkIn: '',
-  aStart: '', aStop: '', delay: 0, status: '', doneText: '', remain: '', comments: '', cLang: '',
+  aStart: '', aStop: '', delay: 0, status: '', doneText: '', remain: '', comments: '', cLang: '', cLangs: {},
   review: '', reviewer: '', followUp: '', reply: '', replyAt: 0, replyBy: '', sentAt: 0, resultAt: 0, gotAt: 0, updatedAt: 0, filedAt: 0, assignAt: 0, crewAt: 0,
 };
 // Ids, dates and times end up in addresses and page markup, so they must keep their exact format.
@@ -218,8 +219,11 @@ export const TASK_TPL = {
 const FORMAT = { uid: /^[\w-]{1,40}$/, date: /^\d{4}-\d{2}-\d{2}$/, time: /^([01]\d|2[0-3]):[0-5]\d(?::[0-5]\d)?$/ };
 const isDay = d => FORMAT.date.test(d) && addDays(d, 0) === d; // a real calendar day, not 2026-02-30
 const isId = x => typeof x === 'string' && FORMAT.uid.test(x); // not undefined, which a regex reads as 'undefined'
+const LANG_KEY = /^[A-Za-z0-9][\w-]{0,39}$/; // a field name or a step id; never "__proto__"
+const langsOf = m => Object.fromEntries(Object.entries(m && typeof m === 'object' && !Array.isArray(m) ? m : {}).filter(([k, v]) => LANG_KEY.test(k) && (v === 'en' || v === 'es')).slice(0, 300));
 export function normTask(t) {
   const n = shape(TASK_TPL, t);
+  for (const k of ['aLangs', 'cLangs']) n[k] = langsOf(t?.[k]);
   if (!FORMAT.uid.test(n.uid)) n.uid = '';
   if (!FORMAT.uid.test(n.crewId)) n.crewId = '';
   n.memberIds = n.members.map((_, i) => (isId(n.memberIds[i]) ? n.memberIds[i] : ''));
@@ -234,9 +238,19 @@ export function normTask(t) {
   return n;
 }
 export const newItem = text => ({ id: uid(), text, done: false, at: 0 });
+// The language a sheet's typed text is in: its own (k: the field, or a step's or check's id), else its part's. The PM and the
+// superintendent, or two crew phones, may type in different languages, so each text keeps the one it was typed in.
+const CREW_TEXT = new Set(['doneText', 'remain', 'comments']);
+export const langOf = (t, k) => (CREW_TEXT.has(k) ? t.cLangs?.[k] || t.cLang : t.aLangs?.[k] || t.aLang);
+export function typedIn(t, k, l) {
+  const crew = CREW_TEXT.has(k), m = crew ? 'cLangs' : 'aLangs', part = crew ? 'cLang' : 'aLang';
+  t[m] = { ...t[m], [k]: l }; // a new object: a template's or another sheet's map is never changed
+  t[part] ||= l;
+  return t;
+}
 
-const ASSIGN = ['id', 'date', 'by', 'floor', 'area', 'crew', 'crewId', 'members', 'memberIds', 'size', 'scope', 'refs', 'aLang', 'allot', 'allotNote', 'est', 'estNote', 'pStart', 'pStop', 'checkIn', 'reply', 'replyAt', 'replyBy'];
-const CREW = ['lead', 'aStart', 'aStop', 'delay', 'status', 'doneText', 'remain', 'comments', 'cLang', 'resultAt'];
+const ASSIGN = ['id', 'date', 'by', 'floor', 'area', 'crew', 'crewId', 'members', 'memberIds', 'size', 'scope', 'refs', 'aLang', 'aLangs', 'allot', 'allotNote', 'est', 'estNote', 'pStart', 'pStop', 'checkIn', 'reply', 'replyAt', 'replyBy'];
+const CREW = ['lead', 'aStart', 'aStop', 'delay', 'status', 'doneText', 'remain', 'comments', 'cLang', 'cLangs', 'resultAt'];
 
 // part 'crew': take the crew's results and check-offs, keep my assignment.
 // part 'assign': take the new assignment and checklist, keep check-offs already made here.
@@ -261,6 +275,7 @@ export function mergeAnswers(base, answers) {
     else if (d.pm || d.pmNote) base.decisions.push(d);
   }
   base.pmReview = answers.pmReview;
+  base.pmLang = answers.pmLang;
   return base;
 }
 
@@ -269,7 +284,7 @@ export function cloneTask(t, date, onlyOpen) {
   const c = normTask(structuredClone(t));
   for (const k of CREW) if (k !== 'lead') c[k] = TASK_TPL[k];
   for (const k of ['review', 'reviewer', 'followUp', 'reply', 'replyAt', 'replyBy', 'sentAt', 'gotAt', 'assignAt', 'crewAt']) c[k] = TASK_TPL[k];
-  for (const list of ['items', 'checks']) c[list] = c[list].filter(i => !onlyOpen || !i.done).map(i => newItem(i.text));
+  for (const list of ['items', 'checks']) c[list] = c[list].filter(i => !onlyOpen || !i.done).map(i => { const n = newItem(i.text); if (c.aLangs[i.id]) c.aLangs[n.id] = c.aLangs[i.id]; return n; }); // a step keeps its language under its new id
   return Object.assign(c, { uid: uid(), origin: 'mine', date, updatedAt: Date.now() });
 }
 
@@ -307,7 +322,7 @@ export const REPORT_TPL = {
   floors: [{ floor: '', crews: [CREW_TPL] }],
   next: [{ step: '', prereq: '', start: '', dur: '', finish: '', deadline: '', lead: '', checkin: '' }],
   risks: [{ risk: '', impact: '', prevent: '', fallback: '', owner: '', by: '' }],
-  preparedBy: '', pmReview: '', updatedAt: 0, filedAt: 0, lang: '', pmAt: 0, // lang: the language it was typed in; pmAt: the PM part's merge stamp
+  preparedBy: '', pmReview: '', updatedAt: 0, filedAt: 0, lang: '', pmLang: '', pmAt: 0, // lang, pmLang: the language the superintendent's part and the PM's (answers, review) are typed in; pmAt: the PM part's merge stamp
 };
 const REPORT_STATUS = ['On plan', 'At risk', 'Behind plan', 'No work today']; // same list as STATUS in report.mjs
 export function normReport(r) {

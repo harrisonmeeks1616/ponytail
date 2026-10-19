@@ -21,8 +21,8 @@ const DAY = dayOf(T0);
 const ago = days => { const d = new Date(T0); d.setDate(d.getDate() - days); return dayOf(d.getTime()); };
 const settle = async (n = 4) => { for (let i = 0; i < n; i++) await new Promise(r => setImmediate(r)); };
 const clone = x => JSON.parse(JSON.stringify(x));
-const O_KEYS = ['id', 'date', 'by', 'floor', 'area', 'crew', 'crewId', 'members', 'memberIds', 'size', 'scope', 'refs', 'allot', 'allotNote', 'est', 'estNote', 'pStart', 'pStop', 'checkIn', 'review', 'reviewer', 'followUp', 'reply', 'replyAt', 'replyBy', 'aLang', 'sentAt'];
-const C_KEYS = ['lead', 'aStart', 'aStop', 'delay', 'status', 'doneText', 'remain', 'comments', 'cLang', 'resultAt'];
+const O_KEYS = ['id', 'date', 'by', 'floor', 'area', 'crew', 'crewId', 'members', 'memberIds', 'size', 'scope', 'refs', 'allot', 'allotNote', 'est', 'estNote', 'pStart', 'pStop', 'checkIn', 'review', 'reviewer', 'followUp', 'reply', 'replyAt', 'replyBy', 'aLang', 'aLangs', 'sentAt'];
+const C_KEYS = ['lead', 'aStart', 'aStop', 'delay', 'status', 'doneText', 'remain', 'comments', 'cLang', 'cLangs', 'resultAt'];
 // A phone is its device secret; the device id is the first 32 hex characters of its SHA-256 (HUB.md, Identity).
 const devOf = secret => (typeof secret === 'string' && /^[A-Za-z0-9]{32}$/.test(secret) ? nodeCrypto.createHash('sha256').update(secret).digest('hex').slice(0, 32) : '');
 const ALNUM = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789';
@@ -515,6 +515,45 @@ test('purge: the PM removes a sheet everywhere, even over an unsynced edit; no o
   assert.equal(sp.task(uid), undefined);
   assert.equal(hub.tasks.has(uid), false, 'and nothing brought it back');
   assert.ok(cp.task(keep) && sp.task(keep));
+});
+
+test('DATA-09: a PM delete still reaches the hub when the app is closed during its Undo; an Undo takes it back; onHub tells a sheet or report the hub has', async () => {
+  const hub = fresh(), sp = await makePhone(hub, 'super'), pm = await makePhone(hub, 'pm');
+  const a = sp.addTask(), b = sp.addTask({ id: 'T1019-02' }), c = sp.addTask({ id: 'T1019-03' });
+  const draft = sp.addTask({ id: 'T1019-04' });
+  sp.editReport(DAY, r => { r.results = 'All good'; });
+  await stable(sp, pm);
+  assert.deepEqual([sp.sync.onHub(a), sp.sync.onHub(DAY, 'report'), sp.sync.onHub('nope'), sp.sync.onHub('2026-01-01', 'report')], [true, true, false, false]);
+  // a stored purge on a phone whose key may not purge (a superintendent's) is dropped once the hub says no, not retried for ever
+  sp.sync.purgeLater('task', b, 1);
+  const sp2 = await makePhone(hub, 'super', { storage: sp.storage, fetchImpl: sp.fetch });
+  await sp2.cycle(); await sp2.cycle();
+  assert.deepEqual([hub.count('purge'), sp2.hubSync().del, hub.tasks.has(b)], [1, {}, true]);
+  // the PM deletes a (the app stores the purge, takes the sheet off), and the app is closed 2 s later, inside the 6 s Undo
+  const drop = (p, uid) => p.save('schwab.tasks', p.tasks().filter(t => t.uid !== uid));
+  pm.sync.purgeLater('task', a, pm.now() + 6000); drop(pm, a);
+  tick(2000); await pm.cycle();
+  assert.ok(hub.tasks.has(a), 'nothing goes while the Undo is offered');
+  const pm2 = await makePhone(hub, 'pm', { storage: pm.storage, fetchImpl: pm.fetch }); // opened again: a new engine on the same storage
+  await pm2.cycle();
+  assert.ok(hub.tasks.has(a), 'not before the Undo would have run out');
+  tick(5000); await pm2.cycle();
+  assert.equal(hub.tasks.has(a), false, 'the stored delete went with the next cycle');
+  await stable(pm2, sp2);
+  assert.deepEqual([hub.count('purge'), sp2.task(a), pm2.task(a), pm2.hubSync().del], [2, undefined, undefined, {}], 'once, everywhere, and nothing is left stored');
+  // Undo: taken back before it was due, so it never goes
+  pm2.sync.purgeLater('task', b, pm2.now() + 6000); drop(pm2, b);
+  pm2.sync.purgeLater('task', b, 0);
+  tick(7000); await stable(pm2);
+  assert.ok(hub.tasks.has(b));
+  // the page that holds the Undo offer sends its own purge when the offer ends: the cycle does not send it a second time
+  pm2.sync.purgeLater('task', c, pm2.now() + 6000); drop(pm2, c);
+  tick(7000); await pm2.cycle();
+  assert.equal(hub.count('purge'), 2);
+  assert.equal((await pm2.sync.purge('task', c)).ok, true);
+  await stable(pm2);
+  assert.deepEqual([hub.count('purge'), hub.tasks.has(c), pm2.hubSync().del], [3, false, {}]);
+  assert.ok(hub.tasks.has(draft) && hub.tasks.has(b));
 });
 
 test('window: old synced sheets leave the phone; unsynced or refused ones never do; an old hub sheet is not stored', async () => {

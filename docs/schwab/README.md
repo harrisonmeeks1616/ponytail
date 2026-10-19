@@ -173,7 +173,7 @@ and live updates. It is one Google Apps Script web app plus one Google Sheet, bo
    **Settings → Hub**, paste the `/exec` link in **Hub link** and the PM key in **Hub key**, **Connect**, then **Test the
    hub**. All five lines should show a check mark and **Everything works**.
 7. **Invite people → Invite crew** (pick the crew, or **Not sure: they pick**) and **Invite superintendent** each make a
-   link to text. On their phone the person opens it, picks the language on a new phone, types their name (crews) and
+   link to text. On their phone the person opens it, picks the language on a new phone, taps or types their name and
    taps **Join**. The invite answers the "Who is using this phone?" question for them. A phone already on a hub asks first.
 8. After any change to `Code.gs`: paste it, save, then **Deploy > Manage deployments**, the pencil, **Version: New
    version**, **Deploy**. Saving alone does not change what phones reach; the link stays the same. Run **Test the hub**
@@ -189,7 +189,8 @@ and live updates. It is one Google Apps Script web app plus one Google Sheet, bo
   reached the hub later. Invite links carry a crew or superintendent key, so send each only to its person.
 - Each role changes only its own part: crews their results, ticks and hours; the office the assignment, the review and
   messages; only the PM edits hours, deletes records (from every phone at once: the delete can be undone for 6 seconds,
-  then it leaves the hub), exports and manages the keys.
+  then it leaves the hub, even if the app was closed meanwhile; on another phone, Delete on a sheet or report the hub
+  has says to ask the PM), exports and manages the keys.
 
 **Keys and archive**
 

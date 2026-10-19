@@ -482,9 +482,9 @@ function reportView(S, day) {
       + grp(tf(L('Most important results today, planned work missed, and effect on the job'), 'r.results', r.results, { rows: 4 }, r.lang)))}
     ${sec(st, 'wins', 2, L('Good results & lessons to repeat'), grp(tf(L('Crew wins, quality improvements, faster methods, repeat-floor lessons'), 'r.wins', r.wins, { rows: 3 }, r.lang)))}
     ${sec(st, 'issues', 3, L('Site issues, concerns & coordination'), grp(tf(L('Safety / quality issues, other trades, access, inspections, scope changes'), 'r.issues', r.issues, { rows: 3 }, r.lang),
-      field(L('Who was notified / when'), 'r.notified', r.notified)))}
+      tf(L('Who was notified / when'), 'r.notified', r.notified, {}, r.lang)))}
     ${sec(st, 'needs', 4, L('Material, equipment & manpower'), r.needs.map((n, i) => `<div class="item fgroup">
-        ${field(L('Item / resource'), `r.needs.${i}.item`, n.item, { wide: true, ph: L('e.g. 2" EMT, scissor lift, 2 more journeymen') })}
+        ${tf(L('Item / resource'), `r.needs.${i}.item`, n.item, { wide: true, ph: L('e.g. 2" EMT, scissor lift, 2 more journeymen') }, r.lang)}
         ${field(L('Quantity'), `r.needs.${i}.qty`, n.qty)}${field(L('Floor / crew'), `r.needs.${i}.where`, n.where, { list: 'floors' })}
         ${field(L('Needed by'), `r.needs.${i}.by`, n.by, { type: 'datetime-local' })}
         <label class="switch"><input type="checkbox" data-k="r.needs.${i}.confirmed"${n.confirmed ? ' checked' : ''}> ${L('Availability confirmed')}</label>
@@ -492,10 +492,10 @@ function reportView(S, day) {
     ${sec(st, 'pm', 5, L('Project manager decision help'), `<p class="hint">${L('State the decision, your recommendation, and when you need an answer. The PM answers right here.')}</p>`
       + r.decisions.map((d, i) => `<div class="item fgroup">
         ${tf(L('Decision / support needed'), `r.decisions.${i}.q`, d.q, { rows: 2 }, r.lang)}
-        ${field(L('Recommendation'), `r.decisions.${i}.rec`, d.rec, { wide: true })}${field(L('Needed by'), `r.decisions.${i}.by`, d.by, { type: 'datetime-local' })}
+        ${tf(L('Recommendation'), `r.decisions.${i}.rec`, d.rec, { wide: true }, r.lang)}${field(L('Needed by'), `r.decisions.${i}.by`, d.by, { type: 'datetime-local' })}
         ${d.by && !d.pm && new Date(d.by) < new Date() ? `<p class="frow"><span class="pill" data-tone="bad">${L('Past due')}</span></p>` : ''}
         <div class="field"><span>${L('PM response')}</span>${seg(`r.decisions.${i}.pm`, d.pm, [['Approved', 'good', L('Approved')], ['Declined', 'bad', L('Declined')], ['Discuss', 'info', L('Discuss')]])}</div>
-        ${field(L('PM note'), `r.decisions.${i}.pmNote`, d.pmNote)}
+        ${tf(L('PM note'), `r.decisions.${i}.pmNote`, d.pmNote, {}, r.pmLang)}
         ${remove('decisions', i, L('Remove decision'))}</div>`).join('') + addTo('decisions', L('+ Add a decision')))}
     ${sec(st, 'floors', 6, L('Floor reports · crew detail'), r.floors.map((f, fi) => `<div class="floor">
         <div class="fgroup"><div class="edit-row">${field(L('Actual floor / level'), `r.floors.${fi}.floor`, f.floor, { list: 'floors' })}<button class="x" data-act="delFloor" data-i="${fi}" aria-label="${L('Remove floor')}">✕</button></div></div>
@@ -506,7 +506,7 @@ function reportView(S, day) {
         ${datalist('floors', S.floors)}`)}
     ${sec(st, 'next', 7, L('Next steps & completion forecast'), r.next.map((x, i) => `<div class="item fgroup">
         ${tf(L('Next step / floor / crew'), `r.next.${i}.step`, x.step, { rows: 2 }, r.lang)}
-        ${field(L('Prerequisites / resources'), `r.next.${i}.prereq`, x.prereq)}
+        ${tf(L('Prerequisites / resources'), `r.next.${i}.prereq`, x.prereq, {}, r.lang)}
         ${field(L('Planned start'), `r.next.${i}.start`, x.start, { type: 'datetime-local' })}${field(L('Estimated duration'), `r.next.${i}.dur`, x.dur, { ph: L('e.g. 2 days') })}
         ${field(L('Expected finish'), `r.next.${i}.finish`, x.finish, { type: 'datetime-local' })}${field(L('Required deadline'), `r.next.${i}.deadline`, x.deadline, { type: 'datetime-local' })}
         ${field(L('Responsible lead'), `r.next.${i}.lead`, x.lead)}${field(L('Confirm / check-in by'), `r.next.${i}.checkin`, x.checkin, { type: 'datetime-local' })}
@@ -514,13 +514,13 @@ function reportView(S, day) {
         ${remove('next', i, L('Remove step'))}</div>`).join('') + addTo('next', L('+ Add next step')))}
     ${sec(st, 'risks', 8, L('Potential delays & workarounds'), r.risks.map((x, i) => `<div class="item fgroup">
         ${tf(L('Risk / affected floor & crew'), `r.risks.${i}.risk`, x.risk, { rows: 2 }, r.lang)}
-        ${field(L('Expected impact / time at risk'), `r.risks.${i}.impact`, x.impact)}
+        ${tf(L('Expected impact / time at risk'), `r.risks.${i}.impact`, x.impact, {}, r.lang)}
         ${tf(L('Prevention / workaround'), `r.risks.${i}.prevent`, x.prevent, { rows: 2 }, r.lang)}
-        ${field(L('Fallback work if blocked'), `r.risks.${i}.fallback`, x.fallback)}
+        ${tf(L('Fallback work if blocked'), `r.risks.${i}.fallback`, x.fallback, {}, r.lang)}
         ${field(L('Action owner'), `r.risks.${i}.owner`, x.owner)}${field(L('Action needed by'), `r.risks.${i}.by`, x.by, { type: 'datetime-local' })}
         ${remove('risks', i, L('Remove risk'))}</div>`).join('') + addTo('risks', L('+ Add a risk'))
       + `<p class="hint">${L('Escalate urgent issues when you find them, and note who you told in section 3.')}</p>`)}
-    ${sec(st, 'sign', 9, L('Sign-off'), grp(field(L('Prepared by'), 'r.preparedBy', r.preparedBy), field(L('PM review / time'), 'r.pmReview', r.pmReview))
+    ${sec(st, 'sign', 9, L('Sign-off'), grp(field(L('Prepared by'), 'r.preparedBy', r.preparedBy), tf(L('PM review / time'), 'r.pmReview', r.pmReview, {}, r.pmLang))
       + (isPM(S) ? `<button class="btn" data-act="stampPM">${L('Stamp my review now')}</button>` : ''))}
     </div>
     <p class="hint">${L('Changes save on this phone as you type.')}${S.folderUrl ? ` ${L('Sending the report also files a PDF in the review folder.')}` : ''}</p>`;
@@ -761,7 +761,7 @@ export function applyInput(r, k, val) {
 export function reportInput(el, S, day) {
   const r = rep(S, day);
   applyInput(r, el.dataset.k, readInput(el));
-  if (!PM_PART.test(el.dataset.k)) r.lang = getLang(); // the language the superintendent's part is typed in, for the hub's translation
+  r[PM_PART.test(el.dataset.k) ? 'pmLang' : 'lang'] = getLang(); // the language each part is typed in (the PM and the superintendent may use different ones), for the hub's translation
   r.updatedAt = Date.now();
   persist();
   for (const o of $('app').querySelectorAll('[data-out]')) if (OUT[o.dataset.out]) o.textContent = OUT[o.dataset.out](r, o.dataset);

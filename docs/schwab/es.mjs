@@ -749,4 +749,13 @@ export default {
 
   // Time clock: a tap the hub did not add (PHONE-UX-03)
   'The PM has already set your hours for {date}, so this tap was not added. Tell the PM if they are wrong.': 'El gerente de proyecto ya fijó sus horas del {date}, así que este toque no se agregó. Avísele al gerente de proyecto si no son correctas.',
+
+  // Deletes on a hub, and the PM's Disconnect
+  'Only the PM can delete what is on the hub. Ask the PM to delete it.': 'Solo el gerente de proyecto puede borrar lo que está en el sistema central. Pídale al gerente de proyecto que lo borre.',
+  'Disconnect this phone from the hub? Your work stays on this phone. To connect again you need the PM key, which was shown only once. Copy it first. Without it, the hub owner must run resetPmKey in the hub script.': '¿Desconectar este teléfono del sistema central? Su trabajo se queda en este teléfono. Para conectarse otra vez necesita la clave del gerente de proyecto, que se mostró una sola vez. Cópiela primero. Sin ella, el dueño del sistema central tendrá que ejecutar resetPmKey en el script del sistema central.',
+  'Copy the PM key': 'Copiar la clave del gerente de proyecto',
+  'PM key copied. Keep it somewhere safe, not in a shared chat.': 'Clave del gerente de proyecto copiada. Guárdela en un lugar seguro, no en un chat compartido.',
+
+  // Joining the hub: the name as the roster spells it (PHONE-UX-11)
+  'This name is not on the crew list. Tap your name above, or tap Join again to use it as typed.': 'Este nombre no está en la lista de la cuadrilla. Toque su nombre arriba, o toque Unirse otra vez para usarlo tal como lo escribió.',
 };

@@ -50,6 +50,7 @@ function mkSync(over = {}) {
     async cycle() { calls.push(['cycle']); return this.status; }, async translate(items, from, to) { calls.push(['translate', items, from, to]); return items.map(x => 'T:' + x); },
     async records(q) { calls.push(['records', q]); return { ok: true, items: [], cursor: '' }; }, async stats() { return { ok: true, rows: {}, cells: 7.5e6, cellLimit: 1e7, sheetUrl: '' }; },
     async purge(kind, key) { calls.push(['purge', kind, key]); return { ok: true, rev: 2 }; }, async rotate(role) { calls.push(['rotate', role]); return { ok: true, key: KEY }; },
+    purgeLater(kind, key, due) { calls.push(['purgeLater', kind, key, due]); }, onHub: () => false,
     async archive(before) { calls.push(['archive', before]); return { ok: true, sheetUrl: 'https://docs.google.com/spreadsheets/d/arch/edit', moved: { tasks: 3 } }; },
     async selftest() { return { ok: true, checks: [{ name: 'write', ok: true, detail: 'ok' }] }; },
     async connect(url, key) { calls.push(['connect', url, key]); return { ok: true, role: 'pm' }; }, disconnect() { calls.push(['disconnect']); },
@@ -66,6 +67,7 @@ function mkCtx(o = {}) {
   const ctx = { S, tasks: () => [], shifts: () => [], reports: () => [], role: 'pm', day: DAY, sync, now: () => NOW, calls, saved: [], removed: [],
     go: h => calls.push(['go', h]), render: () => calls.push(['render']), toast: (m, tone) => calls.push(['toast', m, tone]),
     saveTask: t => ctx.saved.push(t), remove: async (k, key) => { ctx.removed.push([k, key]); return true; }, ask: async () => true, ...o };
+  ctx.choose ||= async (m, opts) => ((await ctx.ask(m, opts.at(-1)[1])) ? opts.at(-1)[0] : null); // the action sheet's last button is its yes
   return ctx;
 }
 const toasts = ctx => ctx.calls.filter(c => c[0] === 'toast');
@@ -265,6 +267,55 @@ es('eventLine in Spanish keeps names and ids', () => {
   assert.equal(live.eventLine(E('task.status', 'Mike R', 'T1019-02 marked Blocked', 'T1019-02'), 'es'), 'T1019-02: estado Bloqueado');
   assert.equal(live.eventLine(E('clock.in', 'Jose L', '', ''), 'es'), 'Jose L marcó entrada');
   assert.equal(live.eventLine(E('task.reviewed', 'H', 'T1 reviewed: Accepted', 'T1'), 'es'), 'T1 revisada: Aceptado');
+  // a phone with no name: the hub writes its role code as who ('pm creó T1' on the Spanish feed); it reads as the role
+  assert.equal(live.eventLine({ ...E('task.created', 'pm', 'New task T1', 'T1'), role: 'pm' }, 'es'), 'Gerente de proyecto creó T1');
+  assert.equal(live.eventLine({ ...E('task.created', 'super', 'New task T1', 'T1'), role: 'super' }, 'en'), 'Superintendent created T1');
+  assert.equal(live.eventLine({ ...E('task.created', 'Dana', 'New task T1', 'T1'), role: 'super' }, 'es'), 'Dana creó T1', 'a real name stays');
+});
+
+// ---------- each typed text in its own language (PHONE-UX-08, PHONE-UX-10) ----------
+
+test('a message, a review and each typed text keep the language they were typed in, whatever the rest of the sheet is in', () => {
+  const t = task({ scope: 'Jale cable al tablero', aLang: 'es', aLangs: { scope: 'es', a: 'es' } }); // a Spanish superintendent's sheet
+  const m = live.withMessage(t, 'Start on level 4', NOW, 'Pat', 'en');
+  assert.deepEqual([lib.langOf(m, 'reply'), lib.langOf(m, 'scope'), lib.langOf(m, 'a')], ['en', 'es', 'es'], 'the English PM\'s message on a Spanish sheet is English');
+  const r = live.withReview(m, 'Follow-up needed', 'Label the panel', NOW + 1, 'Pat', 'en');
+  assert.deepEqual([lib.langOf(r, 'followUp'), lib.langOf(r, 'scope'), r.aLang], ['en', 'es', 'es'], 'an English follow-up relabels nothing else');
+  assert.deepEqual(t.aLangs, { scope: 'es', a: 'es' }, 'the sheet it started from is untouched');
+  // typed on a phone: a step by the PM, results by two crew members; the part's own language is only the first one typed
+  lib.typedIn(r, 'b', 'en'); lib.typedIn(r, 'remain', 'es'); lib.typedIn(r, 'comments', 'en');
+  assert.deepEqual([lib.langOf(r, 'b'), lib.langOf(r, 'a'), lib.langOf(r, 'remain'), lib.langOf(r, 'comments'), r.aLang, r.cLang], ['en', 'es', 'es', 'en', 'es', 'es']);
+  assert.equal(lib.langOf(task({ aLang: 'es' }), 'scope'), 'es', 'text typed before per-text languages reads its part\'s');
+  assert.deepEqual(lib.normTask({ uid: 'x', date: DAY, aLangs: { scope: 'fr', __proto__x: 'es', b: 'es' }, cLangs: [] }).aLangs, { b: 'es' }, 'only en or es, under a field or a step id');
+});
+
+test('Records shows the typed scope and results in the reader\'s language (PHONE-UX-10)', () => {
+  const ctx = mkCtx({ tasks: () => [task({ scope: 'Jale cable al tablero', aLangs: { scope: 'es' } })], reports: () => [report({ results: 'Todo bien hoy', lang: 'es' })] });
+  assert.match(live.recordsView(ctx, 'sheets'), /class="clamp"><span class="tx"[^>]*data-from="es" data-to="en"[^>]*><span class="tx-o">Jale cable al tablero/);
+  assert.match(live.recordsView(ctx, 'reports'), /class="clamp"><span class="tx"[^>]*data-from="es" data-to="en"[^>]*><span class="tx-o">Todo bien hoy/);
+});
+
+test('the daily report: every typed box goes through the translated-preview field, with the language of the part that typed it (PHONE-UX-10)', () => {
+  const store = new Map(), els = new Map(), prevDoc = globalThis.document, seen = {};
+  const el = id => els.get(id) || els.set(id, { innerHTML: '', textContent: '', querySelectorAll: () => [], querySelector: () => null }).get(id);
+  Object.defineProperty(globalThis, 'localStorage', { configurable: true, value: { getItem: k => store.get(k) ?? null, setItem: (k, v) => store.set(k, String(v)), removeItem: k => store.delete(k) } });
+  globalThis.document = { getElementById: el, querySelectorAll: () => [], documentElement: {} };
+  try {
+    const r = report({ lang: 'es', pmLang: 'en', notified: 'Se avisó al GC', needs: [{ item: 'Elevador de tijera' }], decisions: [{ q: 'Elevador', rec: 'Rentarlo dos semanas', pm: 'Approved', pmNote: 'One week only' }],
+      next: [{ step: 'Piso 5', prereq: 'Material' }], risks: [{ risk: 'Lluvia', impact: 'Un día', prevent: 'Lonas', fallback: 'Piso 4' }], pmReview: 'Looks good' });
+    lib.save(lib.KEYS.reports, { [DAY]: r });
+    lib.signIn();
+    rep.reloadReports();
+    rep.setTextField((label, k, v, o, from) => { seen[k] = from; return ''; });
+    rep.renderOffice('report', { ...structuredClone(lib.DEFAULT_SETTINGS), role: 'Project manager' }, DAY);
+  } finally {
+    rep.setTextField((label, k, v, o) => lib.field(label, k, v, o));
+    globalThis.document = prevDoc;
+    delete globalThis.localStorage;
+  }
+  for (const k of ['r.results', 'r.notified', 'r.needs.0.item', 'r.decisions.0.q', 'r.decisions.0.rec', 'r.next.0.step', 'r.next.0.prereq', 'r.risks.0.risk', 'r.risks.0.impact', 'r.risks.0.prevent', 'r.risks.0.fallback'])
+    assert.equal(seen[k], 'es', `${k}: the superintendent's words, with a preview for a reader of the other language`);
+  for (const k of ['r.decisions.0.pmNote', 'r.pmReview']) assert.equal(seen[k], 'en', `${k}: the PM's words carry the PM's language`);
 });
 
 // ---------- the header dot ----------
@@ -662,15 +713,31 @@ test('withMessage and withReview stamp the office part so the newest wins, and k
 
 // ---------- delete ----------
 
-test('deleteRecord: PM only, gone at once with Undo, the hub purge only once the Undo is over, back if the hub fails', async () => {
+test('deleteRecord: gone at once with Undo; the PM\'s hub purge is stored until the Undo is over, then sent, back if the hub fails; another hub phone deletes only what the hub never had', async () => {
   const t = task({ uid: 'del1', id: 'T9-09' });
   const offer = ctx => toasts(ctx).at(-1)[3]; // the toast's { undo, done }
   // a removal that can be put back, as the app's own remove() does
   const mk = (o = {}) => { const order = [], ctx = mkCtx({ tasks: () => [t], ...o, remove: async (k, key) => { order.push(`remove ${k} ${key}`); ctx.removed.push([k, key]); return () => order.push('put back'); } }); ctx.order = order; ctx.toast = (m, tone, opts) => ctx.calls.push(['toast', m, tone, opts]); return ctx; };
-  // not the PM; an unknown record; hours: nothing happens
-  let ctx = mk({ role: 'super' });
+  const purges = ctx => ctx.sync.calls.filter(c => c[0] === 'purgeLater').map(c => c.slice(1));
+  // DATA-08: a superintendent (or crew) phone on a hub: a sheet or report the hub has stays, and the phone says who can delete it
+  const other = (role, onHub) => { const s = mkSync({ onHub: (key, kind) => onHub.includes(kind) }); s.status.role = role; return mk({ role, sync: s, reports: () => [report({ date: '2026-10-17' })] }); };
+  for (const [role, kind, key] of [['super', 'task', 'del1'], ['super', 'report', '2026-10-17'], ['crew', 'task', 'del1']]) {
+    const c = other(role, [kind]);
+    assert.equal(await live.deleteRecord(c, kind, key), false, `${role} ${kind}`);
+    assert.deepEqual([c.removed.length, c.sync.calls.length], [0, 0]);
+    assert.deepEqual(toasts(c).at(-1).slice(1, 3), ['Only the PM can delete what is on the hub. Ask the PM to delete it.', 'bad']);
+  }
+  // a draft the hub never had: gone from this phone with Undo, and the hub is never asked
+  let ctx = other('super', []);
+  assert.equal(await live.deleteRecord(ctx, 'task', 'del1'), true);
+  assert.deepEqual([ctx.order, toasts(ctx).at(-1)[1]], [['remove task del1'], 'Task T9-09 deleted']);
+  await offer(ctx).done(false);
+  assert.equal(ctx.sync.calls.length, 0);
+  // the PM's own phone not signed in to the office (a crew phone as far as the app knows): no purge without the passcode
+  ctx = mk({ role: 'crew', sync: mkSync({ onHub: () => true }) });
   assert.equal(await live.deleteRecord(ctx, 'task', 'del1'), false);
   assert.deepEqual([ctx.removed.length, ctx.sync.calls.length], [0, 0]);
+  // an unknown record; hours: nothing happens
   ctx = mk();
   assert.equal(await live.deleteRecord(ctx, 'task', 'nope'), false);
   assert.equal(await live.deleteRecord(ctx, 'shift', 'del1'), false, 'hours are removed on the Crew hours screen, not here');
@@ -681,6 +748,8 @@ test('deleteRecord: PM only, gone at once with Undo, the hub purge only once the
   assert.match(toasts(ctx).at(-1)[1], /^Task T9-09 deleted\. It is also removed from the hub\.$/);
   assert.equal(typeof offer(ctx).undo, 'function');
   assert.equal(ctx.sync.calls.filter(c => c[0] === 'purge').length, 0, 'nothing goes to the hub while Undo is offered');
+  assert.deepEqual(purges(ctx), [['task', 'del1', NOW + 6000]], 'DATA-09: the purge is stored before the sheet leaves, due when the Undo runs out, so closing the app does not lose it');
+  assert.equal(ctx.sync.calls[0][0], 'purgeLater');
   assert.ok(ctx.calls.some(c => c[0] === 'render'));
   await offer(ctx).done(false); // the 6 seconds are over
   assert.deepEqual(ctx.sync.calls.filter(c => c[0] === 'purge'), [['purge', 'task', 'del1']]);
@@ -691,12 +760,14 @@ test('deleteRecord: PM only, gone at once with Undo, the hub purge only once the
   offer(ctx).undo();
   await offer(ctx).done(true);
   assert.deepEqual([ctx.order, ctx.sync.calls.filter(c => c[0] === 'purge').length], [['remove task del1', 'put back'], 0]);
+  assert.deepEqual(purges(ctx), [['task', 'del1', NOW + 6000], ['task', 'del1', 0]], 'the Undo takes the stored purge back');
   // the hub says no (offline): it comes back on this phone too, and the PM is told
   ctx = mk({ sync: mkSync({ async purge() { return { ok: false, error: 'offline', message: 'No signal.' }; } }) });
   await live.deleteRecord(ctx, 'task', 'del1');
   await offer(ctx).done(false);
   assert.deepEqual(ctx.order, ['remove task del1', 'put back']);
   assert.deepEqual(toasts(ctx).at(-1).slice(1, 3), ['No signal.', 'bad']);
+  assert.deepEqual(purges(ctx).at(-1), ['task', 'del1', 0], 'put back, so nothing is left to purge later');
   // no hub: this phone only, and the toast does not mention a hub
   ctx = mk({ reports: () => [report({ date: '2026-10-17' })], sync: mkSync({ hubStatus: () => ({ state: 'off' }) }) });
   assert.equal(await live.deleteRecord(ctx, 'report', '2026-10-17'), true);
@@ -760,6 +831,28 @@ test('disconnect and rotate ask first', async () => {
   await live.act(ctx, 'hubRotate', { dataset: { v: 'super' } });
   await live.act(ctx, 'hubRotate', { dataset: { v: 'pm' } });
   assert.deepEqual(ctx.sync.calls, [['disconnect'], ['rotate', 'super'], ['rotate', 'crew']], 'a role it does not know is the crew key, never the PM key');
+});
+test('PHONE-UX-16: the PM\'s Disconnect says the PM key was shown only once, offers to copy it, and names resetPmKey', async () => {
+  const asked = [], copied = [];
+  Object.defineProperty(globalThis.navigator, 'clipboard', { configurable: true, value: { writeText: async t => { copied.push(t); } } });
+  try {
+    let pick = 'copy';
+    const ctx = mkCtx({ choose: async (m, opts) => { asked.push([m, opts.map(o => o[1])]); return pick; } });
+    ctx.S.hubKey = KEY;
+    await live.act(ctx, 'hubDisconnect', { dataset: {} });
+    assert.match(asked[0][0], /PM key, which was shown only once\. Copy it first\. Without it, the hub owner must run resetPmKey/);
+    assert.deepEqual(asked[0][1], ['Copy the PM key', 'Disconnect']);
+    assert.deepEqual([copied, ctx.sync.calls], [[KEY], []], 'Copy copies the key and keeps the phone connected');
+    assert.equal(toasts(ctx).at(-1)[1], 'PM key copied. Keep it somewhere safe, not in a shared chat.');
+    pick = true;
+    await live.act(ctx, 'hubDisconnect', { dataset: {} });
+    assert.deepEqual(ctx.sync.calls, [['disconnect']]);
+    // a superintendent or crew phone has no such key to lose: the short question
+    const sup = mkSync(); sup.status.role = 'super';
+    const said = [], c2 = mkCtx({ sync: sup, role: 'super', ask: async m => { said.push(m); return false; } });
+    await live.act(c2, 'hubDisconnect', { dataset: {} });
+    assert.deepEqual([said, sup.calls], [['Disconnect this phone from the hub? Your work stays on this phone.'], []]);
+  } finally { delete globalThis.navigator.clipboard; }
 });
 test('archive: a real date, at least 30 days back, asked first', () => withDoc({ recArch: { value: '' } }, async () => {
   const box = globalThis.document.getElementById('recArch'), ctx = mkCtx(), el = { dataset: {} };

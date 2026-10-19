@@ -28,7 +28,7 @@
 <script>setTimeout(() => { const app = document.getElementById('app'); if (window.appStarted) return; let es = false; try { es = JSON.parse(localStorage.getItem('schwab.settings')).lang === 'es'; } catch {} app.innerHTML = es ? '<div class="empty"><h2>La app no termin\u00f3 de cargar</h2><p>Con se\u00f1al, vuelva a cargar.</p><button class="btn primary" onclick="location.reload()">Recargar</button></div>' : '<div class="empty"><h2>The app didn\u2019t finish loading</h2><p>Get signal, then reload. · La app no termin\u00f3 de cargar. Con se\u00f1al, vuelva a cargar.</p><button class="btn primary" onclick="location.reload()">Reload · Recargar</button></div>'; }, 6000); // a dropped file on the first open after an update; a Spanish phone gets Spanish only</script>
 <script type="module">
 import {
-  KEYS, esc, uid, load, save, loadSettings, nameKey, cleanName, people, findPerson, crewById, addPerson, normTask, newItem, mergeTask, cloneTask, pack, unpack, linkTo,
+  KEYS, esc, uid, load, save, loadSettings, nameKey, cleanName, people, findPerson, crewById, addPerson, normTask, newItem, mergeTask, cloneTask, pack, unpack, linkTo, langOf, typedIn,
   nextId, renumberClashes, sameNumber, ensureDevice,
   today, addDays, niceDate, nowHM, span, fmtMin, t12, stamp, hrs, timeOf, field, datalist, seg, setPath, getPath, readInput, dateBar,
   toast, sheet, ask, sendSheet, pasteSheet, makePdf, savePdf, fileAway, retryUploads, settingsView, settingsAct, restore,
@@ -365,9 +365,9 @@ function renderTask(t) {
 // The office's words show in the reader's language on a hub (live.mjs txView; as typed without one).
 function banner(t, crewSide) {
   const box = (tone, title, html, foot, more = '') => `<div class="banner" data-tone="${tone}" role="note"><b>${esc(title)}</b>${html ? `<p>${html}</p>` : ''}${foot ? `<small>${esc(foot)}</small>` : ''}${more}</div>`;
-  const cx = ctx(), tx = text => text && txView(cx, text, t.aLang);
-  const reviewed = () => (t.review ? box(t.review === 'Accepted' ? 'good' : 'warn', L(t.review), tx(t.followUp), t.reviewer && L('by {name}', { name: t.reviewer })) : '');
-  if (crewSide) return (t.reply ? box('info', L('Message from the office'), tx(t.reply), [t.replyBy, t.replyAt && stamp(t.replyAt)].filter(Boolean).join(' · ')) : '') + reviewed(); // the review reaches a crew phone through the hub
+  const cx = ctx(), tx = k => t[k] && txView(cx, t[k], langOf(t, k));
+  const reviewed = () => (t.review ? box(t.review === 'Accepted' ? 'good' : 'warn', L(t.review), tx('followUp'), t.reviewer && L('by {name}', { name: t.reviewer })) : '');
+  if (crewSide) return (t.reply ? box('info', L('Message from the office'), tx('reply'), [t.replyBy, t.replyAt && stamp(t.replyAt)].filter(Boolean).join(' · ')) : '') + reviewed(); // the review reaches a crew phone through the hub
   if (t.review) return reviewed();
   if (t.status && view.tab !== 'review') return box('info', L('Finished · ready for review'), '', [L(t.status), t.gotAt && stamp(t.gotAt)].filter(Boolean).join(' · '),
     `<button class="link" data-act="tab" data-v="review">${L('Review')}${icon('chev')}</button>`);
@@ -390,11 +390,11 @@ function assign(t) {
   const chips = people(S).filter(p => (t.crewId ? p.crewId === t.crewId : p.crew === t.crew)).map(p => ({ id: p.id, name: p.name }));
   t.members.forEach((name, i) => { if (memberAt({ members: chips.map(c => c.name), memberIds: chips.map(c => c.id) }, t.memberIds[i], name) < 0) chips.push({ id: t.memberIds[i], name }); });
   const on = p => memberAt(t, p.id, p.name) >= 0;
-  const checks = [...new Set([...S.checks, ...t.checks.map(c => c.text)])];
+  const checks = [...new Set([...S.checks, ...t.checks.map(c => c.text)])], cx = ctx(), tf = (label, k, o) => txField(cx, label, `t.${k}`, t[k], o, langOf(t, k)); // the PM and the superintendent may type in different languages
   return group(L('Assignment'), `
       ${field(L('Date'), 't.date', t.date, { type: 'date' })}${field(L('Assigned by'), 't.by', t.by)}
       ${field(L('Floor / level'), 't.floor', t.floor, { list: 'floors' })}${field(L('Task ID'), 't.id', t.id)}
-      ${field(L('Room / area'), 't.area', t.area, { list: 'areas', wide: true, ph: L('e.g. Elec room 3E, east corridor') })}
+      ${tf(L('Room / area'), 'area', { list: 'areas', wide: true, ph: L('e.g. Elec room 3E, east corridor') })}
       ${datalist('floors', S.floors)}${datalist('areas', T.map(x => x.area))}`)
   + group(L('Crew'), `
     <div class="field wide"><span>${L('Crew')}</span><div class="chips">${S.crews.map(c => `<button class="chip" data-act="crew" data-v="${esc(c.id)}" aria-pressed="${t.crewId ? t.crewId === c.id : t.crew === c.name}" style="${crewVar(c.name, c.id)}"><i class="dot"></i>${esc(c.name)}</button>`).join('')}</div></div>
@@ -403,8 +403,8 @@ function assign(t) {
       ${addRow('newMember', L('Add a name'), 'addMember')}</div>
     ${field(L('Crew lead'), 't.lead', t.lead)}${field(L('Crew size'), 't.size', t.size, { type: 'number', mode: 'numeric' })}`)
   + group(L('Assigned task & required finish'), `
-    ${field(L('Work, quantities and limits of scope'), 't.scope', t.scope, { rows: 4, ph: L('e.g. Pull and terminate 12 AWG for lighting circuits L3-14 to L3-18, east corridor. Stop at grid line 7.') })}
-    ${field(L('Drawing / detail references'), 't.refs', t.refs, { wide: true, ph: L('e.g. E-301, detail 4/E-502') })}
+    ${tf(L('Work, quantities and limits of scope'), 'scope', { rows: 4, ph: L('e.g. Pull and terminate 12 AWG for lighting circuits L3-14 to L3-18, east corridor. Stop at grid line 7.') })}
+    ${tf(L('Drawing / detail references'), 'refs', { wide: true, ph: L('e.g. E-301, detail 4/E-502') })}
     <div class="field wide"><span>${L('Steps the crew checks off')}</span><div class="checklist steps-edit">
       ${t.items.map((it, i) => `<div class="edit-row"><input data-k="t.items.${i}.text" value="${esc(it.text)}" aria-label="${esc(L('Step {n}', { n: i + 1 }))}"><button class="x" data-act="delItem" data-i="${i}" aria-label="${esc(L('Remove step {n}', { n: i + 1 }))}">✕</button></div>`).join('')}
       ${addRow('newItem', L('Add a step'), 'addItem')}</div></div>
@@ -414,21 +414,21 @@ function assign(t) {
   + group(L('Assigned work time & estimate'), `
       ${field(L('Allotted time (hrs)'), 't.allot', t.allot, { type: 'number', mode: 'decimal' })}
       ${field(L('Your estimate (hrs)'), 't.est', t.est, { type: 'number', mode: 'decimal' })}
-      ${field(L('Allotted notes'), 't.allotNote', t.allotNote)}${field(L('Estimate notes'), 't.estNote', t.estNote)}
+      ${tf(L('Allotted notes'), 'allotNote')}${tf(L('Estimate notes'), 'estNote')}
       ${field(L('Planned start'), 't.pStart', t.pStart, { type: 'time' })}${field(L('Planned stop'), 't.pStop', t.pStop, { type: 'time' })}${field(L('Check-in at'), 't.checkIn', t.checkIn, { type: 'time' })}
     <p class="hint out form-foot" data-out="crewHrs">${crewHrsLine(t)}</p>`);
 }
 
 // What the crew reads first: who it's for and where it stands, the scope in plain words, then the details.
 function brief(t) {
-  const [label, tone] = stage(t), c = ctx(), tx = (text, lang) => txView(c, text, lang); // as typed with no hub
+  const [label, tone] = stage(t), c = ctx(), tx = k => txView(c, t[k], langOf(t, k)); // as typed with no hub
   const row = (k, html) => (html ? `<dt>${esc(k)}</dt><dd>${html}</dd>` : ''); // html: already escaped
-  const note = n => (n ? ' · ' + esc(n) : '');
+  const note = k => (t[k] ? ' · ' + tx(k) : '');
   return `<section class="brief" style="${crewVar(t.crew, t.crewId)}">
     <div class="brief-top"><span class="who"><i class="dot"></i> ${esc(t.crew || L('Crew'))}</span><span class="pill" data-tone="${tone}">${esc(label)}</span></div>
-    ${t.scope ? `<p class="scope-text">${tx(t.scope, t.aLang)}</p>` : ''}
-    <dl class="kv info">${row(L('Drawings'), tx(t.refs, t.aLang))}${row(L('Planned'), t.pStart && esc(fromTo(t.pStart, t.pStop)))}${row(L('Check in at'), esc(t12(t.checkIn)))}
-      ${row(L('Allotted'), t.allot && esc(L('{n} hrs', { n: t.allot })) + note(t.allotNote))}${row(L('Estimate'), t.est && esc(L('{n} hrs', { n: t.est })) + note(t.estNote))}
+    ${t.scope ? `<p class="scope-text">${tx('scope')}</p>` : ''}
+    <dl class="kv info">${row(L('Drawings'), tx('refs'))}${row(L('Planned'), t.pStart && esc(fromTo(t.pStart, t.pStop)))}${row(L('Check in at'), esc(t12(t.checkIn)))}
+      ${row(L('Allotted'), t.allot && esc(L('{n} hrs', { n: t.allot })) + note('allotNote'))}${row(L('Estimate'), t.est && esc(L('{n} hrs', { n: t.est })) + note('estNote'))}
       ${row(L('Crew'), t.members.map(m => esc(m) + (nameKey(m) && nameKey(m) === nameKey(S.worker) ? ` (${esc(L('you'))})` : '')).join(', '))}${row(L('Assigned'), esc(niceDate(t.date) + (t.by ? ' · ' + L('by {name}', { name: t.by }) : '')))}</dl></section>`;
 }
 
@@ -445,7 +445,7 @@ function workedLine(t) {
 function results(t) {
   const d = doneCount(t), n = t.items.length, c = t.checks.filter(x => x.done).length, cx = ctx();
   // a step's words in the reader's language; no tap to the original inside the tick button (that tap ticks)
-  const tick = (list, it, i) => `<button class="tick" data-act="tick" data-list="${list}" data-i="${i}" aria-pressed="${it.done}"><span class="box">✓</span><span class="txt">${txView(cx, it.text, t.aLang, getLang(), { toggle: false })}</span>${it.at ? `<small>${timeOf(it.at)}</small>` : ''}</button>`;
+  const tick = (list, it, i) => `<button class="tick" data-act="tick" data-list="${list}" data-i="${i}" aria-pressed="${it.done}"><span class="box">✓</span><span class="txt">${txView(cx, it.text, langOf(t, it.id), getLang(), { toggle: false })}</span>${it.at ? `<small>${timeOf(it.at)}</small>` : ''}</button>`;
   // Start and Stop: a big button until tapped, then the time it took, which can be fixed by hand.
   const clock = (k, label, now, primary) => `<div class="clockslot"><span>${label}</span>${t[k]
     ? `<input type="time" data-k="t.${k}" value="${esc(t[k])}" aria-label="${label}">`
@@ -464,27 +464,27 @@ function results(t) {
     <div class="field"><span>${L('Status')}</span>${seg('t.status', t.status, [['Complete', 'good', L('Complete')], ['Partial', 'warn', L('Partial')], ['Blocked', 'bad', L('Blocked')]])}</div>
   </section>
   <section class="card notes"><h2>${L('Notes')}</h2>
-    ${txField(cx, L('Work / quantity completed (locations and details)'), 't.doneText', t.doneText, { rows: 3 }, t.cLang)}
-    ${txField(cx, L('Work remaining'), 't.remain', t.remain, { rows: 2 }, t.cLang)}
-    ${txField(cx, L('Crew comments / concerns'), 't.comments', t.comments, { rows: 3, ph: L('What helped or slowed the work? Quality, rework, support needed') }, t.cLang)}
+    ${txField(cx, L('Work / quantity completed (locations and details)'), 't.doneText', t.doneText, { rows: 3 }, langOf(t, 'doneText'))}
+    ${txField(cx, L('Work remaining'), 't.remain', t.remain, { rows: 2 }, langOf(t, 'remain'))}
+    ${txField(cx, L('Crew comments / concerns'), 't.comments', t.comments, { rows: 3, ph: L('What helped or slowed the work? Quality, rework, support needed') }, langOf(t, 'comments'))}
     ${field(L('Crew / lead'), 't.lead', t.lead)}
   </section>`;
 }
 
 function review(t) {
-  const [label, tone] = stage(t), w = worked(t), cx = ctx(), tx = text => txView(cx, text, t.cLang); // the crew's words in the reader's language
+  const [label, tone] = stage(t), w = worked(t), cx = ctx(), tx = k => t[k] && txView(cx, t[k], langOf(t, k)); // the crew's words in the reader's language
   const row = (k, html, cls = '') => (html ? `<dt${cls}>${esc(k)}</dt><dd${cls}>${html}</dd>` : ''), long = ' class="long"'; // long: typed text, stacked
   return `<section class="brief" style="${crewVar(t.crew, t.crewId)}"><div class="brief-top"><span class="who"><i class="dot"></i> ${esc(t.crew || L('Crew'))}</span><span class="pill" data-tone="${tone}">${esc(label)}</span></div>
     ${t.status || t.aStart ? `<dl class="kv info">${row(L('Status'), esc(t.status ? L(t.status) : L('In progress')))}${row(L('Steps'), t.items.length && esc(L('{d} of {n} done', { d: doneCount(t), n: t.items.length })))}
       ${row(L('Checks'), t.checks.length && esc(L('{d} of {n} done', { d: t.checks.filter(c => c.done).length, n: t.checks.length })))}
       ${row(L('Worked'), w && esc(`${fmtMin(w)} · ${L('{n} crew-hrs', { n: hrs(w / 60 * (t.size || 1)) })}`))}${row(L('Estimate'), t.est && esc(`${L('{n} hrs', { n: t.est })} · ${L('{n} crew-hrs', { n: hrs(t.est * (t.size || 1)) })}`))}
-      ${row(L('Delays'), t.delay && esc(L('{n} min', { n: t.delay })))}${row(L('Completed'), t.doneText && tx(t.doneText), long)}${row(L('Remaining'), t.remain && tx(t.remain), long)}${row(L('Crew notes'), t.comments && tx(t.comments), long)}
+      ${row(L('Delays'), t.delay && esc(L('{n} min', { n: t.delay })))}${row(L('Completed'), tx('doneText'), long)}${row(L('Remaining'), tx('remain'), long)}${row(L('Crew notes'), tx('comments'), long)}
       ${row(L('Received'), esc(stamp(t.gotAt)))}</dl>`
     : `<p class="hint">${L("No results from the crew yet. They'll show here when the crew sends them, or fill them in yourself on the Crew results tab.")}</p>`}</section>`
   + group(L('Lead / superintendent review'), `
     <div class="field wide">${seg('t.review', t.review, [['Accepted', 'good', L('Accepted')], ['Follow-up needed', 'warn', L('Follow-up needed')]])}</div>
     ${field(L('Reviewed by'), 't.reviewer', t.reviewer)}
-    ${field(L('Follow-up / next step'), 't.followUp', t.followUp, { rows: 3 })}
+    ${txField(cx, L('Follow-up / next step'), 't.followUp', t.followUp, { rows: 3 }, langOf(t, 'followUp'))}
     <div class="form-foot"><button class="btn wide" data-act="carry">${L('Carry open work to {date}', { date: niceDate(addDays(t.date, 1)) })}</button></div>`);
 }
 
@@ -757,9 +757,8 @@ async function act(a, el) {
         t.size = t.members.length;
         enlist(t);
       }
-      if (a === 'addItem') t.items.push(newItem(text));
-      if (a === 'addCheck' && !t.checks.some(c => c.text === text)) t.checks.push(newItem(text));
-      if (a !== 'addMember') t.aLang = getLang(); // a step or a check typed in this phone's language
+      const it = a === 'addItem' || (a === 'addCheck' && !t.checks.some(c => c.text === text)) ? newItem(text) : null;
+      if (it) { t[a === 'addItem' ? 'items' : 'checks'].push(it); typedIn(t, it.id, getLang()); } // a step or a check typed in this phone's language
       t.updatedAt = Date.now();
       persist();
       render();
@@ -841,10 +840,7 @@ async function act(a, el) {
       toast(a === 'carry' ? L('Carried to {date}', { date: niceDate(date) }) : L('Duplicated. Change the crew or floor.'));
       return go(`task/${c.uid}/assign`);
     }
-    case 'del': { // gone at once, with Undo for 6 seconds instead of an "are you sure?"; the PM's phone on a hub then takes it off the hub too
-      if (role() === 'pm' && hubOn()) return deleteRecord(ctx(), 'task', t.uid);
-      return toast(L('Task {id} deleted', { id: t.id || L('New task') }), '', { undo: remove('task', t.uid) });
-    }
+    case 'del': return deleteRecord(ctx(), 'task', t.uid); // gone at once, with Undo for 6 seconds instead of an "are you sure?"; on a hub only the PM's phone deletes what the hub has (live.mjs)
     case 'pdfTask': return savePdf(`${fileName(t)}.pdf`, record(t));
     case 'pdfDay': return savePdf(`Task sheets ${day}.pdf`, makePdf(`Electrical task sheets · ${niceDate(day, 'en')}`, letterhead(S), dayTasks().flatMap(recordRows), `${COMPANIES} · ${niceDate(day, 'en')}`));
     case 'fileNow': return fileTask(t);
@@ -875,6 +871,7 @@ document.addEventListener('click', e => {
   const a = el.dataset.act;
   // A second tap on an action still running (sending, sharing, saving) does nothing; then the redrawn control plays its animation.
   busy(el, () => (liveOwns(a) ? liveAct(ctx(), a, el) // the hub screens' own taps
+    : a === 'clear' && hubOn() ? deleteRecord(ctx(), 'report', day) // on a hub, Clear this report deletes it the way a sheet is deleted
     : (view.v === 'clock' || view.v === 'report') && !SHELL.has(a) ? reportAct(a, el, S, day, view.v) : act(a, el)))
     .then(() => twin(el)?.classList.add('just'));
 });
@@ -907,9 +904,9 @@ document.addEventListener('input', e => {
     if (k === 's.lang' || k === 's.role') { setLang(S.lang); render(); }
     return;
   }
-  // The language each part is typed in, so the hub can translate it for a reader of the other language.
-  if (/^t\.(scope|refs|area|allotNote|estNote|followUp|items\.\d+\.text)$/.test(k)) t.aLang = getLang();
-  if (/^t\.(doneText|remain|comments)$/.test(k)) t.cLang = getLang();
+  // The language each text is typed in (its field, or the step's id), so the hub can translate it for a reader of the other language.
+  const tm = /^t\.(?:(scope|refs|area|allotNote|estNote|followUp|doneText|remain|comments)|(items|checks)\.(\d+)\.text)$/.exec(k), tk = tm && (tm[1] || t[tm[2]][+tm[3]]?.id);
+  if (tk) typedIn(t, tk, getLang());
   t.updatedAt = Date.now();
   persist();
   for (const o of app.querySelectorAll('[data-out]')) o.textContent = OUT[o.dataset.out](t);
