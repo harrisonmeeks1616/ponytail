@@ -28,7 +28,7 @@
 <script>setTimeout(() => { const app = document.getElementById('app'); if (window.appStarted) return; let es = false; try { es = JSON.parse(localStorage.getItem('schwab.settings')).lang === 'es'; } catch {} app.innerHTML = es ? '<div class="empty"><h2>La app no termin\u00f3 de cargar</h2><p>Con se\u00f1al, vuelva a cargar.</p><button class="btn primary" onclick="location.reload()">Recargar</button></div>' : '<div class="empty"><h2>The app didn\u2019t finish loading</h2><p>Get signal, then reload. · La app no termin\u00f3 de cargar. Con se\u00f1al, vuelva a cargar.</p><button class="btn primary" onclick="location.reload()">Reload · Recargar</button></div>'; }, 6000); // a dropped file on the first open after an update; a Spanish phone gets Spanish only</script>
 <script type="module">
 import {
-  KEYS, esc, uid, load, save, loadSettings, nameKey, cleanName, people, findPerson, crewById, addPerson, normTask, newItem, mergeTask, cloneTask, pack, unpack, linkTo, langOf, typedIn,
+  KEYS, DEFAULT_SETTINGS, esc, uid, load, save, loadSettings, nameKey, cleanName, people, findPerson, personById, crewById, addPerson, normTask, newItem, mergeTask, cloneTask, pack, unpack, linkTo, langOf, typedIn,
   nextId, renumberClashes, sameNumber, ensureDevice,
   today, addDays, niceDate, nowHM, span, fmtMin, t12, stamp, hrs, timeOf, field, datalist, seg, setPath, getPath, readInput, dateBar,
   toast, sheet, ask, sendSheet, pasteSheet, makePdf, savePdf, fileAway, retryUploads, settingsView, settingsAct, restore,
@@ -205,6 +205,8 @@ async function openJoin(data) {
   location.replace('#day/' + day);
   const h = data.hub && typeof data.hub === 'object' ? data.hub : {};
   if (S.hubRole === 'pm' && S.hubUrl === h.url) return toast(L('This is the PM phone. Send the invite to the person it is for.')); // its key is shown only once, at setup
+  // an office phone kept its office screens as a crew phone, but the hub took nothing of its office work from then on
+  if (data.role === 'crew' && (office() || ['pm', 'super'].includes(S.hubRole) || T.some(x => x.origin === 'mine'))) return toast(L('This phone is for the office, so it does not join as a crew phone. Send the invite to the person it is for.'));
   if (S.hubUrl && S.hubKey && (S.hubUrl !== h.url || S.hubKey !== h.key)
     && !await ask(L('This phone is already connected to a hub. Use this invite instead?'), L('Use this invite'))) return;
   const open = () => joinSheet({ ...ctx(), sync: { ...sync, joinFrom: d => sync.joinFrom(d, { replace: true }) } }, data); // asked above
@@ -782,7 +784,12 @@ async function act(a, el) {
         render();
       } });
     }
-    case 'check': t.checks = t.checks.some(c => c.text === v) ? t.checks.filter(c => c.text !== v) : [...t.checks, newItem(v)]; break;
+    case 'check': { // a check from Settings keeps its own language: the defaults are English words; one added there, this phone's
+      const c = !t.checks.some(x => x.text === v) && newItem(v);
+      t.checks = c ? [...t.checks, c] : t.checks.filter(x => x.text !== v);
+      if (c) t.aLangs = { ...t.aLangs, [c.id]: DEFAULT_SETTINGS.checks.includes(v) ? 'en' : getLang() }; // not the sheet's: picking one is not typing
+      break;
+    }
     case 'tick': {
       const it = t[el.dataset.list][+el.dataset.i];
       it.done = !it.done;
@@ -903,6 +910,7 @@ document.addEventListener('input', e => {
   if (k === 't.date' && !/^\d{4}-\d{2}-\d{2}$/.test(el.value)) return; // every sheet needs a real day; a cleared or half-typed date would hide it
   setPath({ t, s: S }, k, readInput(el));
   if (k.startsWith('s.')) {
+    if (k === 's.worker' && nameKey(personById(S, S.workerId)?.name) !== nameKey(S.worker)) S.workerId = ''; // another name typed: no longer that person (report.mjs attachShifts)
     save(KEYS.settings, S);
     if (k === 's.lang' || k === 's.role') { setLang(S.lang); render(); }
     return;

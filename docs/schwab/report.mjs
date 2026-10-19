@@ -88,8 +88,10 @@ const h2 = c => (c / 100).toFixed(2);
 // The shift this phone is clocked in on. One open longer than any real shift (16 hours) was a missed
 // clock-out: the next tap starts a new shift, and the PM fills in the missing time.
 const onShift = (now = Date.now()) => MY.filter(s => !s.out && now - started(s) < 16 * 36e5).sort(byTime).at(-1);
-// The hub answered in the last minute (it is syncing again or done): a clock tap can go through it instead of a text.
-const hubAnswers = () => { const h = hubStatus(); return (h.state === 'live' || h.state === 'syncing') && Date.now() - h.at < 60e3; };
+// The hub may answer, so a clock tap waits for its own round instead of opening a text: the last round went through, one is
+// running (the first one after the app opens too, while the last good time stored is from yesterday), or none has run yet.
+// After a round that failed (no signal, busy, a refused key) the text opens at once.
+const hubAnswers = () => { const h = hubStatus(); return h.state === 'live' || h.state === 'syncing' || (h.state === 'offline' && !h.message); };
 // The id the hub derives from this phone's secret (HUB.md, Identity); the older random id only until that exists.
 const deviceOf = S => deviceId() || S.device || ((S.device = uid()), save(KEYS.settings, S), S.device);
 const sheetsHere = () => load(KEYS.tasks, []).map(normTask).filter(t => t.uid);
@@ -248,8 +250,14 @@ export function attachPeople(S, shifts) {
   for (const s of shifts) { const p = !s.pid && whoIs(S, s); if (p) { s.pid = p.id; n++; } }
   return n;
 }
-// On this phone's own hours and the PM's timesheet; the app runs it when it loads settings.
-export const attachShifts = S => { if (attachPeople(S, CREW)) keep(KEYS.crewHours, CREW); if (attachPeople(S, MY)) keep(KEYS.hours, MY); };
+// On this phone's own hours and the PM's timesheet; the app runs it when it loads settings. The time clock's person is
+// workerId: a name the PM fixed in Settings (a rename keeps the id) becomes this phone's name, so the next tap stays theirs.
+// Typing another name in the box lets go of the id first (tasks.html), so this never takes a typed name back.
+export const attachShifts = S => {
+  const me = personById(S, S.workerId);
+  if (me && me.name !== S.worker) { S.worker = me.name; save(KEYS.settings, S); }
+  if (attachPeople(S, CREW)) keep(KEYS.crewHours, CREW); if (attachPeople(S, MY)) keep(KEYS.hours, MY);
+};
 // One timesheet per person, in name order, each with key (for the buttons) and pid. A person on S's roster shows under
 // the roster's current name, so a rename keeps their history together; else under the first spelling seen. The crew
 // is the latest shift's that names one (by the crew's current name), else the person's crew in S.
@@ -337,8 +345,8 @@ export function hoursInput(el, S, day) {
   const [, id, f] = el.dataset.k.split('.'), s = CREW.find(x => x.id === id);
   if (!s || !['in', 'out'].includes(f) || (f === 'in' && !el.value)) return;
   s[f] = el.value;
-  s.edited[f] = true;
-  el.closest('.field')?.classList.add('edited'); // the dot on the box the PM changed
+  s.edited[f] = !!el.value; // a clock-out box cleared again is the worker's clock-out to fill, not the PM's
+  el.closest('.field')?.classList.toggle('edited', s.edited[f]); // the dot on the box the PM changed
   el.closest('.shift')?.classList.toggle('open', !s.out);
   keep(KEYS.crewHours, CREW);
   const week = weekOf(day), people = byPerson(week, undefined, S); // the same order as the cards' data-i
@@ -592,7 +600,7 @@ export async function openReport(data, S) {
     // On a hub the text is a copy of what the hub delivers: merged only when newer than the hub copy here (sync.mjs fromText).
     if (!fromText('r', inc.date, pmSent ? 'pm' : 'sup', inc.updatedAt, data.skew)) { toast(L('This phone already has the newest copy of this report from the hub.')); return inc.date; }
     // Normal back-and-forth: neither side's work is lost, so there's nothing to ask.
-    R[inc.date] = pmSent ? mergeAnswers(mine, inc) : mergeAnswers(inc, mine);
+    R[inc.date] = pmSent ? mergeAnswers(mine, inc) : mergeAnswers(inc, mine, true);
     R[inc.date].updatedAt = Date.now();
     toast(pmSent ? L('PM answers added to your report') : L('Updated report loaded. Your answers are kept.'));
     open.add('pm');

@@ -710,8 +710,9 @@ export function makeSync(o = {}) {
     epoch++; fails = 0; nextAllowed = 0;
     // The same hub, also after a Disconnect: everything this phone knew of it stays (bases, stamps, where it was), so its unsynced
     // work goes up first and merges step by step, as if it had never left. A different hub: only what changed is new work there.
-    // ponytail: a crew invite that lets the person pick the crew starts with no crew, so that first round is pull-first, and a
-    // newer hub copy of a part still takes the whole part; keeping the crew through the Disconnect would close that.
+    // ponytail: a round that starts pull-first (a new role, crew or person: sigOf; a crew invite that lets the person pick
+    // the crew starts with none) still lets a newer hub copy of a part take the whole part over work not sent yet. Letting
+    // mergeTask keep an unsynced part it has a base for, so its push merges step by step, would close that.
     const same = url === (s.hubUrl || loadState().url);
     if (!same) store.set(ST, keepHashes());
     patchSettings({ hubUrl: url, hubKey: key, hubRole: rep.role, hubCrew: typeof extra.crew === 'string' ? extra.crew : same ? String(s.hubCrew || '') : '' });

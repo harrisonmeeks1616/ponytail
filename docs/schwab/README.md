@@ -214,8 +214,9 @@ and live updates. It is one Google Apps Script web app plus one Google Sheet, bo
 - Two office phones that numbered sheets offline keep both numbers once both sheets are on the hub, and both show
   **Same number as another sheet** until one is renamed.
 - A shift texted to the PM before that worker's phone joined the hub stays under its old phone id on the PM's copy.
-- One hub per phone. **Disconnect** keeps the phone's work on the phone. A phone moved to another hub (another job) does not
-  copy what it already synced to the new one; what it changes after the move goes up.
+- One hub per phone. **Disconnect** keeps the phone's work on the phone, and joining the same hub again sends what it had
+  not sent yet. A phone moved to another hub (another job) does not copy what it already synced to the new one; what it
+  changes after the move goes up.
 
 ## Spanish mode (crew screens and the time clock)
 

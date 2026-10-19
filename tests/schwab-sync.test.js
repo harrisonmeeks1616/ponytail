@@ -2078,7 +2078,7 @@ test('against the real hub/Code.gs: a phone that taps Disconnect and joins the s
   const step = async (...ps) => { for (const p of ps) { mock.advance(5e3); await p.cycle(); } };
   sp.save('schwab.settings', { ...sp.settings(), crews: [{ name: 'Crew A', lead: '', members: 'Ana R, Jose L' }] });
   const uid = sp.addTask({ sentAt: sp.now(), items: [{ id: 'i1', text: 'Pull wire' }, { id: 'i2', text: 'Install box' }, { id: 'i3', text: 'Label' }] });
-  await step(sp, pm, ana, jose);
+  await step(sp, pm, ana, jose, ana, jose); // a second round: each crew phone has found its person on the roster
   assert.equal((await pm.sync.rotate('crew')).ok, true); // the PM replaces the crew key; both crew phones are refused and keep ticking
   ana.tick(uid, 'i1'); await step(ana);
   mock.advance(5 * 60e3); jose.tick(uid, 'i2'); await step(jose);

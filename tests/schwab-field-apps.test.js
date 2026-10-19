@@ -561,6 +561,19 @@ test('renaming a person or a crew keeps the id, so sheets and hours stay with th
   assert.deepEqual(shifts.map(s => s.who), ['Jose L', 'jose l'], 'each shift keeps the label it was made with');
 });
 
+test('DATA2-06: a name the PM fixed in Settings becomes the time clock name on the worker phone, by the person id', async () => {
+  const { normSettings, findPerson, renamePerson } = await lib;
+  const { attachShifts } = await import('../docs/schwab/report.mjs');
+  const S = normSettings({ crews: [{ name: 'Crew A', members: 'Ana R, Jose L' }] }), id = findPerson(S, 'Ana R').id;
+  Object.assign(S, { worker: 'Ana R', workerId: id });
+  renamePerson(S, id, 'Ana Ramirez'); // the renamed roster, as the hub delivers it
+  attachShifts(S); // the app loading the new settings
+  assert.deepEqual([S.worker, S.workerId], ['Ana Ramirez', id], 'the next tap goes up as Ana Ramirez with her id, not as a stray "Ana R"');
+  Object.assign(S, { worker: 'Luis M', workerId: '' }); // another name typed on the box lets go of the id (tasks.html), so it is never taken back
+  attachShifts(S);
+  assert.equal(S.worker, 'Luis M');
+});
+
 test('two office phones numbered sheets offline: every shift still points at its own sheet', async () => {
   const { normTask, normShift, assignmentFor, renumberClashes, sameNumber } = await lib;
   const { importShifts } = await import('../docs/schwab/report.mjs');
@@ -874,6 +887,12 @@ test('a report text opened on the other phone: the PM copy decides the PM part, 
   const { normReport, mergeAnswers } = await lib;
   const sup = normReport({ wins: 'newer words', decisions: [{ q: 'Saturday OT?', pm: 'Approved' }, { q: 'Lift Monday?', pm: 'Yes', pmNote: 'book it' }], pmReview: 'H · 5 PM' }); // the superintendent's text, sent before the PM took them back
   const pm = normReport({ decisions: [{ q: 'Saturday OT?', pm: '' }, { q: 'Lift Monday?', pm: 'No', pmNote: '' }], pmReview: '' });
-  mergeAnswers(sup, pm);
+  mergeAnswers(sup, pm, true); // on the PM phone, its own copy
   assert.deepEqual([sup.wins, sup.decisions.map(d => [d.q, d.pm, d.pmNote]), sup.pmReview], ['newer words', [['Saturday OT?', '', ''], ['Lift Monday?', 'No', '']], '']);
+  // PHONE-ES-02: on the superintendent phone the text is the PM's copy of unknown age (no hub): an older one opened after a
+  // newer one keeps the later answers and the review, as the live app does
+  const mine = normReport({ decisions: [{ q: 'Wire order?', pm: 'Approved' }, { q: 'Overtime Saturday?', pm: 'Declined', pmNote: 'No overtime this week' }], pmReview: 'Reviewed. Order the wire, no Saturday.', pmLang: 'en' });
+  const older = normReport({ decisions: [{ q: 'Wire order?', pm: 'Approved' }, { q: 'Overtime Saturday?' }], pmReview: '' });
+  mergeAnswers(mine, older);
+  assert.deepEqual([mine.decisions.map(d => [d.pm, d.pmNote]), mine.pmReview, mine.pmLang], [[['Approved', ''], ['Declined', 'No overtime this week']], 'Reviewed. Order the wire, no Saturday.', 'en']);
 });

@@ -267,16 +267,18 @@ export function mergeTask(local, inc, part) {
 }
 
 // The PM owns the decision answers and the review stamp; the superintendent owns everything else. answers is the
-// PM's copy, so it decides, an answer the PM took back included. One whose question was reworded since is added as
-// its own entry, never dropped.
-export function mergeAnswers(base, answers) {
+// PM's copy. own: it is this phone's own (the PM phone), so it decides, an answer the PM took back included. Else it is
+// a text of unknown age (the superintendent phone, no hub to order it): it only adds, so an older text never takes a
+// newer answer back. One whose question was reworded since is added as its own entry, never dropped.
+export function mergeAnswers(base, answers, own) {
   for (const d of answers.decisions) {
+    if (!own && !d.pm && !d.pmNote) continue;
     const m = base.decisions.find(x => x.q === d.q);
     if (m) Object.assign(m, { pm: d.pm, pmNote: d.pmNote });
     else if (d.pm || d.pmNote) base.decisions.push(d);
   }
-  base.pmReview = answers.pmReview;
-  base.pmLang = answers.pmLang;
+  base.pmReview = own ? answers.pmReview : answers.pmReview || base.pmReview;
+  base.pmLang = answers.pmLang || base.pmLang;
   return base;
 }
 

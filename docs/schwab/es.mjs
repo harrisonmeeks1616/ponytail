@@ -768,4 +768,7 @@ export default {
   'Sending…': 'Enviando…',
   'Message saved on this phone. It goes to {crew} when the hub can be reached.': 'Mensaje guardado en este teléfono. Le llega a {crew} cuando haya conexión con el sistema central.',
   'The hub did not accept this PM key. Copy it again from the Execution log of the hub script and paste all of it. If it is lost, run resetPmKey there.': 'El sistema central no aceptó esta clave del gerente de proyecto. Cópiela otra vez del registro de ejecución del script del sistema central y péguela completa. Si se perdió, ejecute resetPmKey ahí.',
+
+  // an office phone opening a crew invite
+  'This phone is for the office, so it does not join as a crew phone. Send the invite to the person it is for.': 'Este teléfono es para la oficina, así que no se une como teléfono de cuadrilla. Mande la invitación a la persona a quien va dirigida.',
 };
