@@ -779,7 +779,8 @@ function reloadData() {
 const reload = () => {
   reloadData();
   if (document.body.classList.contains('office') && !office()) document.querySelectorAll('dialog[open]:not(.pin)').forEach(d => d.close()); // signed out elsewhere: an office question left open can't finish
-  drawSoon();
+  if (hubOn()) return drawSoon(); // another tab's background sync saves too: the redraw waits for the field being typed in
+  needsOffice(view) && !office() ? route() : render();
 };
 
 // ---------- the hub (HUB.md; sync.mjs keeps the stores in step, live.mjs draws the hub screens) ----------

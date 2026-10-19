@@ -696,8 +696,8 @@ async function invite(ctx, role) {
 
 // A phone opening a join link: name and crew, then the hub does the rest. data: the unpacked link.
 export function joinSheet(ctx, data) {
-  const sent = Array.isArray(data?.crews) ? data.crews.filter(x => typeof x === 'string' && x.trim()).slice(0, 50).map(x => x.trim().slice(0, 60)) : [];
-  const crewRole = data?.role === 'crew', names = sent.length ? sent : ctx.S.crews.map(c => c.name).filter(Boolean);
+  const listed = Array.isArray(data?.crews) ? data.crews.filter(x => typeof x === 'string' && x.trim()).slice(0, 50).map(x => x.trim().slice(0, 60)) : []; // the job's crews, from the invite
+  const crewRole = data?.role === 'crew', names = listed.length ? listed : ctx.S.crews.map(c => c.name).filter(Boolean);
   let crew = '';
   const d = sheet(`<h3>${L('Join the hub')}</h3>
     <p class="hint">${crewRole ? L('This link connects this phone to the project hub, so your task sheets arrive by themselves.') : L('This link connects this phone to the project hub as the superintendent.')}</p>

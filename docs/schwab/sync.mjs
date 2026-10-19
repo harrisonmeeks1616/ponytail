@@ -201,11 +201,12 @@ export function makeSync(o = {}) {
   // ---------- scan: which local parts the hub does not have yet ----------
 
   const skewed = st => now() + st.skew;
-  // A part seen for the first time is stamped with its sheet's own last-edit time, never "now": a phone joining with old data cannot beat a newer hub copy.
+  // A part seen for the first time, or not yet seen on this hub (keepHashes), is stamped with its sheet's own last-edit time, never "now": a phone
+  // joining with old data, or edited while disconnected, cannot beat a newer hub copy.
   // Always above the last version this phone knew, so an edit cannot lose to the phone's own earlier push.
   function stampOf(st, pr, edited, seen) {
     const floor = Math.max(num(pr.v), num(seen)) + 1;
-    return Math.max(floor, pr.s === undefined ? (edited > 0 ? Math.min(skewed(st), edited + st.skew) : 0) : skewed(st));
+    return Math.max(floor, pr.s === undefined || pr.v === undefined ? (edited > 0 ? Math.min(skewed(st), edited + st.skew) : 0) : skewed(st));
   }
   const wireTask = (t, sent) => {
     const w = { uid: t.uid, date: t.date }, A = sent.assign, C = sent.crew; // the hub validates every sheet by uid and day, so the day goes with a crew part too; the crew key ignores it

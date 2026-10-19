@@ -1780,6 +1780,14 @@ test('another job, an older tab, a texted sheet, a one-off failure: nothing stal
   sp.editTask(old, t => { t.scope = 'edited after the move'; });
   tick(30e3); await sp.cycle();
   assert.equal(b.tasks.get(old)?.a.scope, 'edited after the move', 'an edit made after the move is new work');
+  // Disconnected and connected again: an edit made while away is ranked by when it was made, not by when the phone came back.
+  const h2 = fresh(), s1 = await makePhone(h2, 'super'), s2 = await makePhone(h2, 'super'), x = s1.addTask({ scope: 'first' });
+  await s1.cycle(); await s2.cycle();
+  s1.sync.disconnect();
+  s1.editTask(x, t => { t.scope = 'older edit, made away'; });
+  tick(60e3); s2.editTask(x, t => { t.scope = 'newer edit on the hub'; }); await s2.cycle();
+  tick(60e3); assert.equal((await s1.sync.connect(URL_A, KEYS.super)).ok, true); await s1.cycle();
+  assert.deepEqual([h2.tasks.get(x).a.scope, s1.task(x).scope], ['newer edit on the hub', 'newer edit on the hub']);
   // A tab on a version before the hub saves a sheet without the office fields: they are not wiped on the hub, and come back here.
   const hub = fresh(), pm = await makePhone(hub, 'pm');
   const u = pm.addTask({ reply: 'Bring the lift', replyBy: 'Pat' });
