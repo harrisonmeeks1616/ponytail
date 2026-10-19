@@ -1,6 +1,8 @@
 'use strict';
 // The hub server (docs/schwab/hub/Code.gs) against an in-memory fake of the Google services it uses
 // (tests/helpers/google-mock.js). Nothing here touches Google; it checks the rules, not Google's behavior.
+// Knobs for debugging: HUB_HISTORIES (random histories, default 300), HUB_SEED (run one history), HUB_TRACE (a shift id to
+// print while a history runs), HUB_CODE_PATH (test a modified copy of Code.gs, for mutation runs).
 process.env.TZ = 'America/New_York'; // before any Date use: the hours math depends on the job's time zone
 
 const test = require('node:test');
@@ -409,6 +411,12 @@ test('partial pushes, as the app sends them (only the part that changed): the ot
   assert.deepEqual([r.results, r.decisions.map(d => [d.rec, d.pm]), r.pmReview], ['Good day', [['LP-1', 'LP-2'], ['Yes', '']], 'Seen']);
   r = ok(sup.push({ reports: [report({ results: 'Evening', updatedAt: T0 - 300, decisions: report().decisions.map(d => ({ ...d, pm: '', pmNote: '' })), pmReview: '', pmAt: 0 })] })).reports[0].report;
   assert.deepEqual([r.results, r.decisions.map(d => d.pm), r.pmReview, r.pmAt], ['Evening', ['LP-2', ''], 'Seen', T0 - 400], 'the PM answers survive the superintendent\'s next edit');
+  // an unstamped part (stamp 0) is "not sent", even where the stored stamp is also 0
+  ok(sup.push({ reports: [report({ date: '2026-10-21', results: 'Unstamped original', updatedAt: 'x' })] }));
+  r = ok(sup.push({ reports: [report({ date: '2026-10-21', results: 'Unstamped overwrite', updatedAt: 0 })] })).reports[0].report;
+  assert.deepEqual([r.results, r.updatedAt], ['Unstamped original', 0], 'a super part with no stamp does not replace one');
+  r = ok(pm.push({ reports: [{ date: '2026-10-21', decisions: [{ q: 'Which panel?', pm: 'sneaky', pmNote: '' }], pmReview: 'Unstamped review', pmAt: 0 }] })).reports[0].report;
+  assert.deepEqual([r.pmReview, r.decisions.map(d => d.pm)], ['', ['', '']], 'and neither does a PM part with no stamp');
   // a PM-only report for a day nobody wrote yet makes the report; the superintendent then fills it in
   r = ok(pm.push({ reports: [{ date: '2026-10-20', decisions: [{ q: 'Q', pm: 'A', pmNote: '' }], pmReview: '', pmAt: T0 - 50, updatedAt: 0 }] })).reports[0].report;
   assert.deepEqual([r.decisions.map(d => [d.q, d.pm]), r.results], [[['Q', 'A']], '']);
@@ -1339,7 +1347,9 @@ test('selftest: write, read, merge rules, a translated drawing number, delete; l
   ok(office(env).push({ tasks: [task({ uid: 'real1' }), task({ uid: 'real2' })] }));
   const seen = crew.pull(); // fills the pull cache
   const before = { events: env.hub.table('Activity').length, tasks: env.hub.table('Tasks').length, dead: env.hub.table('Deleted').length };
+  const rev0 = Number(env.hub.props.REV);
   const r = ok(pm.call('selftest'));
+  assert.equal(Number(env.hub.props.REV) - rev0, 4, 'three rows written by the checks, then one more revision because deleting moves the rows below up');
   assert.deepEqual(r.checks.map(c => [c.name, c.ok]), [['write', true], ['read', true], ['merge rules', true], ['translate', true], ['delete', true]]);
   assert.ok(r.checks.every(c => c.detail === 'ok'));
   assert.deepEqual({ events: env.hub.table('Activity').length, tasks: env.hub.table('Tasks').length, dead: env.hub.table('Deleted').length }, before);

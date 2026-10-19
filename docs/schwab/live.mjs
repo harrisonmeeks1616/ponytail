@@ -51,11 +51,11 @@ const sheetHref = u => (typeof u === 'string' && /^https:\/\/docs\.google\.com\/
 const sheetLink = u => (sheetHref(u) ? `<a class="btn" href="${esc(sheetHref(u))}" target="_blank" rel="noopener noreferrer">${L('Open the Google Sheet')}</a>` : '');
 const pill = (label, tone = '') => `<span class="pill" data-tone="${tone}">${esc(label)}</span>`;
 const clip = (s, n) => (s.length > n ? s.slice(0, n - 1).trimEnd() + '…' : s);
-const MSG_MAX = 1000;
+const MSG_MAX = 1000, PAGE = 100; // PAGE: rows a list draws before "Show more"
 const GOT = new Set(['live', 'syncing', 'offline', 'error']);
 
 // What this file remembers between draws (filters, what is open, the last answers from the hub).
-const fresh = () => ({ siteOpen: false, sub: '', q: '', crew: '', status: '', person: '', limit: 100, old: null, stats: undefined, want: false, archived: null, test: null, busy: '' });
+const fresh = () => ({ siteOpen: false, sub: '', q: '', crew: '', status: '', person: '', limit: PAGE, old: null, stats: undefined, want: false, archived: null, test: null, busy: '' });
 const ui = fresh();
 export const resetUi = () => Object.assign(ui, fresh());
 
@@ -279,7 +279,7 @@ export function liveView(ctx) {
   const sheets = ctx.tasks().filter(t => t.date === day), here = onSite([...openShifts(shiftsOf(ctx)), ...live.onsite], now);
   const byId = new Map(); // a feed line links to the newest sheet with that id
   for (const t of ctx.tasks()) if (t.id && (!byId.has(t.id) || byId.get(t.id).date < t.date)) byId.set(t.id, t);
-  const updated = live.at || st.at;
+  const updated = Math.max(live.at || 0, st.at || 0); // live.at moves only when something changed; st.at at every good round trip
   const head = `<section class="card live-head">
     <div class="row1"><span class="live-state"><i class="hub-dot" data-state="${esc(st.state)}"></i><b>${esc(hubLabel(st.state))}</b></span>
       ${st.state === 'off' ? `<button class="btn" data-go="settings">${L('Set up the hub')}</button>` : `<button class="btn" data-act="liveRefresh">${L('Refresh')}</button>`}</div>
@@ -288,7 +288,7 @@ export function liveView(ctx) {
     ${(st.state === 'offline' || st.state === 'error') && st.message ? `<p class="hint">${esc(st.message)}</p>` : ''}</section>`;
   const review = sheets.filter(t => t.status && !t.review).length, working = sheets.filter(t => t.aStart && !t.status).length;
   const stats = `<div class="stats three"><div class="stat"><b>${here.length}</b><span>${L('On site')}</span></div>
-    <div class="stat"><b>${working}</b><span>${L('In progress')}</span></div>
+    <div class="stat"><b>${working}</b><span>${L('Active')}</span></div>
     <div class="stat"><b class="${review ? 'warn' : ''}">${review}</b><span>${L('To review')}</span></div></div>`;
   const site = siteCard(S, here);
   const groups = groupByCrew(sheets, S.crews.map(c => c.name));
@@ -405,7 +405,7 @@ export function recordsView(ctx, sub) {
   if (ctx.role !== 'pm' && ctx.role !== 'super') return `<div class="empty"><h2>${L('Records are for the office')}</h2></div>`;
   const subs = ctx.role === 'pm' ? ['people', 'sheets', 'reports'] : ['sheets', 'reports'], names = { people: L('By person'), sheets: L('Task sheets'), reports: L('Reports') };
   if (!subs.includes(sub)) sub = subs[0];
-  if (ui.sub !== sub) Object.assign(ui, { sub, q: '', crew: '', status: '', person: '', limit: 100, old: null });
+  if (ui.sub !== sub) Object.assign(ui, { sub, q: '', crew: '', status: '', person: '', limit: PAGE, old: null });
   const tabs = `<nav class="tabs" aria-label="${L('Records')}">${subs.map(s => `<a href="#records/${s}"${s === sub ? ' aria-current="page"' : ''}>${esc(names[s])}</a>`).join('')}</nav>`;
   return tabs + (sub === 'people' ? peopleSub(ctx) : sub === 'sheets' ? sheetsSub(ctx) : reportsSub(ctx)) + olderCard(ctx, { people: 'shifts', sheets: 'tasks', reports: 'reports' }[sub]) + toolsCard(ctx);
 }
@@ -417,14 +417,14 @@ function peopleSub(ctx) {
   const one = ui.person && all.find(p => nameKey(p.who) === nameKey(ui.person));
   if (ui.person && !one) ui.person = ''; // gone from the timesheet since
   if (one) return personDetail(ctx, one, now);
-  return `<div class="rec-controls">${searchBox(L('Search names'), L('Search names'))}</div><div id="recList" class="stack">${peopleList(ctx)}</div>`;
+  return `<div class="rec-controls">${searchBox(L('Search names'), L('Search names'))}</div><div id="recList" class="stack">${peopleList(ctx, all)}</div>`;
 }
-function peopleList(ctx) {
-  const now = nowOf(ctx), mon = monday(dayOf(now)), last = addDays(mon, -7), q = nameKey(ui.q);
-  const ps = peopleWeeks(shiftsOf(ctx), ctx.S, now).filter(p => !q || nameKey(p.who).includes(q));
+function peopleList(ctx, all = peopleWeeks(shiftsOf(ctx), ctx.S, nowOf(ctx))) {
+  const mon = monday(dayOf(nowOf(ctx))), last = addDays(mon, -7), q = nameKey(ui.q);
+  const ps = all.filter(p => !q || nameKey(p.who).includes(q));
   if (!ps.length) return shiftsOf(ctx).some(s => !s.gone) ? `<p class="hint">${L('Nobody matches.')}</p>`
     : `<div class="empty"><h2>${L('No hours logged yet')}</h2><p>${L("Each worker's Clock in and Clock out texts you a link. Tap it on this phone to log their hours here.")}</p></div>`;
-  return ps.map(p => {
+  return `<h2 class="group-h"><span>${L('Hours by person')}</span><span>${ps.length}</span></h2>` + ps.map(p => {
     const wk = d => p.weeks.find(w => w.mon === d), cur = wk(mon), open = p.weeks.reduce((n, w) => n + w.open, 0);
     return `<button class="rec-row" data-act="recPerson" data-v="${esc(p.who)}"><span class="rec-main"><b class="tid">${esc(p.who)}</b>
       <small>${crewDot(ctx.S, p.crew)}${p.crew ? ' · ' : ''}${esc(L('Last week: {n} hrs', { n: h2(wk(last)?.hours || 0) }))}</small>${open ? pill(L('No clock-out'), 'warn') : cur?.live ? pill(L('On the clock'), 'info') : ''}</span>
@@ -442,7 +442,8 @@ function personDetail(ctx, p, now) {
       ${pm ? `<div class="btns"><button class="btn" data-go="clock/${w.mon}">${L('Edit hours')}</button><button class="btn" data-act="recWeekCsv" data-mon="${w.mon}" data-v="${esc(p.who)}">${L('Download week (CSV)')}</button></div>` : ''}</details>`).join('')}`;
 }
 function shiftRow(s, now) {
-  const edited = s.edited.in || s.edited.out, ids = s.tasks.length === 1 ? L('Task {id}', { id: s.tasks[0] }) : s.tasks.length ? L('Tasks {ids}', { ids: s.tasks.join(', ') }) : '';
+  const edited = s.edited.in || s.edited.out, labels = s.tasks.map(x => (typeof x === 'string' ? x : x?.id)).filter(Boolean); // a task is an id, or {uid, id}
+  const ids = labels.length === 1 ? L('Task {id}', { id: labels[0] }) : labels.length ? L('Tasks {ids}', { ids: labels.join(', ') }) : '';
   return `<div class="shift"><div class="row1"><b>${esc(niceDate(s.date))}</b><span class="out">${s.out ? esc(L('{n} hrs', { n: h2(hundredths(s)) })) : missed(s, now) ? pill(L('No clock-out'), 'warn') : pill(L('On the clock'), 'info')}${edited ? ` · ${L('edited')}` : ''}</span></div>
     <p class="hint">${esc(s.out ? L('{start} to {stop}', { start: t12(s.in), stop: t12(s.out) }) : t12(s.in))}${ids ? ' · ' + esc(ids) : ''}</p></div>`;
 }
@@ -517,8 +518,7 @@ function oldReport(r) {
 
 // ---------- Records: export, week CSV, hub storage ----------
 
-const meter = s => { const pct = s.cellLimit > 0 ? Math.min(100, Math.round(s.cells / s.cellLimit * 100)) : 0; return { pct, warn: pct >= 70 }; };
-export { meter };
+export const meter = s => { const pct = s.cellLimit > 0 ? Math.min(100, Math.round(s.cells / s.cellLimit * 100)) || 0 : 0; return { pct, warn: pct >= 70 }; };
 const MIN_ARCHIVE_DAYS = 30; // never archive what crews and the office are still working with
 
 function toolsCard(ctx) {
@@ -611,7 +611,7 @@ export function hubSettingsView(ctx) {
   }
   const pm = st.role === 'pm', test = ui.test;
   const results = test === 'running' ? `<p class="hint" role="status">${L('Testing…')}</p>` : test && !test.ok ? `<p class="hint" role="alert">${esc(test.message || L('The test could not run.'))}</p>`
-    : test ? `<ul class="checks">${test.checks.map(c => `<li data-ok="${c.ok}"><span aria-hidden="true">${c.ok ? '✓' : '✗'}</span><span class="sr">${c.ok ? L('Passed') : L('Failed')}</span> ${esc(CHECKS()[c.name] || c.name)}${c.ok ? '' : ` <small>${esc(c.detail)}</small>`}</li>`).join('')}</ul>
+    : test ? `<ul class="checks">${test.checks.map(c => `<li data-ok="${c.ok}"><span aria-hidden="true">${c.ok ? '✓' : '✗'}</span><span class="sr">${c.ok ? L('Passed') : L('Failed')}</span> ${esc(CHECKS()[c.name] || c.name)}${c.ok ? '' : ` <small>${esc(clip(c.detail, 40))}</small>`}</li>`).join('')}</ul>
       ${test.checks.every(c => c.ok) ? pill(L('Everything works'), 'good') : pill(L('Something failed'), 'bad')}` : '';
   return `<section class="card"><h2>${L('Hub')}</h2>
       <div class="row1"><span class="live-state"><i class="hub-dot" data-state="${esc(st.state)}"></i><b>${esc(hubLabel(st.state))}</b></span><small class="hint">${esc(st.at ? L('Updated {ago}', { ago: ago(st.at, now) }) : '')}</small></div>
@@ -692,12 +692,12 @@ export async function act(ctx, a, el) {
     switch (a) {
       case 'txToggle': { const box = el.closest('.tx'); if (box) box.dataset.view = box.dataset.view === 't' ? 'o' : 't'; break; }
       case 'liveSite': ui.siteOpen = !ui.siteOpen; ctx.render(); break;
-      case 'liveRefresh': el.disabled = true; await ctx.sync.cycle(); ctx.render(); break;
+      case 'liveRefresh': el.disabled = true; el.textContent = L('Refreshing…'); await ctx.sync.cycle(); ctx.render(); break;
       case 'liveMsg': case 'liveReview': { const t = latest(ctx, el.dataset.u); if (t) (a === 'liveMsg' ? messageSheet : reviewSheet)(ctx, t); break; }
       case 'recPerson': ui.person = v; ui.q = ''; ui.old = null; ctx.render(); break;
-      case 'recFilter': ui[el.dataset.f === 'crew' ? 'crew' : 'status'] = v; ui.limit = 100; ui.old = null; ctx.render(); break;
+      case 'recFilter': ui[el.dataset.f === 'crew' ? 'crew' : 'status'] = v; ui.limit = PAGE; ui.old = null; ctx.render(); break;
       case 'recSearch': globalThis.document?.activeElement?.blur?.(); break;
-      case 'recMore': ui.limit += 100; ctx.render(); break;
+      case 'recMore': ui.limit += PAGE; ctx.render(); break;
       case 'recMenu': recMenu(ctx, el.dataset.kind, el.dataset.key); break;
       case 'recOlder': await older(ctx, el.dataset.kind); break;
       case 'recCsv': case 'recWeekCsv': {
@@ -713,7 +713,7 @@ export async function act(ctx, a, el) {
       case 'hubDisconnect':
         if (await (ctx.ask || ask)(L('Disconnect this phone from the hub? Your work stays on this phone.'), L('Disconnect'), 'danger')) { ctx.sync.disconnect(); ui.test = null; ui.stats = undefined; ctx.render(); }
         break;
-      case 'hubSync': el.disabled = true; await ctx.sync.cycle(); ctx.render(); break;
+      case 'hubSync': el.disabled = true; el.textContent = L('Refreshing…'); await ctx.sync.cycle(); ctx.render(); break;
       case 'hubTest': ui.test = 'running'; ctx.render(); ui.test = await ctx.sync.selftest(); ctx.render(); break;
       case 'hubInvite': await invite(ctx, v === 'super' ? 'super' : 'crew'); break;
       case 'hubRotate': await rotate(ctx, v === 'super' ? 'super' : 'crew'); break;
@@ -784,7 +784,7 @@ let previewTimer = 0;
 export function onInput(ctx, el) {
   if (el.dataset.lv === 'q') {
     ui.q = el.value;
-    ui.limit = 100;
+    ui.limit = PAGE;
     ui.old = null;
     const box = $('recList');
     if (box) { box.innerHTML = { people: peopleList, sheets: sheetsList, reports: reportsList }[ui.sub]?.(ctx) || ''; after(ctx, box); }
@@ -807,6 +807,6 @@ export function after(ctx, root = globalThis.document) {
   if (ui.want && ctx.role === 'pm' && hubFor(ctx, 'shifts')) {
     ui.want = false;
     ui.stats = 'loading';
-    ctx.sync.stats().then(r => { ui.stats = r; ctx.render(); }, () => { ui.stats = { ok: false }; ctx.render(); });
+    Promise.resolve(ctx.sync.stats?.()).then(r => { ui.stats = r || { ok: false }; ctx.render(); }, () => { ui.stats = { ok: false }; ctx.render(); });
   }
 }
