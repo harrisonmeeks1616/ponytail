@@ -652,6 +652,8 @@ function normTask_(raw, now) {
   t.memberIds = t.memberIds.map(function (id) { return FORMAT.uid.test(id) ? id : ''; }); // '' keeps the places: memberIds may run next to members
   ['assignAt', 'crewAt', 'replyAt', 'sentAt', 'resultAt'].forEach(function (k) { t[k] = clampStamp_(t[k], now); }); // never more than 5 minutes ahead
   t.items = listIds_(t.items, now); t.checks = listIds_(t.checks, now);
+  // crewBase: the crew part as the phone last had it from the hub, read like a task (one level deep) and never stored
+  if (isObj_(raw.crewBase)) t.base = normTask_(Object.assign({}, raw.crewBase, { crewBase: null, uid: t.uid, date: t.date }), now);
   return t;
 }
 // A task's short id as typed, kept only as a label: printable, at most 40 characters, never starting like a formula.
@@ -711,12 +713,13 @@ function structure_(incoming, stored) { // the office decides which items exist;
     return { id: i.id, text: i.text, done: s ? s.done : false, at: s ? s.at : 0 };
   });
 }
-// ponytail: the crew part is replaced whole by the newest stamp, so two crew phones ticking different steps while
-// offline keep only the newer phone's ticks. Upgrade: a stamp per step (untick must carry one too: it sets at to 0).
-function ticks_(stored, incoming) { // the crew ticks items that exist; it cannot add, remove or reword one
+// A crew value the phone sends goes in: with no base, always (its newer stamp took the whole part); with a base, only when
+// the phone changed it since then, and the stored value is still the base's or the phone's stamp is the newer one.
+function takes_(base, newer, mine, was, cur) { const j = JSON.stringify; return !base || (j(mine) !== j(was) && (newer || j(cur) === j(was))); }
+function ticks_(stored, incoming, base, newer) { // the crew ticks items that exist; it cannot add, remove or reword one
   return stored.map(function (s) {
-    const i = incoming.find(function (x) { return x.id === s.id; });
-    return i ? { id: s.id, text: s.text, done: i.done, at: i.at } : s;
+    const i = incoming.find(function (x) { return x.id === s.id; }), b = base && (base.find(function (x) { return x.id === s.id; }) || { done: false, at: 0 });
+    return i && takes_(base, newer, [i.done, i.at], b && [b.done, b.at], [s.done, s.at]) ? { id: s.id, text: s.text, done: i.done, at: i.at } : s;
   });
 }
 
@@ -732,10 +735,13 @@ function mergeTask_(ctx, stored, inc) {
     t.items = structure_(inc.items, t.items); t.checks = structure_(inc.checks, t.checks);
     t.assignAt = inc.assignAt;
   }
-  if (ctx.role === 'crew' ? inc.crewAt > 0 && inc.crewAt >= t.crewAt : inc.crewAt > t.crewAt) {
-    CREW.forEach(function (k) { t[k] = inc[k]; });
-    t.items = ticks_(t.items, inc.items); t.checks = ticks_(t.checks, inc.checks);
-    t.crewAt = inc.crewAt;
+  // Two phones on one crew: with crewBase only what this phone changed goes over the stored part, so neither wipes the
+  // other's taps; a field or step both changed goes to the newer stamp. Without one, the newer stamp takes the whole part.
+  const newer = ctx.role === 'crew' ? inc.crewAt > 0 && inc.crewAt >= t.crewAt : inc.crewAt > t.crewAt, base = stored && inc.crewAt > 0 ? inc.base : null;
+  if (newer || base) {
+    CREW.forEach(function (k) { if (takes_(base, newer, inc[k], base && base[k], t[k])) t[k] = inc[k]; });
+    t.items = ticks_(t.items, inc.items, base && base.items, newer); t.checks = ticks_(t.checks, inc.checks, base && base.checks, newer);
+    t.crewAt = Math.max(t.crewAt, inc.crewAt);
   }
   // An event points at the sheet by uid (short ids can collide); its text names the short id people read.
   const name = t.id || t.uid, ref = t.uid, ev = [];
@@ -1009,15 +1015,17 @@ function fetchEntities_(ctx, name, rows, norm, keyOf, keep) {
 // a roster crew goes by that id, so a renamed crew keeps the sheets made under its old name and a new crew that took
 // the old name does not get them. By name only where the id cannot tell: a sheet with no crew id or one the roster no
 // longer has, or a name the roster does not know (a phone that has not heard of a rename yet).
+// Answers true (these crews' sheet), false (another roster crew's: it moved there) or null (a name the roster does not know).
 function crewSheets_(names, cfg) {
-  const ids = dict_(), known = dict_();
+  const ids = dict_(), known = dict_(), named = dict_();
   let byId = false;
   (cfg ? cfg.crews : []).forEach(function (c) {
+    if (c.name) named[c.name] = true;
     if (!c.id) return;
     known[c.id] = true;
     if (names.indexOf(c.name) >= 0) { ids[c.id] = true; byId = true; }
   });
-  return function (t) { return byId && t.crewId && known[t.crewId] ? !!ids[t.crewId] : names.indexOf(t.crew) >= 0; };
+  return function (t) { return byId && t.crewId && known[t.crewId] ? !!ids[t.crewId] : names.indexOf(t.crew) >= 0 || (named[t.crew] ? false : null); };
 }
 function pullOnce_(ctx, since) {
   const r = ctx.req, role = ctx.role, rev = ctx.state.rev, office = role !== 'crew', pm = role === 'pm';
@@ -1044,10 +1052,9 @@ function pullOnce_(ctx, since) {
   prefetch_(ctx, { tasks: taskRows, shifts: shiftRows.concat(openRows), reports: reportRows, events: eventRows, config: crews ? cfgAll : cfgRows });
   const cfgOf = function (rows) { return fetchEntities_(ctx, 'config', rows, normConfig_, function () { return 'config'; })[0]; };
 
-  const crewKeep = crews && crewSheets_(crews, cfgOf(cfgAll));
-  out.tasks = cut(fetchEntities_(ctx, 'tasks', taskRows, normTask_, function (o) { return o.uid; }, function (o) { // a crew key gets a sheet once it was sent, never a draft
-    return (office || o.sentAt > 0) && (!crewKeep || crewKeep(o));
-  }));
+  const crewKeep = crews && crewSheets_(crews, cfgOf(cfgAll)), keep = function (o) { return !crewKeep || crewKeep(o) === true; };
+  const sent = fetchEntities_(ctx, 'tasks', taskRows, normTask_, function (o) { return o.uid; }, function (o) { return office || o.sentAt > 0; }); // a crew key gets a sheet once it was sent, never a draft
+  out.tasks = cut(sent.filter(keep));
   const mine = function (o) { return pm || (ctx.dev !== '' && o.device === ctx.dev); }; // crew and super see their own phone's hours only
   out.shifts = cut(fetchEntities_(ctx, 'shifts', shiftRows, normShift_, function (o) { return o.id; }, mine));
   if (office) {
@@ -1062,8 +1069,10 @@ function pullOnce_(ctx, since) {
   }
   const cfg = cfgOf(cfgRows);
   if (cfg) out.config = cfg;
-  out.deleted = readIndex_(ctx, 'deleted').filter(function (x) { return x.rev > since && (office || x.kind !== 'reports'); })
-    .map(function (x) { return { kind: x.kind, key: x.key, rev: x.rev }; });
+  // a sent sheet that changed and is now another crew's (moved there) leaves these crews' phones as a deleted one does
+  const left = sent.filter(function (o) { return crewKeep && crewKeep(o) === false; }).map(function (o) { return { kind: 'tasks', key: o.uid, rev: o.rev }; });
+  out.deleted = cut(readIndex_(ctx, 'deleted').filter(function (x) { return x.rev > since && (office || x.kind !== 'reports'); })
+    .map(function (x) { return { kind: x.kind, key: x.key, rev: x.rev }; }).concat(left));
   if (limit < rev) { out.rev = limit; out.more = true; }
   return out;
 }

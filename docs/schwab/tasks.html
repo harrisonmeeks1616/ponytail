@@ -163,9 +163,14 @@ async function openCode(code) {
   let t = find(inc.uid), firstSheet = false;
   if (!inc.uid || !['task', 'result'].includes(data.kind)) { toast(L('That link has no task sheet in it'), 'bad'); return location.replace('#day/' + day); }
   // An older text opened after a newer one (a re-sent sheet on the crew phone, results on the office phone) changes nothing.
-  const older = data.kind === 'task' ? t?.origin === 'link' && inc.sentAt && t.sentAt && inc.sentAt < t.sentAt
-    : t && t.origin !== 'link' && t.resultAt && inc.resultAt < t.resultAt;
-  if (older) { toast(L('This is an older copy of this sheet. The newer one is kept.')); return location.replace(`#task/${t.uid}/${data.kind === 'result' ? 'review' : 'assign'}`); }
+  // On a hub the text is a copy of what the hub delivers: it is merged only when newer than the hub copy here (sync.mjs fromText).
+  const merges = data.kind === 'task' ? t?.origin === 'link' : !!t && t.origin !== 'link';
+  const older = merges && (data.kind === 'task' ? inc.sentAt && t.sentAt && inc.sentAt < t.sentAt : t.resultAt && inc.resultAt < t.resultAt);
+  const held = merges && !older && !sync.fromText('t', t.uid, data.kind === 'task' ? 'assign' : 'crew', data.kind === 'task' ? inc.sentAt : inc.resultAt);
+  if (older || held) {
+    toast(older ? L('This is an older copy of this sheet. The newer one is kept.') : L('This phone already has the newest copy of this sheet from the hub.'));
+    return location.replace(`#task/${t.uid}/${data.kind === 'result' ? 'review' : 'assign'}`);
+  }
   let moved = [];
   if (data.kind === 'task') {
     if (!t) {
@@ -212,7 +217,7 @@ async function importDay(data) {
   const fresh = inc.filter(t => !find(t.uid)), known = inc.filter(t => find(t.uid));
   if (inc.length && await ask(L('Load the task plan for {date}? New sheets: {fresh}. Updated: {known}. Check-offs already on this phone are kept.', { date: niceDate(date), fresh: fresh.length, known: known.length }), L('Load plan'))) {
     for (const t of fresh) T.push(Object.assign(t, { origin: 'mine' }));
-    for (const t of known) mergeTask(find(t.uid), t, 'assign');
+    for (const t of known) if (sync.fromText('t', t.uid, 'assign', t.updatedAt)) mergeTask(find(t.uid), t, 'assign'); // on a hub, only what is newer than the hub copy here
     const moved = inc.flatMap(t => renumberClashes(T, find(t.uid), sync.onHub));
     persist();
     toast(L('Plan loaded') + renumbered(moved));

@@ -742,4 +742,8 @@ export default {
 
   // Records: segments
   'Sheets': 'Hojas',
+
+  // a texted copy on a hub phone (sync.mjs fromText)
+  'This phone already has the newest copy of this sheet from the hub.': 'Este teléfono ya tiene la copia más reciente de esta hoja desde el sistema central.',
+  'This phone already has the newest copy of this report from the hub.': 'Este teléfono ya tiene la copia más reciente de este reporte desde el sistema central.',
 };

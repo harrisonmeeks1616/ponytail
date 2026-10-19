@@ -1664,7 +1664,7 @@ test('selftest notices a server that stopped following the rules (so a green res
   // a crew key may now rewrite the assignment
   assert.equal(run(broken("const office = ctx.role !== 'crew';\n  if (!stored", "const office = true;\n  if (!stored"))['merge rules'], false);
   // an office push may now erase crew results
-  assert.equal(run(broken("if (ctx.role === 'crew' ? inc.crewAt > 0 && inc.crewAt >= t.crewAt : inc.crewAt > t.crewAt)", "if (true)"))['merge rules'], false);
+  assert.equal(run(broken("const newer = ctx.role === 'crew' ? inc.crewAt > 0 && inc.crewAt >= t.crewAt : inc.crewAt > t.crewAt,", "const newer = true,"))['merge rules'], false);
   // drawing numbers are no longer protected: the translator damages E-301
   assert.equal(run(broken("'\\\\b[A-Z]{1,4}-?\\\\d+(?:[-.]\\\\d+)*[A-Z]?\\\\b',", "'(?!)',"))['translate'], false);
   // the test row is not cleaned up

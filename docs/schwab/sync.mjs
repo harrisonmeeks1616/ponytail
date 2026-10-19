@@ -7,7 +7,7 @@
 // crewAt; updatedAt and pmAt). The newest stamp wins a part; a part this phone has not pushed yet is "mine" and is
 // stamped when the scan first sees it change. Per part, schwab.hubSync keeps s (hash of the local copy the hub
 // has), v and vh (stamp and content hash of the hub's version last seen), p and at (the unsynced copy and its stamp),
-// x (a copy the hub refused).
+// x (a copy the hub refused), b (a sheet's crew part as last had from the hub: crewBase), tx (the time of a text merged here).
 //
 // Who is who (HUB.md, Identity): the hub knows this phone only by its device secret (devSecret, on every request), people
 // and crews by their ids in the shared settings, and task sheets by uid. Short task ids are labels that two office phones
@@ -37,6 +37,8 @@ export const C_KEYS = ['lead', 'aStart', 'aStop', 'delay', 'status', 'doneText',
 const ticks = l => l.filter(i => i.done || i.at).map(i => [i.id, i.done, i.at]); // unticked steps are left out, so a new step is not an edit
 const aPart = t => ({ ...pick(t, A_KEYS), items: t.items.map(i => [i.id, i.text]), checks: t.checks.map(i => [i.id, i.text]) });
 const cPart = t => ({ ...pick(t, C_KEYS), items: ticks(t.items), checks: ticks(t.checks) });
+// The crew part as this phone last had it from the hub, in wire form (crewBase, HUB.md): the hub takes only what changed since.
+const cBase = t => { const l = x => x.filter(i => i.done || i.at).map(i => ({ id: i.id, done: i.done, at: i.at })); return { ...pick(t, C_KEYS), items: l(t.items), checks: l(t.checks) }; };
 const TPARTS = [['assign', aPart, 'assignAt'], ['crew', cPart, 'crewAt']];
 const supPart = r => { const { pmReview, pmAt, updatedAt, filedAt, decisions, ...rest } = r; return { ...rest, decisions: decisions.map(d => [d.q, d.rec, d.by]) }; };
 const pmPart = r => ({ pmReview: r.pmReview, answers: r.decisions.filter(d => d.pm || d.pmNote).map(d => [d.q, d.pm, d.pmNote]) });
@@ -211,7 +213,7 @@ export function makeSync(o = {}) {
   const wireTask = (t, sent) => {
     const w = { uid: t.uid, date: t.date }, A = sent.assign, C = sent.crew; // the hub validates every sheet by uid and day, so the day goes with a crew part too; the crew key ignores it
     if (A) Object.assign(w, pick(t, A_KEYS), { assignAt: A.at });
-    if (C) Object.assign(w, pick(t, C_KEYS), { crewAt: C.at });
+    if (C) Object.assign(w, pick(t, C_KEYS), { crewAt: C.at }, C.b && { crewBase: C.b });
     for (const l of ['items', 'checks']) w[l] = t[l].map(i => ({ id: i.id, ...(A && { text: i.text }), ...(C && { done: i.done, at: i.at }) })); // a crew phone sends ticks, never wording
     return w;
   };
@@ -232,11 +234,12 @@ export function makeSync(o = {}) {
       const rec = ent(st[k], key), sent = {};
       seen[k].add(key);
       for (const [p, fn, at] of defs) {
-        const pr = ent(rec, p), h = hs(fn(doc));
+        const pr = ent(rec, p), h = hs(fn(doc)), tx = pr.tx; // tx: a texted copy merged here is as old as the text (fromText)
+        delete pr.tx;
         if (!writes.includes(p)) pr.s = h; // not this role's part: whatever it holds counts as in sync
         else if (pr.s === h) { delete pr.p; delete pr.at; } else if (pr.x !== h) {
-          if (pr.p !== h) Object.assign(pr, { p: h, at: stampOf(st, pr, edited, doc[at]) });
-          sent[p] = { h, at: pr.at };
+          if (pr.p !== h) Object.assign(pr, { p: h, at: tx || stampOf(st, pr, edited, doc[at]) });
+          sent[p] = { h, at: pr.at, b: pr.b };
         }
       }
       if (Object.keys(sent).length) items.push({ k, key, sent, wire: wire(doc, sent) });
@@ -320,7 +323,10 @@ export function makeSync(o = {}) {
     for (const p in it.sent) {
       const pr = ent(rec, p), { h, at } = it.sent[p], [, fn, stamp] = PARTS[it.k]?.find(x => x[0] === p) || [], theirs = inc ? num(inc[stamp]) : 0;
       if (theirs > at) continue; // someone's newer version won: the pull right behind this brings it
-      Object.assign(pr, { s: h, v: theirs || at, vh: inc ? hs(fn(inc)) : h }); // v and vh name the hub's version: stamp and content, since two phones can tie on a stamp
+      // v and vh name the hub's version: stamp and content, since two phones can tie on a stamp. A sheet the hub merged with
+      // another phone's taps is not the copy here: vh stays this copy's, so the pull right behind brings the merged one.
+      Object.assign(pr, { s: h, v: theirs || at, vh: inc && it.k !== 't' ? hs(fn(inc)) : h });
+      if (it.k === 't' && p === 'crew') pr.b = cBase(it.wire);
       if (pr.p === h) { delete pr.p; delete pr.at; }
     }
     return 0;
@@ -372,7 +378,7 @@ export function makeSync(o = {}) {
       }
     }
     for (const [p, fn, at] of TPARTS) if (took[p]) {
-      Object.assign(ent(rec, p), { s: hs(fn(out)), v: num(inc[at]), vh: hs(fn(inc)) });
+      Object.assign(ent(rec, p), { s: hs(fn(out)), v: num(inc[at]), vh: hs(fn(inc)), ...(p === 'crew' && { b: cBase(inc) }) });
       delete rec[p].p; delete rec[p].at;
     }
     if (loc && sameDoc(loc, out)) return loc;
@@ -407,10 +413,11 @@ export function makeSync(o = {}) {
     }
     return loc && sameDoc(loc, out) ? loc : out;
   }
-  // Keep my unsynced words where I own them. full: the PM's timesheet (my flags decide); else a worker's own clock (the hub's flags decide).
+  // Keep my unsynced words where I own them. full: the PM's timesheet (my flags decide, and so does my removal or its Undo,
+  // which may land while the removal's own echo is on the wire); else a worker's own clock (the hub's flags decide).
   function blend(l, i, full) {
     const flags = full ? { who: l.edited.who || i.edited.who, in: l.edited.in || i.edited.in, out: l.edited.out || i.edited.out } : i.edited;
-    const r = { ...i, edited: { ...flags }, gone: l.gone || i.gone, at: Math.max(l.at, i.at) };
+    const r = { ...i, edited: { ...flags }, gone: full ? l.gone : i.gone, at: Math.max(l.at, i.at) };
     const [a, b] = full ? [l, i] : [i, l]; // a: wins when flagged; b: otherwise
     for (const k of ['who', 'in', 'out']) r[k] = (full ? l.edited : i.edited)[k] ? a[k] : k === 'out' ? b.out || a.out : b[k]; // a clock-out is never undone
     // who it is and what they were on (pid, crew, task links) follow the phone until the PM has touched the shift
@@ -705,6 +712,21 @@ export function makeSync(o = {}) {
     } catch (e) { return lost(e); }
   }
 
+  // A texted copy opened on a hub phone (HUB.md, Texts on a hub phone): kind 't' or 'r', the sheet's uid or the report's day,
+  // the part the text would change and the text's own time. False when this phone already holds that part as new as the
+  // text (from the hub, or its own unsynced edit): the app keeps its copy. Else true: the app merges it, and the change goes
+  // up stamped with the text's time, never "now", so newer work the hub has is not undone by an old text.
+  // ponytail: the text's time is the sending phone's clock, compared with hub stamps as is; a clock minutes off misjudges only
+  // edits made within those minutes.
+  function fromText(kind, key, part, at) {
+    if (!hub()) return true;
+    const st = loadState(), pr = ent(ent(st[kind], key), part);
+    if ((pr.v !== undefined || pr.at !== undefined) && num(at) <= Math.max(num(pr.v), num(pr.at))) return false;
+    pr.tx = num(at);
+    saveState(st);
+    return true;
+  }
+
   // ---------- thin wrappers ----------
 
   const act = async (action, extra) => { try { return await call(action, extra); } catch (e) { return lost(e); } };
@@ -819,7 +841,7 @@ export function makeSync(o = {}) {
     return out;
   }
 
-  return { hubStatus, poke, cycle, wake, start, joinFrom, connect, disconnect, invite, translate, records, stats, purge, rotate, archive, selftest,
+  return { hubStatus, poke, cycle, wake, start, joinFrom, connect, disconnect, invite, translate, records, stats, purge, rotate, archive, selftest, fromText,
     liveData: () => ({ ...live, info }), onHub: uid => loadState().t[uid]?.assign?.v !== undefined }; // onHub: the hub has this sheet, so its number is known
 }
 
@@ -862,3 +884,4 @@ export const archive = before => get().archive(before);
 export const selftest = () => get().selftest();
 export const liveData = () => get().liveData();
 export const onHub = uid => get().onHub(uid);
+export const fromText = (kind, key, part, at) => get().fromText(kind, key, part, at);

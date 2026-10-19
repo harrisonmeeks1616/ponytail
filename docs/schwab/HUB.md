@@ -56,6 +56,7 @@ Wrong keys: no detail in the error, and after 30 bad keys in a minute every requ
 - A push replaces a part only if the incoming stamp is >= the stored stamp (ties: incoming wins). The server clamps a stamp more than 5 minutes ahead of server time to server time.
 - A crew key sending office fields has them ignored (`forbidden` is reported for the entity only if nothing else applied).
 - Checklist merge: office structure wins for which items exist; done and at come from the stored crew part by item `id`. A new item starts not done.
+- Two phones on one crew: a crew part push may carry `crewBase`, the crew part (crew fields, `items` and `checks` as `{id, done, at}`, ticked ones only) as that phone last had it from the hub. With it, only the fields and steps the phone changed since then are applied, each where the stored value is still the base's or the push's stamp passes the rule above; so a phone that has not pulled yet never wipes another phone's taps, and a value both changed goes to the newer stamp. Without it the whole part follows the stamp rule.
 - Delete: PM `purge` (also reachable as `deleted` in a push by pm). The server keeps a tombstone 90 days so phones remove it on their next pull.
 - Crew phones show the task as `origin: 'link'`; office phones as `origin: 'mine'`.
 
@@ -83,7 +84,7 @@ Synced by super or pm: `project site super pm floors crews checks pin` (`pin` is
 | action | request extras | reply extras |
 | --- | --- | --- |
 | `whoami` | | `role, name?, rev, now, tz, version, sheetUrl?` (pm) |
-| `pull` | `since` (rev, 0 = full), `days` (default 14, max 90), `crews?` | `rev, now, same?:true` when nothing changed; else `tasks[], shifts[], reports[], config?, events[], deleted[{kind,key,rev}], onsite?[{who,in,date}]` (super). Every entity carries its `rev`. |
+| `pull` | `since` (rev, 0 = full), `days` (default 14, max 90), `crews?` | `rev, now, same?:true` when nothing changed; else `tasks[], shifts[], reports[], config?, events[], deleted[{kind,key,rev}], onsite?[{who,in,date}]` (super). Every entity carries its `rev`. With `crews`, a sent sheet that changed and is now another roster crew's is listed in `deleted`, so it leaves the old crew's phones. |
 | `push` | `tasks[], shifts[], reports[], config?, deleted[{kind,key}]` (pm) | `rev, tasks[{key,status:'ok'\|'rejected',reason?,task?}], shifts[...], reports[...], config?` with each entity's canonical merged copy |
 | `translate` | `items[]` (max 25, each text <= 2000 chars), `from`, `to` ('en'\|'es') | `items[]` same order, `cached?:n`. Error `quota` when Google's daily limit is hit. |
 | `records` | `kind, from, to, who?, q?, cursor?` | `items[]` (<= 200), `cursor?` |
@@ -105,7 +106,7 @@ Synced by super or pm: `project site super pm floors crews checks pin` (`pin` is
 - Shift `crew`, `tasks` (and `pid`, `crewId`) follow the phone only until the PM has touched the shift (any `edited` flag).
 - Config carries an `at` stamp; first contact adopts the hub's config instead of pushing a phone's defaults.
 - Pulls cap lists at 500 and then return `more: true` with the `rev` actually covered. First cycle after connect (or a role, crew or window change) is pull, push, pull.
-- Deletion is only ever an explicit `purge` (never inferred from a missing local copy); a tombstone reaches other phones on their next pull.
+- Deletion is only ever an explicit `purge` (never inferred from a missing local copy); a tombstone reaches other phones on their next pull. A sheet moved to another crew reaches the old crew's phones the same way (see `pull`).
 - Archive moves hours in whole Monday to Sunday weeks; a later push of an archived record is refused with `archived`.
 - Rate caps: 40 pushes a minute per phone, 300 per key (`busy`). A wrong key is retried every 10 minutes, not on the short backoff. A join link must carry the role `whoami` reports; PM links are refused (the PM key never travels).
 
@@ -138,8 +139,9 @@ Settings gain `hubUrl`, `hubKey`, `hubRole` (set after `whoami`), `hubCrew` (cre
 - **Another hub, or none**: connecting to a different hub, or disconnecting, keeps only each record's "in sync" hash, so what this phone already synced (another job's sheets and reports) is not uploaded to the new hub; edits made after still go up, ranked by when they were made (not by when the phone came back). A sheet saved by a tab of a version before the hub (no `assignAt`) never has its office part pushed: the next pull is a full one and brings the hub's copy back.
 - **Roles on a phone**: `crew` role phones write only the crew part of tasks and their own shifts; the engine does not even attempt office fields. `super` and `pm` phones write what their role allows. The PM phone is the only one whose local `crewHours` store (the timesheet) is pushed with PM rules.
 - **Window**: after a pull, local entities older than the window and not dirty are dropped from the phone (they remain in the hub).
+- **Texts on a hub phone**: Send to crew, Send results, the day plan and the daily report still open a text. A text is a copy of what the hub delivers, so where it would change a sheet or report this phone has, `fromText(kind, key, part, at)` decides: a part this phone already holds from the hub (or has an unsynced edit of) as new as the text's own time (`sentAt`, `resultAt`, the sheet's or report's `updatedAt`) is kept and the person is told so; otherwise the text is merged, and its change goes up stamped with the text's time, never the time it was opened, so newer work on the hub wins over it.
 - **Status** for the header dot: `off` (no hub), `live` (last cycle ok, < 60 s ago), `syncing`, `offline`, `error` (bad key or server problem; message).
-- Exports: `initHub({ S, onChange, toast })`, `hubStatus()`, `poke()`, `cycle()`, `joinFrom(data)`, `connect(url, key)` (runs `whoami`, saves role), `disconnect()`, `invite(role, crew?, crews?)` (returns an app link `#p=` of kind `join`), `translate(items, from, to)`, `records(query)`, `stats()`, `purge(kind, key)`, `rotate(role)`, `archive(before)`, `selftest()`.
+- Exports: `initHub({ S, onChange, toast })`, `hubStatus()`, `poke()`, `cycle()`, `joinFrom(data)`, `connect(url, key)` (runs `whoami`, saves role), `disconnect()`, `invite(role, crew?, crews?)` (returns an app link `#p=` of kind `join`), `translate(items, from, to)`, `records(query)`, `stats()`, `purge(kind, key)`, `rotate(role)`, `archive(before)`, `selftest()`, `fromText(kind, key, part, at)`.
 - **Join link** (kind `join`): `{v:1, kind:'join', hub:{url, key}, role, crew?, crews?}` (`crews`: the job's crew names, for an invite where the person picks; a new phone knows only its defaults). Opening it on a phone saves the hub settings, runs `whoami`, and on a crew phone asks (once) for the person's name and crew. The PM phone never trades its key for an invite to its own hub (its key was shown only once). The invite is deliberate and PM-initiated; the crew key can only do crew-level things, and `rotate` kills a lost phone's access.
 
 ## Translation

@@ -10,7 +10,7 @@ import {
   toast, sheet, ask, sendSheet, pasteSheet, makePdf, savePdf, download, fileAway, dateBar, crewVar, letterhead, L, getLang, unlocked,
   nameKey, cleanName, people, findPerson, personById, crewById, addPerson, renamePerson, assignmentFor, taskLinks, deviceId, choose, screenHead, icon,
 } from './shared.mjs';
-import { hubStatus, cycle } from './sync.mjs';
+import { hubStatus, cycle, fromText } from './sync.mjs';
 
 const obj = x => (x && typeof x === 'object' && !Array.isArray(x) ? x : {});
 export const loadReports = () => Object.fromEntries(Object.entries(obj(load(KEYS.reports, {}))).map(([d, r]) => [d, normReport(r)]));
@@ -588,6 +588,8 @@ export async function openReport(data, S) {
   if (!inc.date) { toast(L('That link has no report in it'), 'bad'); return ''; }
   const mine = R[inc.date], pmSent = data.from === 'Project manager';
   if (mine?.updatedAt && mine.updatedAt !== inc.updatedAt && pmSent !== isPM(S)) {
+    // On a hub the text is a copy of what the hub delivers: merged only when newer than the hub copy here (sync.mjs fromText).
+    if (!fromText('r', inc.date, pmSent ? 'pm' : 'sup', inc.updatedAt)) { toast(L('This phone already has the newest copy of this report from the hub.')); return inc.date; }
     // Normal back-and-forth: neither side's work is lost, so there's nothing to ask.
     R[inc.date] = pmSent ? mergeAnswers(mine, inc) : mergeAnswers(inc, mine);
     R[inc.date].updatedAt = Date.now();

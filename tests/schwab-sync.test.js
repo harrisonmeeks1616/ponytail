@@ -108,7 +108,16 @@ class FakeHub {
       r.items = arrOf(w.items).map(i => ({ id: i.id, text: i.text })); r.checks = arrOf(w.checks).map(i => ({ id: i.id, text: i.text }));
       r.aAt = this.clamp(w.assignAt); applied = true;
     }
-    if (office ? this.clamp(w.crewAt) > r.cAt : this.clamp(w.crewAt) >= r.cAt) { // the office needs a strictly newer stamp: a tie never wipes crew results
+    const newer = office ? this.clamp(w.crewAt) > r.cAt : this.clamp(w.crewAt) >= r.cAt, b = !r.fresh && num(w.crewAt) > 0 && w.crewBase; // the office needs a strictly newer stamp: a tie never wipes crew results
+    if (b) { // crewBase: only what the phone changed since it goes in; a value both sides changed goes to the newer stamp
+      const j = JSON.stringify, take = (mine, was, cur) => j(mine) !== j(was) && (newer || j(cur) === j(was));
+      for (const k of C_KEYS) if (take(w[k], b[k], r.c[k])) { r.c[k] = w[k]; applied = true; }
+      for (const l of ['items', 'checks']) for (const i of arrOf(w[l])) {
+        const was = arrOf(b[l]).find(x => x.id === i.id) || { done: false, at: 0 }, cur = r.ticks[l][i.id] || { done: false, at: 0 };
+        if (take([!!i.done, num(i.at)], [!!was.done, num(was.at)], [cur.done, cur.at])) { r.ticks[l][i.id] = { done: !!i.done, at: num(i.at) }; applied = true; }
+      }
+      if (this.clamp(w.crewAt) > r.cAt) { r.cAt = this.clamp(w.crewAt); applied = true; }
+    } else if (newer) {
       r.c = Object.fromEntries(C_KEYS.map(k => [k, w[k]]));
       for (const l of ['items', 'checks']) r.ticks[l] = Object.fromEntries(arrOf(w[l]).map(i => [i.id, { done: !!i.done, at: num(i.at) }]));
       r.cAt = this.clamp(w.crewAt); applied = true;
@@ -188,11 +197,13 @@ class FakeHub {
     let since = num(req.since); if (since < 0 || since > this.rev) since = 0;
     const days = Math.min(Math.max(num(req.days) || 14, 1), 90), cut = (() => { const d = new Date(this.now()); d.setDate(d.getDate() - days); return dayOf(d.getTime()); })();
     const inWin = d => this.ignoreDays || d >= cut;
-    const tasks = [...this.tasks.values()].filter(r => r.rev > since && inWin(r.a.date) && (role !== 'crew' || !req.crews || req.crews.includes(r.a.crew))).map(r => this.taskView(r));
+    const ours = r => role !== 'crew' || !req.crews || req.crews.includes(r.a.crew), changed = [...this.tasks.values()].filter(r => r.rev > since && inWin(r.a.date));
+    const other = r => !ours(r) && (this.config?.crews || []).some(c => c.name && c.name === r.a.crew); // a sheet moved to another crew on the roster leaves this one's phones
+    const tasks = changed.filter(ours).map(r => this.taskView(r)), left = changed.filter(other).map(r => ({ kind: 'tasks', key: r.uid, rev: r.rev }));
     const shifts = [...this.shifts.values()].filter(s => s.rev > since && inWin(s.date) && (role === 'pm' || (dev && s.device === dev))).map(clone); // no proven device: no hours
     const reports = role === 'crew' ? [] : [...this.reports.values()].filter(r => r.rev > since && inWin(r.date)).map(r => this.reportView(r));
     const config = this.config && this.configRev > since ? this.config : undefined;
-    const deleted = this.tomb.filter(t => t.rev > since && (role !== 'crew' || t.kind !== 'reports')), events = role === 'crew' ? [] : this.events.filter(e => e.rev > since);
+    const deleted = [...this.tomb.filter(t => t.rev > since && (role !== 'crew' || t.kind !== 'reports')), ...left], events = role === 'crew' ? [] : this.events.filter(e => e.rev > since);
     if (since && since === this.rev) return { ok: true, rev: this.rev, now: this.now(), same: true };
     const out = { rev: this.rev, more: false };
     for (const l of [tasks, shifts, reports]) { l.sort((a, b) => a.rev - b.rev); if (this.cap && l.length > this.cap) { l.length = this.cap; out.rev = Math.min(out.rev, l[this.cap - 1].rev); out.more = true; } }
@@ -304,7 +315,7 @@ test('ownership: a crew phone sends only its own part, and the office part reach
   await cp.cycle();
   assert.deepEqual(hub.violations, [], 'no office field ever leaves a crew phone');
   const w = hub.calls.filter(c => c.action === 'push').at(-1).body.tasks[0];
-  assert.deepEqual(Object.keys(w).sort(), ['checks', 'crewAt', 'date', 'items', 'uid', ...C_KEYS].sort(), 'ticks and results, plus the day the hub needs to validate a sheet');
+  assert.deepEqual(Object.keys(w).sort(), ['checks', 'crewAt', 'crewBase', 'date', 'items', 'uid', ...C_KEYS].sort(), 'ticks and results, plus the day the hub needs to validate a sheet and the crew part it started from');
   assert.ok(w.items.every(i => Object.keys(i).sort().join() === 'at,done,id'), 'ticks only, never wording');
   const rec = hub.tasks.get(uid);
   assert.equal(rec.a.scope, 'Pull 12 AWG');
@@ -1832,4 +1843,87 @@ test('another job, an older tab, a texted sheet, a one-off failure: nothing stal
   // A "they pick" crew invite lists the job's crews: a new phone knows only its own defaults.
   const inv = await pm.sync.invite('crew', '', ['Lighting', 'Power', 7]);
   assert.deepEqual((await (await lib).unpack(inv.url.split('#p=')[1])).crews, ['Lighting', 'Power']);
+});
+
+// ---------- shared work: two phones on one crew, a sheet that changes crew, an Undo, texts on hub phones ----------
+
+test('against the real hub/Code.gs: two phones on one crew keep each other\'s taps, and a sheet moved to another crew leaves the old crew\'s phones', async () => {
+  const { createHub } = require('./helpers/google-mock');
+  const mock = createHub({ now: T0 }), k = mock.setup();
+  const real = { clock: () => mock.now(), fetch: async (url, init) => { const text = mock.raw(init.body); return { ok: true, status: 200, json: async () => JSON.parse(text) }; } };
+  const sp = await makePhone(real, 'super', { key: k.super }), ana = await makePhone(real, 'crew', { key: k.crew, crew: 'Crew A', worker: 'Ana R' });
+  const jose = await makePhone(real, 'crew', { key: k.crew, crew: 'Crew A', worker: 'Jose L' }), rosa = await makePhone(real, 'crew', { key: k.crew, crew: 'Crew B', worker: 'Rosa P' });
+  const step = async (...ps) => { for (const p of ps) { mock.advance(5e3); await p.cycle(); } };
+  sp.save('schwab.settings', { ...sp.settings(), crews: [{ name: 'Crew A', lead: '', members: 'Ana R, Jose L' }, { name: 'Crew B', lead: '', members: 'Rosa P' }] });
+  const uid = sp.addTask({ sentAt: sp.now(), items: [{ id: 'i1', text: 'Pull wire' }, { id: 'i2', text: 'Install box' }, { id: 'i3', text: 'Label' }] });
+  await step(sp, ana, jose, rosa);
+  assert.deepEqual([!!ana.task(uid), !!jose.task(uid), !!rosa.task(uid)], [true, true, false]);
+  // Ana starts, ticks two steps and writes what is left; Jose, who has not pulled since, ticks the third
+  ana.tick(uid, 'i1'); ana.tick(uid, 'i2'); ana.editTask(uid, t => Object.assign(t, { aStart: '06:45', status: 'Partial', remain: 'Labels tomorrow, ran out' }));
+  await step(ana);
+  jose.tick(uid, 'i3');
+  await step(jose);
+  const onHub = () => mock.entities('Tasks').find(t => t.uid === uid), view = t => [t.aStart, t.status, t.remain, t.items.map(i => i.done)];
+  const both = ['06:45', 'Partial', 'Labels tomorrow, ran out', [true, true, true]];
+  assert.deepEqual(view(onHub()), both, "Jose's tap does not wipe Ana's work");
+  await step(ana, jose);
+  assert.deepEqual([view(ana.task(uid)), view(jose.task(uid))], [both, both], 'and both phones end with both');
+  // the superintendent moves the sheet to Crew B: it leaves Crew A's phones on their next round and reaches Crew B's
+  sp.editTask(uid, t => { t.crew = 'Crew B'; });
+  await step(sp, ana, jose, rosa);
+  assert.deepEqual([ana.task(uid), jose.task(uid), rosa.task(uid)?.crew], [undefined, undefined, 'Crew B']);
+  assert.deepEqual([ana.toasts, jose.toasts, rosa.toasts], [[], [], []]);
+});
+
+test("the PM's Undo of a removed shift stands, even tapped while the removal's round is on the wire", async () => {
+  const hub = fresh(), w = await makePhone(hub, 'crew', { crew: 'Crew A', worker: 'Jose L' }), pm = await makePhone(hub, 'pm');
+  const id = w.clockIn('Jose L', { crew: 'Crew A' });
+  await stable(w, pm);
+  tick(60e3);
+  pm.editCrewHours(id, s => { s.gone = true; });
+  hub.before = async req => { if (req.action === 'pull' && req.devSecret === pm.secret) { hub.before = null; pm.editCrewHours(id, s => { s.gone = false; }); } }; // Undo, after the removal went up
+  await pm.cycle();
+  await stable(pm, w);
+  assert.deepEqual([pm.crewHours()[0].gone, hub.shifts.get(id).gone, w.hours().map(s => s.id)], [false, false, [id]]);
+});
+
+test('a text opened on a hub phone never undoes newer work the hub has; a newer text is merged and ranked by its own time', async () => {
+  const hub = fresh(), shared = await lib, sp = await makePhone(hub, 'super'), pm = await makePhone(hub, 'pm'), cp = await makePhone(hub, 'crew', { crew: 'Crew A' });
+  const s2 = await makePhone(hub, 'super'); // a second office phone, about to lose signal
+  const uid = sp.addTask({ sentAt: sp.now(), items: [{ id: 'i1', text: 'Pull wire' }, { id: 'i2', text: 'Install box' }, { id: 'i3', text: 'Label' }] });
+  await stable(sp, pm, cp, s2);
+  s2.net.down = true;
+  const taskText = clone(sp.task(uid)); // Send to crew: the text keeps the sheet as sent
+  // the crew sends results (a text), then keeps working through the hub; the office adds a step and a message
+  tick(10e3);
+  cp.tick(uid, 'i1'); const resultText = clone(cp.editTask(uid, t => Object.assign(t, { status: 'Partial', remain: 'Box and labels left', resultAt: cp.now() })));
+  await cp.cycle();
+  tick(10e3);
+  cp.tick(uid, 'i2'); cp.editTask(uid, t => { t.remain = 'Only labels left'; });
+  await cp.cycle();
+  sp.editTask(uid, t => { t.items.push({ id: 'i4', text: 'Label circuits', done: false, at: 0 }); t.reply = 'Use the red tape'; });
+  await stable(sp, pm, cp);
+  // the PM and the crew open the texts: both phones already hold newer copies, which stay
+  assert.equal(pm.sync.fromText('t', uid, 'crew', resultText.resultAt), false);
+  assert.equal(cp.sync.fromText('t', uid, 'assign', taskText.sentAt), false);
+  // the second office phone, offline since before the results, opens the results text: newer than its copy, so merged;
+  // back online, the text's change goes up as old as the text, and the newer crew work on the hub stands everywhere
+  tick(60e3);
+  assert.equal(s2.sync.fromText('t', uid, 'crew', resultText.resultAt), true);
+  s2.editTask(uid, t => shared.mergeTask(t, shared.normTask(clone(resultText)), 'crew'));
+  assert.equal(s2.task(uid).remain, 'Box and labels left');
+  await s2.cycle();
+  tick(10e3); s2.net.down = false;
+  await stable(s2, sp, pm, cp);
+  const view = t => [t.status, t.remain, t.items.map(i => i.done)], now = ['Partial', 'Only labels left', [true, true, false, false]];
+  assert.deepEqual([s2, sp, pm, cp].map(p => view(p.task(uid))), [now, now, now, now], 'the older text lost to the newer hub copy everywhere');
+  assert.deepEqual(view(hub.taskView(hub.tasks.get(uid))), now);
+  assert.equal(cp.task(uid).reply, 'Use the red tape');
+  // the daily report: the superintendent sends it, then corrects it through the hub; the PM opens the old text
+  sp.editReport(DAY, r => Object.assign(r, { status: 'On plan', results: 'Crew A pulled wire on level 3', submittedAt: sp.now() }));
+  const reportText = clone(sp.reports()[DAY]);
+  await stable(sp, pm);
+  tick(10e3); sp.editReport(DAY, r => { r.results += '. CORRECTION: only half of level 3'; });
+  await stable(sp, pm);
+  assert.equal(pm.sync.fromText('r', DAY, 'sup', reportText.updatedAt), false);
 });
