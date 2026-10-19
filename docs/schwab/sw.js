@@ -1,6 +1,6 @@
 // Offline copy of the apps: answer from cache, refresh it in the background.
 // Upper floors and electrical rooms often have no signal, and a reopened tab must still load.
-const CACHE = 'schwab-field-apps-v6';
+const CACHE = 'schwab-field-apps-v7';
 const FILES = ['./', 'index.html', 'tasks.html', 'report.html', 'report.mjs', 'shared.mjs', 'es.mjs', 'shared.css'];
 
 self.addEventListener('install', e => e.waitUntil(caches.open(CACHE).then(c => c.addAll(FILES.map(f => new Request(f, { cache: 'reload' })))).then(() => self.skipWaiting())));
