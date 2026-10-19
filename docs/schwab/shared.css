@@ -81,12 +81,65 @@ svg.i { width: 1.25em; height: 1.25em; flex: none; }
 @media (prefers-reduced-motion: reduce) { *, *::before, *::after { transition: none !important; animation: none !important; scroll-behavior: auto !important; } }
 @media (prefers-reduced-motion: reduce) { ::backdrop { animation: none !important; } }
 
+<<<<<<< ours
 /* ---- type ---- */
 .large-title { font: 700 1.875rem/2.125rem var(--font); letter-spacing: -.02em; }
 .title, .card > h2 { font: 600 1.25rem/1.25 var(--font); }
 .secondary, .hint { font-size: .9375rem; color: var(--muted); }
 .caption, .label { font: 600 .8125rem/1.3 var(--font); text-transform: uppercase; letter-spacing: .04em; color: var(--muted); }
 .hint { margin: 0; line-height: 1.4; }
+=======
+/* ---- header: company names, sign-in, office tabs ---- */
+.top {
+  position: sticky; top: 0; z-index: 5; background: var(--brand); color: var(--brand-ink);
+  padding: calc(env(safe-area-inset-top, 0px) + 10px) 16px 0; border-bottom: 4px solid var(--accent);
+}
+.top-in { max-width: 760px; margin: 0 auto; display: flex; align-items: center; gap: 10px; }
+.top .grow { flex: 1; min-width: 0; }
+.mark { flex: none; }
+/* Both company names always show in full: they scale to the room the buttons leave, even in the widest
+   fallback font (the web font may not have loaded on a first or offline open). */
+.brand { container-type: inline-size; }
+.brand h1 { font-size: clamp(.95rem, 4.4vw, 1.35rem); font-size: min(1.4rem, 7.8cqi); letter-spacing: .01em; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.brand p { margin: 1px 0 0; font-size: .78rem; font-size: min(.85rem, 6.6cqi); font-weight: 600; color: var(--brand-soft); letter-spacing: .02em; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+@media (max-width: 359px) { .mark { display: none; } }
+.icon-btn { background: none; border: 1px solid rgb(255 255 255 / .28); color: inherit; border-radius: 10px; min-width: 44px; height: 44px; font-size: 1.2rem; cursor: pointer; text-decoration: none; display: grid; place-items: center; flex: none; }
+.office-tabs { max-width: 760px; margin: 8px auto 0; display: grid; grid-auto-flow: column; grid-auto-columns: 1fr; }
+.office-tabs a { min-height: 46px; display: flex; align-items: center; justify-content: center; text-align: center; color: rgb(255 255 255 / .78); text-decoration: none; font-weight: 700; font-size: .95rem; border-bottom: 4px solid transparent; margin-bottom: -4px; line-height: 1.1; padding: 0 4px; }
+.office-tabs a[aria-current=page] { color: var(--brand-ink); border-bottom-color: var(--brand-ink); background: rgb(255 255 255 / .08); } /* white on the green rule, so it shows */
+.office-tabs .lock { width: 13px; height: 13px; margin-left: 5px; vertical-align: -1px; opacity: .85; display: inline-block; }
+/* five tabs (Live and Records on a hub): each as wide as its words, so 'Registros' fits a 320px phone */
+.office-tabs:has(> :nth-child(5)) { grid-auto-columns: auto; }
+.office-tabs:has(> :nth-child(5)) a { font-size: .85rem; padding: 0 2px; }
+
+main { max-width: 760px; margin: 0 auto; padding: 12px 16px 140px; display: flex; flex-direction: column; gap: 12px; }
+#app, #nameHint, #todayCard { display: contents; } /* their cards sit in the column around them */
+.proj { margin: 0 2px -4px; font-size: .8rem; font-weight: 600; color: var(--muted); text-transform: uppercase; letter-spacing: .07em; }
+
+/* ---- date bar ---- */
+.datebar { display: flex; align-items: center; gap: 8px; }
+.datebar .day { flex: 1; text-align: center; font-family: var(--display); font-size: 1.5rem; font-weight: 700; position: relative; }
+.datebar .day input { position: absolute; inset: 0; opacity: 0; width: 100%; cursor: pointer; }
+.datebar .day small { display: block; font: 600 .75rem var(--body); color: var(--muted); text-transform: uppercase; letter-spacing: .08em; }
+.nav-btn { width: 48px; height: 48px; border-radius: 50%; border: 1px solid var(--line); background: var(--surface); font-size: 1.4rem; cursor: pointer; }
+
+/* ---- cards & fields ---- */
+.card { background: var(--surface); border: 1px solid var(--line); border-radius: var(--r); padding: 16px; display: flex; flex-direction: column; gap: 12px; min-width: 0; box-shadow: 0 1px 2px rgb(15 23 18 / .06); }
+.card > h2 { font-size: 1.25rem; text-transform: uppercase; letter-spacing: .03em; display: flex; align-items: center; gap: 10px; }
+.num { display: inline-grid; place-items: center; width: 28px; height: 28px; border-radius: 6px; background: var(--primary); color: var(--primary-ink); font-size: 1rem; flex: none; }
+.grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); gap: 10px 12px; }
+.field { display: flex; flex-direction: column; gap: 4px; min-width: 0; }
+.field.wide { grid-column: 1 / -1; }
+.field > span, .label { font-size: .74rem; font-weight: 600; text-transform: uppercase; letter-spacing: .07em; color: var(--muted); }
+input:not([type=checkbox]):not([type=file]), select, textarea {
+  width: 100%; min-height: 48px; padding: 10px 12px; border: 1px solid var(--line); border-radius: 10px;
+  background: var(--sunk); font-size: 16px; /* 16px stops iOS zooming into fields */
+}
+textarea { resize: vertical; min-height: 84px; field-sizing: content; max-height: 50vh; }
+input:focus, select, textarea:focus { background: var(--surface); }
+.hint { margin: 0; font-size: .85rem; color: var(--muted); }
+.out { font-variant-numeric: tabular-nums; font-weight: 600; }
+>>>>>>> theirs
 .muted { color: var(--muted); }
 .out, .num-t { font-variant-numeric: tabular-nums; }
 .out { font-weight: 600; }

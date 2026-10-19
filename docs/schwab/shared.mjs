@@ -7,10 +7,19 @@ import ES from './es.mjs';
 
 // The passcode also keeps a key of its own: a tab still running the version before it (phones keep old
 // tabs open for days) rewrites settings without it, and an old backup has none. hours: this phone's own
+<<<<<<< ours
 // clock-ins; crewHours: the PM's timesheet of everyone's; device: this phone's hub secret, in a key of its own for the
 // same reason as the passcode. roster: the people and crews with their ids, kept apart for the same reason (see
 // loadSettings). Backups and restores carry every key here (a backup leaves out the hub key).
 export const KEYS = { settings: 'schwab.settings', tasks: 'schwab.tasks', reports: 'schwab.reports', pin: 'schwab.pin', hours: 'schwab.hours', crewHours: 'schwab.crewHours', device: 'schwab.device', roster: 'schwab.roster' };
+=======
+// clock-ins; crewHours: the PM's timesheet of everyone's; device: this phone's hub secret, and hub: the hub link, key, role
+// and crew (HUB_FIELDS), each in a key of its own for the same reason as the passcode. Backups and restores carry every
+// key here (a backup leaves out the hub key).
+export const KEYS = { settings: 'schwab.settings', tasks: 'schwab.tasks', reports: 'schwab.reports', pin: 'schwab.pin', hours: 'schwab.hours', crewHours: 'schwab.crewHours', device: 'schwab.device', hub: 'schwab.hub' };
+export const HUB_FIELDS = ['hubUrl', 'hubKey', 'hubRole', 'hubCrew'];
+const ROSTER = 'schwab.roster'; // a copy of settings.people and the crew ids, for normSettings: not in KEYS, a backup's settings carry the roster
+>>>>>>> theirs
 export const COMPANY = 'H.A. Sack-Electrical', COMPANY_ALT = 'Sack Company-Electrical', COMPANIES = `${COMPANY} · ${COMPANY_ALT}`;
 // The top lines of every PDF: who did the work, then the job.
 export const letterhead = (s, more = '') => `${COMPANIES}\n${[s.project, s.site, more].filter(Boolean).join(' · ')}`;
@@ -57,12 +66,22 @@ export function load(key, fallback) {
 // Past that, move to IndexedDB or a shared backend; Backup keeps a copy until then.
 // Settings with a roster also write it to its own key, wherever they are saved from.
 export function save(key, val) {
+<<<<<<< ours
   try {
     localStorage.setItem(key, JSON.stringify(val));
     if (key === KEYS.settings && Array.isArray(val?.people) && Array.isArray(val.crews)) localStorage.setItem(KEYS.roster, JSON.stringify(rosterOf(val)));
     return true;
   } catch { return false; }
+=======
+  try { localStorage.setItem(key, JSON.stringify(val)); } catch { return false; }
+  if (key === KEYS.settings && Array.isArray(val?.people) && Array.isArray(val.crews)) try { localStorage.setItem(ROSTER, JSON.stringify({ crews: val.crews.map(c => ({ id: c?.id, name: c?.name })), people: val.people })); } catch {}
+  saved(key);
+  return true;
+>>>>>>> theirs
 }
+// The app's one hook into every save (tasks.html pokes the hub sync with it); nothing by default.
+let saved = () => {};
+export const onSave = f => { saved = f; };
 
 // hubKey is a secret: never in a backup, a link or the hub's config. hubRole and hubCrew are set by the sync engine.
 // workerId: the roster person this phone's time clock name is (empty when the name matches nobody here).
@@ -80,7 +99,11 @@ export const DEFAULT_SETTINGS = {
   checks: ['Supports / strapping', 'Labeling', 'Terminations / torque', 'Testing', 'Covers / plates', 'Cleanup'],
 };
 // Settings from storage, a backup or the hub: known fields only, every crew and person with an id, the roster checked.
+// A tab still on a version before the roster saves settings with no people and no crew ids: the roster comes back from its
+// own key, crews by name. ponytail: names that old tab typed into a crew's member list are not picked up; reload it to fix.
 export function normSettings(raw) {
+  const ro = raw && typeof raw === 'object' && !Array.isArray(raw.people) && load(ROSTER, null);
+  if (Array.isArray(ro?.people)) raw = { ...raw, people: ro.people, crews: (Array.isArray(raw.crews) ? raw.crews : []).map(c => ({ ...c, id: c?.id || (Array.isArray(ro.crews) ? ro.crews : []).find(x => x?.name === c?.name)?.id || '' })) };
   const s = raw ? shape(SETTINGS_TPL, raw) : structuredClone(DEFAULT_SETTINGS);
   fixRoster(s, Array.isArray(raw?.people));
   return s;
@@ -93,11 +116,16 @@ export function normSettings(raw) {
 // ponytail: a crew renamed in the old tab matches no name, so it gets a new id and its people show under "Not on a
 // crew" (ids kept). Match by members too if old tabs ever rename crews.
 export function loadSettings() {
+<<<<<<< ours
   const raw = load(KEYS.settings, null), roster = load(KEYS.roster, null), pin = load(KEYS.pin, '');
   const old = raw && typeof raw === 'object' && !Array.isArray(raw.people) && Array.isArray(roster?.people);
   const s = normSettings(old ? withRoster(raw, shape(ROSTER_TPL, roster)) : raw);
   if (raw && Array.isArray(raw.people)) save(KEYS.roster, rosterOf(s)); // kept current from the first open of this version
+=======
+  const s = normSettings(load(KEYS.settings, null)), pin = load(KEYS.pin, ''), hub = load(KEYS.hub, null);
+>>>>>>> theirs
   if (PIN_FORMAT.test(pin)) s.pin = pin;
+  if (hub && typeof hub === 'object') for (const k of HUB_FIELDS) s[k] = typeof hub[k] === 'string' ? hub[k] : ''; // its own key wins over an old tab's settings, a disconnect included
   return s;
 }
 const ROSTER_TPL = { crews: [{ id: '', name: '' }], people: [{ id: '', name: '', crewId: '' }] };
@@ -120,9 +148,9 @@ export const nameKey = name => String(name ?? '').normalize('NFD').replace(/[\u0
 // A name as the lists keep it: no comma (the members list is comma separated), single spaces, up to 60 characters.
 export const cleanName = name => String(name ?? '').replace(/,/g, ' ').trim().replace(/\s+/g, ' ').slice(0, 60);
 const split = members => (members || '').split(',').map(cleanName).filter(nameKey);
-// ponytail: an id made while migrating comes from the name (a 53-bit hash), so phones migrating the same lists agree,
-// and a tab still on the old version (its save drops people and crew ids) re-migrates to the same ids. Someone renamed
-// in between gets a new id that one time. New people and crews get random ids.
+// ponytail: an id made while migrating comes from the name (a 53-bit hash), so phones migrating the same lists agree.
+// New people and crews get random ids. A tab still on the old version (its save drops people and crew ids) gets the
+// roster back from its own key (ROSTER, normSettings), so random ids and two people sharing a name survive it.
 const hash = s => {
   let a = 0xdeadbeef, b = 0x41c6ce57;
   for (let i = 0; i < s.length; i++) { const c = s.charCodeAt(i); a = Math.imul(a ^ c, 2654435761); b = Math.imul(b ^ c, 1597334677); }
@@ -275,10 +303,11 @@ export function nextId(tasks, date) {
 }
 // A sheet arrived (a link now, the hub later) with the date and number of one of this phone's own sheets. Ours takes
 // the next free number when it was never sent, since no one else has seen its number; returns [[sheet, old id]].
-export function renumberClashes(tasks, inc) {
+// onHub(uid): the sheet is on the hub already, so other phones know its number and it keeps it.
+export function renumberClashes(tasks, inc, onHub = () => false) {
   const out = [];
   for (const t of tasks) {
-    if (t === inc || t.uid === inc.uid || t.origin !== 'mine' || t.sentAt || !t.id || t.id !== inc.id || t.date !== inc.date) continue;
+    if (t === inc || t.uid === inc.uid || t.origin !== 'mine' || t.sentAt || !t.id || t.id !== inc.id || t.date !== inc.date || onHub(t.uid)) continue;
     out.push([t, t.id]);
     t.id = nextId(tasks, t.date);
     t.updatedAt = Date.now();
@@ -419,8 +448,11 @@ export const deviceId = () => devRec()?.id || '';
 export const deviceSecret = () => devRec()?.secret || '';
 const idOf = async secret => hex(await crypto.subtle.digest('SHA-256', new TextEncoder().encode(secret))).slice(0, 32);
 // Makes the secret once (a restored backup brings the old phone's back). Resolves to the id, or '' where the phone
-// can't (no crypto.subtle off https): the time clock then keeps using the older settings.device.
-export async function ensureDevice() {
+// can't (no crypto.subtle off https): the time clock then keeps using the older settings.device. Calls made while one is
+// still working share it, so two first calls can never make two secrets.
+let making = null;
+export const ensureDevice = () => (making ||= makeDevice().finally(() => { making = null; }));
+async function makeDevice() {
   try {
     let secret = load(KEYS.device, null)?.secret;
     if (!/^[A-Za-z0-9]{32}$/.test(secret)) {
@@ -1042,6 +1074,7 @@ async function addFromSettings(s, el) {
 // hours keep the names either way. A removed crew's people wait under "Not on a crew" and go back with the Undo.
 export async function settingsAct(act, s, el, change = f => { f(s); save(KEYS.settings, s); }) {
   if (act === 'addCrew') addCrew(s, L('Crew {x}', { x: String.fromCharCode(65 + s.crews.length) }));
+<<<<<<< ours
   if (act === 'delCrew') {
     const at = +el.dataset.i, c = s.crews[at];
     if (c) {
@@ -1054,6 +1087,10 @@ export async function settingsAct(act, s, el, change = f => { f(s); save(KEYS.se
       }) });
     }
   }
+=======
+  const dc = act === 'delCrew' && s.crews[el.dataset.i]; // by id after the question: a pull may reorder the list while it is open
+  if (dc && await ask(L('Remove {name} from the crew list? Existing sheets keep their crew name.', { name: dc.name }), L('Remove'), 'danger')) removeCrew(s, dc.id);
+>>>>>>> theirs
   if (act === 'pAdd') await addFromSettings(s, el);
   if (act === 'pEdit') await editPerson(s, el.dataset.pid);
   if (act === 'pDel') {
@@ -1081,13 +1118,19 @@ export async function settingsAct(act, s, el, change = f => { f(s); save(KEYS.se
 // new invite. The device secret goes along, so a restored phone keeps its own hours.
 export function backupData() {
   const data = Object.fromEntries(Object.values(KEYS).map(k => [k, load(k, null)]));
-  if (data[KEYS.settings] && typeof data[KEYS.settings] === 'object') data[KEYS.settings] = { ...data[KEYS.settings], hubKey: '' };
+  for (const k of [KEYS.settings, KEYS.hub]) if (data[k] && typeof data[k] === 'object') data[k] = { ...data[k], hubKey: '' };
   return data;
 }
 export const isBackup = data => !!data && typeof data === 'object' && Object.values(KEYS).some(k => k in data);
+<<<<<<< ours
 // Writes every key the backup has; false if the phone ran out of space part way. A backup's settings bring their own
 // roster (or, from before people had ids, none), never this phone's old one.
 export const restoreData = data => (data[KEYS.settings] == null || save(KEYS.roster, null)) && Object.values(KEYS).every(k => data[k] == null || save(k, data[k]));
+=======
+// Writes every key the backup has; false if the phone ran out of space part way. The hub sync's record of what the hub has
+// (sync.mjs schwab.hubSync) described the old stores: without it the next round merges pull-first, so newer hub copies win.
+export const restoreData = data => { try { localStorage.removeItem('schwab.hubSync'); } catch {} return Object.values(KEYS).every(k => data[k] == null || save(k, data[k])); };
+>>>>>>> theirs
 
 export async function restore(file) {
   let data;

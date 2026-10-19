@@ -249,7 +249,14 @@ test('eventLine rebuilds the hub English into a sentence', () => {
   assert.equal(line(E('clock.in', 'Jose L', 'Jose L clocked in at 7:02 AM, 2026-10-19', 's1')), 'Jose L clocked in');
   assert.equal(line(E('clock.out', 'Jose L', '...', 's1')), 'Jose L clocked out');
   assert.equal(line(E('report.sent', 'Dana', 'Daily report for 2026-10-19 sent by Dana', '2026-10-19')), `Daily report for ${lib.niceDate('2026-10-19', 'en')} sent`);
-  assert.equal(line(E('purge', 'PM', 'Deleted task xyz', 'xyz')), 'Deleted task xyz', 'a kind the app does not know shows the hub words');
+  assert.equal(line(E('purge', 'PM', 'Deleted task xyz', 'xyz')), 'A task sheet was deleted', 'a deleted sheet is never named by its uid');
+  assert.equal(line(E('purge', 'PM', 'Deleted report 2026-10-19', '2026-10-19')), `The ${lib.niceDate('2026-10-19', 'en')} report was deleted`);
+  assert.equal(line(E('pm.add', 'PM', 'PM added a shift for Jose L, 2026-10-19', 's1')), `PM added a shift for Jose L on ${lib.niceDate('2026-10-19', 'en')}`);
+  assert.equal(line({ ...E('pm.edit', 'PM', 'PM edited Jose L, 2026-10-19', 's1'), name: 'José Luis' }), `PM changed the hours of José Luis on ${lib.niceDate('2026-10-19', 'en')}`, 'the roster name when the app knows the shift');
+  assert.equal(line(E('pm.remove', 'PM', 'PM removed a shift for a worker, 2026-10-19', 's1')), `PM removed a shift for a worker on ${lib.niceDate('2026-10-19', 'en')}`);
+  assert.equal(line(E('key.rotated', 'PM', 'Crew key replaced', '')), 'The crew key was replaced');
+  assert.equal(line(E('archive', 'PM', 'Archived 12 rows older than 2026-07-01', '2026-07-01')), `12 rows older than ${lib.niceDate('2026-07-01', 'en')} archived`);
+  assert.equal(line(E('purge', 'PM', 'Purged something', 'x')), 'Purged something', 'words the app does not know: the hub words');
   assert.equal(line(E('task.status', 'x', 'odd text', 'T1')), 'odd text', 'a status it does not know falls back to the hub words');
   assert.equal(line(E('mystery', '', '', '')), 'mystery');
 });
@@ -909,6 +916,12 @@ test('sheets go by uid: two sheets with one number both show, each opens itself,
   assert.deepEqual([...feed.matchAll(/href="#task\/(\w+)\//g)].map(m => m[1]), ['ub', 'uc']);
   assert.match(feed, /Mike started T1019-01/);
   assert.doesNotMatch(feed, /started ub/, 'a uid is never shown as the number');
+  ctx.sync.data.events = [{ rev: 5, ts: NOW, kind: 'task.created', who: 'Dana', ref: 'gone7', text: '' }, { rev: 4, ts: NOW, kind: 'task.created', who: 'Dana', ref: 'unum', text: '' }];
+  const nonum = task({ uid: 'unum', id: '' });
+  const feed2 = live.liveView({ ...ctx, tasks: () => [a, b, c, old, nonum] }).split('class="feed"')[1];
+  assert.match(feed2, /Dana created a task sheet/, 'a sheet not on this phone: no uid');
+  assert.match(feed2, /Dana created New task/, 'a sheet with no number yet');
+  assert.doesNotMatch(feed2, /gone7|created unum/);
   const s = shift({ id: 'h1', who: 'Mike R', date: '2026-10-12', out: '15:00', tasks: [{ uid: 'uo', id: 'T1019-09' }, { uid: 'gone', id: 'T1019-07' }] });
   const pctx = mkCtx({ tasks: () => [old], shifts: () => [s] });
   live.recordsView(pctx, 'people'); // on the By person tab first, as a tap would be

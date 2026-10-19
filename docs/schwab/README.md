@@ -120,6 +120,74 @@ Schwab Field Records/
 - **No signal:** the PDF waits on the phone and uploads when the app is next opened or the phone reconnects. Settings shows how many are waiting.
 - **Any time:** every screen's **⋯** menu has **Save as PDF** (phones get the share sheet: Save to Files, Mail, AirDrop, Drive; computers download it).
 
+## Hub (optional)
+
+Without it the app works as described above: phones pass work by texted links. The hub adds one shared, lasting record
+and live updates. It is one Google Apps Script web app plus one Google Sheet, both in the owner's Google account
+(`hub/Code.gs`, `hub/appsscript.json`; the contract between the pieces is `HUB.md`).
+
+**What it does**
+
+- Task sheets reach the crew's phones by themselves once you tap **Send to crew** (a draft stays on the office phones),
+  and ticks, start, stop and results reach the office as they happen. **Send results** still opens a text, and texted
+  links still work.
+- **Clock in** and **Clock out** reach the PM's **Crew hours** without a text. When that does not get through (no signal,
+  the hub busy, a replaced key) the text opens as before.
+- Office phones get two more tabs. **Live**: who is on site, today's sheets by crew with their progress, and the activity
+  of the day; **Message** and **Review** there reach the crew's sheet. **Records**: hours by person and week, every task
+  sheet and report, older records loaded from the hub, and for the PM **Download all (JSON)**, a week as CSV, the Sheet's
+  storage meter and **Archive older records**.
+- What people type shows in the reader's language (Google Translate), marked **Auto-translated**, with one tap to the
+  original. Drawing and task numbers, quantities and trade abbreviations are kept as typed.
+- The owner can open the Sheet on any phone: tabs for Tasks, Hours, Weekly totals, Reports and Activity.
+
+**One-time setup (the owner, about 15 minutes)**
+
+1. Go to script.google.com and make a **New project**. Paste `hub/Code.gs` over the code there. In **Project Settings**
+   turn on **Show "appsscript.json" manifest file**, then paste `hub/appsscript.json` over that file. It turns on the
+   Sheets service and asks for only two permissions: files this script creates (`drive.file`) and outside requests.
+2. Pick `setupHub` in the function list and **Run** it once. Read Google's permission screen and approve it. The
+   execution log shows the PM key, the crew and superintendent keys, and the link to the new Sheet. Copy the PM key now:
+   the hub keeps only a fingerprint of it (`resetPmKey` makes a new one).
+3. **Deploy > New deployment > Web app**, execute as **Me**, access **Only myself**. Open the `/exec` link in this browser;
+   it answers `{"ok":true,"service":"schwab-field-hub",...}`. Phones cannot reach it yet.
+4. When that works, **Deploy > Manage deployments > Edit**, set access to **Anyone**, and deploy again (the link stays the
+   same). Only phones holding a key can do anything with it.
+5. On the PM's phone: **Settings > Hub**, paste the `/exec` link and the PM key, **Connect**, then **Test the hub**.
+   Every line should show a check mark.
+6. **Invite crew** (pick the crew) and **Invite superintendent** each make a link to text. On their phone the person
+   opens it, types their name (crews) and taps **Join**. A phone already on a hub asks first.
+
+**What stays where**
+
+- Every phone keeps working from its own copy: crew phones keep 14 days, office phones 60. Edits made with no signal
+  wait on the phone and go when it is back. The status dot in the header shows Live, Syncing, Offline or Problem.
+- The Sheet keeps everything. **Records > Load older records** shows what the phone no longer keeps, without storing it.
+- The hub key stays on the phone it was typed on. A backup leaves it out: after a restore, open a new invite (or paste
+  the key again). Invite links carry a crew or superintendent key, so send each only to its person.
+- Each role changes only its own part: crews their results, ticks and hours; the office the assignment, the review and
+  messages; only the PM edits hours, deletes records (from every phone at once), exports and manages the keys.
+
+**Keys and archive**
+
+- A lost phone, or someone who left: **Settings > Hub > Replace the crew key** (or the superintendent key). Every phone on
+  the old key stops syncing until it opens a new invite. A lost PM key: run `resetPmKey` in the script editor.
+- A Sheet holds 10 million cells. Records shows how full it is and warns at 70%. **Archive older records** moves
+  everything before a date (at least 30 days back) into a new archive Sheet; it stays readable there.
+
+**Honest limits**
+
+- It is not instant. A round trip through Apps Script takes a few seconds, and an open app checks every 20 seconds.
+- Google's free quotas apply. Translation stops at 1,500 requests a day (the original text shows after that).
+- Machine translation gets trade words wrong sometimes. The original is always one tap away.
+- A phone's clock decides which of two edits to the same part is newer; clocks a few minutes apart can order edits made
+  within those minutes the wrong way (the hub corrects bigger differences).
+- Two office phones that numbered sheets offline keep both numbers once both sheets are on the hub, and both show
+  **Same number as another sheet** until one is renamed.
+- A shift texted to the PM before that worker's phone joined the hub stays under its old phone id on the PM's copy.
+- One hub per phone. **Disconnect** keeps the phone's work on the phone. A phone moved to another hub (another job) does not
+  copy what it already synced to the new one; what it changes after the move goes up.
+
 ## Spanish mode (crew screens and the time clock)
 
 - Tap **ES** in the header, or Settings → Language. A new phone asks "English / Español" first thing (see First open); an older crew phone that never chose asks the first time it opens a new sheet.
@@ -145,13 +213,17 @@ Schwab Field Records/
 - `report.html` only forwards to the app now, so old report links and an old Daily Report home-screen icon still land in the right place.
 - The PM selects **Project manager** in Settings before opening a daily report. Report links do not select the phone's role.
 - After an app update, reopen online and reload once more after the new offline cache installs. Saved records remain on the phone.
-- There is no live sync. The PM sees crew detail when the superintendent sends the report or it reaches the review folder, not before.
+- Without the hub there is no live sync. The PM sees crew detail when the superintendent sends the report or it reaches the review folder, not before.
 - PDFs use the standard Helvetica font, which covers English and Western European letters. Other characters print as "?".
 - Long reports make long links. iMessage, WhatsApp and email handle them; some plain SMS apps cut them off.
 - Storage is about 5 MB per phone, roughly a year of daily use. Settings shows how much is used.
 
 ## Check
 
+<<<<<<< ours
 `node --test tests/schwab-field-apps.test.js tests/schwab-review-folder.test.js tests/app-display-regressions.test.js tests/schwab-es-lint.test.js` covers the link codec, merges, report roll-up, office passcode, time clock and timesheet, people and crew ids (moving older settings over, two people with one name, renames, sheets with the same number from two phones), every new field through reload and backup and restore, the device secret, PDF writer, upload queue, mocked receiver boundaries, and that every on-screen phrase has its Spanish. Receiver checks do not exercise Google authorization, folder access or a live deployment.
 
 The browser checks in `tests/browser/` drive the real app in Chromium (Playwright; pdftotext for the PDFs). Serve `docs/schwab` (`python3 -m http.server 8765 --bind 127.0.0.1`), then run each with `BASE=http://127.0.0.1:8765/ node tests/browser/<file>`: `schwab-field-app.e2e.js` (a whole job on five phones: first run, task sheets, results, time clock, daily report, crew hours, Undo, the tab bar, 320 px, Spanish), `schwab-first-run.e2e.js`, `schwab-clock-stale.e2e.js` (the 16-hour cutoff) and `schwab-spanish-audit.e2e.js` (every screen and state in Spanish; 0 untranslated to pass). Each exits 0 when everything passes.
+=======
+`node --test tests/schwab-field-apps.test.js tests/schwab-review-folder.test.js tests/app-display-regressions.test.js tests/schwab-es-lint.test.js tests/schwab-sync.test.js tests/schwab-live.test.js tests/schwab-hub.test.js` covers the link codec, merges, report roll-up, office passcode, time clock and timesheet, people and crew ids (moving older settings over, two people with one name, renames, sheets with the same number from two phones), every new field through reload and backup and restore, the device secret, PDF writer, upload queue, mocked receiver boundaries, and that every on-screen phrase has its Spanish; the last three cover the hub sync, the hub screens and the hub itself on a stand-in for Google. Receiver and hub checks do not exercise Google authorization, folder access or a live deployment.
+>>>>>>> theirs

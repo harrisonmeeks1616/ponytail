@@ -656,6 +656,7 @@ export default {
   'Hub invite for the crew': 'Invitación al sistema central para la cuadrilla',
   'Hub invite for the superintendent': 'Invitación al sistema central para el superintendente',
   'Which crew is this invite for?': '¿Para qué cuadrilla es esta invitación?',
+  'This is the PM phone. Send the invite to the person it is for.': 'Este es el teléfono del gerente de proyecto. Mande la invitación a la persona a quien va dirigida.',
   'Not sure: they pick': 'No estoy seguro: ellos escogen',
   'Join the hub': 'Unirse al sistema central',
   'This link connects this phone to the project hub, so your task sheets arrive by themselves.': 'Este enlace conecta este teléfono con el sistema central del proyecto, para que sus hojas de tareas lleguen solas.',
@@ -683,6 +684,7 @@ export default {
 
   // identity: people, devices, duplicate numbers (hub screens)
 
+<<<<<<< ours
 
   // shell: tab bar, settings button, toast Undo
   'Report': 'Reporte',
@@ -723,4 +725,25 @@ export default {
   'People and crews': 'Personas y cuadrillas',
   '{name} taken off the list': 'Se quitó a {name} de la lista',
   '{name} removed from the crew list': 'Se quitó {name} de la lista de cuadrillas',
+=======
+  // the activity feed: PM shift edits, deletes, keys, archive
+  'PM added a shift for {who} on {date}': 'El gerente de proyecto agregó un turno para {who} el {date}',
+  'PM removed a shift for {who} on {date}': 'El gerente de proyecto quitó un turno de {who} del {date}',
+  'PM changed the hours of {who} on {date}': 'El gerente de proyecto cambió las horas de {who} del {date}',
+  'a worker': 'un trabajador',
+  'a task sheet': 'una hoja de tareas',
+  'A task sheet was deleted': 'Se borró una hoja de tareas',
+  'A shift was deleted': 'Se borró un turno',
+  'The {date} report was deleted': 'Se borró el reporte del {date}',
+  'The crew key was replaced': 'Se cambió la clave de la cuadrilla',
+  'The superintendent key was replaced': 'Se cambió la clave del superintendente',
+  '{n} rows older than {date} archived': 'Se archivaron {n} filas anteriores al {date}',
+
+  // the app on a hub: invites, the crew board, the time clock
+  'This phone is already connected to a hub. Use this invite instead?': 'Este teléfono ya está conectado a un sistema central. ¿Usar esta invitación en su lugar?',
+  'Use this invite': 'Usar esta invitación',
+  'Sheets for your crew show up here by themselves. A texted link still works too.': 'Las hojas de su cuadrilla aparecen aquí solas. Un enlace por mensaje también sigue funcionando.',
+  'Clock in and Clock out go to the PM through the hub. With no signal, a text to the PM opens instead. Only the PM can change hours.': 'Las entradas y salidas que marque le llegan al gerente de proyecto por el sistema central. Sin señal, se abre un mensaje para el gerente de proyecto. Solo el gerente de proyecto puede cambiar las horas.',
+  'Saved. Your hours go to the PM through the hub.': 'Guardado. Sus horas le llegan al gerente de proyecto por el sistema central.',
+>>>>>>> theirs
 };
