@@ -46,7 +46,7 @@ const PARTS = { t: TPARTS, r: RPARTS, g: [['v', s => cfgPart(s), 'at']] };
 const shiftPart = (s, full) => [s.id, s.device, s.who, s.pid, s.date, s.in, s.out, s.crew, s.crewId, s.tasks, ...(full ? [s.edited.who, s.edited.in, s.edited.out, s.gone] : [])];
 // The roster always goes normalized, every crew and person with an id. A tab still on an older version saves settings with
 // no people; pushing that would empty the roster on every phone. A config with member lists and no people was written by
-// such a phone, so its people are rebuilt from the lists (normSettings), with the same ids every phone computes.
+// such a phone, so normSettings takes the people back from this phone's own roster key (shared.mjs ROSTER), ids and all.
 const noRoster = s => !arr(s.people).length && arr(s.crews).some(c => String(obj(c).members || '').trim());
 const cfgPart = s => { s = obj(s); const c = shape(CFG_TPL, normSettings(noRoster(s) ? { ...s, people: undefined } : s)); if (!PIN_FORMAT.test(c.pin)) c.pin = ''; return c; };
 const inC = raw => ({ ...cfgPart(raw), at: num(obj(raw).at) });
@@ -119,10 +119,11 @@ export function makeSync(o = {}) {
   const inS = raw => norm.shift(raw); // the person, crew and task links (pid, crewId, tasks [{uid, id}]) are in SHIFT_TPL
   const inR = (raw, key) => { const r = norm.report(raw); return r.date && r.date === key ? r : null; };
   function readLocal(c) {
-    const rawR = c.role === 'crew' ? {} : obj(store.get(KEYS.reports, {})), reports = [], other = {};
+    const rawR = c.role === 'crew' ? {} : obj(store.get(KEYS.reports, {})), reports = [], other = {}, rawT = arr(store.get(KEYS.tasks, []));
     for (const [d, r] of Object.entries(rawR)) { const n = inR(r, d); if (n) reports.push(n); else other[d] = r; }
     return {
-      tasks: arr(store.get(KEYS.tasks, [])).map(inT).filter(t => t.uid),
+      tasks: rawT.map(inT).filter(t => t.uid),
+      older: new Set(rawT.filter(x => isObj(x) && !('assignAt' in x)).map(x => x.uid)), // sheets a tab of a version before the hub saved
       hours: arr(store.get(KEYS.hours, [])).map(inS).filter(Boolean),
       crewH: c.role === 'pm' ? arr(store.get(KEYS.crewHours, [])).map(inS).filter(Boolean) : [], // only the PM's phone keeps (and pushes) the timesheet
       reports, other,
@@ -135,7 +136,8 @@ export function makeSync(o = {}) {
   let epoch = 0, running = null, again = false, timer = 0, pokeT = 0, fails = 0, nextAllowed = 0, lastTry = 0;
   const err = (code, m) => Object.assign(new Error(m || say(code)), { code });
   const bad = code => ({ ok: false, error: code, message: say(code) });
-  const lost = e => ({ ok: false, error: e.code || 'server', message: e.code ? e.message : say('server') });
+  // connect, invite and the PM's one-off actions: nothing retries them, so no "trying again" or "goes to the hub" wording
+  const lost = e => { const code = e.code || 'server'; return { ok: false, error: code, message: ['offline', 'busy', 'quota', 'server'].includes(code) ? L('That did not work. Try again.') : e.message }; };
   function say(code) {
     return ({
       offline: L('No signal. Your work is saved on this phone and goes to the hub when you are back online.'),
@@ -186,7 +188,7 @@ export function makeSync(o = {}) {
       status = res.status;
       j = await res.json().catch(() => null);
     } catch { throw err('offline'); } finally { tm.clear(timeout); }
-    if (!j || typeof j !== 'object' || Array.isArray(j)) throw err(status && status < 500 ? 'bad_reply' : 'server');
+    if (!j || typeof j !== 'object' || Array.isArray(j)) throw err(status && status < 500 && (opt.cfg || status >= 400) ? 'bad_reply' : 'server'); // Google's error page (200) from a working hub: its problem, not the link
     if (j.ok !== true) {
       const code = ERRORS.includes(j.error) ? j.error : 'server'; // our own wording: the hub's text is never shown
       if (code === 'unauthorized' && !opt.cfg) setStatus('error', say(code));
@@ -238,7 +240,14 @@ export function makeSync(o = {}) {
       }
       if (Object.keys(sent).length) items.push({ k, key, sent, wire: wire(doc, sent) });
     };
-    for (const t of lc.tasks) parts('t', t.uid, t, TPARTS, tw, t.updatedAt, wireTask);
+    for (const t of lc.tasks) {
+      // A tab on a version before the hub saved this sheet without the office fields it cannot hold (message, crew and people ids).
+      // Its office part is not pushed over the hub's: the next pull is a full one and brings the hub's copy back (that tab's own
+      // edit to it is dropped). ponytail: seen only until this phone saves its sheets again; a tab reload ends the old version.
+      const a = st.t[t.uid]?.assign, h = a && hs(aPart(t));
+      if (lc.older?.has(t.uid) && a && a.s !== h && tw.includes('assign')) { Object.assign(a, { s: h }); for (const k of ['v', 'vh', 'p', 'at']) delete a[k]; st.sig = ''; }
+      parts('t', t.uid, t, TPARTS, tw, t.updatedAt, wireTask);
+    }
     for (const r of lc.reports) parts('r', r.date, r, RPARTS, rw, r.updatedAt, wireReport);
     const shifts = (k, list, can, full) => {
       for (const s of list) {
@@ -319,6 +328,7 @@ export function makeSync(o = {}) {
     let st = loadState(), fresh = 0;
     const items = scan(st, c, readLocal(c)), send = [];
     for (const it of items) { // a single entity over the hub's cap can never be accepted
+      if (c.role === 'crew' && it.k === 't' && st.t[it.key]?.assign?.v === undefined) continue; // a texted sheet the hub never sent: it stays counted as not sent
       it.len = JSON.stringify(it.wire).length + 1;
       if (it.len > CAP.entity) fresh += ack(st, it, { status: 'rejected' }); else send.push(it);
     }
@@ -649,7 +659,7 @@ export function makeSync(o = {}) {
     if (extra.role && extra.role !== rep.role) return bad('mismatch');
     epoch++; fails = 0; nextAllowed = 0;
     const same = s.hubUrl === url;
-    if (!same) store.set(ST, null); // a different hub knows none of what this phone has synced
+    if (!same) store.set(ST, keepHashes()); // a different hub: only what changed since the last sync is this phone's new work
     patchSettings({ hubUrl: url, hubKey: key, hubRole: rep.role, hubCrew: typeof extra.crew === 'string' ? extra.crew : same ? String(s.hubCrew || '') : '' });
     setStatus('syncing');
     poke();
@@ -666,22 +676,30 @@ export function makeSync(o = {}) {
     if (!r.ok) return r;
     return { ...r, crew, needsName: r.role === 'crew' && !String(cfg().worker || '').trim(), needsCrew: r.role === 'crew' && !crew };
   }
+  // What the hub had of each record (the s hashes), nothing else: a phone moving to another hub (another job) does not upload
+  // the records it already synced with the old one, and its first round there merges pull-first. Later edits still go up.
+  function keepHashes() {
+    const st = loadState(), out = { t: {}, h: {}, m: {}, r: {} };
+    for (const k of Object.keys(out)) for (const [key, rec] of Object.entries(st[k])) for (const [p, pr] of Object.entries(obj(rec))) if (obj(pr).s !== undefined) ent(out[k], key)[p] = { s: pr.s };
+    return Object.values(out).some(x => Object.keys(x).length) ? out : null;
+  }
   function disconnect() {
     epoch++; fails = 0; again = false; pending = 0; live = { events: [], onsite: [], at: 0 };
     tm.clear(timer); tm.clear(pokeT); timer = pokeT = 0;
     patchSettings({ hubUrl: '', hubKey: '', hubRole: '', hubCrew: '' });
-    store.set(ST, null);
+    store.set(ST, keepHashes());
     setStatus('off');
     notify(new Set(['settings']));
   }
-  async function invite(role, crew = '') {
+  async function invite(role, crew = '', crews = []) {
     const c = hub();
     if (!['crew', 'super'].includes(role)) return bad('bad_join');
     if (!c || c.role !== 'pm') return bad('forbidden');
     try {
       const rep = await call('keys');
       if (!KEY_OK.test(rep[role])) return bad('bad_reply');
-      const data = { v: 1, kind: 'join', hub: { url: c.url, key: rep[role] }, role, ...(role === 'crew' && crew && { crew: String(crew).slice(0, 60) }) };
+      const pick = role === 'crew' && !crew ? arr(crews).filter(x => typeof x === 'string' && x.trim()).slice(0, 50).map(x => x.trim().slice(0, 60)) : []; // the person picks from the job's crews
+      const data = { v: 1, kind: 'join', hub: { url: c.url, key: rep[role] }, role, ...(role === 'crew' && crew && { crew: String(crew).slice(0, 60) }), ...(pick.length && { crews: pick }) };
       return { ok: true, url: linkFn('tasks.html', await packFn(data)) };
     } catch (e) { return lost(e); }
   }
@@ -833,7 +851,7 @@ export const cycle = () => get().cycle();
 export const joinFrom = (data, opt) => get().joinFrom(data, opt);
 export const connect = (url, key) => get().connect(url, key);
 export const disconnect = () => get().disconnect();
-export const invite = (role, crew) => get().invite(role, crew);
+export const invite = (role, crew, crews) => get().invite(role, crew, crews);
 export const translate = (items, from, to) => get().translate(items, from, to);
 export const records = q => get().records(q);
 export const stats = () => get().stats();

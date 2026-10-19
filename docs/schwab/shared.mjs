@@ -12,6 +12,7 @@ import ES from './es.mjs';
 // key here (a backup leaves out the hub key).
 export const KEYS = { settings: 'schwab.settings', tasks: 'schwab.tasks', reports: 'schwab.reports', pin: 'schwab.pin', hours: 'schwab.hours', crewHours: 'schwab.crewHours', device: 'schwab.device', hub: 'schwab.hub' };
 export const HUB_FIELDS = ['hubUrl', 'hubKey', 'hubRole', 'hubCrew'];
+const ROSTER = 'schwab.roster'; // a copy of settings.people and the crew ids, for normSettings: not in KEYS, a backup's settings carry the roster
 export const COMPANY = 'H.A. Sack-Electrical', COMPANY_ALT = 'Sack Company-Electrical', COMPANIES = `${COMPANY} · ${COMPANY_ALT}`;
 // The top lines of every PDF: who did the work, then the job.
 export const letterhead = (s, more = '') => `${COMPANIES}\n${[s.project, s.site, more].filter(Boolean).join(' · ')}`;
@@ -58,6 +59,7 @@ export function load(key, fallback) {
 // Past that, move to IndexedDB or a shared backend; Backup keeps a copy until then.
 export function save(key, val) {
   try { localStorage.setItem(key, JSON.stringify(val)); } catch { return false; }
+  if (key === KEYS.settings && Array.isArray(val?.people) && Array.isArray(val.crews)) try { localStorage.setItem(ROSTER, JSON.stringify({ crews: val.crews.map(c => ({ id: c?.id, name: c?.name })), people: val.people })); } catch {}
   saved(key);
   return true;
 }
@@ -81,7 +83,11 @@ export const DEFAULT_SETTINGS = {
   checks: ['Supports / strapping', 'Labeling', 'Terminations / torque', 'Testing', 'Covers / plates', 'Cleanup'],
 };
 // Settings from storage, a backup or the hub: known fields only, every crew and person with an id, the roster checked.
+// A tab still on a version before the roster saves settings with no people and no crew ids: the roster comes back from its
+// own key, crews by name. ponytail: names that old tab typed into a crew's member list are not picked up; reload it to fix.
 export function normSettings(raw) {
+  const ro = raw && typeof raw === 'object' && !Array.isArray(raw.people) && load(ROSTER, null);
+  if (Array.isArray(ro?.people)) raw = { ...raw, people: ro.people, crews: (Array.isArray(raw.crews) ? raw.crews : []).map(c => ({ ...c, id: c?.id || (Array.isArray(ro.crews) ? ro.crews : []).find(x => x?.name === c?.name)?.id || '' })) };
   const s = raw ? shape(SETTINGS_TPL, raw) : structuredClone(DEFAULT_SETTINGS);
   fixRoster(s, Array.isArray(raw?.people));
   return s;
@@ -104,9 +110,9 @@ export const nameKey = name => String(name ?? '').normalize('NFD').replace(/[\u0
 // A name as the lists keep it: no comma (the members list is comma separated), single spaces, up to 60 characters.
 export const cleanName = name => String(name ?? '').replace(/,/g, ' ').trim().replace(/\s+/g, ' ').slice(0, 60);
 const split = members => (members || '').split(',').map(cleanName).filter(nameKey);
-// ponytail: an id made while migrating comes from the name (a 53-bit hash), so phones migrating the same lists agree,
-// and a tab still on the old version (its save drops people and crew ids) re-migrates to the same ids. Someone renamed
-// in between gets a new id that one time. New people and crews get random ids.
+// ponytail: an id made while migrating comes from the name (a 53-bit hash), so phones migrating the same lists agree.
+// New people and crews get random ids. A tab still on the old version (its save drops people and crew ids) gets the
+// roster back from its own key (ROSTER, normSettings), so random ids and two people sharing a name survive it.
 const hash = s => {
   let a = 0xdeadbeef, b = 0x41c6ce57;
   for (let i = 0; i < s.length; i++) { const c = s.charCodeAt(i); a = Math.imul(a ^ c, 2654435761); b = Math.imul(b ^ c, 1597334677); }
@@ -872,7 +878,8 @@ async function addFromSettings(s, el) {
 
 export async function settingsAct(act, s, el) {
   if (act === 'addCrew') addCrew(s, L('Crew {x}', { x: String.fromCharCode(65 + s.crews.length) }));
-  if (act === 'delCrew' && await ask(L('Remove {name} from the crew list? Existing sheets keep their crew name.', { name: s.crews[el.dataset.i].name }), L('Remove'), 'danger')) removeCrew(s, s.crews[el.dataset.i].id);
+  const dc = act === 'delCrew' && s.crews[el.dataset.i]; // by id after the question: a pull may reorder the list while it is open
+  if (dc && await ask(L('Remove {name} from the crew list? Existing sheets keep their crew name.', { name: dc.name }), L('Remove'), 'danger')) removeCrew(s, dc.id);
   if (act === 'pAdd') await addFromSettings(s, el);
   if (act === 'pEdit') await editPerson(s, el.dataset.pid);
   if (act === 'pDel') {
@@ -900,8 +907,9 @@ export function backupData() {
   return data;
 }
 export const isBackup = data => !!data && typeof data === 'object' && Object.values(KEYS).some(k => k in data);
-// Writes every key the backup has; false if the phone ran out of space part way.
-export const restoreData = data => Object.values(KEYS).every(k => data[k] == null || save(k, data[k]));
+// Writes every key the backup has; false if the phone ran out of space part way. The hub sync's record of what the hub has
+// (sync.mjs schwab.hubSync) described the old stores: without it the next round merges pull-first, so newer hub copies win.
+export const restoreData = data => { try { localStorage.removeItem('schwab.hubSync'); } catch {} return Object.values(KEYS).every(k => data[k] == null || save(k, data[k])); };
 
 export async function restore(file) {
   let data;

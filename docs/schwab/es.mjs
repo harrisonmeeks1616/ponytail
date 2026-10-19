@@ -678,6 +678,7 @@ export default {
   'Hub invite for the crew': 'Invitación al sistema central para la cuadrilla',
   'Hub invite for the superintendent': 'Invitación al sistema central para el superintendente',
   'Which crew is this invite for?': '¿Para qué cuadrilla es esta invitación?',
+  'This is the PM phone. Send the invite to the person it is for.': 'Este es el teléfono del gerente de proyecto. Mande la invitación a la persona a quien va dirigida.',
   'Not sure: they pick': 'No estoy seguro: ellos escogen',
   'Join the hub': 'Unirse al sistema central',
   'This link connects this phone to the project hub, so your task sheets arrive by themselves.': 'Este enlace conecta este teléfono con el sistema central del proyecto, para que sus hojas de tareas lleguen solas.',

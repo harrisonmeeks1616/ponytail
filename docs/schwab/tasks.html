@@ -189,6 +189,7 @@ function langSheet() {
 async function openJoin(data) {
   location.replace('#day/' + day);
   const h = data.hub && typeof data.hub === 'object' ? data.hub : {};
+  if (S.hubRole === 'pm' && S.hubUrl === h.url) return toast(L('This is the PM phone. Send the invite to the person it is for.')); // its key is shown only once, at setup
   if (S.hubUrl && S.hubKey && (S.hubUrl !== h.url || S.hubKey !== h.key)
     && !await ask(L('This phone is already connected to a hub. Use this invite instead?'), L('Use this invite'))) return;
   const open = () => joinSheet({ ...ctx(), sync: { ...sync, joinFrom: d => sync.joinFrom(d, { replace: true }) } }, data); // asked above
@@ -712,6 +713,7 @@ document.addEventListener('click', e => {
   e.preventDefault();
   el.closest('dialog')?.close();
   if (stale()) return;
+  if (drawLater && (app.contains(el) || bar.contains(el))) return void drawSoon(); // drawn before a pull reloaded what it shows: redraw, the person taps again
   if (el.dataset.go) go(el.dataset.go);
   else if (liveOwns(el.dataset.act)) liveAct(ctx(), el.dataset.act, el); // the hub screens' own taps
   else if ((view.v === 'clock' || view.v === 'report') && !SHELL.has(el.dataset.act)) reportAct(el.dataset.act, el, S, day, view.v);
@@ -732,9 +734,11 @@ document.addEventListener('input', e => {
   const el = e.target, k = el.dataset.k;
   if (!k) { if (el.dataset.lv && !stale()) liveInput(ctx(), el); return; } // the Records search box
   if (stale()) return;
+  const t = current();
+  // A pull deleted the sheet being typed in, or may have moved a list this field points into by position: redraw, write nothing.
+  if ((!t && k.startsWith('t.')) || (drawLater && /\.\d+\./.test(k))) { drawLater = false; return render(); }
   if (k.startsWith('r.')) { reportInput(el, S, day); return liveInput(ctx(), el); } // and its translated preview, if it has one
   if (k.startsWith('h.')) return hoursInput(el, S, day);
-  const t = current();
   if (k === 't.date' && !/^\d{4}-\d{2}-\d{2}$/.test(el.value)) return; // every sheet needs a real day; a cleared or half-typed date would hide it
   setPath({ t, s: S }, k, readInput(el));
   if (k.startsWith('s.')) {
@@ -775,7 +779,7 @@ function reloadData() {
 const reload = () => {
   reloadData();
   if (document.body.classList.contains('office') && !office()) document.querySelectorAll('dialog[open]:not(.pin)').forEach(d => d.close()); // signed out elsewhere: an office question left open can't finish
-  needsOffice(view) && !office() ? route() : render();
+  drawSoon();
 };
 
 // ---------- the hub (HUB.md; sync.mjs keeps the stores in step, live.mjs draws the hub screens) ----------
@@ -783,7 +787,7 @@ const reload = () => {
 // What live.mjs is handed on every call; its header comment lists each piece.
 function ctx() {
   const r = role();
-  return { S, tasks: () => T, shifts: () => (r === 'pm' ? crewNow() : []), reports: reportsNow, role: r, day, sync, go, render, toast, now: Date.now, saveTask, remove };
+  return { S, tasks: () => T, shifts: () => (r === 'pm' ? crewNow() : []), reports: reportsNow, role: r, day, sync, go, render: drawSoon, toast, now: Date.now, saveTask, remove };
 }
 // Message and Review on the hub screens: the sheet with office fields changed, each changed part stamped past its last stamp.
 function saveTask(n) {
@@ -817,7 +821,7 @@ function drawSoon() {
 document.addEventListener('focusout', () => { if (drawLater) setTimeout(() => drawLater && drawSoon(), 300); });
 const SYNCED = new Set([KEYS.tasks, KEYS.reports, KEYS.hours, KEYS.crewHours, KEYS.settings]);
 // A status change redraws the header dot, and the two screens that are about the hub; Settings redraws after its own taps.
-sync.initHub({ S, toast, onChange: () => { reloadData(); drawSoon(); }, onStatus: () => { header(); if (view.v === 'live' || view.v === 'hub') drawSoon(); } });
+sync.initHub({ S, toast, onChange: () => { reloadData(); drawSoon(); }, onStatus: () => { if (!stale()) header(); if (view.v === 'live' || view.v === 'hub') drawSoon(); } }); // stale(): a sign-in that ran out goes behind the passcode
 onSave(k => SYNCED.has(k) && sync.poke()); // after every save; the sync's own timer and wake-ups catch anything else
 setTextField((label, k, v, o, lang) => txField(ctx(), label, k, v, o, lang)); // the daily report's typed text
 new MutationObserver(() => liveAfter(ctx(), app)).observe(app, { childList: true }); // after every draw: translate the typed text on screen

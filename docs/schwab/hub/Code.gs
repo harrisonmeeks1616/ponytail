@@ -1044,7 +1044,10 @@ function pullOnce_(ctx, since) {
   prefetch_(ctx, { tasks: taskRows, shifts: shiftRows.concat(openRows), reports: reportRows, events: eventRows, config: crews ? cfgAll : cfgRows });
   const cfgOf = function (rows) { return fetchEntities_(ctx, 'config', rows, normConfig_, function () { return 'config'; })[0]; };
 
-  out.tasks = cut(fetchEntities_(ctx, 'tasks', taskRows, normTask_, function (o) { return o.uid; }, crews && crewSheets_(crews, cfgOf(cfgAll))));
+  const crewKeep = crews && crewSheets_(crews, cfgOf(cfgAll));
+  out.tasks = cut(fetchEntities_(ctx, 'tasks', taskRows, normTask_, function (o) { return o.uid; }, function (o) { // a crew key gets a sheet once it was sent, never a draft
+    return (office || o.sentAt > 0) && (!crewKeep || crewKeep(o));
+  }));
   const mine = function (o) { return pm || (ctx.dev !== '' && o.device === ctx.dev); }; // crew and super see their own phone's hours only
   out.shifts = cut(fetchEntities_(ctx, 'shifts', shiftRows, normShift_, function (o) { return o.id; }, mine));
   if (office) {

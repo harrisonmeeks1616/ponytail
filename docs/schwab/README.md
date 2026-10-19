@@ -117,9 +117,11 @@ and live updates. It is one Google Apps Script web app plus one Google Sheet, bo
 
 **What it does**
 
-- Task sheets reach the crew's phones by themselves, and ticks, start, stop and results reach the office as they happen.
-  **Send results** still opens a text, and texted links still work.
-- **Clock in** and **Clock out** reach the PM's **Crew hours** without a text. With no signal the text opens as before.
+- Task sheets reach the crew's phones by themselves once you tap **Send to crew** (a draft stays on the office phones),
+  and ticks, start, stop and results reach the office as they happen. **Send results** still opens a text, and texted
+  links still work.
+- **Clock in** and **Clock out** reach the PM's **Crew hours** without a text. When that does not get through (no signal,
+  the hub busy, a replaced key) the text opens as before.
 - Office phones get two more tabs. **Live**: who is on site, today's sheets by crew with their progress, and the activity
   of the day; **Message** and **Review** there reach the crew's sheet. **Records**: hours by person and week, every task
   sheet and report, older records loaded from the hub, and for the PM **Download all (JSON)**, a week as CSV, the Sheet's
@@ -172,7 +174,8 @@ and live updates. It is one Google Apps Script web app plus one Google Sheet, bo
 - Two office phones that numbered sheets offline keep both numbers once both sheets are on the hub, and both show
   **Same number as another sheet** until one is renamed.
 - A shift texted to the PM before that worker's phone joined the hub stays under its old phone id on the PM's copy.
-- One hub per phone. **Disconnect** keeps the phone's work on the phone.
+- One hub per phone. **Disconnect** keeps the phone's work on the phone. A phone moved to another hub (another job) does not
+  copy what it already synced to the new one; what it changes after the move goes up.
 
 ## Spanish mode (crew screens and the time clock)
 

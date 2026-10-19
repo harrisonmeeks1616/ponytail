@@ -37,7 +37,7 @@ function phone(env, role, label = role + '-dev') {
   return p;
 }
 const task = (o = {}) => ({ uid: 'u1', id: 'T1019-01', date: '2026-10-19', by: 'Sam', crew: 'Crew A', floor: 'Level 3', scope: 'Pull 12 AWG',
-  items: [{ id: 'i1', text: 'Pull' }, { id: 'i2', text: 'Terminate' }], checks: [{ id: 'c1', text: 'Labeling' }], assignAt: T0 - 5000, ...o });
+  items: [{ id: 'i1', text: 'Pull' }, { id: 'i2', text: 'Terminate' }], checks: [{ id: 'c1', text: 'Labeling' }], assignAt: T0 - 5000, sentAt: T0 - 5000, ...o }); // sent: crews pull only sent sheets
 const shift = (o = {}) => ({ id: 's1', device: ID('crew-dev'), who: 'Dana R', date: '2026-10-19', in: '07:00', out: '', at: T0 - 4000, ...o });
 const report = (o = {}) => ({ date: '2026-10-19', super: 'Sam', status: 'On plan', results: 'Good day',
   decisions: [{ q: 'Which panel?', rec: 'LP-1' }, { q: 'Fire stop?', rec: 'Yes' }], updatedAt: T0 - 3000, ...o });
@@ -524,12 +524,15 @@ test('push is capped: 200 entities per kind, 45,000 characters per entity, and a
 // ---------- what each role can read ----------
 test('pull: crew sees tasks and config; hours of its own phone only; no reports, events or on-site list', () => {
   const env = setup(), sup = office(env), pm = phone(env, 'pm', 'pm-dev'), crew = phone(env, 'crew', 'crew-dev'), other = phone(env, 'crew', 'other-dev');
-  ok(sup.push({ tasks: [task()], reports: [report()], config: { project: 'Schwab', site: 'Charlotte', floors: ['L1'], crews: [{ name: 'Crew A', lead: 'Mike', members: 'Mike, Jose' }], checks: ['Labeling'], pin: 'a'.repeat(16) + ':' + 'b'.repeat(64) } }));
+  ok(sup.push({ tasks: [task(), task({ uid: 'draft', id: 'T1019-02', sentAt: 0 })], reports: [report()], config: { project: 'Schwab', site: 'Charlotte', floors: ['L1'], crews: [{ name: 'Crew A', lead: 'Mike', members: 'Mike, Jose' }], checks: ['Labeling'], pin: 'a'.repeat(16) + ':' + 'b'.repeat(64) } }));
   ok(crew.push({ shifts: [shift()] }));
+  assert.deepEqual([crew.pull().tasks.map(t => t.uid), crew.pull({ crews: ['Crew A'] }).tasks.map(t => t.uid), sup.pull().tasks.length], [['u1'], ['u1'], 2], 'a draft the office has not sent stays off crew phones');
+  ok(sup.push({ tasks: [task({ uid: 'draft', id: 'T1019-02', sentAt: T0, assignAt: T0 })] }));
+  assert.deepEqual(crew.pull().tasks.map(t => t.uid).sort(), ['draft', 'u1'], 'Send to crew stamps sentAt: the next pull has it');
   ok(other.push({ shifts: [shift({ id: 's2', device: other.dev, who: 'Eli T' })] }));
   ok(pm.push({ shifts: [shift({ id: 's3', device: '', who: 'Ana P' })] }));
   const r = crew.pull();
-  assert.deepEqual([r.tasks.length, r.reports, r.events, r.onsite], [1, [], [], undefined]);
+  assert.deepEqual([r.tasks.length, r.reports, r.events, r.onsite], [2, [], [], undefined]);
   assert.deepEqual(r.shifts.map(s => s.id), ['s1']);
   assert.equal(r.config.project, 'Schwab');
   assert.equal(r.config.pin, 'a'.repeat(16) + ':' + 'b'.repeat(64));
@@ -2117,7 +2120,7 @@ function convergence(seed, steps) {
       if (chance(0.35) || !Object.keys(c.tasks).length) {
         if (chance(0.5) || !Object.keys(c.tasks).length) {
           const uid = 't' + ++n;
-          const t = { uid, id: 'T' + n, date: today, by: 'Sam', crew: pickOf(['Crew A', 'Crew B']), floor: 'L' + (n % 4), scope: 'S' + n, members: [], items: [{ id: 'i' + ++n, text: 'one' }, { id: 'i' + ++n, text: 'two' }], checks: [{ id: 'c' + ++n, text: 'chk' }], assignAt: stamp };
+          const t = { uid, id: 'T' + n, date: today, by: 'Sam', crew: pickOf(['Crew A', 'Crew B']), floor: 'L' + (n % 4), scope: 'S' + n, members: [], items: [{ id: 'i' + ++n, text: 'one' }, { id: 'i' + ++n, text: 'two' }], checks: [{ id: 'c' + ++n, text: 'chk' }], assignAt: stamp, sentAt: stamp }; // sent, so crews pull it
           c.tasks[uid] = t;
           record(uid, 'office', officeSnap(t));
         } else {

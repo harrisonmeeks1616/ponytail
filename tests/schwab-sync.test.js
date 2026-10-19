@@ -868,10 +868,16 @@ test('transport: a plain-text post to the hub address, the key only in the body,
     assert.deepEqual([c.body.v, c.body.key, c.body.devSecret, 'dev' in c.body], [1, KEYS.crew, cp.secret, false], 'the device secret goes with every request, a device id never does');
     assert.ok(!c.url.includes(KEYS.crew));
   }
-  // a reply that is a web page (wrong address, or access not set to anyone)
-  const page = await makePhone(hub, 'crew', { fetchImpl: async () => ({ ok: true, status: 200, json: async () => { throw new SyntaxError('<html>'); } }) });
+  // a reply that is a web page: when connecting, or a page not found, the address is wrong (or access is not set to anyone);
+  // Google's error page from a hub that answered before (a script timeout, a daily limit) is the hub's problem, not the link
+  const html = status => async () => ({ ok: status < 300, status, json: async () => { throw new SyntaxError('<html>'); } });
+  const page = await makePhone(hub, 'crew', { fetchImpl: html(200) });
   await page.cycle();
-  assert.deepEqual([page.sync.hubStatus().state, page.sync.hubStatus().message], ['error', 'That address did not answer like the hub. Check the hub link.']);
+  assert.deepEqual([page.sync.hubStatus().state, page.sync.hubStatus().message], ['error', 'The hub had a problem. Trying again shortly.']);
+  assert.equal((await page.sync.connect(URL_A, KEYS.crew)).message, 'That address did not answer like the hub. Check the hub link.');
+  const gone = await makePhone(hub, 'crew', { fetchImpl: html(404) });
+  await gone.cycle();
+  assert.equal(gone.sync.hubStatus().message, 'That address did not answer like the hub. Check the hub link.');
   // a request that never answers is cut off by the timeout
   const slow = await makePhone(hub, 'crew', { fetchImpl: (url, init) => new Promise((_, rej) => init.signal.addEventListener('abort', () => rej(new DOMException('aborted', 'AbortError')))) });
   const run = slow.cycle();
@@ -1352,9 +1358,9 @@ test('against the real hub/Code.gs (through the Google mock): a crew, a superint
   const rowsOf = title => { const head = mock.header(title); return mock.table(title).map(r => Object.fromEntries(head.map((h, i) => [h, r[i] ?? '']))); };
   const sp = await makePhone(real, 'super', { key: k.super }), pm = await makePhone(real, 'pm', { key: k.pm }), cp = await makePhone(real, 'crew', { key: k.crew, crew: 'Crew A', worker: 'Jose L' });
   const settleAll = async (...ps) => { for (let i = 0; i < 3; i++) for (const p of ps) { mock.advance(25e3); await p.cycle(); } };
-  // the superintendent sets up the project and a sheet
+  // the superintendent sets up the project and sends a sheet (a draft never reaches a crew phone)
   sp.save('schwab.settings', { ...sp.settings(), floors: ['Basement', 'Level 3'], crews: [{ name: 'Crew A', lead: 'Mike', members: 'Mike, Jose L' }] });
-  const uid = sp.addTask({ id: 'T1019-01', floor: 'Level 3', scope: 'Pull 12 AWG to E-301', lead: 'Mike' });
+  const uid = sp.addTask({ id: 'T1019-01', floor: 'Level 3', scope: 'Pull 12 AWG to E-301', lead: 'Mike', sentAt: sp.now() });
   await sp.cycle();
   assert.equal(sp.sync.hubStatus().state, 'live', sp.sync.hubStatus().message);
   assert.deepEqual(rowsOf('Tasks').map(r => [r['Task ID'], r.Scope]), [['T1019-01', 'Pull 12 AWG to E-301']]);
@@ -1759,4 +1765,38 @@ test('the hub fields have a key of their own: an older tab saving settings canno
   const before = hub.calls.length;
   await p.cycle();
   assert.equal(hub.calls.length, before, 'nothing goes to the hub');
+});
+
+test('another job, an older tab, a texted sheet, a one-off failure: nothing stale goes up, and nobody is promised a retry', async () => {
+  // A phone moving to another hub (another job) does not upload what it synced with the old one; an edit made after still goes up.
+  const a = fresh(), b = new FakeHub(clock), URL_B = 'https://script.google.com/macros/s/OTHERJOB/exec';
+  const sp = await makePhone(a, 'super', { fetchImpl: (url, init) => (url === URL_B ? b : a).fetch(url, init) });
+  const old = sp.addTask({ scope: 'job A sheet' });
+  await sp.cycle();
+  assert.ok(a.tasks.has(old));
+  assert.equal((await sp.sync.connect(URL_B, KEYS.super)).ok, true);
+  tick(30e3); await sp.cycle();
+  assert.equal(b.tasks.size, 0, "job A's sheet stays off job B's hub");
+  sp.editTask(old, t => { t.scope = 'edited after the move'; });
+  tick(30e3); await sp.cycle();
+  assert.equal(b.tasks.get(old)?.a.scope, 'edited after the move', 'an edit made after the move is new work');
+  // A tab on a version before the hub saves a sheet without the office fields: they are not wiped on the hub, and come back here.
+  const hub = fresh(), pm = await makePhone(hub, 'pm');
+  const u = pm.addTask({ reply: 'Bring the lift', replyBy: 'Pat' });
+  await pm.cycle();
+  const { reply, replyAt, replyBy, aLang, crewId, memberIds, assignAt, crewAt, ...was } = pm.tasks()[0];
+  pm.save('schwab.tasks', [{ ...was, floor: 'Level 3' }]);
+  tick(30e3); await pm.cycle();
+  assert.deepEqual([hub.tasks.get(u).a.reply, pm.task(u).reply], ['Bring the lift', 'Bring the lift'], 'the office message survives an older tab');
+  // A crew phone working a sheet texted by an office phone that is not on the hub: not pushed, not reported on every tick.
+  const cp = await makePhone(hub, 'crew', { crew: 'Crew A' }), texted = cp.addTask({ id: 'T1019-09' });
+  for (const i of ['i1', 'i2']) { cp.tick(texted, i); tick(30e3); await cp.cycle(); }
+  assert.deepEqual([cp.toasts.filter(t => t.includes('did not accept')).length, cp.sync.hubStatus().pending, hub.tasks.has(texted)], [0, 1, false]);
+  // One-off actions that nothing retries never say the hub will try again.
+  hub.fail = req => (['purge', 'rotate'].includes(req.action) ? hub.err('busy') : null);
+  for (const r of [await pm.sync.purge('task', u), await pm.sync.rotate('crew')]) assert.deepEqual([r.ok, r.error, r.message], [false, 'busy', 'That did not work. Try again.']);
+  hub.fail = null;
+  // A "they pick" crew invite lists the job's crews: a new phone knows only its own defaults.
+  const inv = await pm.sync.invite('crew', '', ['Lighting', 'Power', 7]);
+  assert.deepEqual((await (await lib).unpack(inv.url.split('#p=')[1])).crews, ['Lighting', 'Power']);
 });

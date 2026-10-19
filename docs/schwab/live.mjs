@@ -682,7 +682,7 @@ const CHECKS = () => ({ write: L('Write a record'), read: L('Read it back'), 'me
 
 async function invite(ctx, role) {
   const make = async crew => {
-    const r = await ctx.sync.invite(role, crew);
+    const r = await ctx.sync.invite(role, crew, names); // a "they pick" invite lists the job's crews: a new phone knows only its defaults
     if (!r.ok) return ctx.toast(r.message || L('The invite link could not be made.'), 'bad');
     const msg = l => L('Join the {project} hub: open this link on your phone and follow the steps.', { project: ctx.S.project || COMPANY }, l);
     sendSheet({ title: role === 'crew' ? L('Hub invite for the crew') : L('Hub invite for the superintendent'), url: r.url, text: role === 'crew' ? `${msg('en')}\n\n${msg('es')}` : msg('en') });
@@ -696,7 +696,8 @@ async function invite(ctx, role) {
 
 // A phone opening a join link: name and crew, then the hub does the rest. data: the unpacked link.
 export function joinSheet(ctx, data) {
-  const crewRole = data?.role === 'crew', names = ctx.S.crews.map(c => c.name).filter(Boolean);
+  const sent = Array.isArray(data?.crews) ? data.crews.filter(x => typeof x === 'string' && x.trim()).slice(0, 50).map(x => x.trim().slice(0, 60)) : [];
+  const crewRole = data?.role === 'crew', names = sent.length ? sent : ctx.S.crews.map(c => c.name).filter(Boolean);
   let crew = '';
   const d = sheet(`<h3>${L('Join the hub')}</h3>
     <p class="hint">${crewRole ? L('This link connects this phone to the project hub, so your task sheets arrive by themselves.') : L('This link connects this phone to the project hub as the superintendent.')}</p>

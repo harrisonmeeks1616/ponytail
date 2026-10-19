@@ -769,3 +769,19 @@ test('the report language follows the superintendent part only', async () => {
   for (const k of ['r.decisions.0.pm', 'r.decisions.12.pmNote', 'r.pmReview']) assert.ok(PM_PART.test(k), k);
   for (const k of ['r.results', 'r.decisions.0.q', 'r.decisions.0.rec', 'r.floors.0.crews.1.done', 'r.pmReviewer']) assert.ok(!PM_PART.test(k), k);
 });
+
+test('an older tab saving settings with no people keeps every person and id; a restore forgets what the hub had', async () => {
+  const { KEYS, loadSettings, save, normSettings, restoreData } = await lib;
+  const store = new Map();
+  Object.defineProperty(globalThis, 'localStorage', { configurable: true, value: { getItem: k => store.get(k) ?? null, setItem: (k, v) => store.set(k, String(v)), removeItem: k => store.delete(k) } });
+  try {
+    const crews = [{ id: 'cAlpha9', name: 'Crew A', lead: '', members: '' }, { id: 'cBeta5', name: 'Crew B', lead: '', members: '' }];
+    save(KEYS.settings, normSettings({ crews, people: [{ id: 'pJose77', name: 'Jose L', crewId: 'cAlpha9' }, { id: 'pMia88', name: 'Mia R', crewId: 'cAlpha9' }, { id: 'pJose99', name: 'Jose L', crewId: 'cBeta5' }] }));
+    store.set(KEYS.settings, JSON.stringify({ lang: 'es', crews: [{ name: 'Crew A', lead: '', members: 'Jose L, Mia R' }, { name: 'Crew B', lead: '', members: 'Jose L' }] })); // a tab before the roster: no people, no crew ids
+    const s = loadSettings();
+    assert.deepEqual([s.lang, s.crews.map(c => c.id), s.people.map(p => [p.id, p.crewId])], ['es', ['cAlpha9', 'cBeta5'], [['pJose77', 'cAlpha9'], ['pMia88', 'cAlpha9'], ['pJose99', 'cBeta5']]], 'the second Jose L included');
+    store.set('schwab.hubSync', '{"rev":9}');
+    assert.ok(restoreData({ [KEYS.tasks]: [] }));
+    assert.equal(store.get('schwab.hubSync'), undefined, 'the next round merges pull-first, so newer hub copies win');
+  } finally { delete globalThis.localStorage; }
+});
