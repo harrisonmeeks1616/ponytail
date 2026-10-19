@@ -1,12 +1,13 @@
 // Daily report and time clock. The report is the office's record of each day, one per date, kept on
-// this phone: the English office form for the PM, behind the office passcode. The time clock is open to
-// everyone on their own phone; the PM's phone keeps the crew timesheet built from it.
+// this phone for the superintendent and the PM, behind the office passcode. The time clock is open to
+// everyone on their own phone; the PM's phone keeps the crew timesheet built from it. The screens follow
+// the phone's language; the PDFs, the spreadsheet and the messages to the office are always English.
 // tasks.html routes here for #report/<day> and #clock/<day>.
 
 import {
   KEYS, COMPANIES, esc, uid, load, save, normTask, normReport, normShift, blank, newFloor, fillFromTasks, mergeAnswers, CREW_TPL, pack, linkTo,
   today, addDays, niceDate, nowHM, span, fmtMin, t12, stamp, hrs, field, datalist, seg, setPath, getPath, readInput,
-  toast, sheet, ask, sendSheet, pasteSheet, makePdf, savePdf, download, fileAway, dateBar, crewVar, letterhead, L, unlocked,
+  toast, sheet, ask, sendSheet, pasteSheet, makePdf, savePdf, download, fileAway, dateBar, crewVar, letterhead, L, getLang, unlocked,
 } from './shared.mjs';
 
 const obj = x => (x && typeof x === 'object' && !Array.isArray(x) ? x : {});
@@ -29,10 +30,10 @@ const rep = (S, day) => (R[day] ||= normReport({
 }));
 const go = h => (location.hash === '#' + h ? dispatchEvent(new HashChangeEvent('hashchange')) : (location.hash = h));
 const $ = id => document.getElementById(id);
-// The report is the office's English record, whatever language this phone shows.
+// The English office record (PDF, spreadsheet, messages), whatever language this phone shows. The screen uses niceDate and stamp.
 const dayEn = d => niceDate(d, 'en'), stampEn = ts => stamp(ts, 'en');
 
-const STATUS = [['On plan', 'good'], ['At risk', 'warn'], ['Behind plan', 'bad'], ['No work today', '']];
+const STATUS = () => [['On plan', 'good', L('On plan')], ['At risk', 'warn', L('At risk')], ['Behind plan', 'bad', L('Behind plan')], ['No work today', '', L('No work today')]]; // stored in English, shown in the phone's language
 export const crewHours = c => c.laborFromTasks || c.labor ? c.labor : span(c.start, c.stop) / 60 * c.workers; // labor: summed from the task sheets by Fill
 const active = r => r.floors.flatMap(f => f.crews.filter(c => !c.na));
 const laborHrs = r => active(r).reduce((n, c) => n + crewHours(c), 0);
@@ -40,11 +41,13 @@ const waiting = r => r.decisions.filter(d => d.q && !d.pm);
 const isLate = s => s.finish && s.deadline && s.finish > s.deadline; // datetime-local strings sort as times
 const when = v => (v ? new Date(v).toLocaleString('en-US', { weekday: 'short', month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' }) : '');
 
-function lateLine(s) {
-  if (!s.finish || !s.deadline) return 'Add the expected finish and the deadline to check the forecast.';
-  const h = (new Date(s.finish) - new Date(s.deadline)) / 36e5;
-  const amt = Math.abs(h) >= 24 ? `${hrs(Math.abs(h) / 24)} days` : `${hrs(Math.abs(h))} hrs`;
-  return h > 0 ? `⚠ Forecast finishes ${amt} after the deadline` : `On track: ${amt} of float before the deadline`;
+// l: the language of the words. The record asks for 'en'; the screen takes the phone's.
+function lateLine(s, l) {
+  if (!s.finish || !s.deadline) return L('Add the expected finish and the deadline to check the forecast.', {}, l);
+  const h = (new Date(s.finish) - new Date(s.deadline)) / 36e5, a = Math.abs(h);
+  // English keeps its old "1 days"; Spanish says "1 día".
+  const amt = a >= 24 ? (hrs(a / 24) === '1' && (l || getLang()) === 'es' ? L('1 day', {}, l) : L('{n} days', { n: hrs(a / 24) }, l)) : L('{n} hrs', { n: hrs(a) }, l);
+  return h > 0 ? L('⚠ Forecast finishes {amt} after the deadline', { amt }, l) : L('On track: {amt} of float before the deadline', { amt }, l);
 }
 
 // ---------- time clock ----------
@@ -128,54 +131,54 @@ export function importShifts(log, shifts, at = 0) {
 // Returns the latest day in the link, to open that week.
 export function openHours(data) {
   const inc = (Array.isArray(data.shifts) ? data.shifts : []).slice(0, 200).map(normShift).filter(Boolean);
-  if (!inc.length) { toast('That link has no hours in it', 'bad'); return ''; }
+  if (!inc.length) { toast(L('That link has no hours in it'), 'bad'); return ''; }
   const { added, updated, skipped } = importShifts(CREW, inc, Number.isFinite(data.at) ? data.at : 0);
   keep(KEYS.crewHours, CREW);
-  const who = inc.at(-1).who || 'the crew';
-  toast((added || updated ? `Hours from ${who}: ${added} new, ${updated} updated` : `Hours from ${who} were already logged`)
-    + (skipped ? `. ${skipped} skipped: you already added that day by hand` : ''), skipped ? 'bad' : '');
+  const who = inc.at(-1).who || L('the crew');
+  toast((added || updated ? L('Hours from {who}: {added} new, {updated} updated', { who, added, updated }) : L('Hours from {who} were already logged', { who }))
+    + (skipped ? `. ${L('{n} skipped: you already added that day by hand', { n: skipped })}` : ''), skipped ? 'bad' : '');
   return inc.map(s => s.date).sort().at(-1);
 }
 
-// ---------- crew timesheet (the PM's phone, behind the passcode; the English office record) ----------
+// ---------- crew timesheet (the PM's phone, behind the passcode) ----------
 
 const weekOf = day => { const mon = monday(day), sun = addDays(mon, 6); return CREW.filter(s => !s.gone && s.date >= mon && s.date <= sun).sort(byTime); };
 // One timesheet per person, by name as typed (any case), in name order.
-export function byPerson(shifts) {
+export function byPerson(shifts, l) { // l: 'en' for the accountant's copy; the screen takes the phone's language
   const m = new Map();
   for (const s of shifts) {
     const k = s.who.toLowerCase();
-    if (!m.has(k)) m.set(k, { who: s.who || 'Name not set', shifts: [] });
+    if (!m.has(k)) m.set(k, { who: s.who || L('Name not set', {}, l), shifts: [] });
     m.get(k).shifts.push(s);
   }
   return [...m.values()].map(p => ({ ...p, hours: total(p.shifts) })).sort((a, b) => a.who.localeCompare(b.who));
 }
 const edited = s => s.edited.in || s.edited.out;
-const shiftLine = s => `${s.out ? `${h2(cents(s))} hrs` : 'No clock-out'}${edited(s) ? ' · edited' : ''}`;
-const crewStats = week => `<div class="stat"><b>${byPerson(week).length}</b><span>People</span></div>
-  <div class="stat"><b>${h2(total(week))}</b><span>Hours</span></div>
-  <div class="stat"><b class="${week.some(s => !s.out) ? 'warn' : ''}">${week.filter(s => !s.out).length}</b><span>Open shifts</span></div>`;
+const shiftLine = s => `${s.out ? L('{n} hrs', { n: h2(cents(s)) }) : L('No clock-out')}${edited(s) ? ` · ${L('edited')}` : ''}`;
+const crewStats = week => `<div class="stat"><b>${byPerson(week).length}</b><span>${L('People')}</span></div>
+  <div class="stat"><b>${h2(total(week))}</b><span>${L('Hours')}</span></div>
+  <div class="stat"><b class="${week.some(s => !s.out) ? 'warn' : ''}">${week.filter(s => !s.out).length}</b><span>${L('Open shifts')}</span></div>`;
 
 function crewView(S, day) {
   const mon = monday(day), week = weekOf(day), people = byPerson(week);
-  const shiftRow = s => `<div class="shift"><div class="row1"><b>${esc(dayEn(s.date))}</b><span class="out" data-out="shift" data-id="${s.id}">${shiftLine(s)}</span>
-      <button class="x" data-act="hDel" data-id="${s.id}" aria-label="Remove the ${esc(dayEn(s.date))} shift">✕</button></div>
-    <div class="grid two"><label class="field"><span>In</span><input type="time" data-k="h.${s.id}.in" value="${s.in}"></label>
-      <label class="field"><span>Out</span><input type="time" data-k="h.${s.id}.out" value="${s.out}"></label></div></div>`;
+  const shiftRow = s => `<div class="shift"><div class="row1"><b>${esc(niceDate(s.date))}</b><span class="out" data-out="shift" data-id="${s.id}">${shiftLine(s)}</span>
+      <button class="x" data-act="hDel" data-id="${s.id}" aria-label="${esc(L('Remove the {date} shift', { date: niceDate(s.date) }))}">✕</button></div>
+    <div class="grid two"><label class="field"><span>${L('In')}</span><input type="time" data-k="h.${s.id}.in" value="${s.in}"></label>
+      <label class="field"><span>${L('Out')}</span><input type="time" data-k="h.${s.id}.out" value="${s.out}"></label></div></div>`;
   $('app').innerHTML = `<div class="datebar">
-      <button class="nav-btn" data-go="clock/${addDays(mon, -7)}" aria-label="Previous week">‹</button>
-      <label class="day">${esc(dayEn(mon))}<small>${mon === monday(today()) ? 'This week' : mon < today() ? 'Past week' : 'Week ahead'} · to ${esc(dayEn(addDays(mon, 6)))}</small>
-        <input type="date" value="${mon}" data-pick="clock" aria-label="Pick a week"></label>
-      <button class="nav-btn" data-go="clock/${addDays(mon, 7)}" aria-label="Next week">›</button></div>
+      <button class="nav-btn" data-go="clock/${addDays(mon, -7)}" aria-label="${L('Previous week')}">‹</button>
+      <label class="day">${esc(niceDate(mon))}<small>${mon === monday(today()) ? L('This week') : mon < today() ? L('Past week') : L('Week ahead')} · ${esc(L('to {date}', { date: niceDate(addDays(mon, 6)) }))}</small>
+        <input type="date" value="${mon}" data-pick="clock" aria-label="${L('Pick a week')}"></label>
+      <button class="nav-btn" data-go="clock/${addDays(mon, 7)}" aria-label="${L('Next week')}">›</button></div>
     <div class="stats three" id="hoursStats">${crewStats(week)}</div>
-    ${people.map((p, i) => `<section class="card person"><div class="row1"><h2>${esc(p.who)}</h2><b class="total" data-out="who" data-i="${i}">${h2(p.hours)} hrs</b></div>
+    ${people.map((p, i) => `<section class="card person"><div class="row1"><h2>${esc(p.who)}</h2><b class="total" data-out="who" data-i="${i}">${L('{n} hrs', { n: h2(p.hours) })}</b></div>
       ${p.shifts.map(shiftRow).join('')}
-      <div class="row1"><button class="link" data-act="hAdd" data-v="${esc(p.who)}">+ Add a shift for ${esc(p.who)}</button>
-        <button class="link" data-act="hRename" data-v="${esc(p.who)}">Rename</button></div></section>`).join('')
-    || `<div class="empty"><h2>No hours logged this week</h2><p>Each worker's Clock in and Clock out texts you a link. Tap it on this phone to log their hours here.</p></div>`}
-    <p class="hint">Only this phone changes hours. Times you change are marked edited and stay as you set them when that worker's next text comes in.</p>`;
-  $('bar').innerHTML = `<div class="bar-in"><button class="btn primary big" data-act="hSend">Send to accountant</button>
-    <button class="btn more" data-act="hPmMenu" aria-label="More actions">⋯</button></div>`;
+      <div class="row1"><button class="link" data-act="hAdd" data-v="${esc(p.who)}">${esc(L('+ Add a shift for {name}', { name: p.who }))}</button>
+        <button class="link" data-act="hRename" data-v="${esc(p.who)}">${L('Rename')}</button></div></section>`).join('')
+    || `<div class="empty"><h2>${L('No hours logged this week')}</h2><p>${L("Each worker's Clock in and Clock out texts you a link. Tap it on this phone to log their hours here.")}</p></div>`}
+    <p class="hint">${L("Only this phone changes hours. Times you change are marked edited and stay as you set them when that worker's next text comes in.")}</p>`;
+  $('bar').innerHTML = `<div class="bar-in"><button class="btn primary big" data-act="hSend">${L('Send to accountant')}</button>
+    <button class="btn more" data-act="hPmMenu" aria-label="${L('More actions')}">⋯</button></div>`;
 }
 
 // Typing a time on the timesheet: data-k="h.<shift id>.in|out". A shift keeps its clock-in; remove it instead.
@@ -188,23 +191,23 @@ export function hoursInput(el, S, day) {
   const week = weekOf(day), people = byPerson(week);
   for (const o of $('app').querySelectorAll('[data-out]')) {
     if (o.dataset.out === 'shift') o.textContent = shiftLine(CREW.find(x => x.id === o.dataset.id));
-    if (o.dataset.out === 'who') o.textContent = `${h2(people[o.dataset.i]?.hours ?? 0)} hrs`;
+    if (o.dataset.out === 'who') o.textContent = L('{n} hrs', { n: h2(people[o.dataset.i]?.hours ?? 0) });
   }
   $('hoursStats').innerHTML = crewStats(week);
 }
 
 function addShift(day, who = '') {
   const mon = monday(day), d0 = today() >= mon && today() <= addDays(mon, 6) ? today() : mon;
-  const d = sheet(`<h3>Add a shift</h3><div class="grid">
-      <label class="field wide"><span>Name</span><input name="who" value="${esc(who)}" list="crewNames" autocomplete="off"></label>
-      <label class="field"><span>Date</span><input type="date" name="date" value="${d0}"></label><span></span>
-      <label class="field"><span>In</span><input type="time" name="in"></label><label class="field"><span>Out</span><input type="time" name="out"></label></div>
+  const d = sheet(`<h3>${L('Add a shift')}</h3><div class="grid">
+      <label class="field wide"><span>${L('Name')}</span><input name="who" value="${esc(who)}" list="crewNames" autocomplete="off"></label>
+      <label class="field"><span>${L('Date')}</span><input type="date" name="date" value="${d0}"></label><span></span>
+      <label class="field"><span>${L('In')}</span><input type="time" name="in"></label><label class="field"><span>${L('Out')}</span><input type="time" name="out"></label></div>
     ${datalist('crewNames', byPerson(CREW.filter(s => !s.gone)).map(p => p.who))}
-    <div class="btns"><button class="btn primary" data-save>Add the shift</button></div>`);
+    <div class="btns"><button class="btn primary" data-save>${L('Add the shift')}</button></div>`);
   d.querySelector('[data-save]').onclick = () => {
     const v = n => d.querySelector(`[name=${n}]`).value;
     const s = normShift({ id: uid(), who: v('who'), date: v('date'), in: v('in'), out: v('out'), edited: { who: true, in: true, out: true } });
-    if (!s?.who) return toast('Add the name, the date and the clock-in time', 'bad');
+    if (!s?.who) return toast(L('Add the name, the date and the clock-in time'), 'bad');
     CREW.push(s);
     keep(KEYS.crewHours, CREW);
     d.close();
@@ -214,11 +217,11 @@ function addShift(day, who = '') {
 
 // A name fixed by the PM (a typo, a nickname) on every shift logged under it; the worker's later texts keep it.
 function renameWorker(day, who) {
-  const d = sheet(`<h3>Rename ${esc(who)}</h3><label class="field"><span>Name on the timesheet</span><input name="who" value="${esc(who)}" autocomplete="off"></label>
-    <div class="btns"><button class="btn primary" data-save>Rename</button></div>`);
+  const d = sheet(`<h3>${esc(L('Rename {name}', { name: who }))}</h3><label class="field"><span>${L('Name on the timesheet')}</span><input name="who" value="${esc(who)}" autocomplete="off"></label>
+    <div class="btns"><button class="btn primary" data-save>${L('Rename')}</button></div>`);
   d.querySelector('[data-save]').onclick = () => {
     const name = d.querySelector('[name=who]').value.trim().slice(0, 60);
-    if (!name) return toast('Type the name', 'bad');
+    if (!name) return toast(L('Type the name'), 'bad');
     for (const s of CREW) if (!s.gone && s.who.toLowerCase() === who.toLowerCase()) Object.assign(s, { who: name, edited: { ...s.edited, who: true } });
     keep(KEYS.crewHours, CREW);
     d.close();
@@ -246,9 +249,10 @@ const timesheetPdf = (S, mon, people) => makePdf('Weekly timesheet', letterhead(
 ], `${COMPANIES} · Timesheet week of ${mon}`);
 
 async function toAccountant(S, day) {
-  const mon = monday(day), week = weekOf(day), people = byPerson(week), gaps = week.filter(s => !s.out).length;
-  if (!week.length) return toast('No hours logged this week', 'bad');
-  if (gaps && !await ask(`${gaps} shift${gaps === 1 ? ' has' : 's have'} no clock-out and count as 0 hours. Fill in the out times first, or send anyway?`, 'Send anyway')) return;
+  const mon = monday(day), week = weekOf(day), people = byPerson(week, 'en'), gaps = week.filter(s => !s.out).length;
+  if (!week.length) return toast(L('No hours logged this week'), 'bad');
+  if (gaps && !await ask(gaps === 1 ? L('1 shift has no clock-out and count as 0 hours. Fill in the out times first, or send anyway?')
+    : L('{n} shifts have no clock-out and count as 0 hours. Fill in the out times first, or send anyway?', { n: gaps }), L('Send anyway'))) return;
   const name = `Timesheet week of ${mon}`;
   const files = [new File(['﻿' + timesheetCsv(people)], `${name}.csv`, { type: 'text/csv' }), new File([timesheetPdf(S, mon, people)], `${name}.pdf`, { type: 'application/pdf' })];
   // Phones get the share sheet (Mail to the accountant, Save to Files); computers download both files.
@@ -259,7 +263,12 @@ async function toAccountant(S, day) {
 }
 
 export const OUT = {
-  lh: (r, d) => { const c = r.floors[d.f].crews[d.c]; return `Total labor-hours: ${hrs(crewHours(c))}${c.laborFromTasks || c.labor ? ' (from the task sheets)' : c.start && c.stop ? ` (${c.workers} × ${fmtMin(span(c.start, c.stop))})` : ''}`; },
+  lh: (r, d) => {
+    const c = r.floors[d.f].crews[d.c], n = hrs(crewHours(c));
+    return c.laborFromTasks || c.labor ? L('Total labor-hours: {n} (from the task sheets)', { n })
+      : c.start && c.stop ? L('Total labor-hours: {n} ({workers} × {time})', { n, workers: c.workers, time: fmtMin(span(c.start, c.stop)) })
+      : L('Total labor-hours: {n}', { n });
+  },
   late: (r, d) => lateLine(r.next[d.i]),
 };
 
@@ -382,7 +391,7 @@ const recordSecs = r => [
     ['Room / area', c.area], ['Task / drawing ref.', c.ref], ['Work hours', c.start && `${t12(c.start)} to ${t12(c.stop)}`], ['Total labor-hours', hrs(crewHours(c))],
     ['Work completed', c.done], ['Quality / testing', c.quality], ['Hold-ups / delays', c.holdups], ['Good results', c.good]]))]),
   ['Next work & completion forecast', r.next.flatMap((s, i) => [[`Next step ${i + 1}`, s.step], ['Prerequisites', s.prereq], ['Planned start', when(s.start)],
-    ['Estimated duration', s.dur], ['Expected finish', when(s.finish)], ['Required deadline', when(s.deadline)], ['Forecast', s.finish && s.deadline && lateLine(s)],
+    ['Estimated duration', s.dur], ['Expected finish', when(s.finish)], ['Required deadline', when(s.deadline)], ['Forecast', s.finish && s.deadline && lateLine(s, 'en')],
     ['Responsible lead', s.lead], ['Confirm / check-in by', when(s.checkin)]])],
   ['Potential delays & workarounds', r.risks.flatMap((x, i) => [[`Risk ${i + 1}`, x.risk], ['Impact / time at risk', x.impact], ['Prevention / workaround', x.prevent],
     ['Fallback work', x.fallback], ['Action owner', x.owner], ['Needed by', when(x.by)]])],
