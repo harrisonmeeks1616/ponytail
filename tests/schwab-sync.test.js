@@ -1739,3 +1739,24 @@ test('the field lists here are the lists in hub/Code.gs, so the two cannot drift
   for (const k of keysOf(shared, 'SHIFT_TPL')) if (k !== 'uid') assert.match(wire, new RegExp(`\\b${k}:`), `a pushed shift carries ${k}`); // uid: inside tasks
   for (const k of ['lang', 'pmAt']) assert.ok(new Set(keysOf(shared, 'REPORT_TPL')).has(k) && new Set(keysOf(hubSrc, 'REPORT')).has(k), `both sides store report ${k}`);
 });
+
+test('the hub fields have a key of their own: an older tab saving settings cannot disconnect or reconnect the phone', async () => {
+  const hub = fresh(), p = await makePhone(hub, 'crew', { url: '', key: '', noRole: true }), sp = await makePhone(hub, 'super');
+  assert.equal(sp.sync.hubStatus().state, 'offline', 'a hub is set: before its first round the status is not off (screens translate and show hub parts from the first draw)');
+  assert.equal((await p.sync.connect(URL_A, KEYS.crew)).ok, true);
+  assert.deepEqual(p.storage.get('schwab.hub'), { hubUrl: URL_A, hubKey: KEYS.crew, hubRole: 'crew', hubCrew: '' });
+  const { hubUrl, hubKey, hubRole, hubCrew, ...old } = p.settings();
+  p.save('schwab.settings', old); // a tab on the older version saves its settings, which never had the hub fields
+  const uid = sp.addTask();
+  await stable(sp, p);
+  assert.ok(p.task(uid), 'still syncing');
+  assert.equal(p.sync.hubStatus().state, 'live');
+  assert.equal(p.sync.onHub(uid), true, 'the sheet is known to be on the hub');
+  assert.equal(sp.sync.onHub('never-synced'), false);
+  p.sync.disconnect();
+  p.save('schwab.settings', { ...old, hubUrl: URL_A, hubKey: KEYS.crew, hubRole: 'crew' }); // and an old tab still holding them saves again
+  assert.equal(p.sync.hubStatus().state, 'off', 'a disconnect stays a disconnect');
+  const before = hub.calls.length;
+  await p.cycle();
+  assert.equal(hub.calls.length, before, 'nothing goes to the hub');
+});

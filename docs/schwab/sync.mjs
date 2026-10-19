@@ -13,7 +13,7 @@
 // and crews by their ids in the shared settings, and task sheets by uid. Short task ids are labels that two office phones
 // working offline can both hand out.
 
-import { KEYS, load, save, shape, L, normTask, normShift, normReport, normSettings, mergeAnswers, pack, linkTo, PIN_FORMAT, ensureDevice, nextId } from './shared.mjs';
+import { KEYS, HUB_FIELDS, load, save, shape, L, normTask, normShift, normReport, normSettings, mergeAnswers, pack, linkTo, PIN_FORMAT, ensureDevice, nextId } from './shared.mjs';
 
 const ROLES = ['crew', 'super', 'pm'];
 const URL_OK = /^https:\/\/script\.google\.com\/(?:a\/macros\/[\w.-]+|macros)\/s\/[\w-]+\/exec$/;
@@ -31,9 +31,9 @@ const SHEET_OK = /^https:\/\/docs\.google\.com\/spreadsheets\/[\w\-/.?=&#%]{0,25
 const sheetUrl = u => (typeof u === 'string' && SHEET_OK.test(u) ? u : '');
 const CFG_TPL = { project: '', site: '', super: '', pm: '', floors: [''], crews: [{ id: '', name: '', lead: '', members: '' }], people: [{ id: '', name: '', crewId: '' }], checks: [''], pin: '' };
 
-const A_KEYS = ['id', 'date', 'by', 'floor', 'area', 'crew', 'crewId', 'members', 'memberIds', 'size', 'scope', 'refs', 'allot', 'allotNote', 'est', 'estNote', 'pStart', 'pStop', 'checkIn',
+export const A_KEYS = ['id', 'date', 'by', 'floor', 'area', 'crew', 'crewId', 'members', 'memberIds', 'size', 'scope', 'refs', 'allot', 'allotNote', 'est', 'estNote', 'pStart', 'pStop', 'checkIn',
   'review', 'reviewer', 'followUp', 'reply', 'replyAt', 'replyBy', 'aLang', 'sentAt'];
-const C_KEYS = ['lead', 'aStart', 'aStop', 'delay', 'status', 'doneText', 'remain', 'comments', 'cLang', 'resultAt'];
+export const C_KEYS = ['lead', 'aStart', 'aStop', 'delay', 'status', 'doneText', 'remain', 'comments', 'cLang', 'resultAt'];
 const ticks = l => l.filter(i => i.done || i.at).map(i => [i.id, i.done, i.at]); // unticked steps are left out, so a new step is not an edit
 const aPart = t => ({ ...pick(t, A_KEYS), items: t.items.map(i => [i.id, i.text]), checks: t.checks.map(i => [i.id, i.text]) });
 const cPart = t => ({ ...pick(t, C_KEYS), items: ticks(t.items), checks: ticks(t.checks) });
@@ -87,9 +87,12 @@ export function makeSync(o = {}) {
 
   // ---------- settings, state, normalizing ----------
 
-  const cfg = () => obj(store.get(KEYS.settings, null));
+  // The hub fields live in their own key (KEYS.hub), so a tab still on an older version that saves settings without them
+  // cannot disconnect the phone; settings keep a copy, as with the passcode. A phone from before that key reads settings.
+  const hubRec = s => Object.fromEntries(HUB_FIELDS.map(k => [k, typeof s[k] === 'string' ? s[k] : '']));
+  const cfg = () => { const s = obj(store.get(KEYS.settings, null)), h = store.get(KEYS.hub, null); return isObj(h) ? { ...s, ...hubRec(h) } : s; };
   function patchSettings(p) { // the stored settings, and the app's own object if it gave us one, so its next save keeps them
-    const ok = store.set(KEYS.settings, { ...cfg(), ...p });
+    const next = { ...cfg(), ...p }, ok = store.set(KEYS.settings, next) && store.set(KEYS.hub, hubRec(next));
     if (o.S) Object.assign(o.S, p);
     return ok;
   }
@@ -160,6 +163,7 @@ export function makeSync(o = {}) {
     const c = hub();
     if (!c) return { state: 'off', message: '', at: 0, pending: 0, role: '', crew: '', rev: 0 };
     let { state, message } = cur;
+    if (state === 'off') state = 'offline'; // a hub is set but no round has said how it is yet (the page just opened): not off, not live
     if (state === 'live' && now() - cur.at >= LIVE_MS) { state = 'offline'; message = say('offline'); }
     const m = meta ||= pick(loadState(), ['rev', 'ok']);
     return { state, message, at: cur.at || m.ok, pending, role: c.role, crew: c.crew, rev: m.rev };
@@ -797,7 +801,7 @@ export function makeSync(o = {}) {
   }
 
   return { hubStatus, poke, cycle, wake, start, joinFrom, connect, disconnect, invite, translate, records, stats, purge, rotate, archive, selftest,
-    liveData: () => ({ ...live, info }) };
+    liveData: () => ({ ...live, info }), onHub: uid => loadState().t[uid]?.assign?.v !== undefined }; // onHub: the hub has this sheet, so its number is known
 }
 
 // Sheets that share a day and a short id with another sheet: uid -> the uids of the others. Pure, for any list of sheets.
@@ -838,3 +842,4 @@ export const rotate = role => get().rotate(role);
 export const archive = before => get().archive(before);
 export const selftest = () => get().selftest();
 export const liveData = () => get().liveData();
+export const onHub = uid => get().onHub(uid);

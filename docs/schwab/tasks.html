@@ -13,6 +13,7 @@
 <header class="top"><div class="top-in">
   <svg class="mark" viewBox="0 0 24 24" width="32" height="32" aria-hidden="true"><rect width="24" height="24" rx="6" fill="var(--accent)"/><path d="M13.6 3.5 6.5 13.4h4.6l-1.2 7.1 7.6-10.4h-4.7z" fill="var(--brand)"/></svg>
   <div class="grow brand"><h1>H.A. Sack-Electrical</h1><p>Sack Company-Electrical</p></div>
+  <span id="hubDot"></span>
   <button class="icon-btn lang" id="langBtn" data-act="toggleLang" aria-label="Español">ES</button>
   <button class="icon-btn" id="lockBtn" data-act="lockBtn" aria-label="Office sign-in"></button>
 </div>
@@ -27,14 +28,17 @@ import {
   today, addDays, niceDate, nowHM, span, fmtMin, t12, stamp, hrs, timeOf, field, datalist, seg, setPath, getPath, readInput,
   toast, sheet, ask, sendSheet, pasteSheet, makePdf, savePdf, fileAway, retryUploads, settingsView, settingsAct, restore,
   registerSW, dateBar, crewVar as cv, L, setLang, getLang, COMPANIES, letterhead,
-  UNLOCK, hasPin, adoptPin, setPin, pinHash, tryPin, unlocked, signIn, signOut,
+  UNLOCK, hasPin, adoptPin, setPin, pinHash, tryPin, unlocked, signIn, signOut, onSave,
 } from './shared.mjs';
-import { renderOffice, reportAct, reportInput, openReport, openHours, hoursInput, workerChange, fileReportIfChanged, reloadReports, sectionToggle, hasReports, attachShifts } from './report.mjs';
+import { renderOffice, reportAct, reportInput, openReport, openHours, hoursInput, workerChange, fileReportIfChanged, reloadReports, sectionToggle, hasReports, attachShifts,
+  reportsNow, crewNow, dropReport, setTextField } from './report.mjs';
+import * as sync from './sync.mjs';
+import { liveView, recordsView, hubSettingsView, statusDot, joinSheet, txView, txField, after as liveAfter, owns as liveOwns, act as liveAct, onInput as liveInput, deleteRecord } from './live.mjs';
 
 window.appStarted = true; // every file loaded (see the fallback above)
 registerSW();
 const app = document.getElementById('app'), bar = document.getElementById('bar');
-let S = loadSettings();
+const S = loadSettings(); // one object for the life of the page: reloads copy into it, so report.mjs, live.mjs and the hub sync share it
 setLang(S.lang);
 ensureDevice(); // this phone's hub identity; the time clock uses the older device id until it exists
 attachShifts(S);
@@ -53,6 +57,10 @@ const worked = t => (t.aStart && t.aStop ? Math.max(0, span(t.aStart, t.aStop) -
 const isOpen = t => t.status !== 'Complete' && t.review !== 'Accepted';
 // Signed out, this is a crew phone: only the sheets sent to it show. The office passcode opens the rest.
 const office = () => unlocked();
+// The hub (HUB.md): hubOn, this phone is connected; role, its office role for the hub screens (the hub's word when it has
+// one, else Settings), 'crew' when signed out.
+const hubOn = () => sync.hubStatus().state !== 'off';
+const role = () => (!office() ? 'crew' : ['pm', 'super'].includes(S.hubRole) ? S.hubRole : isPM() ? 'pm' : 'super');
 const visible = () => (office() ? T : T.filter(t => t.origin === 'link'));
 const prevDay = () => [...new Set(visible().map(t => t.date))].filter(d => d < day).sort().at(-1);
 const dayTasks = () => visible().filter(t => t.date === day);
@@ -99,9 +107,10 @@ function enlist(t) {
 // The passcode guards the superintendent's parts: the daily report, settings, and making or changing
 // assignments (any sheet this phone didn't receive). On the PM's phone the time clock is the crew
 // timesheet, so it is guarded too. Crew sheets and everyone else's time clock are open.
-const VIEWS = ['clock', 'report', 'settings'];
+// #live, #records/<people|sheets|reports> and #hub (the hub's status, open to a crew phone) are the hub screens of live.mjs.
+const VIEWS = ['clock', 'report', 'settings', 'live', 'records', 'hub'];
 const isPM = () => S.role === 'Project manager';
-const needsOffice = vw => ['report', 'settings'].includes(vw.v) || (vw.v === 'clock' && isPM()) || (vw.v === 'task' && find(vw.uid)?.origin !== 'link');
+const needsOffice = vw => ['report', 'settings', 'live', 'records'].includes(vw.v) || (vw.v === 'clock' && isPM()) || (vw.v === 'task' && find(vw.uid)?.origin !== 'link');
 
 function route() {
   // The sign-in pad guards one address: a repeat event for it changes nothing, moving on (back button, a link) closes it.
@@ -113,7 +122,7 @@ function route() {
   if (h.startsWith('p=')) return openCode(h.slice(2));
   const [v, a, b] = h.split('/');
   if (['day', 'clock', 'report'].includes(v) && /^\d{4}-\d{2}-\d{2}$/.test(a) && addDays(a, 0) === a) day = a; // a real day, not 2026-02-30
-  view = v === 'task' && find(a) ? { v: 'task', uid: a, tab: b || 'assign' } : { v: VIEWS.includes(v) ? v : 'board' };
+  view = v === 'task' && find(a) ? { v: 'task', uid: a, tab: b || 'assign' } : { v: VIEWS.includes(v) ? v : 'board', sub: a };
   if (view.v === 'task') day = find(a).date;
   if (needsOffice(view) && !office()) { // the crew board stays behind the passcode pad
     view = { v: 'board' };
@@ -128,6 +137,7 @@ function route() {
 async function openCode(code) {
   let data;
   try { data = await unpack(code); } catch { toast(L('That link is damaged or cut off. Ask for it to be sent again.'), 'bad'); return location.replace('#day/' + day); }
+  if (data.kind === 'join') return openJoin(data);
   // A crew phone (or a new office phone) learns the office's code from its first link. A phone with
   // office-made sheets of its own never does, so no link can lock it out of its own records.
   if (['task', 'result', 'day', 'report'].includes(data.kind) && !T.some(x => x.origin === 'mine') && !hasReports()) adoptPin(S, data.pin);
@@ -153,22 +163,37 @@ async function openCode(code) {
       T.push(t = Object.assign(inc, { origin: 'link', gotAt: Date.now() })); // a crew phone opening its sheet
       firstSheet = !S.lang && !S.me && !T.some(x => x.origin === 'mine'); // a phone with a name in Settings is an office phone
     } else if (t.origin === 'link') mergeTask(t, inc, 'assign'); // re-sent sheet: new assignment, crew check-offs kept
-    moved = renumberClashes(T, t);
+    moved = renumberClashes(T, t, sync.onHub);
   } else if (!t || t.origin !== 'link') { // results reaching the superintendent (not the crew re-opening its own)
     if (!t) T.push(t = Object.assign(inc, { origin: 'mine' }));
     else mergeTask(t, inc, 'crew');
     t.gotAt = Date.now();
-    moved = renumberClashes(T, t);
+    moved = renumberClashes(T, t, sync.onHub);
     toast(L('{crew} results for {id} received', { crew: t.crew || L('Crew'), id: t.id }) + renumbered(moved));
   }
   if (moved.length && data.kind === 'task') toast(renumbered(moved).trim());
   if (data.kind === 'result' && t.origin !== 'link') fileTask(t);
   persist();
   location.replace(`#task/${t.uid}/${data.kind === 'result' ? 'review' : 'assign'}`);
-  if (firstSheet) { // first sheet on a new crew phone: ask the language once
-    sheet(`<h3>Language · Idioma</h3><div class="btns"><button class="btn big" data-act="lang" data-v="en">English</button><button class="btn big primary" data-act="lang" data-v="es">Español</button></div>`)
-      .querySelector('.sheet-x').setAttribute('aria-label', 'Close · Cerrar'); // no language chosen yet
-  }
+  if (firstSheet) langSheet(); // first sheet on a new crew phone: ask the language once
+}
+// No language chosen yet, so both at once. Picking one closes it.
+function langSheet() {
+  const d = sheet(`<h3>Language · Idioma</h3><div class="btns"><button class="btn big" data-act="lang" data-v="en">English</button><button class="btn big primary" data-act="lang" data-v="es">Español</button></div>`);
+  d.querySelector('.sheet-x').setAttribute('aria-label', 'Close · Cerrar');
+  return d;
+}
+
+// A hub invite (kind join, made by the PM): the join sheet of live.mjs asks the name and crew and connects. A phone on
+// another hub, or on this one with another key, is asked first; a new crew phone picks its language before the sheet opens.
+async function openJoin(data) {
+  location.replace('#day/' + day);
+  const h = data.hub && typeof data.hub === 'object' ? data.hub : {};
+  if (S.hubUrl && S.hubKey && (S.hubUrl !== h.url || S.hubKey !== h.key)
+    && !await ask(L('This phone is already connected to a hub. Use this invite instead?'), L('Use this invite'))) return;
+  const open = () => joinSheet({ ...ctx(), sync: { ...sync, joinFrom: d => sync.joinFrom(d, { replace: true }) } }, data); // asked above
+  if (data.role === 'crew' && !S.lang && !S.me && !T.some(x => x.origin === 'mine')) return langSheet().addEventListener('close', open);
+  open();
 }
 
 async function importDay(data) {
@@ -178,7 +203,7 @@ async function importDay(data) {
   if (inc.length && await ask(L('Load the task plan for {date}? New sheets: {fresh}. Updated: {known}. Check-offs already on this phone are kept.', { date: niceDate(date), fresh: fresh.length, known: known.length }), L('Load plan'))) {
     for (const t of fresh) T.push(Object.assign(t, { origin: 'mine' }));
     for (const t of known) mergeTask(find(t.uid), t, 'assign');
-    const moved = inc.flatMap(t => renumberClashes(T, find(t.uid)));
+    const moved = inc.flatMap(t => renumberClashes(T, find(t.uid), sync.onHub));
     persist();
     toast(L('Plan loaded') + renumbered(moved));
   }
@@ -200,18 +225,26 @@ function header() {
   lock.setAttribute('aria-label', on ? L('Lock the office screens') : L('Office sign-in'));
   document.getElementById('proj').textContent = [S.project, S.site].filter(Boolean).join(' · ');
   tabs.setAttribute('aria-label', L('Screens'));
-  const here = { clock: 'clock', report: 'report', settings: '' }[view.v] ?? 'day';
+  const here = { clock: 'clock', report: 'report', live: 'live', records: 'records', settings: '', hub: '' }[view.v] ?? 'day';
   const locked = `<svg class="lock" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" aria-hidden="true">${LOCK.shut}</svg>`;
-  tabs.innerHTML = [['day', L('Tasks')], ['clock', isPM() && on ? L('Crew hours') : L('Time clock')], ['report', L('Daily report')]]
-    .map(([v, label]) => `<a href="#${v}/${day}"${v === here ? ' aria-current="page"' : ''}${(v === 'report' || (v === 'clock' && isPM())) && !on ? ` aria-label="${esc(`${label}, ${L('needs the office passcode')}`)}">${label}${locked}` : `>${label}`}</a>`).join('');
+  const hubTabs = on && hubOn() ? [['live', L('Live')], ['records', L('Records')]] : []; // office phones on a hub
+  tabs.innerHTML = [['day', L('Tasks')], ['clock', isPM() && on ? L('Crew hours') : L('Time clock')], ['report', L('Daily report')], ...hubTabs]
+    .map(([v, label]) => `<a href="#${v}${v === 'live' || v === 'records' ? '' : '/' + day}"${v === here ? ' aria-current="page"' : ''}${(v === 'report' || (v === 'clock' && isPM())) && !on ? ` aria-label="${esc(`${label}, ${L('needs the office passcode')}`)}">${label}${locked}` : `>${label}`}</a>`).join('');
+  document.getElementById('hubDot').innerHTML = statusDot(sync.hubStatus(), getLang(), role() === 'crew' ? 'hub' : 'live'); // nothing without a hub
 }
 
 let drawnOn = today(); // the day the screen was last drawn, to notice midnight
+let dups = null; // with a hub: sheets sharing a day and a short id (sync.mjs duplicateShortIds), for the "Same number" pill
 function render() {
   drawnOn = today();
+  dups = hubOn() ? sync.duplicateShortIds(T) : null;
   header();
-  bar.hidden = view.v === 'settings';
-  if (view.v === 'settings') app.innerHTML = `<button class="link" data-go="day/${day}">‹ ${L('Back to task sheets')}</button>${settingsView(S)}`;
+  bar.hidden = ['settings', 'live', 'records', 'hub'].includes(view.v);
+  const back = `<button class="link" data-go="day/${day}">‹ ${L('Back to task sheets')}</button>`;
+  if (view.v === 'settings') app.innerHTML = `${back}${settingsView(S)}${hubSettingsView(ctx())}`;
+  else if (view.v === 'hub') app.innerHTML = back + hubSettingsView(ctx());
+  else if (view.v === 'live') app.innerHTML = liveView(ctx());
+  else if (view.v === 'records') app.innerHTML = recordsView(ctx(), view.sub);
   else if (view.v === 'clock' || view.v === 'report') renderOffice(view.v, S, day);
   else if (view.v === 'task') renderTask(current());
   else renderBoard();
@@ -251,7 +284,7 @@ function renderBoard() {
     ${list.length ? '' : `<p class="hint">${L('No sheets for this crew on this day.')}</p>`}`
     : !office()
       ? `<div class="empty"><h2>${L('No task sheets for {date}', { date: niceDate(day) })}</h2>
-        <p>${L('Open the link your superintendent texted you, or paste it here.')}</p>
+        <p>${hubOn() ? L('Sheets for your crew show up here by themselves. A texted link still works too.') : L('Open the link your superintendent texted you, or paste it here.')}</p>
         <button class="btn primary" data-act="paste">${L('Open a link someone sent you')}</button>
         <button class="link" data-act="lockBtn">${L('Superintendent or PM? Sign in to the office screens')}</button></div>`
       : `<div class="empty"><h2>${L('No task sheets for {date}', { date: niceDate(day) })}</h2>
@@ -277,7 +310,8 @@ function card(t) {
 }
 
 // Two sent sheets with the same date and number (made on two office phones offline): both say so until one is renumbered.
-const clash = (t, more = '') => (sameNumber(T, t) ? `<p class="hint"><span class="pill" data-tone="warn">${L('Same number as another sheet')}</span>${more}</p>` : '');
+// With a hub, any two (a sheet that came only through the hub was never texted, so it has no sentAt).
+const clash = (t, more = '') => ((dups ? dups.has(t.uid) : sameNumber(T, t)) ? `<p class="hint"><span class="pill" data-tone="warn">${L('Same number as another sheet')}</span>${more}</p>` : '');
 
 function renderTask(t) {
   const crewSide = t.origin === 'link';
@@ -343,14 +377,18 @@ function assign(t) {
 }
 
 function brief(t) {
-  const [label, tone] = stage(t);
+  const [label, tone] = stage(t), c = ctx(), tx = (text, lang) => txView(c, text, lang); // as typed with no hub
   const row = (k, html) => (html ? `<dt>${esc(k)}</dt><dd>${html}</dd>` : ''); // html: already escaped
   const note = n => (n ? ' · ' + esc(n) : '');
+  const by = (...bits) => bits.filter(Boolean).map(esc).join(' · ');
+  // With a hub the office's message and review reach the crew's sheet on their next pull.
+  const fromOffice = hubOn() ? (t.reply ? `<div class="live-note"><span class="label">${by(L('Message'), t.replyBy, t.replyAt && stamp(t.replyAt))}</span>${tx(t.reply, t.aLang)}</div>` : '')
+    + (t.review ? `<div class="live-note"><span class="label">${by(`${L('Review')}: ${L(t.review)}`, t.reviewer)}</span>${t.followUp ? tx(t.followUp, t.aLang) : ''}</div>` : '') : '';
   return `<section class="card brief" style="${crewVar(t.crew, t.crewId)}">
     <div class="row1"><span class="label">${esc(t.crew || L('Crew'))} · ${esc(L('Task {id}', { id: t.id }))}</span><span class="pill" data-tone="${tone}">${esc(label)}</span></div>
-    <div class="big">${t.floor ? esc(t.floor) : esc(L('Floor not set'))}${t.area ? ' · ' + esc(t.area) : ''}</div>
-    ${t.scope ? `<p class="scope-text">${esc(t.scope)}</p>` : ''}
-    <dl class="kv">${row(L('Drawings'), esc(t.refs))}${row(L('Planned'), t.pStart && esc(fromTo(t.pStart, t.pStop)))}${row(L('Check in at'), esc(t12(t.checkIn)))}
+    ${fromOffice}<div class="big">${t.floor ? esc(t.floor) : esc(L('Floor not set'))}${t.area ? ' · ' + tx(t.area, t.aLang) : ''}</div>
+    ${t.scope ? `<p class="scope-text">${tx(t.scope, t.aLang)}</p>` : ''}
+    <dl class="kv">${row(L('Drawings'), tx(t.refs, t.aLang))}${row(L('Planned'), t.pStart && esc(fromTo(t.pStart, t.pStop)))}${row(L('Check in at'), esc(t12(t.checkIn)))}
       ${row(L('Allotted'), t.allot && esc(L('{n} hrs', { n: t.allot })) + note(t.allotNote))}${row(L('Estimate'), t.est && esc(L('{n} hrs', { n: t.est })) + note(t.estNote))}
       ${row(L('Crew'), t.members.map(m => esc(m) + (nameKey(m) && nameKey(m) === nameKey(S.worker) ? ` (${esc(L('you'))})` : '')).join(', '))}${row(L('Assigned'), esc(niceDate(t.date) + (t.by ? ' · ' + L('by {name}', { name: t.by }) : '')))}</dl></section>`;
 }
@@ -365,8 +403,9 @@ function workedLine(t) {
 }
 
 function results(t) {
-  const d = doneCount(t), n = t.items.length;
-  const tick = (list, it, i) => `<button class="tick" data-act="tick" data-list="${list}" data-i="${i}" aria-pressed="${it.done}"><span class="box">✓</span><span class="txt">${esc(it.text)}</span>${it.at ? `<small>${timeOf(it.at)}</small>` : ''}</button>`;
+  const d = doneCount(t), n = t.items.length, c = ctx();
+  // a step's words in the reader's language; no tap to the original inside the tick button (that tap ticks)
+  const tick = (list, it, i) => `<button class="tick" data-act="tick" data-list="${list}" data-i="${i}" aria-pressed="${it.done}"><span class="box">✓</span><span class="txt">${txView(c, it.text, t.aLang, getLang(), { toggle: false })}</span>${it.at ? `<small>${timeOf(it.at)}</small>` : ''}</button>`;
   const clock = (k, label, now, primary) => t[k]
     ? `<input type="time" data-k="t.${k}" value="${esc(t[k])}" aria-label="${label}">`
     : `<button class="btn${primary ? ' primary' : ''}" data-act="clock" data-v="${k}">${now}</button>`;
@@ -384,23 +423,23 @@ function results(t) {
       <button class="x" data-act="delay" data-v="15" aria-label="${L('15 minutes more')}">+</button></div></div>
     <p class="out" data-out="worked">${workedLine(t)}</p>
     <div class="field"><span>${L('Status')}</span>${seg('t.status', t.status, [['Complete', 'good', L('Complete')], ['Partial', 'warn', L('Partial')], ['Blocked', 'bad', L('Blocked')]])}</div>
-    ${field(L('Work / quantity completed (locations and details)'), 't.doneText', t.doneText, { rows: 3 })}
-    ${field(L('Work remaining'), 't.remain', t.remain, { rows: 2 })}
+    ${txField(c, L('Work / quantity completed (locations and details)'), 't.doneText', t.doneText, { rows: 3 }, t.cLang)}
+    ${txField(c, L('Work remaining'), 't.remain', t.remain, { rows: 2 }, t.cLang)}
   </section>
   <section class="card"><h2><span class="num">4</span>${L('Crew comments / concerns')}</h2>
-    ${field(L('What helped or slowed the work? Quality, rework, support needed'), 't.comments', t.comments, { rows: 3 })}
+    ${txField(c, L('What helped or slowed the work? Quality, rework, support needed'), 't.comments', t.comments, { rows: 3 }, t.cLang)}
     ${field(L('Crew / lead'), 't.lead', t.lead)}
   </section>`;
 }
 
 function review(t) {
-  const [label, tone] = stage(t), w = worked(t);
+  const [label, tone] = stage(t), w = worked(t), c = ctx(), tx = text => txView(c, text, t.cLang); // the crew's words in the reader's language
   const row = (k, html) => (html ? `<dt>${esc(k)}</dt><dd>${html}</dd>` : '');
   return `<section class="card brief" style="${crewVar(t.crew, t.crewId)}"><div class="row1"><span class="label">${esc(t.crew || L('Crew'))} · ${esc(L('Task {id}', { id: t.id }))} · ${t.floor ? esc(t.floor) : ''}</span><span class="pill" data-tone="${tone}">${esc(label)}</span></div>
     ${t.status || t.aStart ? `<dl class="kv">${row(L('Status'), esc(t.status ? L(t.status) : L('In progress')))}${row(L('Steps'), t.items.length && esc(L('{d} of {n} done', { d: doneCount(t), n: t.items.length })))}
       ${row(L('Checks'), t.checks.length && esc(L('{d} of {n} done', { d: t.checks.filter(c => c.done).length, n: t.checks.length })))}
       ${row(L('Worked'), w && esc(`${fmtMin(w)} · ${L('{n} crew-hrs', { n: hrs(w / 60 * (t.size || 1)) })}`))}${row(L('Estimate'), t.est && esc(`${L('{n} hrs', { n: t.est })} · ${L('{n} crew-hrs', { n: hrs(t.est * (t.size || 1)) })}`))}
-      ${row(L('Delays'), t.delay && esc(L('{n} min', { n: t.delay })))}${row(L('Completed'), t.doneText && esc(t.doneText))}${row(L('Remaining'), t.remain && esc(t.remain))}${row(L('Crew notes'), t.comments && esc(t.comments))}
+      ${row(L('Delays'), t.delay && esc(L('{n} min', { n: t.delay })))}${row(L('Completed'), t.doneText && tx(t.doneText))}${row(L('Remaining'), t.remain && tx(t.remain))}${row(L('Crew notes'), t.comments && tx(t.comments))}
       ${row(L('Received'), esc(stamp(t.gotAt)))}</dl>`
     : `<p class="hint">${L("No results from the crew yet. They'll show here when the crew sends them, or fill them in yourself on the Crew results tab.")}</p>`}</section>
   <section class="card"><h2><span class="num">5</span>${L('Lead / superintendent review')}</h2>
@@ -580,6 +619,7 @@ async function act(a, el) {
       }
       if (a === 'addItem') t.items.push(newItem(text));
       if (a === 'addCheck' && !t.checks.some(c => c.text === text)) t.checks.push(newItem(text));
+      if (a !== 'addMember') t.aLang = getLang(); // a step or a check typed in this phone's language
       t.updatedAt = Date.now();
       persist();
       render();
@@ -642,8 +682,9 @@ async function act(a, el) {
       return go(`task/${c.uid}/assign`);
     }
     case 'del':
+      if (role() === 'pm' && hubOn()) return deleteRecord(ctx(), 'task', t.uid); // asks, and takes it off the hub first (or deletes nothing)
       if (!await ask(L("Delete task {id}? This can't be undone.", { id: t.id }), L('Delete'), 'danger')) return;
-      T = T.filter(x => x !== t);
+      T = T.filter(x => x.uid !== t.uid); // by uid: the hub sync may have reloaded the list while the question was open
       persist();
       return go('day/' + t.date);
     case 'pdfTask': return savePdf(`${fileName(t)}.pdf`, record(t));
@@ -672,6 +713,7 @@ document.addEventListener('click', e => {
   el.closest('dialog')?.close();
   if (stale()) return;
   if (el.dataset.go) go(el.dataset.go);
+  else if (liveOwns(el.dataset.act)) liveAct(ctx(), el.dataset.act, el); // the hub screens' own taps
   else if ((view.v === 'clock' || view.v === 'report') && !SHELL.has(el.dataset.act)) reportAct(el.dataset.act, el, S, day, view.v);
   else act(el.dataset.act, el);
 });
@@ -688,8 +730,9 @@ function stale() {
 
 document.addEventListener('input', e => {
   const el = e.target, k = el.dataset.k;
-  if (!k || stale()) return;
-  if (k.startsWith('r.')) return reportInput(el, S, day);
+  if (!k) { if (el.dataset.lv && !stale()) liveInput(ctx(), el); return; } // the Records search box
+  if (stale()) return;
+  if (k.startsWith('r.')) { reportInput(el, S, day); return liveInput(ctx(), el); } // and its translated preview, if it has one
   if (k.startsWith('h.')) return hoursInput(el, S, day);
   const t = current();
   if (k === 't.date' && !/^\d{4}-\d{2}-\d{2}$/.test(el.value)) return; // every sheet needs a real day; a cleared or half-typed date would hide it
@@ -700,11 +743,12 @@ document.addEventListener('input', e => {
     return;
   }
   // The language each part is typed in, so the hub can translate it for a reader of the other language.
-  if (/^t\.(scope|refs|allotNote|estNote|followUp|items\.\d+\.text)$/.test(k)) t.aLang = getLang();
+  if (/^t\.(scope|refs|area|allotNote|estNote|followUp|items\.\d+\.text)$/.test(k)) t.aLang = getLang();
   if (/^t\.(doneText|remain|comments)$/.test(k)) t.cLang = getLang();
   t.updatedAt = Date.now();
   persist();
   for (const o of app.querySelectorAll('[data-out]')) o.textContent = OUT[o.dataset.out](t);
+  liveInput(ctx(), el); // a translated preview under the field asks again
 });
 
 document.addEventListener('change', e => {
@@ -716,16 +760,67 @@ document.addEventListener('change', e => {
 });
 
 document.addEventListener('keydown', e => {
-  if (e.key === 'Enter' && e.target.dataset.enter) { e.preventDefault(); if (!stale()) act(e.target.dataset.enter, e.target); }
+  if (e.key === 'Enter' && e.target.dataset.enter) {
+    e.preventDefault();
+    const a = e.target.dataset.enter;
+    if (!stale()) liveOwns(a) ? liveAct(ctx(), a, e.target) : act(a, e.target);
+  }
 });
 
-// The other app (or another tab) changed shared data: reload so a stale copy here never overwrites it.
-const reload = () => {
-  S = loadSettings(); setLang(S.lang); T = loadTasks(); reloadReports(); attachShifts(S);
+// The other app (or another tab, or the hub sync) changed shared data: reload so a stale copy here never overwrites it.
+function reloadData() {
+  Object.assign(S, loadSettings()); setLang(S.lang); T = loadTasks(); reloadReports(); attachShifts(S);
   if (view.v === 'task' && !current()) view = { v: 'board' };
+}
+const reload = () => {
+  reloadData();
   if (document.body.classList.contains('office') && !office()) document.querySelectorAll('dialog[open]:not(.pin)').forEach(d => d.close()); // signed out elsewhere: an office question left open can't finish
   needsOffice(view) && !office() ? route() : render();
 };
+
+// ---------- the hub (HUB.md; sync.mjs keeps the stores in step, live.mjs draws the hub screens) ----------
+
+// What live.mjs is handed on every call; its header comment lists each piece.
+function ctx() {
+  const r = role();
+  return { S, tasks: () => T, shifts: () => (r === 'pm' ? crewNow() : []), reports: reportsNow, role: r, day, sync, go, render, toast, now: Date.now, saveTask, remove };
+}
+// Message and Review on the hub screens: the sheet with office fields changed, each changed part stamped past its last stamp.
+function saveTask(n) {
+  const i = T.findIndex(x => x.uid === n.uid), old = T[i];
+  if (!old) return;
+  const moved = ks => ks.some(k => JSON.stringify(n[k]) !== JSON.stringify(old[k]));
+  if (moved(sync.A_KEYS)) n.assignAt = Math.max(n.assignAt, old.assignAt + 1);
+  if (moved(sync.C_KEYS)) n.crewAt = Math.max(n.crewAt, old.crewAt + 1);
+  T[i] = n;
+  persist();
+  fileIfChanged(n); // a review is filed, as the Review tab files it
+}
+// The PM deleted a record (live.mjs deleteRecord, after the hub let it go). The sync may have taken it off already.
+async function remove(kind, key) {
+  if (kind === 'report') return dropReport(key);
+  const had = T.some(x => x.uid === key);
+  T = T.filter(x => x.uid !== key);
+  if (had) persist();
+  if (location.hash.startsWith(`#task/${key}/`)) { view = { v: 'board' }; location.replace('#day/' + day); }
+  return had;
+}
+// The sync saved what it pulled: every in-memory copy reloads now, before any further tap. The screen redraws too, but
+// never under a field someone is typing in: then it waits until the field is left, and until the tap that left it lands.
+let drawLater = false;
+const typing = () => !!document.activeElement?.matches?.('textarea, select, input:not([type=checkbox]):not([type=radio]):not([type=button]):not([type=file])') && app.contains(document.activeElement);
+function drawSoon() {
+  if (typing()) return void (drawLater = true);
+  drawLater = false;
+  needsOffice(view) && !office() ? route() : render();
+}
+document.addEventListener('focusout', () => { if (drawLater) setTimeout(() => drawLater && drawSoon(), 300); });
+const SYNCED = new Set([KEYS.tasks, KEYS.reports, KEYS.hours, KEYS.crewHours, KEYS.settings]);
+// A status change redraws the header dot, and the two screens that are about the hub; Settings redraws after its own taps.
+sync.initHub({ S, toast, onChange: () => { reloadData(); drawSoon(); }, onStatus: () => { header(); if (view.v === 'live' || view.v === 'hub') drawSoon(); } });
+onSave(k => SYNCED.has(k) && sync.poke()); // after every save; the sync's own timer and wake-ups catch anything else
+setTextField((label, k, v, o, lang) => txField(ctx(), label, k, v, o, lang)); // the daily report's typed text
+new MutationObserver(() => liveAfter(ctx(), app)).observe(app, { childList: true }); // after every draw: translate the typed text on screen
 addEventListener('storage', e => [...Object.values(KEYS), UNLOCK].includes(e.key) && reload());
 addEventListener('pageshow', e => e.persisted && reload());
 addEventListener('hashchange', route);

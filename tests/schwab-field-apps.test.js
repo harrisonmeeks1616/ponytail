@@ -710,3 +710,62 @@ test('a tab still on the old version cannot wipe the passcode', async () => {
     assert.match(loadSettings().pin, PIN_FORMAT, 'the passcode survives');
   } finally { delete globalThis.localStorage; }
 });
+
+// ---------- the app on a hub (the wiring in tasks.html, report.mjs and shared.mjs) ----------
+
+test('the hub link, key, role and crew have a key of their own: an old tab, a disconnect and a backup', async () => {
+  const { KEYS, HUB_FIELDS, loadSettings, save, backupData, restoreData, onSave } = await lib;
+  const store = new Map(), saves = [];
+  Object.defineProperty(globalThis, 'localStorage', { configurable: true, value: { getItem: k => store.get(k) ?? null, setItem: (k, v) => store.set(k, String(v)) } });
+  try {
+    const hub = { hubUrl: 'https://script.google.com/macros/s/x/exec', hubKey: 'K'.repeat(32), hubRole: 'crew', hubCrew: 'Crew A' };
+    save(KEYS.settings, { me: '', worker: 'Jose L', ...hub });
+    save(KEYS.hub, hub);
+    store.set(KEYS.settings, JSON.stringify({ worker: 'Jose L' })); // a tab on the old version saves settings without the hub fields
+    assert.deepEqual(HUB_FIELDS.map(k => loadSettings()[k]), HUB_FIELDS.map(k => hub[k]), 'still connected');
+    save(KEYS.hub, { hubUrl: '', hubKey: '', hubRole: '', hubCrew: '' }); // disconnected, with an older settings copy still holding them
+    store.set(KEYS.settings, JSON.stringify({ worker: 'Jose L', ...hub }));
+    assert.equal(loadSettings().hubUrl, '', 'the own key wins, a disconnect included');
+    save(KEYS.hub, hub);
+    const file = JSON.parse(JSON.stringify(backupData()));
+    assert.ok(!JSON.stringify(file).includes(hub.hubKey), 'no copy of the hub key in a backup');
+    assert.deepEqual(file[KEYS.hub], { ...hub, hubKey: '' });
+    store.clear();
+    assert.ok(restoreData(file));
+    assert.deepEqual([loadSettings().hubUrl, loadSettings().hubKey], [hub.hubUrl, ''], 'restored: the address, not the key');
+    onSave(k => saves.push(k));
+    save(KEYS.tasks, []);
+    Object.defineProperty(globalThis, 'localStorage', { configurable: true, value: { getItem: () => null, setItem: () => { throw new Error('full'); } } });
+    assert.equal(save(KEYS.tasks, [1]), false);
+    assert.deepEqual(saves, [KEYS.tasks], 'the save hook hears each save that happened, and only those');
+  } finally { (await lib).onSave(() => {}); delete globalThis.localStorage; }
+});
+
+test('two first calls for the device secret make one secret', async () => {
+  const { KEYS, ensureDevice, deviceSecret } = await lib;
+  const store = new Map(), writes = [];
+  Object.defineProperty(globalThis, 'localStorage', { configurable: true, value: { getItem: k => store.get(k) ?? null, setItem: (k, v) => { if (k === KEYS.device) writes.push(v); store.set(k, String(v)); } } });
+  try {
+    const [a, b] = await Promise.all([ensureDevice(), ensureDevice()]);
+    assert.match(a, /^[0-9a-f]{32}$/);
+    assert.equal(a, b);
+    assert.equal(writes.length, 1, 'one secret written');
+    assert.equal(await ensureDevice(), a, 'and later calls keep it');
+    assert.equal(JSON.parse(writes[0]).secret, deviceSecret());
+  } finally { delete globalThis.localStorage; }
+});
+
+test('a sheet on the hub keeps its number when a link with the same number arrives', async () => {
+  const { normTask, renumberClashes } = await lib;
+  const T = [normTask({ uid: 'mine1', origin: 'mine', id: 'T1019-02', date: '2026-10-19' }), normTask({ uid: 'mine2', origin: 'mine', id: 'T1019-02', date: '2026-10-19' })];
+  const inc = normTask({ uid: 'theirs', origin: 'mine', id: 'T1019-02', date: '2026-10-19', sentAt: 5 });
+  T.push(inc);
+  assert.deepEqual(renumberClashes(T, inc, uid => uid === 'mine1').map(([t, old]) => [t.uid, old, t.id]), [['mine2', 'T1019-02', 'T1019-01']], 'only the sheet the hub has never seen moves');
+  assert.equal(T[0].id, 'T1019-02');
+});
+
+test('the report language follows the superintendent part only', async () => {
+  const { PM_PART } = await import('../docs/schwab/report.mjs');
+  for (const k of ['r.decisions.0.pm', 'r.decisions.12.pmNote', 'r.pmReview']) assert.ok(PM_PART.test(k), k);
+  for (const k of ['r.results', 'r.decisions.0.q', 'r.decisions.0.rec', 'r.floors.0.crews.1.done', 'r.pmReviewer']) assert.ok(!PM_PART.test(k), k);
+});

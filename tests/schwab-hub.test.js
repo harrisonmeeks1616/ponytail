@@ -925,6 +925,91 @@ test('a day the PM added by hand is matched by person id first: a namesake\'s cl
   assert.equal(gone(old, { id: 'o14', who: 'jos\u00e9  l' }), true, 'a phone with no person id is matched by the name, however typed');
 });
 
+test('on site now names the person and crew by id: two people called Jose L clocked in on two phones stay two people', async () => {
+  const env = setup(), sup = office(env), x = phone(env, 'crew', 'phone-X'), y = phone(env, 'crew', 'phone-Y');
+  ok(x.push({ shifts: [shift({ id: 'x1', device: x.dev, who: 'Jose L', pid: 'p-a', crew: 'Crew A', crewId: 'c-a', in: '06:30' })] }));
+  ok(y.push({ shifts: [shift({ id: 'y1', device: y.dev, who: 'Jose L', pid: 'p-b', crew: 'Crew B', crewId: 'c-b', in: '07:00' })] }));
+  const on = sup.pull().onsite;
+  assert.deepEqual(on, [{ who: 'Jose L', in: '06:30', date: '2026-10-19', pid: 'p-a', crewId: 'c-a', crew: 'Crew A' },
+    { who: 'Jose L', in: '07:00', date: '2026-10-19', pid: 'p-b', crewId: 'c-b', crew: 'Crew B' }]);
+  assert.ok(![x.dev, y.dev, 'x1', 'y1'].some(v => JSON.stringify(on).includes(v)), 'no devices or shift ids');
+  // What the Live board makes of it (live.mjs onSite): two lines, each under its own crew.
+  const { normSettings } = await import('../docs/schwab/shared.mjs'), { onSite } = await import('../docs/schwab/live.mjs');
+  const S = normSettings({ crews: [{ id: 'c-a', name: 'Crew A' }, { id: 'c-b', name: 'Crew B' }], people: [{ id: 'p-a', name: 'Jose L', crewId: 'c-a' }, { id: 'p-b', name: 'Jose L', crewId: 'c-b' }] });
+  assert.deepEqual(onSite(on, T0, S).map(p => [p.who, p.crew]), [['Jose L', 'Crew A'], ['Jose L', 'Crew B']]);
+});
+
+test('task events point at the sheet by uid; their text and the Activity tab show the short id people read', () => {
+  const env = setup(), sup = office(env), pm = phone(env, 'pm', 'pm-dev'), crew = phone(env, 'crew', 'crew-dev');
+  ok(sup.push({ tasks: [task({ uid: 'u-a' })] }));
+  ok(pm.push({ tasks: [task({ uid: 'u-b', crew: 'Crew B' })] })); // the same date and short id, made offline on another office phone
+  ok(crew.push({ tasks: [task({ uid: 'u-a', aStart: '07:00', status: 'Blocked', crewAt: T0 - 9 }), task({ uid: 'u-b', aStart: '07:10', crewAt: T0 - 9 })] }));
+  ok(sup.push({ tasks: [task({ uid: 'u-a', assignAt: T0 - 1, review: 'Accepted', reviewer: 'Sam', reply: 'Thanks', replyBy: 'Sam', replyAt: T0 - 1 })] }));
+  assert.deepEqual(pm.pull().events.map(e => [e.kind, e.ref, e.text]), [
+    ['task.created', 'u-a', 'New task T1019-01 for Crew A, Level 3'],
+    ['task.created', 'u-b', 'New task T1019-01 for Crew B, Level 3'],
+    ['task.started', 'u-a', 'Crew A started T1019-01 at 7:00 AM'],
+    ['task.status', 'u-a', 'T1019-01 marked Blocked'],
+    ['task.started', 'u-b', 'Crew B started T1019-01 at 7:10 AM'],
+    ['task.reviewed', 'u-a', 'T1019-01 reviewed: Accepted'],
+    ['task.replied', 'u-a', 'Message sent on T1019-01']]);
+  assert.deepEqual([...new Set(rowsOf(env.hub, 'Activity').map(r => r.Ref))], ['T1019-01'], 'the Sheet owner reads the short id');
+  ok(sup.push({ tasks: [task({ uid: 'u-c', id: '' })] })); // no short id yet: the uid is all there is to show
+  assert.deepEqual([env.hub.entities('Activity').at(-1).ref, rowsOf(env.hub, 'Activity').at(-1).Ref, rowsOf(env.hub, 'Activity').at(-1).What], ['u-c', 'u-c', 'New task u-c for Crew A, Level 3']);
+});
+
+test('a config from an older phone (no people list, crews without ids) never wipes the roster or the crew ids', () => {
+  const env = setup(), pm = phone(env, 'pm', 'pm-dev'), sup = office(env), crew = phone(env, 'crew', 'crew-dev');
+  const cfg = { project: 'Schwab', floors: ['L1'], at: T0 - 9000,
+    crews: [{ id: 'c-a', name: 'Crew A', lead: 'Mike', members: 'Jose L, Mike' }, { id: 'c-b', name: 'Crew B', lead: '', members: 'Kim T' }],
+    people: [{ id: 'p-jose', name: 'Jose L', crewId: 'c-a' }, { id: 'p-mike', name: 'Mike', crewId: 'c-a' }, { id: 'p-kim', name: 'Kim T', crewId: 'c-b' }] };
+  ok(pm.push({ config: cfg }));
+  // Its own edits land (project, floors, a lead, a new crew); its crews find their ids by name, however typed.
+  const old = ok(sup.push({ config: { project: 'Schwab Tower', floors: ['L1', 'L2'], crews: [{ name: 'crew a', lead: 'Ana', members: 'Mike' }, { name: 'Crew B', members: 'Kim T' }, { name: 'Crew C', members: 'Lee' }] } })).config;
+  assert.deepEqual([old.project, old.floors], ['Schwab Tower', ['L1', 'L2']]);
+  assert.deepEqual(old.crews.map(c => [c.id, c.name, c.lead]), [['c-a', 'crew a', 'Ana'], ['c-b', 'Crew B', ''], ['', 'Crew C', '']]);
+  assert.deepEqual(old.people, cfg.people, 'the roster stays as stored');
+  assert.deepEqual(crew.pull().config.people, cfg.people, 'and every phone still reads it');
+  // An id is never handed out twice: a second crew of that name, next to the one that has the id, stays without.
+  assert.deepEqual(ok(sup.push({ config: { crews: [{ id: 'c-a', name: 'Crew A' }, { name: 'Crew A' }] } })).config.crews.map(c => c.id), ['c-a', '']);
+  // A phone that does send a people list decides the roster, even an empty one.
+  assert.deepEqual(ok(pm.push({ config: { ...cfg, at: T0 + 1, people: [] } })).config.people, []);
+});
+
+test('a crew phone gets its sheets by crew id: a renamed crew keeps the old sheets, a new crew with the old name does not get them', () => {
+  const env = setup(), pm = phone(env, 'pm', 'pm-dev'), crew = phone(env, 'crew', 'crew-dev');
+  const roster = (at, crews) => ok(pm.push({ config: { at, crews } }));
+  const got = names => crew.pull({ crews: names }).tasks.map(t => t.uid).sort();
+  roster(T0 - 9000, [{ id: 'c-a', name: 'Crew A' }, { id: 'c-b', name: 'Crew B' }]);
+  ok(pm.push({ tasks: [task({ uid: 'old-a', crewId: 'c-a' }), task({ uid: 'b1', crew: 'Crew B', crewId: 'c-b' }), task({ uid: 'legacy' })] })); // legacy: from before crew ids
+  assert.deepEqual(got(['Crew A']), ['legacy', 'old-a']);
+  // Crew A becomes Electric A; a sheet made after that carries the new name.
+  roster(T0 - 8000, [{ id: 'c-a', name: 'Electric A' }, { id: 'c-b', name: 'Crew B' }]);
+  ok(pm.push({ tasks: [task({ uid: 'new-a', crew: 'Electric A', crewId: 'c-a' })] }));
+  assert.deepEqual(got(['Electric A']), ['new-a', 'old-a'], 'the sheet made under the old name comes by id');
+  assert.deepEqual(got(['Crew A']), ['legacy', 'old-a'], 'a phone that has not heard of the rename yet still gets what it had');
+  // A new crew takes the old name: Electric A's sheets stay Electric A's.
+  roster(T0 - 7000, [{ id: 'c-a', name: 'Electric A' }, { id: 'c-b', name: 'Crew B' }, { id: 'c-new', name: 'Crew A' }]);
+  ok(pm.push({ tasks: [task({ uid: 'n1', crewId: 'c-new' }), task({ uid: 'gone', crew: 'Electric A', crewId: 'c-gone' })] }));
+  assert.deepEqual(got(['Crew A']), ['legacy', 'n1'], 'a sheet with no crew id goes by its name');
+  assert.deepEqual(got(['Electric A']), ['gone', 'new-a', 'old-a'], 'so does one whose crew the roster no longer has');
+  assert.deepEqual(got(['Electric A', 'Crew B']).length, 4);
+  // Still one cold read for the index and one for the rows, however many sheets the window holds.
+  env.hub.cache.clear();
+  const n = env.hub.calls.length;
+  assert.deepEqual(got(['Electric A']), ['gone', 'new-a', 'old-a']);
+  assert.ok(env.hub.calls.slice(n).filter(c => c.startsWith('sheets.')).length <= 2, env.hub.calls.slice(n).join(', '));
+});
+
+test('whoami says which device id the hub derived from this phone\'s secret, and none for a missing or malformed one', () => {
+  const env = setup(), p = phone(env, 'crew', 'phone-X');
+  const me = ok(p.call('whoami'));
+  assert.equal(me.dev, sha(p.secret).slice(0, 32), 'the first 32 hex characters of SHA-256(devSecret)');
+  assert.equal(ok(p.push({ shifts: [shift({ device: me.dev })] })).shifts[0].shift.device, me.dev, 'the id its shifts are stored under');
+  assert.equal(ok(env.hub.call(env.k.crew, 'whoami', { dev: me.dev })).dev, '', 'a claimed id is not a device');
+  for (const bad of ['short', 'x'.repeat(31) + '!', 42, null]) assert.equal(ok(env.hub.call(env.k.crew, 'whoami', { devSecret: bad })).dev, '', String(bad));
+});
+
 test('round trip: every field of every template survives a push and a pull, and sending the pulled copy back writes nothing', () => {
   const env = setup(), pm = phone(env, 'pm', 'pm-dev'), crew = phone(env, 'crew', 'crew-dev');
   const tpl = name => JSON.parse(JSON.stringify(env.hub.eval(name)));

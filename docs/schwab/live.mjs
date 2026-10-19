@@ -195,6 +195,7 @@ export const openShifts = shifts => shifts.filter(s => !s.gone && !s.out).map(s 
 
 // One server event as a sentence in the phone's language. The hub writes English text; names, ids and statuses are
 // carried over and the sentence is rebuilt, so only a kind this app doesn't know shows the hub's own words.
+// e.name: for a PM shift edit, the person as the roster has them now (else the name in the hub's text).
 export function eventLine(e, l = getLang()) {
   const x = (en, v) => L(en, v, l), who = e.who || '', ref = e.ref || '', text = e.text || '';
   const end = words => words.find(w => text.endsWith(' ' + w));
@@ -207,6 +208,19 @@ export function eventLine(e, l = getLang()) {
     case 'clock.in': return x('{who} clocked in', { who });
     case 'clock.out': return x('{who} clocked out', { who });
     case 'report.sent': return /^\d{4}-\d{2}-\d{2}$/.test(ref) ? x('Daily report for {date} sent', { date: niceDate(ref, l) }) : text;
+    case 'pm.add': case 'pm.remove': case 'pm.edit': { // the hub: "PM added a shift for Jose L, 2026-10-19"
+      const m = /^PM (?:added a shift for|removed a shift for|edited) (.*), (\d{4}-\d{2}-\d{2})$/.exec(text);
+      if (!m) return text;
+      const v = { who: e.name || (m[1] === 'a worker' ? x('a worker') : m[1]), date: niceDate(m[2], l) };
+      return e.kind === 'pm.add' ? x('PM added a shift for {who} on {date}', v) : e.kind === 'pm.remove' ? x('PM removed a shift for {who} on {date}', v) : x('PM changed the hours of {who} on {date}', v);
+    }
+    case 'purge': { // "Deleted task <uid>": the record is gone, so its key means nothing to anyone
+      const m = /^Deleted (task|report|shift) (.*)$/.exec(text);
+      return !m ? text : m[1] === 'task' ? x('A task sheet was deleted') : m[1] === 'shift' ? x('A shift was deleted')
+        : /^\d{4}-\d{2}-\d{2}$/.test(m[2]) ? x('The {date} report was deleted', { date: niceDate(m[2], l) }) : text;
+    }
+    case 'key.rotated': return /^Crew /.test(text) ? x('The crew key was replaced') : /^Superintendent /.test(text) ? x('The superintendent key was replaced') : text;
+    case 'archive': { const m = /^Archived (\d+) rows older than (\d{4}-\d{2}-\d{2})$/.exec(text); return m ? x('{n} rows older than {date} archived', { n: m[1], date: niceDate(m[2], l) }) : text; }
     default: return text || e.kind || '';
   }
 }
@@ -321,11 +335,15 @@ export function liveView(ctx) {
       <small>${esc(L('{d} of {n} done', { d: g.sheets.filter(finished).length, n: g.sheets.length }))}</small></h3>${g.sheets.map(t => (rank(t) === 6 ? doneRow(ctx, t) : sheetCard(ctx, t, now, dup.has(t.uid)))).join('')}`).join('')
     : `<div class="empty"><h2>${L('No task sheets for today yet')}</h2><button class="btn" data-go="day/${day}">${L('Open the Tasks tab')}</button></div>`;
   const feed = live.events.slice(0, 50);
-  // a clock line names the person as the roster has them now (by the shift it is about); a sheet line says the sheet's crew
+  // a clock line names the person as the roster has them now (by the shift it is about); a sheet line says the sheet's crew.
+  // A sheet is named by its number: one without a number yet is a new task, and one not on this phone (deleted, or older
+  // than it keeps) is "a task sheet", since its reference is a uid; a number some sheet here has is shown as it is.
+  const ids = new Set(ctx.tasks().map(t => t.id).filter(Boolean));
   const lineOf = e => {
     const task = String(e.kind).startsWith('task.'), t = task ? sheetOf(e.ref) : undefined, s = !task && shiftOf.get(e.ref);
     const p = s ? personNow(S, s) : personNow(S, { who: e.who }), crew = t ? crewById(S, t.crewId)?.name || t.crew : p.crew;
-    return [t, `<span class="feed-x">${esc(eventLine({ ...e, who: p.name || e.who, ref: t?.id || e.ref }))}${crew ? ` <span class="feed-crew">· ${esc(crew)}</span>` : ''}</span>`];
+    const ref = !task ? e.ref : t ? t.id || L('New task') : ids.has(e.ref) ? e.ref : L('a task sheet');
+    return [t, `<span class="feed-x">${esc(eventLine({ ...e, who: p.name || e.who, name: s ? p.name : '', ref }))}${crew ? ` <span class="feed-crew">· ${esc(crew)}</span>` : ''}</span>`];
   };
   const events = `<section class="card"><h2>${L('Activity')}</h2>${feed.length
     ? `<ol class="feed">${feed.map(e => { const [t, line] = lineOf(e);

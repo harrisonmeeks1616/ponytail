@@ -7,9 +7,11 @@ import ES from './es.mjs';
 
 // The passcode also keeps a key of its own: a tab still running the version before it (phones keep old
 // tabs open for days) rewrites settings without it, and an old backup has none. hours: this phone's own
-// clock-ins; crewHours: the PM's timesheet of everyone's; device: this phone's hub secret, in a key of its own for the
-// same reason as the passcode. Backups and restores carry every key here (a backup leaves out the hub key).
-export const KEYS = { settings: 'schwab.settings', tasks: 'schwab.tasks', reports: 'schwab.reports', pin: 'schwab.pin', hours: 'schwab.hours', crewHours: 'schwab.crewHours', device: 'schwab.device' };
+// clock-ins; crewHours: the PM's timesheet of everyone's; device: this phone's hub secret, and hub: the hub link, key, role
+// and crew (HUB_FIELDS), each in a key of its own for the same reason as the passcode. Backups and restores carry every
+// key here (a backup leaves out the hub key).
+export const KEYS = { settings: 'schwab.settings', tasks: 'schwab.tasks', reports: 'schwab.reports', pin: 'schwab.pin', hours: 'schwab.hours', crewHours: 'schwab.crewHours', device: 'schwab.device', hub: 'schwab.hub' };
+export const HUB_FIELDS = ['hubUrl', 'hubKey', 'hubRole', 'hubCrew'];
 export const COMPANY = 'H.A. Sack-Electrical', COMPANY_ALT = 'Sack Company-Electrical', COMPANIES = `${COMPANY} · ${COMPANY_ALT}`;
 // The top lines of every PDF: who did the work, then the job.
 export const letterhead = (s, more = '') => `${COMPANIES}\n${[s.project, s.site, more].filter(Boolean).join(' · ')}`;
@@ -55,8 +57,13 @@ export function load(key, fallback) {
 // ponytail: everything lives in localStorage (~5 MB per site), roughly a year of daily sheets.
 // Past that, move to IndexedDB or a shared backend; Backup keeps a copy until then.
 export function save(key, val) {
-  try { localStorage.setItem(key, JSON.stringify(val)); return true; } catch { return false; }
+  try { localStorage.setItem(key, JSON.stringify(val)); } catch { return false; }
+  saved(key);
+  return true;
 }
+// The app's one hook into every save (tasks.html pokes the hub sync with it); nothing by default.
+let saved = () => {};
+export const onSave = f => { saved = f; };
 
 // hubKey is a secret: never in a backup, a link or the hub's config. hubRole and hubCrew are set by the sync engine.
 // workerId: the roster person this phone's time clock name is (empty when the name matches nobody here).
@@ -80,8 +87,9 @@ export function normSettings(raw) {
   return s;
 }
 export function loadSettings() {
-  const s = normSettings(load(KEYS.settings, null)), pin = load(KEYS.pin, '');
+  const s = normSettings(load(KEYS.settings, null)), pin = load(KEYS.pin, ''), hub = load(KEYS.hub, null);
   if (PIN_FORMAT.test(pin)) s.pin = pin;
+  if (hub && typeof hub === 'object') for (const k of HUB_FIELDS) s[k] = typeof hub[k] === 'string' ? hub[k] : ''; // its own key wins over an old tab's settings, a disconnect included
   return s;
 }
 
@@ -251,10 +259,11 @@ export function nextId(tasks, date) {
 }
 // A sheet arrived (a link now, the hub later) with the date and number of one of this phone's own sheets. Ours takes
 // the next free number when it was never sent, since no one else has seen its number; returns [[sheet, old id]].
-export function renumberClashes(tasks, inc) {
+// onHub(uid): the sheet is on the hub already, so other phones know its number and it keeps it.
+export function renumberClashes(tasks, inc, onHub = () => false) {
   const out = [];
   for (const t of tasks) {
-    if (t === inc || t.uid === inc.uid || t.origin !== 'mine' || t.sentAt || !t.id || t.id !== inc.id || t.date !== inc.date) continue;
+    if (t === inc || t.uid === inc.uid || t.origin !== 'mine' || t.sentAt || !t.id || t.id !== inc.id || t.date !== inc.date || onHub(t.uid)) continue;
     out.push([t, t.id]);
     t.id = nextId(tasks, t.date);
     t.updatedAt = Date.now();
@@ -395,8 +404,11 @@ export const deviceId = () => devRec()?.id || '';
 export const deviceSecret = () => devRec()?.secret || '';
 const idOf = async secret => hex(await crypto.subtle.digest('SHA-256', new TextEncoder().encode(secret))).slice(0, 32);
 // Makes the secret once (a restored backup brings the old phone's back). Resolves to the id, or '' where the phone
-// can't (no crypto.subtle off https): the time clock then keeps using the older settings.device.
-export async function ensureDevice() {
+// can't (no crypto.subtle off https): the time clock then keeps using the older settings.device. Calls made while one is
+// still working share it, so two first calls can never make two secrets.
+let making = null;
+export const ensureDevice = () => (making ||= makeDevice().finally(() => { making = null; }));
+async function makeDevice() {
   try {
     let secret = load(KEYS.device, null)?.secret;
     if (!/^[A-Za-z0-9]{32}$/.test(secret)) {
@@ -884,7 +896,7 @@ export async function settingsAct(act, s, el) {
 // new invite. The device secret goes along, so a restored phone keeps its own hours.
 export function backupData() {
   const data = Object.fromEntries(Object.values(KEYS).map(k => [k, load(k, null)]));
-  if (data[KEYS.settings] && typeof data[KEYS.settings] === 'object') data[KEYS.settings] = { ...data[KEYS.settings], hubKey: '' };
+  for (const k of [KEYS.settings, KEYS.hub]) if (data[k] && typeof data[k] === 'object') data[k] = { ...data[k], hubKey: '' };
   return data;
 }
 export const isBackup = data => !!data && typeof data === 'object' && Object.values(KEYS).some(k => k in data);
