@@ -141,23 +141,42 @@ and live updates. It is one Google Apps Script web app plus one Google Sheet, bo
   original. Drawing and task numbers, quantities and trade abbreviations are kept as typed.
 - The owner can open the Sheet on any phone: tabs for Tasks, Hours, Weekly totals, Reports and Activity.
 
-**One-time setup (the owner, about 15 minutes)**
+**One-time setup (the owner, about 15 minutes, on a computer signed in to the owner's Google account)**
 
-1. Go to script.google.com and make a **New project**. Paste `hub/Code.gs` over the code there. In **Project Settings**
-   turn on **Show "appsscript.json" manifest file**, then paste `hub/appsscript.json` over that file. It turns on the
-   Sheets service and asks for only two permissions: files this script creates (`drive.file`) and outside requests.
-2. Pick `setupHub` in the function list and **Run** it once. Read Google's permission screen and approve it. The
-   execution log shows the PM key, the crew and superintendent keys, and the link to the new Sheet. Copy the PM key now:
-   the hub keeps only a fingerprint of it (`resetPmKey` makes a new one).
-3. **Deploy > New deployment > Web app**, execute as **Me**, access **Only myself**. Open the `/exec` link in this browser;
-   it answers `{"ok":true,"service":"schwab-field-hub",...}`. Phones cannot reach it yet.
-4. When that works, **Deploy > Manage deployments > Edit**, set access to **Anyone**, and deploy again (the link stays the
-   same). Only phones holding a key can do anything with it.
-5. On the PM's phone: **Settings → Hub**, paste the `/exec` link and the PM key, **Connect**, then **Test the hub**.
-   Every line should show a check mark.
-6. **Invite crew** (pick the crew) and **Invite superintendent** each make a link to text. On their phone the person
-   opens it, picks the language on a new phone, types their name (crews) and taps **Join**. The invite answers the
-   "Who is using this phone?" question for them. A phone already on a hub asks first.
+1. Go to script.google.com and make a **New project** on its own (not from a Sheet's **Extensions** menu: `setupHub`
+   makes the Sheet). Rename it **Schwab field hub**; Google's permission screen shows that name. Paste `hub/Code.gs`
+   over everything in `Code.gs` and save.
+2. **Project Settings** (gear, left): turn on **Show "appsscript.json" manifest file in editor**. Back in the editor, paste
+   `hub/appsscript.json` over that file and save. **Services** now lists **Sheets** (the Sheets API, v4); no other
+   service, trigger or library is needed. The manifest keeps the time zone America/New_York (the hours math needs it)
+   and asks for only two permissions: files this script creates (`drive.file`) and outside requests
+   (`script.external_request`).
+3. Pick `setupHub` in the function list next to **Debug** and **Run** it once. Google asks to authorize: **Review
+   permissions**, pick the owner's account; if it says Google hasn't verified the app (it is your own script), **Advanced**,
+   then **Go to Schwab field hub (unsafe)**. It should ask for two things only: "See, edit, create, and delete only the
+   specific Google Drive files you use with this app" and "Connect to an external service". Tick both if there are
+   boxes, then **Allow**. The **Execution log** shows the PM key, the crew and superintendent keys, and the link to the
+   new Sheet (**Schwab field hub** in My Drive: open it to read, change things through the app). Copy the PM key now:
+   the hub keeps only a fingerprint of it (`resetPmKey` makes a new one). The other two keys need no copying: invites
+   carry them. Running `setupHub` again prints only the Sheet link.
+4. **Deploy > New deployment**, type (gear) **Web app**, **Execute as: Me**, **Who has access: Only myself**, **Deploy**
+   (authorize again if asked). Copy the **Web app** link, the one ending in `/exec`. Open it in this browser: it answers
+   `{"ok":true,"service":"schwab-field-hub","version":"1.0.0"}`. If Google says it cannot open the file, more than one
+   Google account is signed in: use a window with only the owner's. Phones cannot reach it yet.
+5. When that works, **Deploy > Manage deployments**, the pencil (**Edit**), **Who has access: Anyone** (not "Anyone with
+   Google account": phones do not sign in), **Deploy**. The link stays the same, and a private window now gets the same
+   answer. Only phones holding a key can do anything with it. No **Anyone** choice means the account's administrator
+   does not allow it.
+6. Connect the PM's phone first, once its **Settings** hold the job's project, floors, people and crews: a phone that
+   joins later takes those from the hub in place of its own. On the PM's phone (role Project manager, signed in, gear):
+   **Settings → Hub**, paste the `/exec` link in **Hub link** and the PM key in **Hub key**, **Connect**, then **Test the
+   hub**. All five lines should show a check mark and **Everything works**.
+7. **Invite people → Invite crew** (pick the crew, or **Not sure: they pick**) and **Invite superintendent** each make a
+   link to text. On their phone the person opens it, picks the language on a new phone, types their name (crews) and
+   taps **Join**. The invite answers the "Who is using this phone?" question for them. A phone already on a hub asks first.
+8. After any change to `Code.gs`: paste it, save, then **Deploy > Manage deployments**, the pencil, **Version: New
+   version**, **Deploy**. Saving alone does not change what phones reach; the link stays the same. Run **Test the hub**
+   again.
 
 **What stays where**
 
