@@ -129,9 +129,14 @@ function clockView(S) {
       ${week.length ? `<dl class="kv">${week.map(row).join('')}</dl>` : `<p class="hint">${L('No hours yet this week.')}</p>`}
       <p class="out">${esc(L('Week total: {n} hrs', { n: h2(total(week)) }))} · ${esc(L('Last week: {n} hrs', { n: h2(total(last)) }))}</p></section>
     <p class="hint">${L('Each Clock in and Clock out opens a text to the PM. Send it every time: it carries your last two weeks, so a missed text catches up. Only the PM can change hours.')}</p>`;
-  $('bar').innerHTML = `<div class="bar-in"><button class="btn primary big" data-act="hTap">${on ? L('Clock out') : L('Clock in')}</button>
+  // The button carries what it shows, so a tap on a screen gone stale (past the 16 hour cutoff while the phone
+  // slept, or clocked in from another tab) is refused instead of doing the other thing.
+  $('bar').innerHTML = `<div class="bar-in"><button class="btn primary big" data-act="hTap" data-v="${on ? `out:${on.id}` : 'in'}">${on ? L('Clock out') : L('Clock in')}</button>
     <button class="btn more" data-act="hMenu" aria-label="${L('More actions')}">⋯</button></div>`;
+  clearTimeout(cutoff); // redraw the moment the open shift turns into a missed clock-out
+  if (on) cutoff = setTimeout(() => location.hash.startsWith('#clock') && go(location.hash.slice(1)), started(on) + 16 * 36e5 - Date.now() + 1000);
 }
+let cutoff = 0;
 
 // The text to the PM: this phone's last two weeks, each shift under the name it was clocked in with, so a
 // borrowed phone never moves its owner's hours to someone else. at orders texts opened out of turn.
@@ -639,6 +644,13 @@ export async function reportAct(a, el, S, day, v) {
     case 'hTap': {
       if (!S.worker.trim()) { toast(L('Type your name first'), 'bad'); return $('app').querySelector('[data-k="s.worker"]')?.focus(); }
       workerChange(S); // a name saved before this phone knew its spelling takes it now, before it goes to the PM
+      const shown = val || '', now = onShift() ? `out:${onShift().id}` : 'in';
+      if (shown && shown !== now) { // the screen was out of date: do nothing, show the truth, say why
+        const was = shown.startsWith('out:') && MY.find(x => x.id === shown.slice(4));
+        renderOffice(v, S, day);
+        return toast(was && !was.out ? L('Your shift from {date} passed 16 hours and counts as a missed clock-out. Tap Clock in to start a new shift.', { date: niceDate(was.date) })
+          : L('This screen was out of date. Check it and tap again.'), 'bad');
+      }
       const on = onShift(), s = on || normShift({ id: uid(), device: deviceOf(S), who: S.worker, pid: S.workerId, date: today(), in: nowHM() });
       if (on) Object.assign(on, { out: nowHM(), who: S.worker.trim(), pid: S.workerId || on.pid }); else MY.push(s); // a name fixed while on the clock goes on this shift
       // The crew and the sheets this phone lists the worker on that day go to the PM with the hours (else the

@@ -732,7 +732,9 @@ addEventListener('hashchange', route);
 addEventListener('online', () => retryUploads(S));
 addEventListener('visibilitychange', () => {
   if (document.hidden) { fileIfChanged(current()); fileReportIfChanged(S, day); }
-  else if (!stale() && drawnOn !== today() && day === drawnOn && ['board', 'clock', 'report'].includes(view.v)) go(`${view.v === 'board' ? 'day' : view.v}/${today()}`); // left open overnight: today's screen
+  else if (stale()) return;
+  else if (drawnOn !== today() && day === drawnOn && ['board', 'clock', 'report'].includes(view.v)) go(`${view.v === 'board' ? 'day' : view.v}/${today()}`); // left open overnight: today's screen
+  else if (view.v === 'clock' && !(isPM() && office())) render(); // a worker's clock may have passed its cutoff while hidden
 });
 addEventListener('pagehide', () => { fileIfChanged(current()); fileReportIfChanged(S, day); }); // queued even if the upload can't finish; retried on next open
 app.addEventListener('toggle', sectionToggle, true);

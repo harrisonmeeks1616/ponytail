@@ -26,6 +26,8 @@ export default {
   'Finished · ready for review': 'Terminadas · listas para revisar',
   'Floor not set': 'Piso sin indicar',
   'Crew not set': 'Cuadrilla sin indicar',
+  'Your shift from {date} passed 16 hours and counts as a missed clock-out. Tap Clock in to start a new shift.': 'Su turno del {date} pasó de 16 horas y cuenta como salida no marcada. Toque Marcar entrada para empezar un turno nuevo.',
+  'This screen was out of date. Check it and tap again.': 'Esta pantalla estaba desactualizada. Revísela y toque otra vez.',
   'No sheets for this crew on this day.': 'No hay hojas para esta cuadrilla en este día.',
   'No task sheets for {date}': 'No hay hojas de tareas para el {date}',
   'Open the link your superintendent texted you, or paste it here.': 'Abra el enlace que le mandó su superintendente por mensaje, o péguelo aquí.',
