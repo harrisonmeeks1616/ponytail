@@ -234,12 +234,13 @@ export function makeSync(o = {}) {
   // ---------- scan: which local parts the hub does not have yet ----------
 
   const skewed = st => now() + st.skew;
-  // A part seen for the first time, or changed while disconnected (st.away), is stamped with its sheet's own last-edit time, never "now": a phone
-  // joining with old data, or edited while disconnected, cannot beat a newer hub copy.
+  // A part is stamped with its sheet's own last-edit time (never later than now), not the time this phone first noticed the
+  // change: a phone joining with old data, edited while disconnected, or whose stamp could not be saved (a full phone, D4S-01)
+  // cannot beat a newer hub copy. A part the hub has, with no edit time, goes by now.
   // Always above the last version this phone knew, so an edit cannot lose to the phone's own earlier push.
   function stampOf(st, pr, edited, seen) {
-    const floor = Math.max(num(pr.v), num(seen)) + 1;
-    return Math.max(floor, pr.s === undefined || pr.v === undefined || st.away ? (edited > 0 ? Math.min(skewed(st), edited + st.skew) : 0) : skewed(st));
+    const floor = Math.max(num(pr.v), num(seen)) + 1, fresh = pr.s === undefined || pr.v === undefined || st.away;
+    return Math.max(floor, edited > 0 ? Math.min(skewed(st), edited + st.skew) : fresh ? 0 : skewed(st));
   }
   const wireTask = (t, sent) => {
     const w = { uid: t.uid, date: t.date }, A = sent.assign, C = sent.crew; // the hub validates every sheet by uid and day, so the day goes with a crew part too; the crew key ignores it
@@ -281,9 +282,9 @@ export function makeSync(o = {}) {
       // edit to it is dropped). ponytail: seen only until this phone saves its sheets again; a tab reload ends the old version.
       const a = st.t[t.uid]?.assign, h = a && hs(aPart(t));
       if (lc.older?.has(t.uid) && a && a.s !== h && tw.includes('assign')) { Object.assign(a, { s: h }); for (const k of ['v', 'vh', 'p', 'at']) delete a[k]; st.sig = ''; }
-      parts('t', t.uid, t, TPARTS, tw, t.updatedAt, wireTask);
+      parts('t', t.uid, t, TPARTS, tw, Math.max(num(t.updatedAt), num(t.sentAt), num(t.resultAt)), wireTask); // Send and Send results stamp their own time, not updatedAt
     }
-    for (const r of lc.reports) parts('r', r.date, r, RPARTS, rw, r.updatedAt, wireReport);
+    for (const r of lc.reports) parts('r', r.date, r, RPARTS, rw, Math.max(num(r.updatedAt), num(r.submittedAt)), wireReport);
     const shifts = (k, list, can, full) => {
       for (const s of list) {
         const pr = ent(ent(st[k], s.id), 'v'), h = hs(shiftPart(s, full));
@@ -374,7 +375,9 @@ export function makeSync(o = {}) {
       if (it.len > CAP.entity) { for (const p in it.sent) delete it.sent[p].b; for (const k of ['assignBase', 'crewBase', 'base', 'supBase', 'pmBase']) if (it.wire[k]) delete it.wire[k]; it.len = JSON.stringify(it.wire).length + 1; } // too big with its bases: the whole part goes by its stamp, as before (a supBase of null is no copy and stays)
       if (it.len > CAP.entity) fresh += ack(st, it, { status: 'rejected' }); else send.push(it);
     }
-    saveState(st);
+    // nothing goes up before its stamp is saved: sent again later, it would be stamped again (D4S-01)
+    // ponytail: a shift's or the settings' stamp is still the time this phone noticed the change; their own edit time would close that too.
+    if (!saveState(st)) throw err('space');
     try {
       for (const batch of chunks(send)) {
         const done = [];
@@ -807,8 +810,7 @@ export function makeSync(o = {}) {
     if ((pr.v !== undefined || pr.at !== undefined) && num(at) <= Math.max(num(pr.v), num(pr.at))) return false;
     pr.tx = num(at);
     if (copy) for (const [p, , , base] of PARTS[kind]) if (base && (!parts || parts.includes(p)) && ent(rec, p).s === undefined) rec[p].b = base(copy);
-    saveState(st);
-    return true;
+    return saveState(st); // not saved (a full phone): the text is not taken, as if the hub had a newer copy (D4S-02)
   }
   // A sheet's office part stamp for a day plan text this phone sends (fromText where it is opened, in hub time): the hub's
   // version when this copy is the hub's, else this phone's edit not sent yet (now, until the scan stamps it); a sheet never

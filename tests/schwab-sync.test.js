@@ -2702,3 +2702,44 @@ test('against the real hub/Code.gs: a merge whose sync record will not save is u
   assert.deepEqual(all(), [end, end, end, end], 'the newer review stands on the hub and every phone, and the offline answer too');
   assert.deepEqual([again.toasts, lap.toasts], [[], []]);
 });
+
+test('against the real hub/Code.gs: a full phone sends nothing whose stamp it could not save, and its older edit never beats a newer one after it has room (D4S-01)', async () => {
+  for (const reopen of [false, true]) {
+    const { mock, k, real } = realHub();
+    const sp = await makePhone(real, 'super', { key: k.super }), ph = await makePhone(real, 'pm', { key: k.pm }), lap = await makePhone(real, 'pm', { key: k.pm });
+    const step = async (...ps) => { for (const p of ps) { mock.advance(5e3); await p.cycle(); } };
+    const uid = ph.addTask({ scope: 'Original' });
+    sp.editReport(DAY, r => Object.assign(r, { status: 'On plan', decisions: [{ q: 'Saturday OT?', rec: 'Yes', by: '', pm: '', pmNote: '' }] }));
+    await step(sp, ph, lap, ph);
+    // the PM phone is full for its sync record only: the sheet and the review it edits are saved, their stamps are not
+    mock.advance(60e3); ph.editTask(uid, t => { t.scope = 'PM A edit'; }); ph.editReport(DAY, r => { r.pmReview = 'PM A review'; });
+    ph.storage.failOn.add('schwab.hubSync'); await step(ph);
+    assert.equal(ph.sync.hubStatus().state, 'error');
+    assert.equal(mock.entities('Tasks').find(t => t.uid === uid).scope, 'Original', 'nothing went up without a saved stamp');
+    // there is room again, but no signal; meanwhile the PM's laptop makes newer edits
+    ph.storage.failOn.clear(); ph.net.down = true;
+    mock.advance(60e3); lap.editTask(uid, t => { t.scope = 'PM B newer'; }); lap.editReport(DAY, r => { r.pmReview = 'PM B newer review'; }); await step(lap);
+    const back = reopen ? await makePhone(real, 'pm', { key: k.pm, storage: ph.storage, fetchImpl: ph.fetch }) : ph;
+    ph.net.down = false; await step(back, lap, sp, back);
+    const want = ['PM B newer', 'PM B newer review'];
+    assert.deepEqual([mock.entities('Tasks').find(t => t.uid === uid).scope, mock.entities('Reports').find(r => r.date === DAY).pmReview], want, `the newer edits stand on the hub (reopen: ${reopen})`);
+    assert.deepEqual([back.task(uid).scope, back.reports()[DAY].pmReview], want, 'and on the phone that was full');
+    assert.deepEqual([lap.task(uid).scope, lap.reports()[DAY].pmReview], want);
+  }
+});
+
+test('against the real hub/Code.gs: a text this phone could not record is not taken, so an old text never goes up over newer work (D4S-02)', async () => {
+  const { mock, k, real } = realHub();
+  const ph = await makePhone(real, 'pm', { key: k.pm }), lap = await makePhone(real, 'pm', { key: k.pm });
+  const step = async (...ps) => { for (const p of ps) { mock.advance(5e3); await p.cycle(); } };
+  const uid = ph.addTask({ scope: 'Original' }); await step(ph, lap, ph);
+  const T1 = ph.now() + 10e3; // a day plan texted from another office phone at T1
+  mock.advance(60e3); lap.editTask(uid, t => { t.scope = 'PM B newer'; t.assignAt = lap.now(); }); await step(lap);
+  ph.net.down = true; ph.storage.failOn.add('schwab.hubSync');
+  assert.equal(ph.sync.fromText('t', uid, 'assign', T1), false, 'not recorded, so not taken');
+  ph.storage.failOn.clear();
+  assert.equal(ph.sync.fromText('t', uid, 'assign', T1), true, 'with room, the same text is taken');
+  const l = ph.tasks(); Object.assign(l.find(x => x.uid === uid), { scope: 'Old text T1', assignAt: T1 }); ph.save('schwab.tasks', l); // as tasks.html merges it
+  ph.net.down = false; await step(ph, lap, ph);
+  assert.deepEqual([mock.entities('Tasks').find(t => t.uid === uid).scope, ph.task(uid).scope, lap.task(uid).scope], ['PM B newer', 'PM B newer', 'PM B newer'], 'the text is older than the laptop edit');
+});
