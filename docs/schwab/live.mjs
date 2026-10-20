@@ -324,7 +324,7 @@ export async function txApply(ctx, root = globalThis.document) {
 // which stays here until it joins as the office (OWNER3-02). On the Live and Tasks screens.
 export function crewKeyNote(ctx) {
   const h = hub(ctx);
-  if (h.state !== 'off' && h.role !== 'pm' && h.role !== 'crew' && ctx.S.role === 'Project manager' && ['pm', 'super'].includes(ctx.role)) return `<div class="banner" data-tone="warn" role="note"><b>${L('This phone is not connected with the PM key')}</b><p>${L('PM answers and crew hours are read-only. In Settings, disconnect and connect with the PM key to update them on the hub.')}</p></div>`;
+  if (h.state !== 'off' && h.role === 'super' && ctx.S.role === 'Project manager' && ['pm', 'super'].includes(ctx.role)) return `<div class="banner" data-tone="warn" role="note"><b>${L('This phone is not connected with the PM key')}</b><p>${L('PM answers and crew hours are read-only. In Settings, disconnect and connect with the PM key to update them on the hub.')}</p></div>`;
   return h.state === 'off' || h.role !== 'crew' || (ctx.role !== 'pm' && ctx.role !== 'super') ? '' : `<div class="banner" data-tone="warn" role="note"><b>${L('This phone is on the hub as a crew phone')}</b><p>${ctx.role === 'pm'
     ? L('Sheets, reports and settings made here stay on this phone. In Settings, disconnect and connect again with the PM key: then they go up.')
     : L('Sheets, reports and settings made here stay on this phone. Ask the PM for the superintendent invite and open it on this phone: then they go up.')}</p></div>`;

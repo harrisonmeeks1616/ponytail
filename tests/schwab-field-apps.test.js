@@ -912,3 +912,12 @@ test('a report text opened on the other phone: the PM copy decides the PM part, 
   mergeAnswers(mine, older);
   assert.deepEqual([mine.decisions.map(d => [d.pm, d.pmNote]), mine.pmReview, mine.pmLang], [[['Approved', ''], ['Declined', 'No overtime this week']], 'Reviewed. Order the wire, no Saturday.', 'en']);
 });
+
+test('the offline copy lists every file the app imports, so nothing is missing offline', () => {
+  const fs = require('node:fs'), path = require('node:path'), dir = path.join(__dirname, '..', 'docs', 'schwab');
+  const files = new Function(`return ${fs.readFileSync(path.join(dir, 'sw.js'), 'utf8').match(/const FILES = (\[[^\]]*\])/)[1]}`)();
+  const imported = new Set();
+  for (const f of fs.readdirSync(dir).filter(f => /\.(mjs|html)$/.test(f))) for (const m of fs.readFileSync(path.join(dir, f), 'utf8').matchAll(/from '\.\/([^']+)'/g)) imported.add(m[1]);
+  assert.ok(imported.size >= 5, 'the scan found the imports');
+  for (const f of imported) assert.ok(files.includes(f), `sw.js FILES is missing ${f}`);
+});
