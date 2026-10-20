@@ -239,8 +239,10 @@ export function makeSync(o = {}) {
   // cannot beat a newer hub copy. A part the hub has, with no edit time, goes by now.
   // Always above the last version this phone knew, so an edit cannot lose to the phone's own earlier push.
   // The part's own stamp on the sheet (assignAt, crewAt) counts as an edit time too: a Message from Live moves it, not updatedAt (D4V-01).
+  // It can be this phone's clock (an edit here) or the hub's (a pull), so it goes through the skew and the cap like an edit time; the
+  // floor is only the version this phone recorded, always hub time (a phone ahead of the hub cannot stamp the future, D4V-01-AHEAD).
   function stampOf(st, pr, edited, seen) {
-    const floor = Math.max(num(pr.v), num(seen)) + 1, fresh = pr.s === undefined || pr.v === undefined || st.away, e = Math.max(num(edited), num(seen));
+    const floor = num(pr.v) + 1, fresh = pr.s === undefined || pr.v === undefined || st.away, e = Math.max(num(edited), num(seen));
     return Math.max(floor, e > 0 ? Math.min(skewed(st), e + st.skew) : fresh ? 0 : skewed(st));
   }
   const wireTask = (t, sent) => {
@@ -746,7 +748,7 @@ export function makeSync(o = {}) {
     // A round that starts pull-first keeps a part changed since its base until its push (mergeTask, keeps): the hub merges
     // its changed fields, rather than a newer part replacing unrelated offline work. A part without a base follows its stamp.
     const same = url === (s.hubUrl || loadState().url);
-    if (!same) store.set(ST, keepHashes());
+    if (!same && !store.set(ST, keepHashes())) return bad('space'); // a full phone stays on its old hub, unchanged: the new one's first pull would start at the old one's place (D4S-03)
     patchSettings({ hubUrl: url, hubKey: key, hubRole: rep.role, hubCrew: typeof extra.crew === 'string' ? extra.crew : same ? String(s.hubCrew || '') : '' });
     setStatus('syncing');
     poke();

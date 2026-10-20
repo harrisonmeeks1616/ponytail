@@ -2776,15 +2776,15 @@ test("a merge undone on a full phone also takes back the settings it added to th
   assert.deepEqual(S, { lang: 'en' }, "and the app's own object holds nothing the undone merge added");
 });
 
-test('against the real hub/Code.gs: the later of two office messages stands, also from a phone whose clock is behind the hub (D4V-01)', async () => {
+test('against the real hub/Code.gs: the later of two office messages stands, also from a phone whose clock is behind or ahead of the hub (D4V-01)', async () => {
   const { withMessage } = await import('../docs/schwab/live.mjs');
   const message = (p, uid, text) => { // as tasks.html saveTask keeps what live.mjs withMessage returns: updatedAt is not touched
     const l = p.tasks(), i = l.findIndex(x => x.uid === uid), old = l[i], n = withMessage(old, text, p.now(), p.role, 'en');
     n.assignAt = Math.max(n.assignAt, old.assignAt + 1); l[i] = n; p.save('schwab.tasks', l);
   };
-  for (const off of [0, -120e3]) {
+  for (const [spOff, off] of [[0, 0], [0, -120e3], [30e3, 0], [120e3, -120e3], [120e3, 0]]) { // either phone's clock behind or ahead of the hub
     const { mock, k, real } = realHub();
-    const sp = await makePhone(real, 'super', { key: k.super }), pm = await makePhone(real, 'pm', { key: k.pm, offset: off });
+    const sp = await makePhone(real, 'super', { key: k.super, offset: spOff }), pm = await makePhone(real, 'pm', { key: k.pm, offset: off });
     const step = async (...ps) => { for (const p of ps) { mock.advance(5e3); await p.cycle(); } };
     const uid = sp.addTask({ sentAt: sp.now() });
     await step(sp, pm, sp, pm, sp, pm);
@@ -2792,6 +2792,21 @@ test('against the real hub/Code.gs: the later of two office messages stands, als
     message(sp, uid, 'super msg (earlier)'); await step(sp);
     mock.advance(20e3); message(pm, uid, 'PM msg (later)'); // before the PM phone pulled the superintendent's
     await step(pm, sp, pm, sp);
-    assert.deepEqual([mock.entities('Tasks').find(t => t.uid === uid).reply, pm.task(uid).reply, sp.task(uid).reply], Array(3).fill('PM msg (later)'), `PM clock offset ${off}`);
+    assert.deepEqual([mock.entities('Tasks').find(t => t.uid === uid).reply, pm.task(uid).reply, sp.task(uid).reply], Array(3).fill('PM msg (later)'), `clock offsets: super ${spOff}, PM ${off}`);
   }
+});
+
+test('a full phone moving to another hub refuses and stays on its old hub, so the new one never starts from the old one\'s place (D4S-03)', async () => {
+  const a = fresh(), b = new FakeHub(clock), URL_B = 'https://script.google.com/macros/s/OTHERJOB/exec', hubs = { [URL_B]: b };
+  const sp = await makePhone(a, 'super', { fetchImpl: (url, init) => (hubs[url] || a).fetch(url, init) });
+  sp.addTask({ scope: 'job A sheet' }); await sp.cycle();
+  const was = sp.hubSync();
+  sp.storage.failOn.add('schwab.hubSync');
+  const r = await sp.sync.connect(URL_B, KEYS.super);
+  assert.deepEqual([r.ok, r.error], [false, 'space']);
+  assert.equal(sp.settings().hubUrl, URL_A, 'still on the old hub');
+  assert.deepEqual(sp.hubSync(), was, 'and its record of it is unchanged');
+  sp.storage.failOn.clear();
+  assert.equal((await sp.sync.connect(URL_B, KEYS.super)).ok, true, 'with room it moves');
+  assert.equal(sp.hubSync()?.rev || 0, 0, 'and starts the new hub from the beginning');
 });
