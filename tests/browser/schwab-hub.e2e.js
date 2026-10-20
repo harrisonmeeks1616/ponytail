@@ -1082,6 +1082,29 @@ async function join(p, link, o = {}) {
     check(gone.every(r => !r) && tomb, `DATA3-04: the cleared report stays cleared after its old text is opened again (hub ${!!gone[0]}, PM ${!!gone[1]}, super ${!!gone[2]}, tombstone ${!!tomb})`);
   });
 
+  // GATE3-02: the superintendent, with no signal, opens the PM's text of a sheet new to his phone. It used to stay a crew
+  // copy for good (To do, Start now, no assignment fields), so he could never fix or resend the PM's sheet.
+  await step('11m. A task text opened on an office phone before its hub copy arrives makes the office sheet', async () => {
+    const signIn = async p => { if (await p.locator('dialog.pin[open]').count()) await pad(p, PIN); };
+    await nav(pm, '#day/' + DAY); await signIn(pm); await nav(pm, '#day/' + DAY);
+    sup.zq.down = true;
+    await pm.click('.bar [data-act=new]'); await pm.waitForSelector('[data-k="t.scope"]');
+    await pm.click('[data-act=crew] >> text="Crew A"'); await pm.fill('[data-k="t.floor"]', 'Level 10'); await pm.fill('[data-k="t.scope"]', 'Pull wire to the level 10 panel');
+    await pm.fill('#newItem', 'Pull wire'); await pm.press('#newItem', 'Enter'); await blur(pm);
+    const uid = await pm.evaluate(() => location.hash.split('/')[1]);
+    await pm.click('.bar [data-act=sendTask]'); const link = await takeLink(pm);
+    check(await until(async () => { await syncNow(pm); return entities(await dump(), 'Tasks').some(t => t.uid === uid); }, 30000), 'the PM sheet is on the hub');
+    await sup.goto(link); await sup.waitForFunction(() => window.appStarted === true); await signIn(sup); await sup.waitForTimeout(800);
+    const got = await taskOf(sup, uid);
+    check(got?.origin === 'mine' && await sup.locator('[data-k="t.floor"]').count() === 1, `the superintendent, with no signal, gets the office sheet with its assignment fields (origin ${got?.origin})`);
+    await sup.fill('[data-k="t.area"]', 'East wing'); await blur(sup); await sup.waitForTimeout(300);
+    await nav(pm, `#task/${uid}/assign`); await pm.fill('[data-k="t.floor"]', 'Level 11'); await blur(pm);
+    check(await until(async () => { await syncNow(pm); return entities(await dump(), 'Tasks').find(t => t.uid === uid)?.floor === 'Level 11'; }, 30000), 'the PM fixes the floor on the hub');
+    sup.zq.down = false;
+    const both = await until(async () => { await syncNow(sup); const h = entities(await dump(), 'Tasks').find(t => t.uid === uid), s = await taskOf(sup, uid); return h?.area === 'East wing' && s?.floor === 'Level 11' && s; }, 30000);
+    check(both?.origin === 'mine', `back online: the PM's fix reaches the superintendent and his area reaches the hub, on the office sheet (origin ${both?.origin})`);
+  });
+
   await step('12. Disconnecting returns the app to its no-hub behavior', async () => {
     await nav(sup, '#settings');
     await sup.click('[data-act=hubDisconnect]');

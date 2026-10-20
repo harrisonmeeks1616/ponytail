@@ -182,7 +182,10 @@ async function openCode(code) {
   }
   let moved = [];
   if (data.kind === 'task') {
-    if (!t) {
+    if (!t && ['pm', 'super'].includes(sync.hubStatus().role)) { // an office phone on a hub: its pull brings this sheet as the office's, so a text that comes first makes that copy, never a crew one (GATE3-02)
+      sync.fromText('t', inc.uid, 'assign', inc.assignAt || inc.sentAt, 0, data.skew !== undefined && inc); // from a hub phone a copy of the hub's: its base, so only what is changed here goes up (as a day plan's)
+      T.push(t = Object.assign(inc, { origin: 'mine', gotAt: Date.now() }));
+    } else if (!t) {
       T.push(t = Object.assign(inc, { origin: 'link', gotAt: Date.now() })); // a crew phone opening its sheet
       firstSheet = !S.lang && !S.me && !T.some(x => x.origin === 'mine'); // a phone with a name in Settings is an office phone
     } else if (t.origin === 'link') mergeTask(t, inc, 'assign'); // re-sent sheet: new assignment, crew check-offs kept
