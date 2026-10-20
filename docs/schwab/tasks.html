@@ -739,7 +739,7 @@ function quickFind() {
   const rel = d => (d === here ? L('Today') : d === addDays(here, 1) ? L('Tomorrow') : d === addDays(here, -1) ? L('Yesterday') : '');
   const days = words => {
     const named = daysNamed(words, here);
-    return [...named.flatMap(d => [{ lead: icon('cal'), title: niceDate(d), sub: [rel(d), count(d)].filter(Boolean).join(' · '), go: `day/${d}` }, ...reps.filter(x => x.r.date === d)]),
+    return [...named.flatMap(d => [{ lead: icon('cal'), title: niceDate(d) + (d.slice(0, 4) === here.slice(0, 4) ? '' : ', ' + d.slice(0, 4)), sub: [rel(d), count(d)].filter(Boolean).join(' · '), go: `day/${d}` }, ...reps.filter(x => x.r.date === d)]),
       ...reps.filter(x => !named.includes(x.r.date) && has(words)(x))];
   };
   const recent = load(RECENT, []).map(u => sheets.find(x => x.t.uid === u)).filter(Boolean);
