@@ -183,7 +183,7 @@ async function openCode(code) {
   let moved = [];
   if (data.kind === 'task') {
     if (!t && ['pm', 'super'].includes(sync.hubStatus().role)) { // an office phone on a hub: its pull brings this sheet as the office's, so a text that comes first makes that copy, never a crew one (GATE3-02)
-      sync.fromText('t', inc.uid, 'assign', inc.assignAt || inc.sentAt, 0, data.skew !== undefined && inc); // from a hub phone a copy of the hub's: its base, so only what is changed here goes up (as a day plan's)
+      sync.fromText('t', inc.uid, 'assign', inc.assignAt || inc.sentAt, 0, inc); // the text is its base: only what is changed here goes up, and an unchanged copy waits for the hub's (GATE4-SEC-01)
       T.push(t = Object.assign(inc, { origin: 'mine', gotAt: Date.now() }));
     } else if (!t) {
       T.push(t = Object.assign(inc, { origin: 'link', gotAt: Date.now() })); // a crew phone opening its sheet
@@ -191,7 +191,7 @@ async function openCode(code) {
     } else if (t.origin === 'link') mergeTask(t, inc, 'assign'); // re-sent sheet: new assignment, crew check-offs kept
     moved = renumberClashes(T, t, sync.onHub);
   } else if (!t || t.origin !== 'link') { // results reaching the superintendent (not the crew re-opening its own)
-    if (!t) { sync.fromText('t', inc.uid, 'assign', inc.assignAt || inc.sentAt, 0, data.skew !== undefined && inc, ['assign']); T.push(t = Object.assign(inc, { origin: 'mine' })); } // its office part goes up as old as the copy it is, never as the crew's last edit; from a hub phone that copy is its base, so only an office edit made here goes up
+    if (!t) { sync.fromText('t', inc.uid, 'assign', inc.assignAt || inc.sentAt, 0, inc, ['assign']); T.push(t = Object.assign(inc, { origin: 'mine' })); } // its office part goes up as old as the copy it is, never as the crew's last edit; the copy is its base, so only an office edit made here goes up (GATE4-SEC-01)
     else mergeTask(t, inc, 'crew');
     t.gotAt = Date.now();
     moved = renumberClashes(T, t, sync.onHub);
@@ -232,7 +232,7 @@ async function importDay(data) {
   const inc = (Array.isArray(data.tasks) ? data.tasks : []).slice(0, 500).map(normTask).filter(t => t.uid);
   const fresh = inc.filter(t => !find(t.uid)), known = inc.filter(t => find(t.uid));
   if (inc.length && await ask(L('Load the task plan for {date}? New sheets: {fresh}. Updated: {known}. Check-offs already on this phone are kept.', { date: niceDate(date), fresh: fresh.length, known: known.length }), L('Load plan'))) {
-    for (const t of fresh) { sync.fromText('t', t.uid, 'assign', t.assignAt || t.updatedAt, 0, data.skew !== undefined && t); T.push(Object.assign(t, { origin: 'mine' })); } // from a hub phone a sheet new here is a copy of the hub's: its base, so only what is changed here goes up (GATE2-DATA-01)
+    for (const t of fresh) { sync.fromText('t', t.uid, 'assign', t.assignAt || t.updatedAt, 0, t); T.push(Object.assign(t, { origin: 'mine' })); } // a sheet new here is the text's copy: its base, so only what is changed here goes up (GATE2-DATA-01, GATE4-SEC-01)
     for (const t of known) if (sync.fromText('t', t.uid, 'assign', t.assignAt || t.updatedAt)) mergeTask(find(t.uid), t, 'assign'); // on a hub, only an office part newer than the hub copy here (its own stamp, hub time: sync.mjs officeAt; a text from an older version has none)
     const moved = inc.flatMap(t => renumberClashes(T, find(t.uid), sync.onHub));
     persist();

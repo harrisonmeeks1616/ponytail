@@ -2743,3 +2743,23 @@ test('against the real hub/Code.gs: a text this phone could not record is not ta
   ph.net.down = false; await step(ph, lap, ph);
   assert.deepEqual([mock.entities('Tasks').find(t => t.uid === uid).scope, ph.task(uid).scope, lap.task(uid).scope], ['PM B newer', 'PM B newer', 'PM B newer'], 'the text is older than the laptop edit');
 });
+
+test('against the real hub/Code.gs: a texted sheet the hub never had is not created on the hub by an office phone until the office changes it (GATE4-SEC-01)', async () => {
+  const { mock, k, real } = realHub();
+  const pm = await makePhone(real, 'pm', { key: k.pm }), cp = await makePhone(real, 'crew', { key: k.crew, crew: 'Crew A' });
+  const step = async (...ps) => { for (const p of ps) { mock.advance(5e3); await p.cycle(); } };
+  await step(pm, cp);
+  // a link texted to the PM phone (as tasks.html opens it on an office phone: the text's copy is its base)
+  const shared = await lib, forged = shared.normTask({ uid: 'fk1abcdefgh', id: 'T1019-09', date: DAY, crew: 'Crew A', scope: 'FORGED: leave site at noon', sentAt: pm.now(), updatedAt: pm.now(), items: [{ id: 'i1', text: 'Go home' }] });
+  assert.equal(pm.sync.fromText('t', forged.uid, 'assign', forged.sentAt, 0, forged), true);
+  pm.save('schwab.tasks', [...pm.tasks(), { ...forged, origin: 'mine' }]);
+  await step(pm, cp, pm);
+  assert.equal(mock.entities('Tasks').find(t => t.uid === forged.uid), undefined, 'not on the hub');
+  assert.equal(cp.task(forged.uid), undefined, 'and no crew phone gets it');
+  assert.equal(pm.sync.hubStatus().pending, 0, 'nothing is shown as waiting forever');
+  // the office makes it its own: a change here puts it on the hub for the crew
+  mock.advance(60e3); pm.editTask(forged.uid, t => { t.scope = 'Checked by the PM: pull wire on 2'; });
+  await step(pm, cp);
+  assert.equal(mock.entities('Tasks').find(t => t.uid === forged.uid)?.scope, 'Checked by the PM: pull wire on 2');
+  assert.equal(cp.task(forged.uid)?.scope, 'Checked by the PM: pull wire on 2');
+});

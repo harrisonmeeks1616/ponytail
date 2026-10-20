@@ -274,7 +274,10 @@ export function makeSync(o = {}) {
           sent[p] = { h, at: pr.at, b: pr.b };
         }
       }
-      if (Object.keys(sent).length) items.push({ k, key, sent, wire: wire(doc, sent, rec) });
+      // a sheet the hub never had, here only as a text's copy and unchanged since, is not created on the hub from this phone:
+      // a text proves nothing about its sender, so only the office's own change (or the sender's own hub copy) puts it there (GATE4-SEC-01)
+      const asText = k === 't' && rec.assign?.v === undefined && sent.assign?.b && hs(aPart(sent.assign.b)) === sent.assign.h;
+      if (Object.keys(sent).length && !asText) items.push({ k, key, sent, wire: wire(doc, sent, rec) });
     };
     for (const t of lc.tasks) {
       // A tab on a version before the hub saved this sheet without the office fields it cannot hold (message, crew and people ids).
