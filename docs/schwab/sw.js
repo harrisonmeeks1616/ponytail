@@ -8,7 +8,7 @@ self.addEventListener('install', e => e.waitUntil(caches.open(CACHE).then(c => c
 // Do not skipWaiting: switching workers under an open page could mix module versions.
 self.addEventListener('activate', e => e.waitUntil(caches.keys().then(keys => Promise.all(keys.filter(k => k === 'schwab-field-apps' || (k.startsWith('schwab-field-apps-') && k !== CACHE)).map(k => caches.delete(k)))).then(() => self.clients.claim())));
 self.addEventListener('fetch', e => {
-  const url = new URL(e.request.url); url.search = '';
+  const url = new URL(e.request.url); url.search = ''; url.hash = '';
   if (e.request.method !== 'GET' || !CORE.has(url.href)) return;
   // The complete cache was populated atomically at install; never refresh one core file alone.
   e.respondWith(caches.open(CACHE).then(c => c.match(e.request, { ignoreSearch: true })).then(hit => hit || fetch(e.request)));
