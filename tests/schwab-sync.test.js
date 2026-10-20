@@ -2763,3 +2763,35 @@ test('against the real hub/Code.gs: a texted sheet the hub never had is not crea
   assert.equal(mock.entities('Tasks').find(t => t.uid === forged.uid)?.scope, 'Checked by the PM: pull wire on 2');
   assert.equal(cp.task(forged.uid)?.scope, 'Checked by the PM: pull wire on 2');
 });
+
+test("a merge undone on a full phone also takes back the settings it added to the app's own object (D4V-02)", async () => {
+  const hub = fresh(), sp = await makePhone(hub, 'super');
+  sp.save('schwab.settings', { ...sp.settings(), floors: ['Basement', 'Level 1'] });
+  await sp.cycle();
+  const S = { lang: 'en' }, cp = await makePhone(hub, 'crew', { crew: 'Crew A', S, worker: 'Jose L' });
+  cp.storage.failOn.add('schwab.hubSync');
+  await cp.cycle();
+  assert.equal(cp.sync.hubStatus().state, 'error');
+  assert.deepEqual(cp.settings().floors, ['Level 1'], 'the stored settings went back');
+  assert.deepEqual(S, { lang: 'en' }, "and the app's own object holds nothing the undone merge added");
+});
+
+test('against the real hub/Code.gs: the later of two office messages stands, also from a phone whose clock is behind the hub (D4V-01)', async () => {
+  const { withMessage } = await import('../docs/schwab/live.mjs');
+  const message = (p, uid, text) => { // as tasks.html saveTask keeps what live.mjs withMessage returns: updatedAt is not touched
+    const l = p.tasks(), i = l.findIndex(x => x.uid === uid), old = l[i], n = withMessage(old, text, p.now(), p.role, 'en');
+    n.assignAt = Math.max(n.assignAt, old.assignAt + 1); l[i] = n; p.save('schwab.tasks', l);
+  };
+  for (const off of [0, -120e3]) {
+    const { mock, k, real } = realHub();
+    const sp = await makePhone(real, 'super', { key: k.super }), pm = await makePhone(real, 'pm', { key: k.pm, offset: off });
+    const step = async (...ps) => { for (const p of ps) { mock.advance(5e3); await p.cycle(); } };
+    const uid = sp.addTask({ sentAt: sp.now() });
+    await step(sp, pm, sp, pm, sp, pm);
+    mock.advance(10 * 60e3); await step(sp, pm);
+    message(sp, uid, 'super msg (earlier)'); await step(sp);
+    mock.advance(20e3); message(pm, uid, 'PM msg (later)'); // before the PM phone pulled the superintendent's
+    await step(pm, sp, pm, sp);
+    assert.deepEqual([mock.entities('Tasks').find(t => t.uid === uid).reply, pm.task(uid).reply, sp.task(uid).reply], Array(3).fill('PM msg (later)'), `PM clock offset ${off}`);
+  }
+});

@@ -216,6 +216,7 @@ async function openJoin(data) {
   location.replace('#day/' + day);
   const h = data.hub && typeof data.hub === 'object' ? data.hub : {};
   if (S.hubRole === 'pm' && S.hubUrl === h.url) return toast(L('This is the PM phone. Send the invite to the person it is for.')); // its key is shown only once, at setup
+  if (data.role === 'super' && S.role === 'Project manager') return toast(L('That is a superintendent invite. This phone is set to Project manager, so connect in Settings with the PM key from the Execution log of the hub script.'), 'bad'); // sync.mjs connect refuses it after Join anyway (pm_invite): say so before the sheet
   // an office phone kept its office screens as a crew phone, but the hub took nothing of its office work from then on
   const crewSide = crewPhone() || S.hubRole === 'crew'; // signed in, still a crew phone: someone fixed its settings (a sign-in lasts 12 hours)
   if (data.role === 'crew' && ((office() && !crewSide) || ['pm', 'super'].includes(S.hubRole) || T.some(x => x.origin === 'mine'))) return toast(L('This phone is for the office, so it does not join as a crew phone. Send the invite to the person it is for.'));

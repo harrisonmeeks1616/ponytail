@@ -1172,3 +1172,9 @@ test('Settings PM on a superintendent key shows a localized read-only warning ev
   sync.status.role = 'pm'; assert.equal(live.crewKeyNote(ctx), '', 'actual PM key needs no warning');
   sync.status.state = 'off'; sync.status.role = ''; assert.equal(live.crewKeyNote(ctx), '', 'no-hub workflow needs no warning');
 });
+
+test('deleteRecord: a PM delete whose pending purge cannot be stored says so, so the PM keeps the app open through the Undo (D4S-06)', async () => {
+  const t = task({ uid: 'del1', id: 'T9-09' }), ctx = mkCtx({ tasks: () => [t], sync: mkSync({ purgeLater() { return false; } }) });
+  assert.equal(await live.deleteRecord(ctx, 'task', 'del1'), true);
+  assert.deepEqual(toasts(ctx).at(-1).slice(1, 3), ['Task T9-09 deleted. It is also removed from the hub. This phone is out of space: keep the app open until Undo is gone, or the hub keeps it.', 'bad']);
+});

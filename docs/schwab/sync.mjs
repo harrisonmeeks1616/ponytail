@@ -238,9 +238,10 @@ export function makeSync(o = {}) {
   // change: a phone joining with old data, edited while disconnected, or whose stamp could not be saved (a full phone, D4S-01)
   // cannot beat a newer hub copy. A part the hub has, with no edit time, goes by now.
   // Always above the last version this phone knew, so an edit cannot lose to the phone's own earlier push.
+  // The part's own stamp on the sheet (assignAt, crewAt) counts as an edit time too: a Message from Live moves it, not updatedAt (D4V-01).
   function stampOf(st, pr, edited, seen) {
-    const floor = Math.max(num(pr.v), num(seen)) + 1, fresh = pr.s === undefined || pr.v === undefined || st.away;
-    return Math.max(floor, edited > 0 ? Math.min(skewed(st), edited + st.skew) : fresh ? 0 : skewed(st));
+    const floor = Math.max(num(pr.v), num(seen)) + 1, fresh = pr.s === undefined || pr.v === undefined || st.away, e = Math.max(num(edited), num(seen));
+    return Math.max(floor, e > 0 ? Math.min(skewed(st), e + st.skew) : fresh ? 0 : skewed(st));
   }
   const wireTask = (t, sent) => {
     const w = { uid: t.uid, date: t.date }, A = sent.assign, C = sent.crew; // the hub validates every sheet by uid and day, so the day goes with a crew part too; the crew key ignores it
@@ -527,7 +528,7 @@ export function makeSync(o = {}) {
     const was = MERGED.map(k => [k, store.get(k, null)]), S0 = o.S && { ...o.S };
     try { mergePull(c, rep, sig, st); } catch (e) {
       for (const [k, v] of was) if (JSON.stringify(store.get(k, null)) !== JSON.stringify(v)) store.set(k, v);
-      if (S0) Object.assign(o.S, S0);
+      if (S0) { for (const k of Object.keys(o.S)) if (!Object.hasOwn(S0, k)) delete o.S[k]; Object.assign(o.S, S0); } // a key the merge added goes too
       throw e;
     }
   }

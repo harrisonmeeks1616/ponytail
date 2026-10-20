@@ -616,6 +616,7 @@ export default {
   'The hub did not answer. Download only what is on this phone?': 'El sistema central no respondió. ¿Descargar solo lo que hay en este teléfono?',
   'Download': 'Descargar',
   'It is also removed from the hub.': 'También se quita del sistema central.',
+  'This phone is out of space: keep the app open until Undo is gone, or the hub keeps it.': 'Este teléfono no tiene espacio: mantenga la app abierta hasta que desaparezca Deshacer, o el sistema central lo conserva.',
   'The hub could not be reached, so nothing was deleted.': 'No se pudo conectar con el sistema central, así que no se borró nada.',
   'Hub': 'Sistema central',
   'Optional. One shared log of hours, task sheets and reports, a live board, and translation of what people type. Paste the hub link and your key.': 'Opcional. Un registro compartido de horas, hojas de tareas y reportes, un tablero en vivo y la traducción de lo que escribe la gente. Pegue el enlace del sistema central y su clave.',

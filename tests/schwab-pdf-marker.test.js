@@ -29,7 +29,7 @@ async function kinds() {
   const chunk = html.slice(html.search(/(?:async )?function fileTask\(t\)/)).split(/\r?\n\/\/ -{5,} office passcode/)[0];
   assert.match(chunk, /const fileIfChanged = /, 'find the actual task filing code');
   const ctx = vm.createContext({ S, fileAway: lib.fileAway, load: lib.load, save: lib.save, normTask: lib.normTask, KEYS: lib.KEYS,
-    fileName: () => 'T1 Crew A Level 1', record: () => new Uint8Array([37, 80, 68, 70]) });
+    fileName: () => 'T1 Crew A Level 1', record: () => new Uint8Array([37, 80, 68, 70, 45]) }); // "%PDF-"
   // As in tasks.html: T is reloaded from storage when a sync (or another tab) changes it.
   vm.runInContext(`let T = []; const find = u => T.find(t => t.uid === u); const persist = () => save(KEYS.tasks, T);\n${chunk}
     this.api = { leave: () => fileIfChanged(find('u1')), swap: () => { T = load(KEYS.tasks, []).map(normTask); }, now: () => find('u1') };`, ctx);

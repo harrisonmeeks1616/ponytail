@@ -5,6 +5,7 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const lib = import('../docs/schwab/shared.mjs');
+const P = s => Buffer.from('%PDF-' + s).toString('base64'); // a queued PDF, as fileAway makes it
 
 test('links round-trip a task sheet and reject junk', async () => {
   const { pack, unpack, codeFrom } = await lib;
@@ -174,15 +175,15 @@ test('a newer queued PDF survives completion of an older upload', async () => {
     return { status: 200, json: async () => ({ ok: true }) };
   };
   try {
-    queue({ date: '2026-10-04', name: 'Fictional test', pdf: 'older', v: 1 });
+    queue({ date: '2026-10-04', name: 'Fictional test', pdf: P('older'), v: 1 });
     const uploading = flush(s);
     await began;
-    queue({ date: '2026-10-04', name: 'Fictional test', pdf: 'newer', v: 2 });
+    queue({ date: '2026-10-04', name: 'Fictional test', pdf: P('newer'), v: 2 });
     release();
     assert.deepEqual(await uploading, { left: 1, error: '' });
     globalThis.fetch = async (url, o) => { sent.push(JSON.parse(o.body)); return { status: 200, json: async () => ({ ok: true }) }; };
     assert.equal((await flush(s)).left, 0);
-    assert.deepEqual(sent.map(x => x.pdf), ['older', 'newer']);
+    assert.deepEqual(sent.map(x => x.pdf), [P('older'), P('newer')]);
   } finally { globalThis.fetch = realFetch; delete globalThis.localStorage; }
 });
 
@@ -247,15 +248,16 @@ test('upload queue: newer edits survive, refusals cannot block or flood, dead re
   const s = { folderUrl: 'https://script.google.com/macros/s/x/exec', siteCode: 'sparky' };
   const answer = decide => async (url, o) => {
     const b = JSON.parse(o.body);
+    b.pdf = atob(b.pdf).slice(5); // the test's own name for the PDF
     sent.push(b.pdf);
     return { status: 200, json: async () => decide(b) };
   };
   try {
     // The superintendent edits a sheet while an earlier upload is running.
-    queue({ date: '2026-10-03', name: 'A', pdf: 'a' });
-    queue({ date: '2026-10-03', name: 'T1', pdf: 'old', v: 1 });
+    queue({ date: '2026-10-03', name: 'A', pdf: P('a') });
+    queue({ date: '2026-10-03', name: 'T1', pdf: P('old'), v: 1 });
     globalThis.fetch = answer(b => {
-      if (b.pdf === 'a') queue({ date: '2026-10-03', name: 'T1', pdf: 'new', v: 2 });
+      if (b.pdf === 'a') queue({ date: '2026-10-03', name: 'T1', pdf: P('new'), v: 2 });
       return { ok: true };
     });
     assert.equal((await flush(s)).left, 1, 'the newer copy is still waiting');
@@ -266,8 +268,8 @@ test('upload queue: newer edits survive, refusals cannot block or flood, dead re
 
     // A refused record goes to the back of the line: the next try sends what is behind it.
     sent.length = 0;
-    queue({ date: '2026-10-04', name: 'Bad', pdf: 'bad' });
-    queue({ date: '2026-10-04', name: 'Good', pdf: 'good' });
+    queue({ date: '2026-10-04', name: 'Bad', pdf: P('bad') });
+    queue({ date: '2026-10-04', name: 'Good', pdf: P('good') });
     globalThis.fetch = answer(b => (b.pdf === 'bad' ? { ok: false, error: 'Not a field app PDF' } : { ok: true }));
     assert.deepEqual(await flush(s), { left: 2, error: 'Not a field app PDF' }, 'one refused post per try, not one per record');
     assert.deepEqual(await flush(s), { left: 1, error: 'Not a field app PDF' });

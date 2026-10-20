@@ -928,8 +928,11 @@ export async function savePdf(filename, bytes) {
 
 const OUTBOX = 'schwab.outbox';
 // A record with no valid date (saved before blank dates were fixed) is refused forever; drop it.
-// Its sheet is re-dated on load and filed again, so nothing is lost.
-const box = () => load(OUTBOX, []).filter(x => isDay(x?.date));
+// Its sheet is re-dated on load and filed again, so nothing is lost. A backup file gets passed around, so only a PDF
+// (base64 of %PDF-...) and only its own fields go out: whatever else a crafted item carries (ping, url) is never sent.
+const clean = list => (Array.isArray(list) ? list : []).filter(x => isDay(x?.date) && typeof x.pdf === 'string' && x.pdf.length % 4 === 0 && /^JVBERi[0-3][A-Za-z0-9+/]*={0,2}$/.test(x.pdf))
+  .map(({ date, name, pdf, v }) => ({ date, name, pdf, v }));
+const box = () => clean(load(OUTBOX, []));
 const same = (a, b) => a.date === b.date && a.name === b.name;
 const sameCopy = (a, b) => same(a, b) && a.pdf === b.pdf && a.v === b.v;
 export const queue = item => save(OUTBOX, [...box().filter(x => !same(x, item)), item]);
@@ -1159,7 +1162,7 @@ export const isBackup = data => !!data && typeof data === 'object' && Object.val
 // stores, so it goes first; with none in the backup (or a restore cut short) the next round merges pull-first.
 export const restoreData = data => {
   try { localStorage.removeItem(SYNC); } catch {}
-  return (data[KEYS.settings] == null || save(KEYS.roster, null)) && [...Object.values(KEYS), OUTBOX, SYNC].every(k => data[k] == null || save(k, data[k]));
+  return (data[KEYS.settings] == null || save(KEYS.roster, null)) && [...Object.values(KEYS), OUTBOX, SYNC].every(k => data[k] == null || save(k, k === OUTBOX ? clean(data[k]) : data[k]));
 };
 
 export async function restore(file) {
