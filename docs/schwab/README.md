@@ -175,7 +175,9 @@ and live updates. It is one Google Apps Script web app plus one Google Sheet, bo
    hub**. All five lines should show a check mark and **Everything works**.
 7. **Invite people → Invite crew** (pick the crew, or **Not sure: they pick**) and **Invite superintendent** each make a
    link to text. On their phone the person opens it, picks the language on a new phone, taps or types their name and
-   taps **Join**. The invite answers the "Who is using this phone?" question for them. A phone already on a hub asks first.
+   taps **Join**. The invite answers the "Who is using this phone?" question for them. Opened on the PM's phone, or a crew
+   invite on an office phone, it changes nothing and says to send it to its person. A phone on another hub, or on this one
+   with another key, asks first.
 8. After any change to `Code.gs`: paste it, save, then **Deploy > Manage deployments**, the pencil, **Version: New
    version**, **Deploy**. Saving alone does not change what phones reach; the link stays the same. Run **Test the hub**
    again.
@@ -253,3 +255,4 @@ and live updates. It is one Google Apps Script web app plus one Google Sheet, bo
 `node --test tests/schwab-field-apps.test.js tests/schwab-review-folder.test.js tests/app-display-regressions.test.js tests/schwab-es-lint.test.js tests/schwab-sync.test.js tests/schwab-live.test.js tests/schwab-hub.test.js` covers the link codec, merges, report roll-up, office passcode, time clock and timesheet, people and crew ids (moving older settings over, two people with one name, renames, sheets with the same number from two phones), every new field through reload and backup and restore, the device secret, PDF writer, upload queue, mocked receiver boundaries, and that every on-screen phrase has its Spanish; the last three cover the hub sync, the hub screens and the hub itself on a stand-in for Google. Receiver and hub checks do not exercise Google authorization, folder access or a live deployment.
 
 The browser checks in `tests/browser/` drive the real app in Chromium (Playwright; pdftotext for the PDFs). Serve `docs/schwab` (`python3 -m http.server 8765 --bind 127.0.0.1`), then run each with `BASE=http://127.0.0.1:8765/ node tests/browser/<file>`: `schwab-field-app.e2e.js` (a whole job on five phones: first run, task sheets, results, time clock, daily report, crew hours, Undo, the tab bar, 320 px, Spanish), `schwab-first-run.e2e.js`, `schwab-clock-stale.e2e.js` (the 16-hour cutoff) and `schwab-spanish-audit.e2e.js` (every screen and state in Spanish; 0 untranslated to pass). Each exits 0 when everything passes.
+`schwab-hub.e2e.js` runs the same way: six phones (PM, superintendent, two crew phones, two workers) on the hub at 320 px, from joining to Live, Records, hours, translation, deletes, offline and a copied device id, against `hub/Code.gs` on the stand-in for Google (`tests/browser/hub-dev-server.js`, which it starts and stops itself on `HUBPORT`, default 8780).

@@ -8,11 +8,10 @@
 //   --only runs the screens whose name contains the text; --list prints the screen names; --dump prints every string
 //   with how it was accounted for (to check the audit itself). AUDIT_JSON=path moves the JSON copy of the results
 //   (default: $TMPDIR/schwab-spanish-audit.json).
-//   --hub adds the hub screens (Live, Records, joining, hub settings). They are for when the hub (docs/schwab/sync.mjs,
-//   live.mjs) is wired into the app, which it is not yet, and they need a local hub dev server (HUBDEV, default
-//   http://127.0.0.1:8780/). Their phones use the address https://script.google.com/macros/s/TESTHUB/exec, which the
-//   audit forwards to the local hub; a translation comes back as the typed token with ZQtr in front (typed data, so it
-//   is accounted for like any typed text).
+//   --hub adds the hub screens (Live, Records, joining, hub settings). They need a local hub dev server running
+//   (node tests/browser/hub-dev-server.js 8780; HUBDEV, default http://127.0.0.1:8780/). Their phones use the address
+//   https://script.google.com/macros/s/TESTHUB/exec, which the audit forwards to the local hub; a translation comes back
+//   as the typed token with ZQtr in front (typed data, so it is accounted for like any typed text).
 //
 // Puts the app in Spanish mode, visits every screen and state as the right role, and collects every
 // piece of text a person could see or hear: visible text nodes; the attributes aria-label, placeholder,
