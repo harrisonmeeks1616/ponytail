@@ -2114,6 +2114,27 @@ test('against the real hub/Code.gs: two PM devices fixing one shift keep both fi
 });
 const rowsOfTotals = mock => { const head = mock.header('Weekly totals'); return mock.table('Weekly totals').map(r => r[head.indexOf('Hours')])[0]; };
 
+test('against the real hub/Code.gs: an hours text the PM opens on a hub phone for a day entered by hand keeps the worker\'s punches, on her clock and on the hub (RECHECK3-03)', async () => {
+  const { normShift } = await lib, { importShifts } = await import('../docs/schwab/report.mjs');
+  const { mock, k, real } = realHub();
+  const w = await makePhone(real, 'crew', { key: k.crew, crew: 'Crew A', worker: 'Ana R' }), pm = await makePhone(real, 'pm', { key: k.pm });
+  const step = async (...ps) => { for (const p of ps) { mock.advance(5e3); await p.cycle(); } };
+  await step(w, pm);
+  w.net.down = true; // no data all day: her hours text goes out instead
+  const id = w.clockIn('Ana R', { in: '06:45' }); w.editHours(id, s => { s.out = '16:15'; }); await step(w);
+  pm.save('schwab.crewHours', [normShift({ id: 'hand1', who: 'Ana R', date: DAY, in: '07:00', out: '15:30', edited: { who: true, in: true, out: true } })]); // the PM entered her day by hand
+  await step(pm);
+  const crew = pm.crewHours().map(normShift);
+  importShifts(crew, w.hours().map(normShift), pm.now(), true); // then opens her text: openHours on a hub phone
+  pm.save('schwab.crewHours', crew);
+  await step(pm, pm);
+  w.net.down = false; await step(w, w, pm);
+  const view = l => l.filter(s => !s.gone).map(s => [s.id, s.in, s.out]).sort();
+  const both = [['hand1', '07:00', '15:30'], [id, '06:45', '16:15']].sort();
+  assert.deepEqual([view(w.hours()), view(mock.entities('Hours')), view(pm.crewHours())], [[[id, '06:45', '16:15']], both, both], 'her clock keeps her punches; the hub and the PM have both rows to settle');
+  assert.deepEqual([w.toasts, pm.toasts], [[], []]);
+});
+
 test('against the real hub/Code.gs: the PM typing in a daily report keeps the superintendent\'s words, offline or within one sync (supBase, DATA2-01)', async () => {
   const { mock, k, real } = realHub();
   const sp = await makePhone(real, 'super', { key: k.super }), pm = await makePhone(real, 'pm', { key: k.pm });
@@ -2135,6 +2156,32 @@ test('against the real hub/Code.gs: the PM typing in a daily report keeps the su
   await step(sp, pm, sp);
   const two = ['At risk', 'Crew A pulled wire on level 3. CORRECTION: only half of level 3', 'Level 3 east a day early', 'Inspector moved to Wednesday'];
   assert.deepEqual(all(), [two, two, two]);
+  assert.deepEqual([sp.toasts, pm.toasts, sp.sync.hubStatus().pending, pm.sync.hubStatus().pending], [[], [], 0, 0]);
+});
+
+test('against the real hub/Code.gs: the superintendent removes or rewords a decision the PM answered, and every phone agrees; an answer he never saw stays (RECHECK3-01)', async () => {
+  const { mock, k, real } = realHub();
+  const sp = await makePhone(real, 'super', { key: k.super }), pm = await makePhone(real, 'pm', { key: k.pm });
+  const step = async (...ps) => { for (const p of ps) { mock.advance(5e3); await p.cycle(); } };
+  const qs = r => r?.decisions.map(d => [d.q, d.pm]), all = () => [qs(mock.entities('Reports').find(r => r.date === DAY)), qs(sp.reports()[DAY]), qs(pm.reports()[DAY])];
+  const answer = (q, a) => pm.editReport(DAY, r => { r.decisions.find(d => d.q === q).pm = a; r.pmAt = pm.now(); });
+  sp.editReport(DAY, r => { r.status = 'On plan'; r.decisions = [{ q: 'Order 500 ft of wire?', rec: '', by: '' }, { q: 'Overtime Saturday?', rec: '', by: '' }]; });
+  await step(sp, pm);
+  answer('Order 500 ft of wire?', 'Approved'); await step(pm, sp);
+  sp.editReport(DAY, r => { r.decisions.shift(); }); // no longer needed
+  await step(sp, pm, sp);
+  const one = [['Overtime Saturday?', '']];
+  assert.deepEqual(all(), [one, one, one], 'removed on the hub and on both phones');
+  // he rewords the other one with no signal, while the PM answers it: the answer he never saw stays, under its own question
+  sp.net.down = true; sp.editReport(DAY, r => { r.decisions[0].q = 'Overtime Sunday?'; }); await step(sp);
+  answer('Overtime Saturday?', 'Approved'); await step(pm);
+  sp.net.down = false; await step(sp, pm, sp);
+  const two = [['Overtime Sunday?', ''], ['Overtime Saturday?', 'Approved']];
+  assert.deepEqual(all(), [two, two, two]);
+  sp.editReport(DAY, r => { r.decisions.pop(); }); // now he has seen it, and takes the old wording out
+  await step(sp, pm, sp);
+  const three = [['Overtime Sunday?', '']];
+  assert.deepEqual(all(), [three, three, three]);
   assert.deepEqual([sp.toasts, pm.toasts, sp.sync.hubStatus().pending, pm.sync.hubStatus().pending], [[], [], 0, 0]);
 });
 

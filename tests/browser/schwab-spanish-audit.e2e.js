@@ -789,6 +789,10 @@ async function crewHoursVariants(h) {
   p = await h.open({ role: 'pm', crewHours: closedShifts(), hash: `#clock/${TODAY}` });
   await h.snap(p, 'Crew hours, all shifts closed');
   await click(p, '[data-act=hSend]'); await h.after(p, 'Crew hours, all shifts closed');
+  // A day added by hand and the worker's own taps for it: the row says both count, and Send to accountant asks first.
+  p = await h.open({ role: 'pm', crewHours: [...closedShifts(), shift({ who: 'ZQRay', date: TODAY, in: '06:45', out: '15:15', device: 'zqdev5' })], hash: `#clock/${TODAY}` });
+  await h.snap(p, 'Crew hours, a day added by hand and from the phone');
+  await click(p, '[data-act=hSend]'); await p.waitForSelector('dialog .ask'); await h.snap(p, 'Accountant warning ask, a day added by hand and from the phone'); await click(p, 'dialog [data-a="0"]');
   // Weeks with nothing in them.
   await nav(p, `#clock/${LASTWK}`); await h.snap(p, 'Crew hours, empty week (past)'); // no Send to accountant: Add a shift is the one action
   await nav(p, `#clock/${NEXTWK}`); await h.snap(p, 'Crew hours, empty week (ahead)');

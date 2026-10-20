@@ -57,7 +57,8 @@ screens") until someone signs in and changes the role in **Settings → This pho
   typo). What the PM changes is marked *edited* and stays as set when that worker's next text comes in; a
   removed shift stays removed. A whole day the PM added by hand (with a clock-out) stays as entered: a late text
   for the same person and day is filed as removed, with a warning. With a hub, the worker's own taps for that day are
-  kept as a second row under that person (they are the real punches), for the PM to settle. A day added with
+  kept as a second row under that person (they are the real punches, whether they come through the hub or in a text),
+  for the PM to settle: both rows count, so the row says so and **Send to accountant** asks first. A day added with
   no clock-out yet takes the worker's own Clock in and Clock out as a second row under that person, for the PM to
   settle. Each shift keeps the name it was clocked in with, so a borrowed phone never moves its owner's hours. Hours links opened on any other phone change nothing.
 - **One list of people:** **Settings → People and crews** holds the app's list of people. Each crew is one group with its people as

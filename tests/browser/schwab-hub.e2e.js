@@ -897,6 +897,12 @@ async function join(p, link, o = {}) {
     await nav(pm, '#clock/' + today);
     await pm.fill(`input[data-k="h.${hand.id}.out"]`, '15:00'); await blur(pm);
     check(await until(async () => (await rosa()).find(s => s.id === hand.id)?.out === '15:00', 20000), 'the PM sets 3:00 PM as the clock-out of the day added by hand');
+    // RECHECK3-02: now both count, so Crew hours flags her tap row and Send to accountant asks first, as it does for open shifts
+    const flagged = await until(async () => (await pm.locator('[data-out=twice]:visible').evaluateAll(l => l.map(e => e.dataset.id))).join() === tap.id, 10000);
+    await pm.click('.bar [data-act=hSend]');
+    const asked = await until(async () => { const t = await text(pm, 'dialog[open] .ask'); if (/no clock-out/.test(t)) { await pm.click('dialog[open] [data-a="1"]'); return ''; } return t; }, 10000); // open shifts are asked about first
+    if (asked) await pm.click('dialog[open] [data-a="0"]');
+    check(flagged && /^1 shift from a worker's phone is on a day you also entered by hand, and both count/.test(asked), `RECHECK3-02: Crew hours flags her tap on the day entered by hand, and Send to accountant asks first (flag: ${flagged}; ask: ${asked})`);
     await toasts(cb);
     await cb.click('[data-act=hTap]'); // Marcar salida
     check(await sawToast(cb, /^Guardado\. Sus horas/), 'her clock-out is saved');

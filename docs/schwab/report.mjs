@@ -183,23 +183,27 @@ async function sendMine(S, s, what) {
   sendSheet({ title: L('Send your hours to the PM'), url, text: `${text} Open the link on the PM's phone to log it.` });
 }
 
+// A day the PM entered whole by hand (with a clock-out) that s, a shift from a worker's phone, falls on: the same person's
+// day, by roster id when both shifts have one (two people may share a name), else by name. Both would count.
+const byHand = (log, s) => !!s.device && log.some(x => !x.gone && !x.device && x.out && x.date === s.date && (x.pid && s.pid ? x.pid === s.pid : nameKey(x.who) === nameKey(s.who)));
 // A worker's link opened on the PM's phone (at: when it was sent): new shifts are added, and what the PM
 // hasn't changed follows the worker's phone (a clock-out since; a name fixed in a newer text). A shift the PM
 // removed stays removed, and a link only speaks for shifts its own phone made. The person, crew and tasks are the
 // worker's too: a text only ever adds to them, so an older one opened late can't take one away. Returns what changed.
-export function importShifts(log, shifts, at = 0) {
+// hub: this phone is on a hub, where the hub and every text keep a worker's own taps (HUB.md, Worker rules).
+export function importShifts(log, shifts, at = 0, hub = false) {
   let added = 0, updated = 0, skipped = 0;
-  // The same person's day: by roster id when both shifts have one (two people may share a name), else by name.
-  const same = (a, b) => a.date === b.date && (a.pid && b.pid ? a.pid === b.pid : nameKey(a.who) === nameKey(b.who));
   for (const s of shifts) {
     if (!s.device) continue;
     const m = log.find(x => x.id === s.id);
     if (!m) {
-      // ponytail: the PM already added this person's whole day by hand (the texts never came), so the PM's entry
-      // stands and this one is filed as removed, never doubling the day. A real second shift that day is
+      // ponytail: with no hub, the PM already added this person's whole day by hand (the texts never came), so the PM's
+      // entry stands and this one is filed as removed, never doubling the day. A real second shift that day is
       // added back by hand; match on overlapping times instead if split shifts become common. A day the PM
-      // added with no clock-out is waiting for this phone's times: they are added for the PM to see.
-      const twin = log.some(x => !x.gone && !x.device && x.out && same(x, s));
+      // added with no clock-out is waiting for this phone's times: they are added for the PM to see. On a hub a
+      // removal here would reach the hub and take the real punches off the worker's own clock: they stay as a
+      // second row, flagged on Crew hours (byHand), for the PM to settle.
+      const twin = !hub && byHand(log, s);
       log.push({ ...s, at, edited: { who: false, in: false, out: false }, gone: twin });
       if (twin) skipped++; else added++;
       continue;
@@ -220,7 +224,7 @@ export function importShifts(log, shifts, at = 0) {
 export function openHours(data, S) {
   const inc = (Array.isArray(data.shifts) ? data.shifts : []).slice(0, 200).map(normShift).filter(Boolean);
   if (!inc.length) { toast(L('That link has no hours in it'), 'bad'); return ''; }
-  const { added, updated, skipped } = importShifts(CREW, inc, Number.isFinite(data.at) ? data.at : 0);
+  const { added, updated, skipped } = importShifts(CREW, inc, Number.isFinite(data.at) ? data.at : 0, hubStatus().state !== 'off');
   if (S) attachPeople(S, CREW);
   keep(KEYS.crewHours, CREW);
   const who = inc.at(-1).who || L('the crew');
@@ -288,6 +292,7 @@ function crewView(S, day) {
       ${taskIds(s).length ? `<span class="hint">${esc(taskIds(s).length === 1 ? L('Task {id}', { id: taskIds(s)[0] }) : L('Tasks {ids}', { ids: taskIds(s).join(', ') }))}</span>` : ''}</span>
       <span class="out" data-out="shift" data-id="${s.id}">${shiftLine(s)}</span>
       <button class="x" data-act="hDel" data-id="${s.id}" aria-label="${esc(L('Remove the {date} shift', { date: niceDate(s.date) }))}">✕</button></div>
+    <p class="clock-missed" data-out="twice" data-id="${s.id}"${byHand(week, s) ? '' : ' hidden'}>${L('You also entered this day by hand, and both count. If it is the same work, remove one.')}</p>
     <div class="grid two">${time(s, 'in')}${time(s, 'out')}</div></div>`;
   screenHead(L('Crew hours'), { more: 'hPmMenu',
     sub: `${mon === monday(today()) ? L('This week') : mon < today() ? L('Past week') : L('Week ahead')} · ${L('to {date}', { date: niceDate(addDays(mon, 6)) })}` });
@@ -352,6 +357,7 @@ export function hoursInput(el, S, day) {
   const week = weekOf(day), people = byPerson(week, undefined, S); // the same order as the cards' data-i
   for (const o of $('app').querySelectorAll('[data-out]')) {
     if (o.dataset.out === 'shift') o.innerHTML = shiftLine(CREW.find(x => x.id === o.dataset.id));
+    if (o.dataset.out === 'twice') o.hidden = !byHand(week, CREW.find(x => x.id === o.dataset.id)); // a clock-out typed on the day added by hand
     if (o.dataset.out === 'who') o.textContent = L('{n} hrs', { n: h2(people[o.dataset.i]?.hours ?? 0) });
   }
   $('hoursStats').innerHTML = crewStats(week, S);
@@ -433,6 +439,9 @@ async function toAccountant(S, day) {
   if (!week.length) return toast(L('No hours logged this week'), 'bad');
   if (gaps && !await ask(gaps === 1 ? L('1 shift has no clock-out and counts as 0 hours. Fill in the out times first, or send anyway?')
     : L('{n} shifts have no clock-out and count as 0 hours. Fill in the out times first, or send anyway?', { n: gaps }), L('Send anyway'))) return;
+  const twice = week.filter(s => byHand(week, s)).length;
+  if (twice && !await ask(twice === 1 ? L("1 shift from a worker's phone is on a day you also entered by hand, and both count. Remove one first if it is the same work, or send anyway?")
+    : L("{n} shifts from workers' phones are on days you also entered by hand, and both count. Remove one first where it is the same work, or send anyway?", { n: twice }), L('Send anyway'))) return;
   const name = `Timesheet week of ${mon}`;
   const files = [new File(['﻿' + timesheetCsv(people)], `${name}.csv`, { type: 'text/csv' }), new File([timesheetPdf(S, mon, people)], `${name}.pdf`, { type: 'application/pdf' })];
   // Phones get the share sheet (Mail to the accountant, Save to Files); computers download both files.

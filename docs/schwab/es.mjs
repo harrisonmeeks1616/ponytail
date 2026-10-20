@@ -771,4 +771,9 @@ export default {
 
   // an office phone opening a crew invite
   'This phone is for the office, so it does not join as a crew phone. Send the invite to the person it is for.': 'Este teléfono es para la oficina, así que no se une como teléfono de cuadrilla. Mande la invitación a la persona a quien va dirigida.',
+
+  // Crew hours: a day the PM added by hand and the worker's own taps for it (RECHECK3-02)
+  'You also entered this day by hand, and both count. If it is the same work, remove one.': 'Usted también agregó este día a mano, y los dos cuentan. Si es el mismo trabajo, quite uno.',
+  "1 shift from a worker's phone is on a day you also entered by hand, and both count. Remove one first if it is the same work, or send anyway?": '1 turno del teléfono de un trabajador cae en un día que usted también agregó a mano, y los dos cuentan. ¿Quiere quitar uno primero si es el mismo trabajo, o enviar así?',
+  "{n} shifts from workers' phones are on days you also entered by hand, and both count. Remove one first where it is the same work, or send anyway?": '{n} turnos de teléfonos de trabajadores caen en días que usted también agregó a mano, y los dos cuentan. ¿Quiere quitar uno primero donde sea el mismo trabajo, o enviar así?',
 };

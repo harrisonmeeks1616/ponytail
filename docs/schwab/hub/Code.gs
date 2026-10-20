@@ -856,8 +856,9 @@ function mergeShift_(ctx, stored, inc) {
 const SUPER_PART = (function () { const t = clone_(REPORT); ['date', 'updatedAt', 'pmReview', 'pmLang', 'pmAt'].forEach(function (k) { delete t[k]; }); t.decisions = [{ q: 't', rec: 't', by: 's' }]; return t; })();
 function merge3_(tpl, s, m, b, newer) {
   if (!isObj_(tpl) && !Array.isArray(tpl)) return takes_(true, newer, m, b, s) ? m : s;
-  const o = {}, j = JSON.stringify;
+  const o = {};
   if (!Array.isArray(tpl)) { Object.keys(tpl).forEach(function (k) { o[k] = merge3_(tpl[k], s[k], m[k], b[k], newer); }); return o; }
+  const j = function (x) { return JSON.stringify(shape_(tpl[0], x)); }; // the template's fields only: a decision's PM answer is not the superintendent's part
   const f = Object.keys(tpl[0])[0], keys = function (l) { const n = dict_(); return l.map(function (x) { const t = String(x[f]); n[t] = (n[t] || 0) + 1; return t + '\n' + n[t]; }); };
   const ks = keys(s), kb = keys(b), out = [], put = dict_();
   keys(m).forEach(function (k, i) {
@@ -890,7 +891,9 @@ function mergeReport_(ctx, stored, inc) {
       const a = d.q ? answers.find(function (x) { return x.q === d.q; }) : null;
       return { q: d.q, rec: d.rec, by: d.by, pm: a ? a.pm : '', pmNote: a ? a.pmNote : '' };
     });
-    answers.forEach(function (a) { if ((a.pm || a.pmNote) && !kept.some(function (k) { return k.q === a.q; })) kept.push(a); }); // an answer is never dropped
+    // An answer is never dropped, unless the phone had it (its base's pmAt, the PM part it last had) and took its question out or reworded it.
+    // ponytail: by the whole PM part's stamp; an answer to any question since keeps every answered one this push left out, for the next edit.
+    if (!base || base.pmAt < r.pmAt) answers.forEach(function (a) { if ((a.pm || a.pmNote) && !kept.some(function (k) { return k.q === a.q; })) kept.push(a); });
     r.decisions = kept;
   }
   if (pm && (inc.pmAt > 0 || !stored) && inc.pmAt >= r.pmAt) {

@@ -233,8 +233,8 @@ export function makeSync(o = {}) {
     for (const l of ['items', 'checks']) w[l] = t[l].map(i => ({ id: i.id, ...(A && { text: i.text }), ...(C && { done: i.done, at: i.at }) })); // a crew phone sends ticks, never wording
     return w;
   };
-  const wireReport = (r, sent) => {
-    const { filedAt, ...w } = r, S = sent.sup && { updatedAt: sent.sup.at, supBase: sent.sup.b || null }; // null: this phone never had the hub's copy
+  const wireReport = (r, sent, rec) => { // the base's pmAt: the PM part this phone last had, so an answer it saw goes with a question it takes out
+    const { filedAt, ...w } = r, S = sent.sup && { updatedAt: sent.sup.at, supBase: sent.sup.b ? { ...sent.sup.b, pmAt: num(rec.pm?.v) } : null }; // null: this phone never had the hub's copy
     if (sent.sup && sent.pm) return { ...w, ...S, pmAt: sent.pm.at };
     if (sent.sup) return { ...w, decisions: r.decisions.map(d => ({ ...d, pm: '', pmNote: '' })), pmReview: '', pmLang: '', pmAt: 0, ...S };
     return { date: r.date, decisions: r.decisions.filter(d => d.q || d.pm || d.pmNote).map(d => ({ q: d.q, pm: d.pm, pmNote: d.pmNote })), pmReview: r.pmReview, pmLang: r.pmLang, pmAt: sent.pm.at, updatedAt: 0 }; // every question, so an answer the PM took back is taken back on the hub too
@@ -258,7 +258,7 @@ export function makeSync(o = {}) {
           sent[p] = { h, at: pr.at, b: pr.b };
         }
       }
-      if (Object.keys(sent).length) items.push({ k, key, sent, wire: wire(doc, sent) });
+      if (Object.keys(sent).length) items.push({ k, key, sent, wire: wire(doc, sent, rec) });
     };
     for (const t of lc.tasks) {
       // A tab on a version before the hub saved this sheet without the office fields it cannot hold (message, crew and people ids).
@@ -424,7 +424,7 @@ export function makeSync(o = {}) {
     const out = loc ? structuredClone(loc) : { ...inc, filedAt: 0 };
     if (loc) {
       if (took.sup) { for (const k of Object.keys(inc)) if (!['pmReview', 'pmLang', 'pmAt', 'updatedAt', 'filedAt', 'decisions'].includes(k)) out[k] = inc[k]; out.updatedAt = inc.updatedAt; }
-      const tmp = { decisions: (took.sup ? inc : loc).decisions.map(d => ({ ...d, pm: '', pmNote: '' })), pmReview: '', pmLang: '' }, from = took.pm ? inc : loc;
+      const tmp = { decisions: (took.sup ? inc : loc).decisions.map(d => ({ ...d, pm: '', pmNote: '' })), pmReview: '', pmLang: '' }, from = took.pm || !writes.includes('pm') ? inc : loc; // a phone that never answers has the hub's answers
       mergeAnswers(tmp, { decisions: from.decisions.filter(d => d.pm || d.pmNote).map(d => ({ ...d })), pmReview: from.pmReview, pmLang: from.pmLang }); // an answer to a reworded question stays as its own entry
       Object.assign(out, { decisions: tmp.decisions, pmReview: tmp.pmReview, pmLang: tmp.pmLang });
       if (took.pm) out.pmAt = inc.pmAt;
