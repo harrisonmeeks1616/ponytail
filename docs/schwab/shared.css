@@ -244,6 +244,11 @@ input:not([type=checkbox]):not([type=file]):not([type=radio]), select, textarea 
   background: var(--field); font-size: 1.0625rem; /* 16px or more stops iPhones zooming into a field */
 }
 input[type=search] { -webkit-appearance: none; appearance: none; }
+/* iPhone draws date and time boxes at their own minimum width with the value centered, wider than the column: drawn
+   plainly they fill it like every other box (the picker still opens on tap) */
+input:is([type=date], [type=time]) { -webkit-appearance: none; appearance: none; display: block; min-width: 0; }
+input::-webkit-date-and-time-value { text-align: left; }
+input::-webkit-datetime-edit-fields-wrapper { padding: 0; } /* Android adds 1 px above and below: the box stood 2 px taller than its neighbors */
 textarea { resize: vertical; min-height: 88px; field-sizing: content; max-height: 50vh; line-height: 1.4; }
 ::placeholder { color: var(--muted); opacity: .8; }
 .kv { display: grid; grid-template-columns: auto 1fr; gap: 6px 16px; margin: 0; font-variant-numeric: tabular-nums; }
@@ -695,7 +700,6 @@ details.rec-week > summary .rec-main { padding: 0; flex-direction: row; flex-wra
 .fgroup .field > span { font: 600 .8125rem/1.3 var(--font); }
 .fgroup .field > :is(input, textarea, select):not([type=checkbox]) { /* beats the base text box */ min-height: 44px; padding: 4px 0 8px; border: 0; border-radius: 0; background: none; }
 .fgroup .field > textarea[rows] { min-height: 64px; }
-.fgroup input::-webkit-date-and-time-value { text-align: left; }
 .fgroup .field:focus-within { background: var(--field); }
 .fgroup :is(input:not([type=checkbox]), textarea, select):focus-visible { outline: none; }
 .fgroup .field:has(:focus-visible) { box-shadow: inset 0 0 0 2px var(--ring); }
