@@ -558,13 +558,11 @@ function recordRows(t) {
 
 const record = t => makePdf('Electrical task sheet', letterhead(S), recordRows(t), `${COMPANIES} · Task ${t.id}`);
 const fileName = t => `${t.id} ${t.crew} ${t.floor}`.trim();
-async function fileTask(t) {
+// Marked filed when queued, on the sheet as it is now (by uid: a sync may have reloaded T since the caller got t).
+function fileTask(t) {
   if (!S.folderUrl) return;
-  const v = t.updatedAt;
-  if (await fileAway(S, { date: t.date, name: fileName(t), bytes: record(t), v })) {
-    t.filedAt = Math.max(t.filedAt || 0, v);
-    persist();
-  }
+  const { uid, updatedAt: v } = t;
+  return fileAway(S, { date: t.date, name: fileName(t), bytes: record(t), v }, () => { const n = find(uid); if (n) { n.filedAt = Math.max(n.filedAt || 0, v); persist(); } });
 }
 // A finished sheet edited after it was filed (say, a follow-up note typed after tapping the review
 // button) is filed again when you leave it, so the folder always has the last word.

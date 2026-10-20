@@ -981,11 +981,14 @@ export const flush = s => (flushing ||= (async () => {
 
 // file: { date, name, bytes, v }. v is the record's last edit time, preserved in the receiver's
 // metadata so an older offline edit can be distinguished without deleting newer records.
-export async function fileAway(s, f) {
+// onQueued() runs once the PDF is queued, before any upload: the caller marks its record filed there, so a screen left
+// mid-upload (or a page closed) doesn't queue the same version again with a new "Saved" minute, a second PDF.
+export async function fileAway(s, f, onQueued) {
   if (!s.folderUrl) return false;
   const item = { date: f.date, name: f.name, pdf: b64(f.bytes), v: f.v || 0 };
   if (!isDay(item.date)) return false; // the folder refuses an impossible day; never claim it was filed
   if (!queue(item)) { toast(L("This phone is out of space, so the PDF wasn't queued. Use Save as PDF."), 'bad'); return false; }
+  onQueued?.();
   const waiting = () => box().some(x => sameCopy(x, item));
   let r = await flush(s);
   if (waiting()) r = await flush(s); // another upload was mid-way, or a refused record went first; go again for this one

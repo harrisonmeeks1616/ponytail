@@ -606,13 +606,11 @@ const recordSecs = r => [
 ];
 
 const record = (S, r) => makePdf('Superintendent daily report', letterhead(S, dayEn(r.date)), recordSecs(r), `${COMPANIES} · Daily report ${r.date}`);
-const fileReport = async (S, r) => {
+// Marked filed when queued, on the report as it is now (by date: a sync may have reloaded R since the caller got r).
+const fileReport = (S, r) => {
   if (!S.folderUrl) return;
-  const v = r.updatedAt;
-  if (await fileAway(S, { date: r.date, name: `Daily Report ${r.date}`, bytes: record(S, r), v })) {
-    r.filedAt = Math.max(r.filedAt || 0, v);
-    persist();
-  }
+  const { date, updatedAt: v } = r;
+  return fileAway(S, { date, name: `Daily Report ${date}`, bytes: record(S, r), v }, () => { const n = R[date]; if (n) { n.filedAt = Math.max(n.filedAt || 0, v); persist(); } });
 };
 // A sent report edited afterwards is filed again when you leave it.
 export const fileReportIfChanged = (S, day) => { const r = R[day]; return r?.submittedAt && r.updatedAt > r.filedAt && fileReport(S, r); };
