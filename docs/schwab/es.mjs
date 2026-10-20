@@ -836,4 +836,6 @@ export default {
   "Opens task setup, the daily report, settings and the PM's crew hours. Crew sheets and the time clock stay open to everyone. Use the same code on the PM's and the superintendent's phones. Crew phones learn it from the first task sheet they open.": 'Abre la preparación de tareas, el reporte diario, los ajustes y las horas de las cuadrillas en el teléfono del gerente de proyecto. Las hojas de las cuadrillas y la asistencia quedan abiertas para todos. Use el mismo código en el teléfono del gerente de proyecto y en el del superintendente. Los teléfonos de las cuadrillas lo reciben con la primera hoja de tarea que abren.',
   'On site now: {people}': 'En la obra ahora: {people}',
   'On site now: {people} in {crews}': 'En la obra ahora: {people} en {crews}',
+  // v7 upgrade compatibility: the live v7 tasks screen can briefly load this dictionary.
+  'Crew-hrs actual / est.': 'Horas-cuadrilla reales / est.',
 };

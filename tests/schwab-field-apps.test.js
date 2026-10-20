@@ -211,6 +211,7 @@ test('Spanish mode has a Spanish version of every on-screen phrase', async () =>
     "Opens task setup, the daily report, settings and the PM's crew hours. Crew sheets and the time clock stay open to everyone. Use the same code on the PM's and the superintendent's phones. Crew phones learn it from the first task sheet they open.",
     'On site now: {people}',
     'On site now: {people} in {crews}',
+    'Crew-hrs actual / est.', // v7 tasks screen
   ]);
   for (const en of v8Compatibility) {
     assert.ok(typeof ES[en] === 'string' && ES[en].trim() && ES[en] !== en, `missing v8 Spanish for: ${en}`);
