@@ -715,6 +715,8 @@ const RECENT = 'schwab.recent'; // the last 5 sheets opened on this phone, newes
 const sawSheet = u => save(RECENT, [u, ...load(RECENT, []).filter(x => typeof x === 'string' && x !== u)].slice(0, 5));
 const canFind = () => FIND_ON.includes(view.v) && !setup && !document.querySelector('dialog[open]') && !document.activeElement?.matches?.('input, textarea, select');
 const strings = x => (typeof x === 'string' ? [x] : x && typeof x === 'object' ? Object.entries(x).flatMap(([k, v]) => (['date', 'lang', 'pmLang', 'status'].includes(k) ? [] : strings(v))) : []);
+// ponytail: each open folds every sheet's text once, and each keystroke scans them all: a few ms at a year of sheets.
+// Index the words if a phone ever holds many times that.
 function quickFind() {
   if (stale()) return;
   const here = today(), far = d => Math.abs(Date.parse(d) - Date.parse(here)) * 2 + (d < here); // nearest day first, a later one before an earlier

@@ -1179,7 +1179,7 @@ export const findWords = q => [...new Set(nameKey(q).split(' ').filter(Boolean))
 function fold(text) {
   const cs = Array.from(String(text ?? '')), at = [];
   let f = '';
-  cs.forEach((c, i) => { const k = c.normalize('NFD').replace(/[̀-ͯ]/g, '').replace(/[^\p{L}\p{N}]/gu, ' ').toLowerCase(); for (let j = 0; j < k.length; j++) at.push(i); f += k; });
+  cs.forEach((c, i) => { const k = c.normalize('NFD').replace(/[\u0300-\u036f]/g, '').replace(/[^\p{L}\p{N}]/gu, ' ').toLowerCase(); for (let j = 0; j < k.length; j++) at.push(i); f += k; });
   return { cs, at, f };
 }
 // The text, escaped, with every match of a word in bold (an accent typed as its own mark stays with its letter).

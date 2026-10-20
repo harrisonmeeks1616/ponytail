@@ -507,6 +507,23 @@ async function upcomingScreens(h) {
   await h.snap(q, 'Upcoming, empty week'); // from today: "for tomorrow"
 }
 
+async function quickFindScreens(h) {
+  // Quick Find: the hint on an empty box, the sheets opened last, results in every group (sheets with Show all, people,
+  // days, a daily report), and no match.
+  const p = await h.open({ role: 'super', tasks: [...boardTasks('mine'), ...yesterdayOpen()], reports: { [YEST]: report({ date: YEST }) }, settings: { crews: IDCREWS, people: ROSTER } });
+  const find = async (q, screen) => { await p.fill('dialog.find input', q); await settle(p, 250); await h.snap(p, screen); };
+  await click(p, '#findBtn'); await h.snap(p, 'Quick Find, empty box');
+  await esc1(p); await click(p, '.board .tcard'); await nav(p, `#day/${TODAY}`); // a sheet opened: it is a recent one now
+  await click(p, '#findBtn'); await h.snap(p, 'Quick Find, recent sheets');
+  await find('zqpull12awg', 'Quick Find, results'); // whole typed tokens: a match is bold, so part of one would read as a word of its own
+  await click(p, 'dialog.find .find-all'); await h.after(p, 'Quick Find, results');
+  await find('zqjose', 'Quick Find, results');
+  await find('mañana', 'Quick Find, days');
+  await find('ayer', 'Quick Find, days');
+  await find('ZQnada', 'Quick Find, no match');
+  await esc1(p);
+}
+
 async function officeTask(h) {
   const full = task({ uid: 'zqfull', id: 'T1014-21', review: 'Follow-up needed', reviewer: 'ZQDana', followUp: 'ZQfollowup' });
   const working = task({ uid: 'zqwork', id: 'T1014-23', status: '', aStop: '', delay: 0, resultAt: 0 });
@@ -1145,6 +1162,7 @@ const SCREENS = [
   ['Office board', officeBoard],
   ['Office board, nothing open, new task', officeBoardNothingOpen],
   ['Upcoming, full and empty', upcomingScreens],
+  ['Quick Find: empty, results, no match', quickFindScreens],
   ['Task sheet tabs, menus, asks, share', officeTask],
   ['Share sheet, long link', longLink],
   ['Task sheet with the review folder', officeTaskWithFolder],

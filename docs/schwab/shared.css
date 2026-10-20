@@ -638,10 +638,10 @@ details.rec-week > summary .rec-main { padding: 0; flex-direction: row; flex-wra
 
 /* >>> section: crewhours */
 /* The PM's Crew hours: per person, the name and crew on the left and the week's total on the right; shifts as rows. */
-#hoursStats, .live-stats { gap: 0; background: var(--group); border-radius: var(--r); } /* and Live's counts */
-:is(#hoursStats, .live-stats) .stat { position: relative; background: none; text-align: center; padding: 10px 6px; }
-:is(#hoursStats, .live-stats) .stat span { display: block; }
-:is(#hoursStats, .live-stats) .stat + .stat::before { content: ''; position: absolute; left: 0; top: 12px; bottom: 12px; border-left: 1px solid var(--line); }
+#hoursStats { gap: 0; background: var(--group); border-radius: var(--r); }
+#hoursStats .stat { position: relative; background: none; text-align: center; padding: 10px 6px; }
+#hoursStats .stat span { display: block; }
+#hoursStats .stat + .stat::before { content: ''; position: absolute; left: 0; top: 12px; bottom: 12px; border-left: 1px solid var(--line); }
 .person.card { margin-top: 10px; padding: 0; gap: 0; background: none; border-radius: 0; }
 .person-h { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; padding-bottom: 8px; border-bottom: 1px solid var(--line); }
 .person-who { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 2px; }
@@ -719,16 +719,6 @@ details.rec-week > summary .rec-main { padding: 0; flex-direction: row; flex-wra
 /* The Today / Tasks board: the date switcher under the title, a calm summary for the office, rows grouped by floor
    with progress pies, the review group, and Accepted folded away at the bottom like Things' Logbook. */
 .board { display: flex; flex-direction: column; gap: 4px; }
-.board-stats { grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 0; margin: 2px 0 6px; padding: 12px 0; background: var(--group); border-radius: var(--r); }
-.board-stats .stat { padding: 0 12px; background: none; border-radius: 0; }
-.board-stats .stat + .stat { box-shadow: inset 1px 0 var(--line); }
-.board-stats .stat b { font-size: 1.375rem; }
-.board-stats .stat b small { font-size: .875rem; }
-.board-stats .stat span { display: block; margin-top: 2px; font-size: .75rem; }
-@media (max-width: 419px) {
-  .board-stats { grid-template-columns: repeat(2, minmax(0, 1fr)); row-gap: 12px; }
-  .board-stats .stat:nth-child(3) { box-shadow: none; }
-}
 .crew-filter { margin: 2px -16px 0; padding: 0 16px 4px; }
 .crew-filter .chip { min-height: 44px; }
 
@@ -1013,7 +1003,9 @@ body:has(.fab.lift) :is(h3[data-floor], h3[data-day]) { transition: color .18s v
 /* Quick Find (Things 3): the search button in the title row of a main screen, a pull down past the top, "/" on a
    computer. The sheet keeps one height while you type, so nothing jumps under the box; the box and its ✕ stay put while
    the results scroll. Results are rows like the board's, under small headings, with the matched letters in bold. */
-html { overscroll-behavior-y: contain; } /* the page still bounces at the top; a pull there is Quick Find, not the browser's reload */
+/* The page still bounces at the top; a pull there is Quick Find, not the browser's reload. ponytail: Chrome honors this;
+   Safari in a browser tab (not the home screen app) may still offer its own pull to reload. 'none' stops that, and the bounce. */
+html { overscroll-behavior-y: contain; }
 .title-row .find-btn:has(+ #titleMore:not(:empty)) { margin-right: -8px; } /* next to the ⋯: the two buttons touch, 20 px between the icons */
 dialog.sheet.find { height: 92vh; height: 92dvh; }
 @media (min-width: 600px) { dialog.sheet.find { height: min(640px, 84dvh); } }
