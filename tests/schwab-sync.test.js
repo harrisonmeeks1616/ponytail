@@ -2679,3 +2679,23 @@ test('against the real hub/Code.gs: a person filled in on the PM phone\'s own sh
   assert.deepEqual([mock.entities('Hours').find(s => s.id === id).pid, pm.crewHours().find(s => s.id === id).pid], ['pPat', 'pPat'], 'the person goes up from the PM phone\'s own clock');
   assert.deepEqual(mock.entities('Activity').filter(e => e.kind.startsWith('pm.')).map(e => e.text), [], "Activity says no 'PM edited'");
 });
+
+test('against the real hub/Code.gs: a merge whose sync record will not save is undone whole, so a newer PM edit is never pushed over by it (DATA4-01)', async () => {
+  const { mock, k, real } = realHub();
+  const sp = await makePhone(real, 'super', { key: k.super }), ph = await makePhone(real, 'pm', { key: k.pm }), lap = await makePhone(real, 'pm', { key: k.pm });
+  const step = async (...ps) => { for (const p of ps) { mock.advance(5e3); await p.cycle(); } };
+  const q = (text, rec) => ({ q: text, rec, by: '', pm: '', pmNote: '' }), ans = r => r && [r.decisions[0]?.pm, r.pmReview];
+  const all = () => [mock.entities('Reports').find(r => r.date === DAY), ph.reports()[DAY], lap.reports()[DAY], sp.reports()[DAY]].map(ans);
+  sp.editReport(DAY, r => Object.assign(r, { status: 'On plan', decisions: [q('Saturday OT for crew A?', 'Yes')] }));
+  await step(sp, ph, lap);
+  ph.net.down = true; ph.editReport(DAY, r => { r.decisions[0].pm = 'Approved'; }); await step(ph);
+  mock.advance(60e3); lap.editReport(DAY, r => { r.pmReview = 'Remote version one'; }); await step(lap);
+  // the phone comes back with storage full for its sync record only: the merge of version one must not stay half-saved
+  ph.net.down = false; ph.storage.failOn.add('schwab.hubSync'); await step(ph);
+  assert.equal(ph.sync.hubStatus().state, 'error');
+  assert.notEqual(ph.reports()[DAY].pmReview, 'Remote version one', 'nothing merged stays without its sync record');
+  mock.advance(60e3); lap.editReport(DAY, r => { r.pmReview = 'Remote version two'; }); await step(lap);
+  ph.storage.failOn.clear(); await step(ph, lap, sp, ph);
+  const end = ['Approved', 'Remote version two'];
+  assert.deepEqual(all(), [end, end, end, end], 'the newer review stands on the hub and every phone, and the offline answer too');
+});

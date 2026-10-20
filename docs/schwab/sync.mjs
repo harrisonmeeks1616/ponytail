@@ -137,7 +137,7 @@ export function makeSync(o = {}) {
     return st;
   }
   let meta = null; // what hubStatus shows, so a screen can ask on every draw without reading the whole state
-  const saveState = st => { meta = pick(st, ['rev', 'ok', 'skew']); return store.set(ST, st); };
+  const saveState = st => { const ok = store.set(ST, st); if (ok) meta = pick(st, ['rev', 'ok', 'skew']); return ok; };
   const inT = raw => {
     const t = norm.task(raw);
     for (const l of ['items', 'checks']) { const seen = new Set(); t[l] = t[l].filter(i => i.id && !seen.has(i.id) && seen.add(i.id)); }
@@ -512,7 +512,18 @@ export function makeSync(o = {}) {
   }
 
   // Merge a pull reply into the stores. Everything is computed first, saved to the stores, and only then recorded as synced.
+  // A merge saved without its sync record would look like this phone's own work next time and go up over newer work, so
+  // if any part will not save (a full phone), every store goes back as it was and the whole reply is taken again later.
+  const MERGED = [KEYS.tasks, KEYS.hours, KEYS.crewHours, KEYS.reports, KEYS.settings, KEYS.hub, KEYS.pin];
   function applyPull(c, rep, sig, st = loadState()) { // st: a push's acks not saved yet (pushPhase)
+    const was = MERGED.map(k => [k, store.get(k, null)]), S0 = o.S && { ...o.S };
+    try { mergePull(c, rep, sig, st); } catch (e) {
+      for (const [k, v] of was) if (JSON.stringify(store.get(k, null)) !== JSON.stringify(v)) store.set(k, v);
+      if (S0) Object.assign(o.S, S0);
+      throw e;
+    }
+  }
+  function mergePull(c, rep, sig, st) {
     const kinds = new Set(), ts = now();
     const win = winDays(c.role), cut = cutoff(ts, win);
     let moved = [];
@@ -603,7 +614,7 @@ export function makeSync(o = {}) {
     if (rev < st.rev) Object.assign(st, { rev: 0, sig: '' }); // the hub was rebuilt behind us: start over with a full pull
     else Object.assign(st, { rev, sig });
     st.ok = ts;
-    saveState(st);
+    if (!saveState(st)) throw err('space');
     notify(kinds);
   }
   async function pullPhase(c, ep) {
