@@ -656,7 +656,6 @@ export default {
   'Your crew': 'Su cuadrilla',
   'Join': 'Unirse',
   'Pick your crew': 'Escoja su cuadrilla',
-  'Connected to the hub': 'Conectado al sistema central',
   'Refreshing…': 'Actualizando…',
   'Disconnect this phone from the hub? Your work stays on this phone.': '¿Desconectar este teléfono del sistema central? Su trabajo se queda en este teléfono.',
   'Disconnect': 'Desconectar',
@@ -811,4 +810,18 @@ export default {
 
   // Quick Find
   'Sheets, people and days': 'Hojas, personas y días',
+
+  // a phone on the hub in the wrong role, and what joining says (OWNER3)
+  'That is the crew key: crew phones join with the crew invite. On this phone, paste the PM key from the Execution log of the hub script, or open the superintendent invite.': 'Esa es la clave de cuadrilla: los teléfonos de cuadrilla se unen con la invitación de cuadrilla. En este teléfono, pegue la clave del gerente de proyecto del registro de ejecución del script del sistema central, o abra la invitación del superintendente.',
+  'That did not work. Check the signal and try again. If it still fails, check that the hub deployment is set to Who has access: Anyone.': 'No funcionó. Revise la señal e intente de nuevo. Si sigue sin funcionar, revise que la implementación del sistema central tenga Quién tiene acceso: Cualquier usuario.',
+  'This phone is on the hub as a crew phone': 'Este teléfono está en el sistema central como teléfono de cuadrilla',
+  'Sheets, reports and settings made here stay on this phone. In Settings, disconnect and connect again with the PM key: then they go up.': 'Las hojas, los reportes y los ajustes hechos aquí se quedan en este teléfono. En Ajustes, desconéctelo y conéctelo otra vez con la clave del gerente de proyecto: entonces se envían.',
+  'Sheets, reports and settings made here stay on this phone. Ask the PM for the superintendent invite and open it on this phone: then they go up.': 'Las hojas, los reportes y los ajustes hechos aquí se quedan en este teléfono. Pida al gerente de proyecto la invitación del superintendente y ábrala en este teléfono: entonces se envían.',
+  'Not on the hub yet': 'Todavía no está en el sistema central',
+  'This phone is signed in to the office screens. Sign out and join the hub as a crew phone?': 'Este teléfono tiene abiertas las pantallas de oficina. ¿Cerrarlas y unirse al sistema central como teléfono de cuadrilla?',
+  'Sign out and join': 'Cerrar y unirse',
+  'Connected as the superintendent': 'Conectado como superintendente',
+  'Connected as a crew phone for {crew}': 'Conectado como teléfono de cuadrilla de {crew}',
+  'Connected as a crew phone': 'Conectado como teléfono de cuadrilla',
+  'This phone is set up for the superintendent. Sign in with the office passcode the PM gives you.': 'Este teléfono está configurado para el superintendente. Entre con el código de oficina que le dé el gerente de proyecto.',
 };

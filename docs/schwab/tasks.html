@@ -39,7 +39,7 @@ import {
 import { renderOffice, reportAct, reportInput, openReport, openHours, hoursInput, workerChange, fileReportIfChanged, reloadReports, sectionToggle, hasReports, attachShifts,
   reportsNow, crewNow, dropReport, setTextField } from './report.mjs';
 import * as sync from './sync.mjs';
-import { liveView, recordsView, hubSettingsView, statusDot, joinSheet, txView, txField, after as liveAfter, owns as liveOwns, act as liveAct, onInput as liveInput, deleteRecord, txCached } from './live.mjs';
+import { liveView, recordsView, hubSettingsView, statusDot, joinSheet, crewKeyNote, txView, txField, after as liveAfter, owns as liveOwns, act as liveAct, onInput as liveInput, deleteRecord, txCached } from './live.mjs';
 
 window.appStarted = true; // every file loaded (see the fallback above)
 registerSW();
@@ -209,7 +209,9 @@ async function openJoin(data) {
   const h = data.hub && typeof data.hub === 'object' ? data.hub : {};
   if (S.hubRole === 'pm' && S.hubUrl === h.url) return toast(L('This is the PM phone. Send the invite to the person it is for.')); // its key is shown only once, at setup
   // an office phone kept its office screens as a crew phone, but the hub took nothing of its office work from then on
-  if (data.role === 'crew' && (office() || ['pm', 'super'].includes(S.hubRole) || T.some(x => x.origin === 'mine'))) return toast(L('This phone is for the office, so it does not join as a crew phone. Send the invite to the person it is for.'));
+  const crewSide = crewPhone() || S.hubRole === 'crew'; // signed in, still a crew phone: someone fixed its settings (a sign-in lasts 12 hours)
+  if (data.role === 'crew' && ((office() && !crewSide) || ['pm', 'super'].includes(S.hubRole) || T.some(x => x.origin === 'mine'))) return toast(L('This phone is for the office, so it does not join as a crew phone. Send the invite to the person it is for.'));
+  if (data.role === 'crew' && office()) { if (!await ask(L('This phone is signed in to the office screens. Sign out and join the hub as a crew phone?'), L('Sign out and join'))) return; signOut(); render(); } // OWNER3-03
   if (S.hubUrl && S.hubKey && (S.hubUrl !== h.url || S.hubKey !== h.key)
     && !await ask(L('This phone is already connected to a hub. Use this invite instead?'), L('Use this invite'))) return;
   const open = () => joinSheet({ ...ctx(), sync: { ...sync, joinFrom: d => sync.joinFrom(d, { replace: true }) } }, data); // asked above
@@ -296,7 +298,7 @@ function renderBoard() {
   const rows = ts => `<div class="list lead">${ts.map(row).join('')}</div>`;
   const head = (text, n, cls = '') => `<h3 class="section-h${cls}">${text}<small>${n}</small></h3>`;
   screenHead(day === today() ? L('Today') : niceDate(day), { sub: day === today() ? '' : day < today() ? L('Past day') : L('Planning ahead'), more: 'boardMenu' });
-  app.innerHTML = `<div class="board">${dateBar(day, 'day', { upcoming: office() })}${all.length ? `
+  app.innerHTML = `<div class="board">${dateBar(day, 'day', { upcoming: office() })}${office() ? crewKeyNote(ctx()) : ''}${all.length ? `
     ${office() ? daySummary(list) : ''}
     ${crews.length > 1 || crewFilter ? `<div class="chips scroll crew-filter" role="group" aria-label="${L('Show crew')}">
       <button class="chip" data-act="filter" data-v="" aria-pressed="${!crewFilter}">${L('All crews')}</button>
@@ -310,7 +312,7 @@ function renderBoard() {
     ${office() || crewPhone() ? '' : `<button class="link sign-in" data-act="lockBtn">${L('Office sign-in')}</button>`}`
     : !office()
       ? `<div class="empty">${icon('today', 'empty-ic')}<h2>${L('No task sheets for {date}', { date: niceDate(day) })}</h2>
-        <p>${hubOn() ? L('Sheets for your crew show up here by themselves. A texted link still works too.') : L('Open the link your superintendent texted you, or paste it here.')}</p>
+        <p>${S.hubRole === 'super' ? L('This phone is set up for the superintendent. Sign in with the office passcode the PM gives you.') : hubOn() ? L('Sheets for your crew show up here by themselves. A texted link still works too.') : L('Open the link your superintendent texted you, or paste it here.')}</p>
         <button class="btn primary" data-act="paste">${L('Open a link someone sent you')}</button>
         ${crewPhone() ? '' : `<button class="link" data-act="lockBtn">${L('Superintendent or PM? Sign in to the office screens')}</button>`}</div>`
       : `<div class="empty">${icon('today', 'empty-ic')}<h2>${L('No task sheets for {date}', { date: niceDate(day) })}</h2>

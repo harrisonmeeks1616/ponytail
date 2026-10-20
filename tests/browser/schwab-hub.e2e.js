@@ -183,8 +183,8 @@ async function join(p, link, o = {}) {
   if (o.crew) await p.click(`dialog [data-crew="${o.crew}"]`);
   await narrow(p, `join sheet (${p.zq.name})`);
   await p.click('dialog [data-join]');
-  const ok = await sawToast(p, /^(Connected to the hub|Conectado al sistema central)$/, 10000);
-  return { ok, sheetText, chips: chips.map(c => c.trim()), who: who.map(c => c.trim()) };
+  const ok = await sawToast(p, /^(Connected as (the superintendent|a crew phone( for .+)?)|Conectado como (superintendente|teléfono de cuadrilla( de .+)?))$/, 10000); // it says which (OWNER3)
+  return { ok, sheetText, chips: chips.map(c => c.trim()), who: who.map(c => c.trim()), toast: (await p.evaluate(() => window.__toasts.slice())).at(-1) };
 }
 
 (async () => {
@@ -235,6 +235,9 @@ async function join(p, link, o = {}) {
     const cfg = await until(async () => entities(await dump(), 'Config')[0], 15000);
     check(cfg && cfg.people?.length === 4 && cfg.crews?.some(c => c.name === 'Low voltage') && /^[0-9a-f]{16}:/.test(cfg.pin), 'the PM roster, crews and the passcode hash reach the hub config');
     await pm.click('[data-act=hubInvite][data-v=super]');
+    await pm.waitForSelector('dialog .linkbox');
+    const invText = await text(pm, 'dialog[open]');
+    check(/Send it only to the person it is for/.test(invText) && !/work details/.test(invText), `OWNER3-05: the invite sheet says the link carries the hub key, not that work details are inside it (${invText.slice(0, 160)})`);
     links.super = await takeLink(pm);
     const invite = async crew => { await pm.click('[data-act=hubInvite][data-v=crew]'); await pm.waitForSelector('dialog [data-crew]'); await narrow(pm, 'Invite crew: which crew'); await pm.click(`dialog [data-crew="${crew}"]`); return takeLink(pm); };
     links.a = await invite('Crew A'); links.b = await invite('Crew B'); links.w1 = await invite('Crew A'); links.pick = await invite('');
@@ -266,7 +269,10 @@ async function join(p, link, o = {}) {
   await step('2. Each phone joins by opening its link', async () => {
     sup = await phone('Super');
     const s = await join(sup, links.super, { name: 'Dana Super' });
-    check(s.ok && /as the superintendent/.test(s.sheetText) && !s.chips.length, 'superintendent: the join sheet says what it does, Join connects ("Connected to the hub")');
+    check(s.ok && /as the superintendent/.test(s.sheetText) && !s.chips.length, 'superintendent: the join sheet says what it does, Join connects');
+    await sup.waitForTimeout(400);
+    check(s.toast === 'Connected as the superintendent' && /set up for the superintendent\. Sign in with the office passcode the PM gives you/.test(await text(sup, '#app')),
+      `OWNER3-04: after joining, the superintendent is told he is set up as the superintendent and the passcode comes from the PM (toast "${s.toast}")`);
     const sst = await local(sup, 'schwab.settings');
     check(sst?.me === 'Dana Super' && sst.worker === 'Dana Super', `PHONE-UX-07: the superintendent's join asks the name, for the sheets they assign and their own time clock (me ${sst?.me}, worker ${sst?.worker})`);
     ca = await phone('Crew A');
@@ -293,7 +299,7 @@ async function join(p, link, o = {}) {
     const picked = await w2.evaluate(() => [document.querySelector('dialog [name=who]').value, document.querySelector('dialog [data-crew="Crew B"]').getAttribute('aria-pressed')]);
     check(picked.join() === 'Luis M,true', `worker 2: tapping Luis M fills the name as the roster spells it and picks his crew, Crew B (${picked})`);
     await w2.click('dialog [data-join]');
-    check(await sawToast(w2, /^Connected to the hub$/), 'worker 2 (Luis M) joins on Crew B');
+    check(await sawToast(w2, /^Connected as a crew phone for Crew B$/), 'worker 2 (Luis M) joins on Crew B, and the toast names the crew');
     for (const [p, role, crew, worker] of [[sup, 'super', '', ''], [ca, 'crew', 'Crew A', 'Ana R'], [cb, 'crew', 'Crew B', 'Rosa P'], [w1, 'crew', 'Crew A', 'Jose L'], [w2, 'crew', 'Crew B', 'Luis M']]) {
       const hb = await local(p, 'schwab.hub'), st = await local(p, 'schwab.settings');
       check(hb?.hubUrl === HUBURL && hb.hubRole === role && hb.hubCrew === crew && (!worker || st.worker === worker), `${p.zq.name}: saved as ${role}${crew ? ' on ' + crew : ''}${worker ? ', named ' + worker : ''}`);
@@ -301,6 +307,17 @@ async function join(p, link, o = {}) {
     }
     check(await until(async () => (await local(sup, 'schwab.settings'))?.people?.length === 4, 20000), 'the superintendent phone takes the roster from the hub');
     check(await until(async () => /^[0-9a-f]{16}:/.test(await local(sup, 'schwab.pin') || ''), 20000), 'the superintendent phone learns the office passcode from the hub');
+    // OWNER3-03: someone signed in on Ana's crew phone to fix a setting (a sign-in lasts 12 hours); she opens her crew invite again
+    check(await until(async () => /^[0-9a-f]{16}:/.test(await local(ca, 'schwab.pin') || ''), 20000), 'the Crew A phone learns the office passcode from the hub');
+    await ca.click('#lockBtn'); await ca.waitForSelector('dialog .keypad'); await pad(ca, PIN);
+    await ca.evaluate(() => { window.__toasts = []; }); // only what this opening says
+    await ca.goto(links.a); await ca.waitForSelector('dialog[open] .ask');
+    const signedQ = await text(ca, 'dialog[open] .ask');
+    await ca.click('dialog[open] [data-a="1"]'); await ca.waitForSelector('dialog [data-join]'); await ca.click('dialog [data-join]');
+    const rejoined = await sawToast(ca, /^Connected as a crew phone for Crew A$/), cahb = await local(ca, 'schwab.hub');
+    check(/signed in to the office screens\. Sign out and join the hub as a crew phone\?/.test(signedQ) && rejoined && !(await ca.evaluate(() => document.body.classList.contains('office'))) && cahb.hubRole === 'crew' && cahb.hubCrew === 'Crew A',
+      `OWNER3-03: a signed-in crew phone opening its crew invite is offered to sign out and join ("${signedQ}"), and joins signed out on Crew A`);
+    await nav(ca, '#day/' + DAY);
     await nav(cb, '#hub');
     check(/Cuadrilla/.test(await text(cb, '#app')) && /Crew B/.test(await text(cb, '#app')), 'Crew B hub page: shows its crew, in Spanish');
     await narrow(cb, 'crew hub page (Spanish)');

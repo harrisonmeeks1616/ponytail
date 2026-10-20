@@ -319,6 +319,15 @@ export async function txApply(ctx, root = globalThis.document) {
 
 // ---------- Live ----------
 
+// Signed in on a phone the hub knows as a crew phone (it joined with a crew invite): the hub takes none of its office work,
+// which stays here until it joins as the office (OWNER3-02). On the Live and Tasks screens.
+export function crewKeyNote(ctx) {
+  const h = hub(ctx);
+  return h.state === 'off' || h.role !== 'crew' || (ctx.role !== 'pm' && ctx.role !== 'super') ? '' : `<div class="banner" data-tone="warn" role="note"><b>${L('This phone is on the hub as a crew phone')}</b><p>${ctx.role === 'pm'
+    ? L('Sheets, reports and settings made here stay on this phone. In Settings, disconnect and connect again with the PM key: then they go up.')
+    : L('Sheets, reports and settings made here stay on this phone. Ask the PM for the superintendent invite and open it on this phone: then they go up.')}</p></div>`;
+}
+
 export function liveView(ctx) {
   screenHead(L('Live'), { sub: niceDate(dayOf(nowOf(ctx))) });
   if (ctx.role !== 'pm' && ctx.role !== 'super') return `<div class="empty"><h2>${L('The live board is for the office')}</h2></div>`;
@@ -355,7 +364,7 @@ export function liveView(ctx) {
     ? `<ol class="feed">${feed.map(e => { const [t, line] = lineOf(e);
       return `<li><small>${esc(ago(e.ts, now))}</small>${t ? `<a href="${taskHref(t)}">${line}</a>` : line}</li>`; }).join('')}</ol>`
     : `<p class="hint">${st.state === 'off' ? L('Connect the hub to see crews start, finish and clock in.') : L('Nothing yet. Crews starting, finishing and clocking in show up here.')}</p>`}</section>`;
-  return `${head}${stats}${site}<h3 class="section-h">${L("Today's sheets")}<small>${sheets.length}</small></h3>${board}${events}`;
+  return `${crewKeyNote(ctx)}${head}${stats}${site}<h3 class="section-h">${L("Today's sheets")}<small>${sheets.length}</small></h3>${board}${events}`;
 }
 
 // Who is on site: a chip a person (initials in a ring of their crew's color, the name, since when), the crews in the
@@ -385,7 +394,8 @@ const doneRow = t => `<a class="live-done" href="#task/${esc(t.uid)}/assign"><sp
 function sheetCard(ctx, t, now, dup) {
   const [label, tone] = stage(t), { d, n } = progress(t), la = lastActivity(t), need = t.status && !t.review;
   const where = [t.floor, t.area].filter(Boolean).join(' · ') || L('Floor not set');
-  const last = la ? L('Last activity {ago}', { ago: ago(la, now) }) : t.sentAt ? L('Sent {ago}', { ago: ago(t.sentAt, now) }) : L('Not started');
+  const last = la ? L('Last activity {ago}', { ago: ago(la, now) }) : !t.sentAt ? L('Not started')
+    : hub(ctx).state !== 'off' && !ctx.sync.onHub?.(t.uid) ? L('Not on the hub yet') : L('Sent {ago}', { ago: ago(t.sentAt, now) }); // "Sent" only once the crew can get it from the hub
   const nk = t.status === 'Blocked' ? (t.comments ? 'comments' : 'remain') : t.status === 'Partial' ? (t.remain ? 'remain' : 'comments') : '', note = nk && t[nk];
   return `<div class="live-card">
     <a class="row" href="${taskHref(t)}"><span class="row-lead">${pieOf(t)}</span>
@@ -714,7 +724,8 @@ async function invite(ctx, role) {
     const r = await ctx.sync.invite(role, crew, names, role === 'crew' ? people(ctx.S).filter(p => !crew || p.crew === crew) : []);
     if (!r.ok) return ctx.toast(r.message || L('The invite link could not be made.'), 'bad');
     const msg = l => L('Join the {project} hub: open this link on your phone and follow the steps.', { project: ctx.S.project || COMPANY }, l);
-    sendSheet({ title: role === 'crew' ? L('Hub invite for the crew') : L('Hub invite for the superintendent'), url: r.url, text: role === 'crew' ? `${msg('en')}\n\n${msg('es')}` : msg('en') });
+    sendSheet({ title: role === 'crew' ? L('Hub invite for the crew') : L('Hub invite for the superintendent'), url: r.url, text: role === 'crew' ? `${msg('en')}\n\n${msg('es')}` : msg('en'),
+      note: L('An invite link carries the hub key. Send it only to the person it is for. If a phone is lost, replace the key.') }); // not a task link: no work details in it
   };
   const names = ctx.S.crews.map(c => c.name).filter(Boolean);
   if (role === 'super' || !names.length) return make('');
@@ -763,7 +774,7 @@ export function joinSheet(ctx, data) {
     if (!r.ok) return err(r.message || L('That hub invite is not valid'));
     patchSettings(ctx, crewRole ? { worker: name } : { me: name, worker: ctx.S.worker || name }); // the superintendent's own time clock too, as the first run does
     d.close();
-    ctx.toast(L('Connected to the hub'));
+    ctx.toast(!crewRole ? L('Connected as the superintendent') : r.crew ? L('Connected as a crew phone for {crew}', { crew: r.crew }) : L('Connected as a crew phone')); // which one: a wrong invite shows at once
     ctx.render();
   };
 }
@@ -831,7 +842,7 @@ async function connect(ctx, el) {
   if (!url.trim() || !key.trim()) return err(L('Paste the hub link and the key.'));
   el.disabled = true;
   err('');
-  const r = await ctx.sync.connect(url, key);
+  const r = await ctx.sync.connect(url, key, { office: true }); // only the office has this form: a crew key is refused (sync.mjs)
   el.disabled = false;
   if (!r.ok) return err(r.message || L('That did not work. Try again.'));
   ctx.toast(L('Connected as {role}', { role: roleName(r.role) }));

@@ -2091,6 +2091,39 @@ test('against the real hub/Code.gs: a phone that taps Disconnect and joins the s
   assert.deepEqual([done(mock.entities('Tasks').find(t => t.uid === uid)), done(ana.task(uid)), done(jose.task(uid))], [want, want, want], 'both ticks, everywhere');
 });
 
+test('against the real hub/Code.gs: a phone that changes role on one hub keeps every sheet and its settings, and they all reach the hub (OWNER3-01)', async () => {
+  const { mock, k, real } = realHub(), { unpack } = await lib;
+  const step = async (...ps) => { for (const p of ps) { mock.advance(5e3); await p.cycle(); } };
+  const onHub = uid => mock.entities('Tasks').find(t => t.uid === uid)?.scope, cfg = () => mock.entities('Config')[0] || {};
+  // the PM pastes the crew key, plans on the crew key, taps Disconnect and connects with the PM key
+  const pm = await makePhone(real, 'pm', { key: '', url: '', noRole: true }), pin = '0123456789abcdef:' + 'a'.repeat(64);
+  pm.save('schwab.settings', { ...pm.settings(), project: 'Riverside Tower', floors: ['Level 3'], pin, crews: [{ id: 'c1', name: 'Crew A', lead: '', members: '' }], people: [{ id: 'p1', name: 'Ana R', crewId: 'c1' }] });
+  const u1 = pm.addTask({ scope: 'Pull wire to the panel', sentAt: pm.now() });
+  assert.equal((await pm.sync.connect(URL_A, k.crew)).role, 'crew');
+  await step(pm); // one round on the crew key is enough to lose it all without the fix
+  const u2 = pm.addTask({ id: 'T1019-02', scope: 'Install conduit', sentAt: pm.now() });
+  await step(pm, pm);
+  pm.sync.disconnect();
+  assert.equal((await pm.sync.connect(URL_A, k.pm)).role, 'pm');
+  await step(pm, pm, pm);
+  assert.deepEqual([pm.task(u1).scope, pm.task(u2).scope, onHub(u1), onHub(u2)], ['Pull wire to the panel', 'Install conduit', 'Pull wire to the panel', 'Install conduit']);
+  const names = s => (s.people || []).map(p => p.name);
+  assert.deepEqual([cfg().project, cfg().floors, cfg().pin, names(cfg())], ['Riverside Tower', ['Level 3'], pin, ['Ana R']], 'the settings and the passcode reached the hub');
+  // the superintendent joins with the crew invite, signs in and plans, then taps "Use this invite" on his own
+  const invite = async role => unpack((await pm.sync.invite(role, role === 'crew' ? 'Crew A' : '')).url.split('#p=')[1]);
+  const sp = await makePhone(real, 'super', { key: '', url: '', noRole: true });
+  assert.equal((await sp.sync.joinFrom(await invite('crew'))).role, 'crew');
+  await step(sp, sp);
+  assert.deepEqual([sp.settings().project, sp.settings().pin, names(sp.settings())], ['Riverside Tower', pin, ['Ana R']], 'a phone invited later learns the project and the passcode');
+  const u3 = sp.addTask({ id: 'T1019-03', scope: 'Hang fixtures', sentAt: sp.now() });
+  sp.save('schwab.settings', { ...sp.settings(), floors: ['Level 3', 'Roof'] });
+  await step(sp, sp);
+  assert.equal((await sp.sync.joinFrom(await invite('super'), { replace: true })).role, 'super');
+  await step(sp, sp, pm);
+  assert.deepEqual([sp.task(u3).scope, onHub(u3), pm.task(u3)?.scope], ['Hang fixtures', 'Hang fixtures', 'Hang fixtures']);
+  assert.deepEqual([cfg().floors, pm.settings().floors, cfg().project, names(cfg()), names(pm.settings())], [['Level 3', 'Roof'], ['Level 3', 'Roof'], 'Riverside Tower', ['Ana R'], ['Ana R']]);
+});
+
 test('against the real hub/Code.gs: two PM devices fixing one shift keep both fixes, and a time both changed goes to the newer fix (DATA2-05)', async () => {
   const { mock, k, real } = realHub();
   const w = await makePhone(real, 'crew', { key: k.crew, crew: 'Crew A', worker: 'Ana R' }), ph = await makePhone(real, 'pm', { key: k.pm }), lap = await makePhone(real, 'pm', { key: k.pm });

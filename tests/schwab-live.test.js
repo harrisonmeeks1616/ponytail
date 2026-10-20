@@ -821,6 +821,36 @@ test('connect: both boxes first, errors stay on the form, success redraws', () =
   assert.ok(names(ctx.calls).includes('render'));
   assert.equal(toasts(ctx).at(-1)[1], 'Connected as Project manager');
 }));
+// The real sync engine (sync.mjs makeSync) on a fake hub that answers every request with `answer` (or throws).
+const realSync = async answer => {
+  const { makeSync } = await load('sync.mjs'), m = new Map();
+  const storage = { get: (k, fb) => (m.has(k) ? JSON.parse(m.get(k)) : fb), set: (k, v) => !!m.set(k, JSON.stringify(v)) };
+  return makeSync({ storage, now: () => NOW, ensureDevice: async () => '', timers: { set: () => 0, clear: () => {} },
+    fetchImpl: async () => { if (!answer) throw new TypeError('Failed to fetch'); return { status: 200, json: async () => ({ now: NOW, rev: 0, ...answer }) }; } });
+};
+const connectForm = sync => withDoc({ hubUrl: { value: 'https://script.google.com/macros/s/X/exec' }, hubKey: { value: 'c'.repeat(32) }, hubErr: { textContent: '' } }, async () => {
+  await live.act(mkCtx({ sync }), 'hubConnect', { dataset: {}, disabled: false });
+  return globalThis.document.getElementById('hubErr').textContent;
+});
+test('OWNER3-02: an office phone never runs as a crew phone on the hub unawares: Connect refuses the crew key, and a signed-in crew phone says so on Live and Tasks', async () => {
+  const sync = await realSync({ ok: true, role: 'crew' });
+  assert.match(await connectForm(sync), /^That is the crew key: crew phones join with the crew invite\. On this phone, paste the PM key/);
+  assert.equal(sync.hubStatus().state, 'off', 'refused before anything is saved');
+  // a superintendent who joined with a crew invite, then signed in with the office passcode
+  const crew = mkSync({ onHub: () => false });
+  crew.status.role = 'crew';
+  const html = live.liveView(mkCtx({ role: 'super', sync: crew, tasks: () => [task({ sentAt: NOW - min(1) })] }));
+  assert.match(html, /This phone is on the hub as a crew phone.*Ask the PM for the superintendent invite and open it on this phone/s);
+  assert.ok(html.includes('Not on the hub yet') && !/Sent (just now|1 min ago)/.test(html), 'a sheet the hub does not have is never "Sent"');
+  assert.match(live.crewKeyNote(mkCtx({ role: 'pm', sync: crew })), /connect again with the PM key/);
+  assert.deepEqual([live.crewKeyNote(mkCtx({ role: 'super' })), live.crewKeyNote(mkCtx({ role: 'crew', sync: crew }))], ['', ''], 'not for a phone the hub knows as the office, nor one signed out');
+  assert.match(live.liveView(mkCtx({ tasks: () => [task({ sentAt: NOW - min(1) })], sync: mkSync({ onHub: () => true }) })), /Sent 1 min ago/);
+});
+test('OWNER3-07: Connect that cannot reach the hub names the deployment\'s access setting; a crew invite with no signal does not', async () => {
+  assert.match(await connectForm(await realSync(null)), /Check the signal and try again\. If it still fails, check that the hub deployment is set to Who has access: Anyone\./);
+  const r = await (await realSync(null)).joinFrom({ v: 1, kind: 'join', role: 'crew', crew: 'Crew A', hub: { url: 'https://script.google.com/macros/s/X/exec', key: 'c'.repeat(32) } });
+  assert.equal(r.message, 'That did not work. Try again.');
+});
 test('disconnect and rotate ask first', async () => {
   let ctx = mkCtx({ ask: async () => false });
   await live.act(ctx, 'hubDisconnect', { dataset: {} });

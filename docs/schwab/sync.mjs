@@ -172,6 +172,8 @@ export function makeSync(o = {}) {
       bad_join: L('That hub invite is not valid'),
       mismatch: L('This invite does not match the hub. Ask for a new one.'),
       already: L('This phone is already connected to a different hub. Disconnect it first to join this one.'),
+      crew_key: L('That is the crew key: crew phones join with the crew invite. On this phone, paste the PM key from the Execution log of the hub script, or open the superintendent invite.'),
+      no_reach: L('That did not work. Check the signal and try again. If it still fails, check that the hub deployment is set to Who has access: Anyone.'),
       off: L('This phone is not connected to a hub'),
     })[code] || L('The hub had a problem. Trying again shortly.');
   }
@@ -253,8 +255,8 @@ export function makeSync(o = {}) {
       for (const [p, fn, at] of defs) {
         const pr = ent(rec, p), h = hs(fn(doc)), tx = pr.tx; // tx: a texted copy merged here is as old as the text (fromText)
         delete pr.tx;
-        if (!writes.includes(p)) pr.s = h; // not this role's part: whatever it holds counts as in sync
-        else if (pr.s === h) { delete pr.p; delete pr.at; } else if (pr.x !== h) {
+        if (!writes.includes(p)) continue; // not this role's part: left as the hub last had it, so a role that owns it later sends what changed (OWNER3-01)
+        if (pr.s === h) { delete pr.p; delete pr.at; } else if (pr.x !== h) {
           if (pr.p !== h) Object.assign(pr, { p: h, at: tx || stampOf(st, pr, edited, doc[at]) });
           sent[p] = { h, at: pr.at, b: pr.b };
         }
@@ -285,8 +287,7 @@ export function makeSync(o = {}) {
     shifts('h', lc.hours, s => c.dev && s.device === c.dev, false);
     shifts('m', lc.crewH, s => !(c.dev && s.device === c.dev), true); // the PM's own clock-ins go up from their own clock, not the timesheet
     const pr = ent(ent(st.g, 'c'), 'v'), cp = cfgPart(cfg()), h = hs(cp);
-    if (c.role === 'crew') pr.s = h;
-    else if (pr.s === h) { delete pr.p; delete pr.at; } else if (pr.x !== h) {
+    if (c.role === 'crew') { /* never sends settings: left as the hub last had them, as an office part is above */ } else if (pr.s === h) { delete pr.p; delete pr.at; } else if (pr.x !== h) {
       if (pr.p !== h) Object.assign(pr, { p: h, at: Math.max(skewed(st), num(pr.v) + 1, num(pr.at) + 1) }); // the hub orders two office phones' settings by this stamp
       items.push({ k: 'g', key: 'c', sent: { v: { h, at: pr.at, b: pr.b } }, wire: { ...cp, at: pr.at, ...(pr.b && { base: pr.b }) } });
     }
@@ -353,7 +354,7 @@ export function makeSync(o = {}) {
     let st = loadState(), fresh = 0, held = false;
     const items = scan(st, c, readLocal(c)), send = [];
     for (const it of items) { // a single entity over the hub's cap can never be accepted
-      if (c.role === 'crew' && it.k === 't' && st.t[it.key]?.assign?.v === undefined) continue; // a texted sheet the hub never sent: it stays counted as not sent
+      if (it.k === 't' && !it.sent.assign && st.t[it.key]?.assign?.v === undefined) continue; // a sheet the hub never had goes with its office part, never as a blank one (a crew phone: a texted sheet the hub never sent stays counted as not sent)
       if (hold && it.k === 't' && st.t[it.key]?.assign?.v === undefined && it.wire.id && !it.wire.sentAt) { held = true; continue; } // a new unsent sheet waits for the pull (renumber)
       it.len = JSON.stringify(it.wire).length + 1;
       if (it.len > CAP.entity) { for (const p in it.sent) delete it.sent[p].b; for (const k of ['assignBase', 'crewBase', 'base', 'supBase', 'pmBase']) if (it.wire[k]) delete it.wire[k]; it.len = JSON.stringify(it.wire).length + 1; } // too big with its bases: the whole part goes by its stamp, as before (a supBase of null is no copy and stays)
@@ -706,7 +707,8 @@ export function makeSync(o = {}) {
     await ensure();
     const s = cfg();
     let rep;
-    try { rep = await whoami(null, { cfg: { url, key, secret: device().secret, role: '' } }); } catch (e) { return lost(e); }
+    try { rep = await whoami(null, { cfg: { url, key, secret: device().secret, role: '' } }); } catch (e) { return e.code === 'offline' && extra.office ? bad('no_reach') : lost(e); } // a private deployment answers like no signal (OWNER3-07)
+    if (extra.office && rep.role === 'crew') return bad('crew_key'); // the office's Connect: as a crew phone none of its office work would reach the hub (OWNER3-02)
     if (extra.role && extra.role !== rep.role) return bad('mismatch');
     epoch++; fails = 0; nextAllowed = 0;
     // The same hub, also after a Disconnect: everything this phone knew of it stays (bases, stamps, where it was), so its unsynced
@@ -947,7 +949,7 @@ export const hubStatus = () => get().hubStatus();
 export const poke = () => get().poke();
 export const cycle = () => get().cycle();
 export const joinFrom = (data, opt) => get().joinFrom(data, opt);
-export const connect = (url, key) => get().connect(url, key);
+export const connect = (url, key, extra) => get().connect(url, key, extra);
 export const disconnect = () => get().disconnect();
 export const invite = (role, crew, crews, people) => get().invite(role, crew, crews, people);
 export const translate = (items, from, to) => get().translate(items, from, to);

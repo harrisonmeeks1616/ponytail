@@ -766,7 +766,7 @@ export const ask = async (msg, yes, tone = 'primary') => (await choose(msg, [[tr
 // The share sheet: the message, then one big row per way to send it (Share, Text message, Email, Copy link). The link
 // itself sits quietly at the bottom, for when copying is refused and it has to be selected by hand. The title's hyphens
 // don't break (T1019-01 stays on one line).
-export function sendSheet({ title, text, url }) {
+export function sendSheet({ title, text, url, note = L('The work details are inside the link itself.') }) { // note: the line under the ways to send it
   const msg = `${text}\n${url}`, way = (ic, label) => `${icon(ic)}<span>${label}</span>`;
   const d = sheet(`<h3>${esc(title).replace(/(\w)-(\w)/g, '$1\u2011$2')}</h3><p class="preview">${esc(text)}</p>
     <div class="btns share-acts">
@@ -775,7 +775,7 @@ export function sendSheet({ title, text, url }) {
       <a class="btn" href="mailto:?subject=${encodeURIComponent(title)}&body=${encodeURIComponent(msg)}">${way('mail', L('Email'))}</a>
       <button class="btn" data-s="copy">${way('link', L('Copy link'))}</button>
     </div>
-    <p class="hint">${url.length > 1800 ? L('Long link: send by iMessage, WhatsApp or email. Some plain SMS apps cut long links.') + ' ' : ''}${L('The work details are inside the link itself.')}</p>
+    <p class="hint">${url.length > 1800 ? L('Long link: send by iMessage, WhatsApp or email. Some plain SMS apps cut long links.') + ' ' : ''}${note}</p>
     <textarea class="linkbox" readonly rows="2" aria-label="${L('Link')}">${esc(url)}</textarea>`);
   d.classList.add('share');
   d.addEventListener('click', e => {
