@@ -2695,7 +2695,10 @@ test('against the real hub/Code.gs: a merge whose sync record will not save is u
   assert.equal(ph.sync.hubStatus().state, 'error');
   assert.notEqual(ph.reports()[DAY].pmReview, 'Remote version one', 'nothing merged stays without its sync record');
   mock.advance(60e3); lap.editReport(DAY, r => { r.pmReview = 'Remote version two'; }); await step(lap);
-  ph.storage.failOn.clear(); await step(ph, lap, sp, ph);
+  // the app is closed and opened again before there is room: a new engine reads only what was stored
+  const again = await makePhone(real, 'pm', { key: k.pm, storage: ph.storage, fetchImpl: ph.fetch });
+  ph.storage.failOn.clear(); await step(again, lap, sp, again);
   const end = ['Approved', 'Remote version two'];
   assert.deepEqual(all(), [end, end, end, end], 'the newer review stands on the hub and every phone, and the offline answer too');
+  assert.deepEqual([again.toasts, lap.toasts], [[], []]);
 });

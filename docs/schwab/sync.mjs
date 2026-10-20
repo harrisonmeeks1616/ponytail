@@ -514,6 +514,8 @@ export function makeSync(o = {}) {
   // Merge a pull reply into the stores. Everything is computed first, saved to the stores, and only then recorded as synced.
   // A merge saved without its sync record would look like this phone's own work next time and go up over newer work, so
   // if any part will not save (a full phone), every store goes back as it was and the whole reply is taken again later.
+  // ponytail: localStorage has no transactions, so a phone too full to write even the old values back keeps the merge
+  // without its record; moving the stores to IndexedDB (one transaction for stores and record) closes that.
   const MERGED = [KEYS.tasks, KEYS.hours, KEYS.crewHours, KEYS.reports, KEYS.settings, KEYS.hub, KEYS.pin];
   function applyPull(c, rep, sig, st = loadState()) { // st: a push's acks not saved yet (pushPhase)
     const was = MERGED.map(k => [k, store.get(k, null)]), S0 = o.S && { ...o.S };
