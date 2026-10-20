@@ -2185,6 +2185,29 @@ test('against the real hub/Code.gs: the superintendent removes or rewords a deci
   assert.deepEqual([sp.toasts, pm.toasts, sp.sync.hubStatus().pending, pm.sync.hubStatus().pending], [[], [], 0, 0]);
 });
 
+test('against the real hub/Code.gs: a PM phone and a PM laptop answering different decisions of a daily report both keep their answer (pmBase, DATA3-02)', async () => {
+  const { mock, k, real } = realHub();
+  const sp = await makePhone(real, 'super', { key: k.super }), ph = await makePhone(real, 'pm', { key: k.pm }), lap = await makePhone(real, 'pm', { key: k.pm });
+  const step = async (...ps) => { for (const p of ps) { mock.advance(5e3); await p.cycle(); } };
+  const q = (text, rec) => ({ q: text, rec, by: '', pm: '', pmNote: '' }), ans = r => r && [...r.decisions.map(d => [d.pm, d.pmNote]), r.pmReview];
+  const all = () => [mock.entities('Reports').find(r => r.date === DAY), ph.reports()[DAY], lap.reports()[DAY], sp.reports()[DAY]].map(ans);
+  sp.editReport(DAY, r => Object.assign(r, { status: 'On plan', decisions: [q('Saturday OT for crew A?', 'Yes'), q('Second scissor lift?', 'No')] }));
+  await step(sp, ph, lap);
+  // the phone, with no signal, answers the first; later the laptop, online, answers the second and writes the review
+  ph.net.down = true; ph.editReport(DAY, r => Object.assign(r.decisions[0], { pm: 'Approved', pmNote: 'Up to 6 hours' })); await step(ph);
+  mock.advance(15 * 60e3); lap.editReport(DAY, r => { r.decisions[1].pm = 'Declined'; r.pmReview = 'Seen 3 PM'; }); await step(lap);
+  ph.net.down = false; await step(ph, lap, sp, ph);
+  const one = [['Approved', 'Up to 6 hours'], ['Declined', ''], 'Seen 3 PM'];
+  assert.deepEqual(all(), [one, one, one, one], 'both answers stand on the hub and every phone');
+  // both answer the same decision: the newer answer wins everywhere
+  lap.net.down = true; lap.editReport(DAY, r => { r.decisions[1].pm = 'Approved'; }); await step(lap);
+  mock.advance(60e3); ph.editReport(DAY, r => { r.decisions[1].pmNote = 'Rent it Monday'; r.decisions[1].pm = 'Approved'; }); await step(ph);
+  lap.net.down = false; await step(lap, ph, sp, lap);
+  const two = [['Approved', 'Up to 6 hours'], ['Approved', 'Rent it Monday'], 'Seen 3 PM'];
+  assert.deepEqual(all(), [two, two, two, two]);
+  assert.deepEqual([sp.toasts, ph.toasts, lap.toasts], [[], [], []]);
+});
+
 test('against the real hub/Code.gs: after the PM clears a day\'s report the real one still reaches everyone, and a record the hub calls deleted leaves the phone (DATA2-02)', async () => {
   const { mock, k, real } = realHub();
   const sp = await makePhone(real, 'super', { key: k.super }), pm = await makePhone(real, 'pm', { key: k.pm });

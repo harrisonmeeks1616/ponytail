@@ -696,8 +696,8 @@ function normReport_(raw, now) {
   if (REPORT_STATUS.indexOf(r.status) < 0) r.status = '';
   ['lang', 'pmLang'].forEach(function (k) { if (r[k] !== 'en' && r[k] !== 'es') r[k] = ''; });
   ['submittedAt', 'updatedAt', 'pmAt'].forEach(function (k) { r[k] = clampStamp_(r[k], now); });
-  // supBase: the superintendent part as the phone last had it from the hub, read like a report and never stored; null: it never had one
-  if (isObj_(raw.supBase)) r.supBase = normReport_(Object.assign({}, raw.supBase, { date: r.date, supBase: undefined }), now); else if (raw.supBase === null) r.supBase = null;
+  // supBase, pmBase: the superintendent part and the PM part as the phone last had them from the hub, read like a report and never stored; null: it never had one
+  ['supBase', 'pmBase'].forEach(function (k) { if (isObj_(raw[k])) r[k] = normReport_(Object.assign({}, raw[k], { date: r.date, supBase: undefined, pmBase: undefined }), now); else if (raw[k] === null) r[k] = null; });
   return r;
 }
 function normConfig_(raw, now) {
@@ -896,12 +896,19 @@ function mergeReport_(ctx, stored, inc) {
     if (!base || base.pmAt < r.pmAt) answers.forEach(function (a) { if ((a.pm || a.pmNote) && !kept.some(function (k) { return k.q === a.q; })) kept.push(a); });
     r.decisions = kept;
   }
-  if (pm && (inc.pmAt > 0 || !stored) && inc.pmAt >= r.pmAt) {
+  // pmBase the same way for the PM part: only the answers (by question) and the review this PM device changed since go in,
+  // so a PM phone and a PM laptop answering different decisions both stand; one both changed goes to the newer pmAt.
+  const pnew = inc.pmAt >= r.pmAt, pbase = stored && inc.pmAt > 0 && inc.pmBase !== undefined ? inc.pmBase || shape_(REPORT, { date: inc.date }) : null;
+  if (pm && (inc.pmAt > 0 || !stored) && (pnew || pbase)) {
+    const none = { pm: '', pmNote: '' };
     inc.decisions.forEach(function (d) {
-      const m = d.q ? r.decisions.find(function (x) { return x.q === d.q; }) : null;
+      const m = d.q ? r.decisions.find(function (x) { return x.q === d.q; }) : null, s = m || none;
+      const b = pbase && ((d.q && pbase.decisions.find(function (x) { return x.q === d.q; })) || none);
+      if (!takes_(pbase, pnew, [d.pm, d.pmNote], b && [b.pm, b.pmNote], [s.pm, s.pmNote])) return;
       if (m) { m.pm = d.pm; m.pmNote = d.pmNote; } else if (d.pm || d.pmNote) r.decisions.push({ q: d.q, rec: d.rec, by: d.by, pm: d.pm, pmNote: d.pmNote });
     });
-    r.pmReview = inc.pmReview; r.pmLang = inc.pmLang; r.pmAt = inc.pmAt;
+    ['pmReview', 'pmLang'].forEach(function (k) { if (takes_(pbase, pnew, inc[k], pbase && pbase[k], r[k])) r[k] = inc[k]; });
+    r.pmAt = Math.max(r.pmAt, inc.pmAt);
   }
   const ev = r.submittedAt > (was ? was.submittedAt : 0) ? [['report.sent', r.super, 'Daily report for ' + r.date + ' sent' + (r.super ? ' by ' + r.super : ''), r.date]] : [];
   return { obj: r, events: ev };

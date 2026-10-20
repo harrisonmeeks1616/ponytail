@@ -614,6 +614,8 @@ export async function openReport(data, S) {
     toast(pmSent ? L('PM answers added to your report') : L('Updated report loaded. Your answers are kept.'));
     open.add('pm');
     fileReport(S, R[inc.date]);
+  } else if (!mine?.updatedAt && !fromText('r', inc.date, pmSent ? 'pm' : 'sup', inc.updatedAt, data.skew, data.skew !== undefined && inc)) { // no copy here: a text from a hub phone is a copy of the hub's (skew: it was on a hub)
+    toast(L('This phone already has the newest copy of this report from the hub.')); return inc.date;
   } else if (!mine?.updatedAt || mine.updatedAt === inc.updatedAt
     || await ask(L('Replace your copy of the {date} report with the one in this link? Link copy saved {link}. Yours saved {mine}.',
       { date: niceDate(inc.date), link: stamp(inc.updatedAt), mine: stamp(mine.updatedAt) }), L('Use the link copy'))) {
@@ -634,7 +636,7 @@ async function send(S, day) {
   r.updatedAt = Date.now();
   persist();
   reportView(S, day);
-  const url = linkTo('tasks.html', await pack({ v: 1, kind: 'report', from: S.role, pin: S.pin, skew: hubStatus().skew || 0, report: r }));
+  const url = linkTo('tasks.html', await pack({ v: 1, kind: 'report', from: S.role, pin: S.pin, skew: hubStatus().skew, report: r })); // skew only from a phone on a hub (sync.mjs fromText)
   const answered = r.decisions.filter(d => d.q && d.pm).length, asked = r.decisions.filter(d => d.q).length;
   const firstDue = waiting(r).map(d => d.by).filter(Boolean).sort()[0];
   sendSheet(isPM(S)

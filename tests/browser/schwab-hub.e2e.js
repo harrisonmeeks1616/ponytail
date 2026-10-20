@@ -998,6 +998,72 @@ async function join(p, link, o = {}) {
     check(await sawToast(pm, /^PM key copied\./) && (await local(pm, 'schwab.hub'))?.hubKey === KEYS.pm && (await hubStatus(pm)).state !== 'off', 'Copy the PM key copies it, and the phone stays connected');
   });
 
+  // Round 3: DATA3-05 (a day plan text put the PM phone's office part over the superintendent's unsent fix, judged by any
+  // change, a pulled crew tick too), DATA3-03 and DATA3-04 (a report text opened on a phone with no copy of that day brought
+  // back what the superintendent took out, and a report the PM cleared).
+  await step('11l. Texts opened on an office phone with no signal never undo newer work: a day plan, a late report, a cleared report', async () => {
+    const signIn = async p => { if (await p.locator('dialog.pin[open]').count()) await pad(p, PIN); };
+    const go = async (p, hash) => { await nav(p, hash); await signIn(p); await nav(p, hash); };
+    const openAll = p => p.evaluate(() => document.querySelectorAll('details').forEach(d => d.setAttribute('open', '')));
+    const typeIn = async (p, key, v) => { await openAll(p); await p.fill(`[data-k="${key}"]`, v); await blur(p); await p.waitForTimeout(200); };
+    const opened = async (p, link) => { await p.goto(link); await p.waitForFunction(() => window.appStarted === true); await signIn(p); await p.waitForTimeout(1500); };
+    const dp = await make('Crew A', 'Mount the panel on level 8', 'Level 8', ['Mount panel', 'Label panel']);
+    check(await until(async () => { await syncNow(pm); return await taskOf(ca, dp.uid) && await taskOf(pm, dp.uid); }, 45000), 'the new sheet reaches Crew A and the PM');
+    sup.zq.down = true; // the superintendent, with no signal, fixes the floor
+    await go(sup, `#task/${dp.uid}/assign`);
+    await sup.fill('[data-k="t.floor"]', 'Level 9'); await blur(sup);
+    await sleep(2000); await advanceAll(60e3);
+    await nav(ca, `#task/${dp.uid}/crew`); await ca.click('[data-act=tick][data-list=items][data-i="0"]');
+    check(await until(async () => { await syncNow(pm); return (await taskOf(pm, dp.uid))?.items[0].done; }, 30000), "the PM phone pulls Crew A's tick");
+    await go(pm, '#day/' + DAY);
+    await pm.click('[data-act=boardMenu]'); await pm.click('dialog [data-act=sendDay]');
+    const plan = await takeLink(pm);
+    await sup.goto(plan); await sup.waitForFunction(() => window.appStarted === true); await signIn(sup);
+    await sup.waitForSelector('dialog .ask'); await sup.click('dialog [data-a="1"]'); await sup.waitForTimeout(800);
+    check((await taskOf(sup, dp.uid)).floor === 'Level 9', `DATA3-05: the PM's day plan, newer only by a crew tick, leaves the superintendent's unsent fix (floor ${(await taskOf(sup, dp.uid)).floor})`);
+    sup.zq.down = false;
+    const fixed = await until(async () => { await syncNow(sup); await syncNow(pm); const t = entities(await dump(), 'Tasks').find(x => x.uid === dp.uid); return t?.floor === 'Level 9' && t.items[0].done && t; }, 30000);
+    check(fixed, 'back online: the fix and the tick both stand on the hub');
+    // a daily report the PM phone has no copy of: the superintendent sends it, then fixes it; the PM, with no signal, opens the old text
+    const D2 = '2026-10-16', rep = async p => ((await local(p, 'schwab.reports')) || {})[D2], hubRep = async () => entities(await dump(), 'Reports').find(r => r.date === D2);
+    const view = r => r && JSON.stringify([(r.needs || []).map(n => n.item), (r.risks || []).map(x => x.risk)]);
+    pm.zq.down = true;
+    await go(sup, '#report/' + D2); await openAll(sup);
+    await sup.click('[data-act=set][data-k="r.status"][data-v="On plan"]');
+    await sup.click('[data-act=add][data-v=needs]'); await typeIn(sup, 'r.needs.0.item', 'Scissor lift');
+    await sup.click('[data-act=add][data-v=needs]'); await typeIn(sup, 'r.needs.1.item', '2 boxes of wire nuts');
+    await sup.click('[data-act=add][data-v=risks]'); await typeIn(sup, 'r.risks.0.risk', 'Inspection on level 2 may slip');
+    await sleep(2000); await syncNow(sup);
+    await sup.click('[data-act=send]');
+    const rlink = await takeLink(sup);
+    await advanceAll(10 * 60e3);
+    await go(sup, '#report/' + D2); await openAll(sup);
+    await sup.click('[data-act=del][data-list=needs][data-i="0"]');
+    await typeIn(sup, 'r.risks.0.risk', 'Inspection on level 2 moved to Thursday');
+    const want = JSON.stringify([['2 boxes of wire nuts'], ['Inspection on level 2 moved to Thursday']]);
+    check(await until(async () => { await syncNow(sup); return view(await hubRep()) === want; }, 30000), 'the superintendent takes out the lift and rewords the risk, on the hub');
+    await advanceAll(10 * 60e3);
+    await toasts(pm);
+    await opened(pm, rlink);
+    check(await sawToast(pm, /^Report loaded$/), 'the PM phone, with no signal and no copy of that day, loads the old text');
+    pm.zq.down = false;
+    for (let i = 0; i < 2; i++) { await syncNow(pm); await syncNow(sup); }
+    const late = [view(await hubRep()), view(await rep(pm)), view(await rep(sup))];
+    check(late.every(v => v === want), `DATA3-03: back online, the old text brings back nothing the superintendent took out, everywhere (hub, PM, super: ${late.join(' | ')})`);
+    // the PM clears that report; the same old text opened again does not bring it back
+    await go(pm, '#report/' + D2);
+    await toasts(pm);
+    await pm.click('[data-act=menu]'); await pm.click('dialog [data-act=clear]');
+    check(await sawToast(pm, /report was deleted\. It is also removed from the hub\.Undo$/), 'the PM clears the report');
+    check(await until(async () => !(await hubRep()), 45000), 'and it leaves the hub');
+    await advanceAll(60 * 60e3);
+    await opened(pm, rlink);
+    for (let i = 0; i < 2; i++) { await syncNow(pm); await syncNow(sup); }
+    const tomb = (await dump()).Deleted?.rows.some(r => r[0] === D2 && r[1] === 'reports');
+    const gone = [await hubRep(), await rep(pm), await rep(sup)];
+    check(gone.every(r => !r) && tomb, `DATA3-04: the cleared report stays cleared after its old text is opened again (hub ${!!gone[0]}, PM ${!!gone[1]}, super ${!!gone[2]}, tombstone ${!!tomb})`);
+  });
+
   await step('12. Disconnecting returns the app to its no-hub behavior', async () => {
     await nav(sup, '#settings');
     await sup.click('[data-act=hubDisconnect]');

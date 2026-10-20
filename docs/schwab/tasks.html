@@ -223,7 +223,7 @@ async function importDay(data) {
   const fresh = inc.filter(t => !find(t.uid)), known = inc.filter(t => find(t.uid));
   if (inc.length && await ask(L('Load the task plan for {date}? New sheets: {fresh}. Updated: {known}. Check-offs already on this phone are kept.', { date: niceDate(date), fresh: fresh.length, known: known.length }), L('Load plan'))) {
     for (const t of fresh) T.push(Object.assign(t, { origin: 'mine' }));
-    for (const t of known) if (sync.fromText('t', t.uid, 'assign', t.updatedAt, data.skew)) mergeTask(find(t.uid), t, 'assign'); // on a hub, only what is newer than the hub copy here
+    for (const t of known) if (sync.fromText('t', t.uid, 'assign', t.assignAt || t.updatedAt)) mergeTask(find(t.uid), t, 'assign'); // on a hub, only an office part newer than the hub copy here (its own stamp, hub time: sync.mjs officeAt; a text from an older version has none)
     const moved = inc.flatMap(t => renumberClashes(T, find(t.uid), sync.onHub));
     persist();
     toast(L('Plan loaded') + renumbered(moved));
@@ -776,7 +776,7 @@ function taskMsg(t, l) {
 
 async function send(kind, t) {
   if (kind === 'task') { t.sentAt = Date.now(); persist(); render(); }
-  const payload = { v: 1, kind, pin: S.pin, skew: sync.hubStatus().skew || 0, ...(kind === 'day' ? { date: day, tasks: dayTasks() } : { task: t }) }; // skew: this phone's hub time offset (sync.mjs fromText)
+  const payload = { v: 1, kind, pin: S.pin, skew: sync.hubStatus().skew || 0, ...(kind === 'day' ? { date: day, tasks: dayTasks().map(x => ({ ...x, assignAt: sync.officeAt(x) })) } : { task: t }) }; // skew: this phone's hub time offset (sync.mjs fromText)
   const url = linkTo('tasks.html', await pack(payload));
   if (kind === 'task') {
     // A crew that has answered in Spanish before gets the message in both languages.
