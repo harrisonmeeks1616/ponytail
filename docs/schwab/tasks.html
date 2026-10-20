@@ -127,12 +127,17 @@ function route() {
   const pad = document.querySelector('dialog.pin[open]');
   if (pad) { if (pad.dataset.want === location.hash) return; pad.close(); }
   document.querySelectorAll('dialog.sheet[open]').forEach(x => x.dataset.at !== location.hash && x.close()); // a sheet left behind on the last screen would act on it
+  // A hint about the last screen does not follow to the next. A toast that came with this move (a link opened, signed out)
+  // stays, and so does one offering Undo. ponytail: "came with this move" is a 400 ms window (the hashchange right after
+  // the toast); a flag on toast() is the upgrade if a slow phone ever drops one.
+  const tt = document.getElementById('toast');
+  if (tt && !tt.offer && Date.now() - tt.at > 400) tt.classList.remove('show');
   fileIfChanged(current());
   fileReportIfChanged(S, day);
   const h = location.hash.slice(1);
   if (h.startsWith('p=')) return openCode(h.slice(2));
   const [v, a, b] = h.split('/'), was = view;
-  if (['day', 'clock', 'report', 'upcoming'].includes(v) && /^\d{4}-\d{2}-\d{2}$/.test(a) && addDays(a, 0) === a) day = a; // a real day, not 2026-02-30
+  if (['day', 'clock', 'report', 'upcoming'].includes(v) && /^\d{4}-\d{2}-\d{2}$/.test(a) && addDays(a, 0) === a && a <= '9999-12-24') day = a; // a real day, not 2026-02-30, with Upcoming's 7 days after it
   view = v === 'task' && find(a) ? { v: 'task', uid: a, tab: b || 'assign' } : { v: VIEWS.includes(v) ? v : 'board', sub: a };
   if (view.v === 'task' && was?.uid !== view.uid) openedFrom = ['live', 'records', 'upcoming'].includes(was?.v) ? was : null; // its Back goes there (a tab of the sheet keeps it)
   if (view.v === 'task') day = find(a).date;
@@ -266,6 +271,7 @@ function header() {
 
 let drawnOn = today(); // the day the screen was last drawn, to notice midnight
 let dups = null; // with a hub: sheets sharing a day and a short id (sync.mjs duplicateShortIds), for the "Same number" pill
+const dayLabel = d => (d === today() ? L('Today') : niceDate(d)); // a Back to a board says its day, as the board's title does
 function render() {
   drawnOn = today();
   dups = hubOn() ? sync.duplicateShortIds(T) : null;
@@ -273,7 +279,7 @@ function render() {
   screenHead(''); // each screen sets its own title
   bar.hidden = ['settings', 'live', 'records', 'hub'].includes(view.v);
   bar.innerHTML = ''; // and puts its one primary action here
-  const back = { go: `day/${day}`, label: L('Back to task sheets') };
+  const back = { go: `day/${day}`, label: dayLabel(day) };
   if (view.v === 'settings') { screenHead(L('Settings'), { back }); app.innerHTML = settingsView(S, hubSettingsView(ctx())); }
   else if (view.v === 'hub') { screenHead(L('Hub'), { back }); app.innerHTML = `<div class="settings">${hubSettingsView(ctx())}</div>`; } // a crew phone's way to the hub (the dot)
   else if (view.v === 'live') app.innerHTML = liveView(ctx());
@@ -297,8 +303,8 @@ function renderBoard() {
   const prev = prevDay();
   const rows = ts => `<div class="list lead">${ts.map(row).join('')}</div>`;
   const head = (text, n, cls = '') => `<h3 class="section-h${cls}">${text}<small>${n}</small></h3>`;
-  screenHead(day === today() ? L('Today') : niceDate(day), { sub: day === today() ? '' : day < today() ? L('Past day') : L('Planning ahead'), more: 'boardMenu' });
-  app.innerHTML = `<div class="board">${dateBar(day, 'day', { upcoming: office() })}${office() ? crewKeyNote(ctx()) : ''}${all.length ? `
+  screenHead(day === today() ? L('Today') : niceDate(day), { more: 'boardMenu' });
+  app.innerHTML = `<div class="board">${dateBar(day, 'day', { upcoming: office(), iconOnly: day !== today() })}${office() ? crewKeyNote(ctx()) : ''}${all.length ? `
     ${office() ? daySummary(list) : ''}
     ${crews.length > 1 || crewFilter ? `<div class="chips scroll crew-filter" role="group" aria-label="${L('Show crew')}">
       <button class="chip" data-act="filter" data-v="" aria-pressed="${!crewFilter}">${L('All crews')}</button>
@@ -311,11 +317,11 @@ function renderBoard() {
     ${office() ? '' : `<button class="btn wide open-link" data-act="paste">${L('Open a link')}</button>`}
     ${office() || crewPhone() ? '' : `<button class="link sign-in" data-act="lockBtn">${L('Office sign-in')}</button>`}`
     : !office()
-      ? `<div class="empty">${icon('today', 'empty-ic')}<h2>${L('No task sheets for {date}', { date: niceDate(day) })}</h2>
+      ? `<div class="empty">${icon('today', 'empty-ic')}<h2>${L('No task sheets yet')}</h2>
         <p>${S.hubRole === 'super' ? L('This phone is set up for the superintendent. Sign in with the office passcode the PM gives you.') : hubOn() ? L('Sheets for your crew show up here by themselves. A texted link still works too.') : L('Open the link your superintendent texted you, or paste it here.')}</p>
         <button class="btn primary" data-act="paste">${L('Open a link someone sent you')}</button>
         ${crewPhone() ? '' : `<button class="link" data-act="lockBtn">${L('Superintendent or PM? Sign in to the office screens')}</button>`}</div>`
-      : `<div class="empty">${icon('today', 'empty-ic')}<h2>${L('No task sheets for {date}', { date: niceDate(day) })}</h2>
+      : `<div class="empty">${icon('today', 'empty-ic')}<h2>${L('No task sheets yet')}</h2>
         <p>${L('Tap + to make one sheet for each crew, then send it to their phones.')}</p>
         ${prev ? `<button class="link" data-act="carryDay">${L('Copy unfinished from {date}', { date: niceDate(prev) })}</button>` : ''}</div>`}</div>`;
   bar.innerHTML = fab();
@@ -346,10 +352,10 @@ function renderUpcoming() {
     html += quiet(gap) + pieHead(esc(d === tomorrow ? L('Tomorrow') : d === today() ? L('Today') : niceDate(d)), ts, ts.length, `data-day="${d}"`, `#day/${d}`) + `<div class="list lead">${ts.map(row).join('')}</div>`;
     gap = [];
   }
-  screenHead(L('Upcoming'), { sub: L('{start} to {stop}', { start: niceDate(days[0]), stop: niceDate(days[6]) }), back: { go: `day/${day}`, label: day === today() ? L('Today') : niceDate(day) } });
+  screenHead(L('Upcoming'), { sub: L('{start} to {stop}', { start: niceDate(days[0]), stop: niceDate(days[6]) }), back: { go: `day/${day}`, label: dayLabel(day) } });
   app.innerHTML = `<div class="board upcoming">${html ? html + quiet(gap) : `<div class="empty">${icon('cal', 'empty-ic')}<h2>${L('Nothing planned for the next 7 days')}</h2>
     <button class="btn primary" data-act="new" data-day="${days[0]}">${days[0] === tomorrow ? L('New sheet for tomorrow') : L('New sheet for {date}', { date: niceDate(days[0]) })}</button></div>`}</div>`;
-  bar.innerHTML = fab();
+  bar.innerHTML = html ? fab() : ''; // an empty week has its one button
 }
 
 // One sheet on the board: a progress pie (a check once it is done), the area and number, then a quiet line with the
@@ -367,7 +373,7 @@ function row(t) {
     <span class="row-lead">${lead}</span>
     <span class="row-main"><span class="row-title">${t.area ? `<span class="area">${esc(t.area)}</span> ` : ''}<span class="tid">${esc(t.id || L('New task'))}</span></span>
       <span class="row-sub">${[`<span class="who"><i class="dot"></i> ${esc(t.crew || L('No crew yet'))}</span>`, when && `<span class="nw">${esc(when)}</span>`,
-        `<span class="stage" data-tone="${tone}">${esc(label)}</span>`].filter(Boolean).join(' ·&nbsp;')}</span>
+        `<span class="stage" data-tone="${tone}">${esc(label)}</span>`].filter(Boolean).join('&nbsp;· ')}</span>
       ${same(t) ? `<span class="pill" data-tone="warn">${L('Same number as another sheet')}</span>` : ''}${t.news ? `<span class="pill news" data-tone="info">${L('New message')}</span>` : ''}</span>
     ${t.est ? `<span class="row-end">${esc(L('{n} hrs', { n: t.est }))}</span>` : ''}${icon('chev', 'chev')}
   </a>`;
@@ -384,10 +390,10 @@ function renderTask(t) {
   const tabs = [['assign', L('Assign')], ['results', L('Crew results')], ['review', L('Review')]];
   screenHead(t.area || (t.id ? L('Task {id}', { id: t.id }) : L('New task')), {
     sub: [t.floor, t.area && t.id && L('Task {id}', { id: t.id })].filter(Boolean).join(' · '), more: crewSide ? 'crewMenu' : 'taskMenu',
-    back: openedFrom ? { go: openedFrom.v + (openedFrom.sub ? '/' + openedFrom.sub : ''), label: { live: L('Live'), upcoming: L('Upcoming') }[openedFrom.v] || L('Records') } : { go: `day/${t.date}`, label: L('{date} task sheets', { date: niceDate(t.date) }) },
+    back: openedFrom ? { go: openedFrom.v + (openedFrom.sub ? '/' + openedFrom.sub : ''), label: { live: L('Live'), upcoming: L('Upcoming') }[openedFrom.v] || L('Records') } : { go: `day/${t.date}`, label: dayLabel(t.date) },
   });
   app.innerHTML = `<div class="tsheet">${crewSide
-    ? banner(t, true) + clash(t) + brief(t) + results(t)
+    ? banner(t, true) + clash(t) + brief(t, false) + results(t, info(t)) // the checkboxes first; the details under them, before Time & status
     : `<nav class="tabs" aria-label="${L('Task sheet')}">${tabs.map(([k, l]) => `<a href="#task/${esc(t.uid)}/${k}" data-act="tab" data-v="${k}"${k === view.tab ? ' aria-current="page"' : ''}>${l}</a>`).join('')}</nav>`
       + banner(t, false) + clash(t, ' ' + L('Change the Task ID on one of them.'))
       + (view.tab === 'results' ? brief(t) + results(t) : view.tab === 'review' ? review(t) : assign(t))}
@@ -455,17 +461,21 @@ function assign(t) {
     <p class="hint out form-foot" data-out="crewHrs">${crewHrsLine(t)}</p>`);
 }
 
-// What the crew reads first: who it's for and where it stands, the scope in plain words, then the details.
-function brief(t) {
+// What the crew reads first: who it's for and where it stands, the scope in plain words, then the details
+// (withInfo false: the crew phone shows them under its checkboxes).
+function brief(t, withInfo = true) {
   const [label, tone] = stage(t), c = ctx(), tx = k => txView(c, t[k], langOf(t, k)); // as typed with no hub
-  const row = (k, html) => (html ? `<dt>${esc(k)}</dt><dd>${html}</dd>` : ''); // html: already escaped
-  const note = k => (t[k] ? ' · ' + tx(k) : '');
   return `<section class="brief" style="${crewVar(t.crew, t.crewId)}">
     <div class="brief-top"><span class="who"><i class="dot"></i> ${esc(t.crew || L('Crew'))}</span><span class="pill" data-tone="${tone}">${esc(label)}</span></div>
-    ${t.scope ? `<p class="scope-text">${tx('scope')}</p>` : ''}
-    <dl class="kv info">${row(L('Drawings'), tx('refs'))}${row(L('Planned'), t.pStart && esc(fromTo(t.pStart, t.pStop)))}${row(L('Check in at'), esc(t12(t.checkIn)))}
+    ${t.scope ? `<p class="scope-text">${tx('scope')}</p>` : ''}${withInfo ? info(t) : ''}</section>`;
+}
+function info(t) {
+  const c = ctx(), tx = k => txView(c, t[k], langOf(t, k));
+  const row = (k, html, cls = '') => (html ? `<dt${cls}>${esc(k)}</dt><dd${cls}>${html}</dd>` : ''); // html: already escaped
+  const note = k => (t[k] ? ' · ' + tx(k) : '');
+  return `<dl class="kv info">${row(L('Drawings'), tx('refs'))}${row(L('Planned'), t.pStart && esc(fromTo(t.pStart, t.pStop)))}${row(L('Check in at'), esc(t12(t.checkIn)))}
       ${row(L('Allotted'), t.allot && esc(L('{n} hrs', { n: t.allot })) + note('allotNote'))}${row(L('Estimate'), t.est && esc(L('{n} hrs', { n: t.est })) + note('estNote'))}
-      ${row(L('Crew'), t.members.map(m => esc(m) + (nameKey(m) && nameKey(m) === nameKey(S.worker) ? ` (${esc(L('you'))})` : '')).join(', '))}${row(L('Assigned'), esc(niceDate(t.date) + (t.by ? ' · ' + L('by {name}', { name: t.by }) : '')))}</dl></section>`;
+      ${row(L('Crew'), t.members.map(m => esc(m) + (nameKey(m) && nameKey(m) === nameKey(S.worker) ? ` (${esc(L('you'))})` : '')).join(', '), ' class="long"')}${row(L('Assigned'), esc(niceDate(t.date) + (t.by ? ' · ' + L('by {name}', { name: t.by }) : '')))}</dl>`;
 }
 
 function workedLine(t) {
@@ -478,7 +488,7 @@ function workedLine(t) {
 }
 
 // The crew's part: big round checkboxes, one Time & status card (Start and Stop, the status), then the notes.
-function results(t) {
+function results(t, details = '') {
   const d = doneCount(t), n = t.items.length, c = t.checks.filter(x => x.done).length, cx = ctx();
   // a step's words in the reader's language; no tap to the original inside the tick button (that tap ticks)
   const tick = (list, it, i) => `<button class="tick" data-act="tick" data-list="${list}" data-i="${i}" aria-pressed="${it.done}"><span class="box">✓</span><span class="txt">${txView(cx, it.text, langOf(t, it.id), getLang(), { toggle: false })}</span>${it.at ? `<small>${timeOf(it.at)}</small>` : ''}</button>`;
@@ -490,7 +500,7 @@ function results(t) {
       <div class="checklist">${t.items.map((it, i) => tick('items', it, i)).join('')}</div></section>` : ''}
     ${t.checks.length ? `<section class="steps"><h3 class="section-h">${L('Required finish checks')}<small>${L('{d} of {n} done', { d: c, n: t.checks.length })}</small></h3>
       <div class="checklist">${t.checks.map((it, i) => tick('checks', it, i)).join('')}</div></section>` : ''}
-  <section class="card timecard"><h2>${L('Time & status')}</h2>
+  ${details}<section class="card timecard"><h2>${L('Time & status')}</h2>
     <div class="startstop">${clock('aStart', L('Actual start'), icon('play') + L('Start now'), true)}${clock('aStop', L('Actual stop'), icon('stop') + L('Stop now'), !!t.aStart)}</div>
     <p class="out" data-out="worked">${workedLine(t)}</p>
     <div class="field"><span>${L('Delay / interruption (minutes)')}</span><div class="edit-row stepper">
@@ -638,7 +648,7 @@ async function firstRun() {
   d.addEventListener('cancel', e => e.preventDefault()); // Escape doesn't skip it
   const brand = `<div class="fr-brand">${document.querySelector('.top .mark').outerHTML}<div><b>${COMPANY}</b><span>${COMPANY_ALT}</span></div></div>`;
   const back = to => `<button class="link fr-back" data-fr="back" data-v="${to}">${icon('back')}<span>${L('Back')}</span></button>`;
-  const dots = () => { const n = a.role && a.role !== crew ? 4 : 3, at = ['lang', 'role', 'name', 'pin'].indexOf(step); return `<div class="fr-dots" aria-hidden="true">${Array.from({ length: n }, (_, i) => `<i${i <= at ? ' class="on"' : ''}></i>`).join('')}</div>`; };
+  const dots = () => { const n = a.role === crew ? 3 : 4, at = ['lang', 'role', 'name', 'pin'].indexOf(step); return `<div class="fr-dots" aria-hidden="true">${Array.from({ length: n }, (_, i) => `<i${i <= at ? ' class="on"' : ''}></i>`).join('')}</div>`; };
   const option = (fr, v, title, sub = '') => `<button class="fr-opt" data-fr="${fr}" data-v="${esc(v)}"><span><b>${esc(title)}</b>${sub ? `<small>${esc(sub)}</small>` : ''}</span>${icon('chev', 'chev')}</button>`;
   const screens = {
     lang: () => `<h2 class="large-title" id="frQ" tabindex="-1">Language · Idioma</h2>
@@ -750,7 +760,10 @@ function quickFind() {
   findSheet(words => (!words.length ? [[L('Recent sheets'), recent]]
     : [[L('Task sheets'), sheets.filter(has(words))], [L('People'), who.filter(has(words))], [L('Days'), days(words)]]), it => {
     if (it.crew !== undefined) crewFilter = it.crew;
-    const was = location.hash, to = () => it.name && [...app.querySelectorAll('.card.person h2')].find(h => h.textContent === it.name)?.closest('.card').scrollIntoView({ block: 'start' }); // the PM lands on that person's hours
+    const was = location.hash, to = () => { // the PM lands on that person's hours, or is told there are none
+      const card = it.name && [...app.querySelectorAll('.card.person h2')].find(h => h.textContent === it.name)?.closest('.card');
+      if (card) card.scrollIntoView({ block: 'start' }); else if (it.name) toast(L('No hours for {name} this week', { name: it.name }));
+    };
     if (was !== '#' + it.go) addEventListener('hashchange', to, { once: true }); // after route() has drawn the screen
     go(it.go);
     if (was === '#' + it.go) to();
@@ -891,7 +904,7 @@ async function act(a, el) {
         s?.scrollIntoView({ block: 'center' });
         s?.querySelector('button')?.focus({ preventScroll: true });
         s?.classList.remove('need'); void s?.offsetWidth; s?.classList.add('need'); // a short shake draws the eye (off with reduced motion)
-        return toast(L('Pick Complete, Partial or Blocked first'), 'bad');
+        return toast(L('Pick Complete, Partial or Blocked first')); // guidance, not a failure
       }
       t.cLang = getLang();
       t.resultAt = Date.now(); // the office phone keeps these over an older results text
@@ -984,7 +997,9 @@ const SHELL = new Set(['toggleLang', 'lang', 'lockBtn', 'find']); // header butt
 // stays still). Each floor heading on the board (data-floor) and day heading on Upcoming (data-day) is a drop target: the
 // one under the finger lights up, and near the top or bottom edge the list scrolls slowly. Let go and the + flies back to
 // its corner, then taps itself with that floor or day on it, so the sheet comes from the same tap as ever (the
-// dispatcher, busy(), act('new')); let go anywhere else and it is the plain +. A press that never lifts is a plain tap.
+// dispatcher, busy(), act('new')); let go anywhere else and it is the plain +, but let go near where it started (a change
+// of mind) and it is nothing. The lifted + rides 44 px above the finger, so the heading under the finger stays in sight.
+// A press that never lifts is a plain tap.
 const DROPS = 'h3[data-floor], h3[data-day]';
 let plus = null, plusHold = 0; // the press on the + under way; until when the browser's click after a drop is no tap
 const buzz = () => navigator.userActivation?.hasBeenActive && navigator.vibrate?.(8); // nothing on an iPhone
@@ -993,7 +1008,7 @@ function plusFollow() {
   const p = plus, [top, bottom] = band();
   if (!p.fab.isConnected) p.fab = bar.querySelector('.fab[data-act=new]') || p.fab; // drawn again under the finger (a hub pull): carry on with the new one
   p.fab.classList.add('lift');
-  p.fab.style.translate = `${p.x - p.x0}px ${p.y - p.y0}px`;
+  p.fab.style.translate = `${p.x - p.x0}px ${p.y - p.y0 - 44}px`;
   const on = (p.y > top && p.y < bottom && [...document.querySelectorAll(DROPS)].find(h => { const r = h.getBoundingClientRect(); return r.height && p.y > r.top - 14 && p.y < r.bottom + 10 && p.x > r.left - 16 && p.x < r.right + 16; })) || null;
   if (on !== p.on) { p.on?.classList.remove('plus-on'); on?.classList.add('plus-on'); p.on = on; }
 }
@@ -1010,7 +1025,8 @@ function plusDrop(e) {
   plus = null;
   if (!p.lifted) return; // a plain tap: its own click is the + as before
   p.on?.classList.remove('plus-on');
-  const where = e.type === 'pointerup' && (!p.on ? {} : 'day' in p.on.dataset ? { day: p.on.dataset.day } : { floor: p.on.dataset.floor }); // a cancel makes nothing
+  const back = !p.on && Math.hypot(p.x - p.x0, p.y - p.y0) < 48; // let go by its own corner: a change of mind
+  const where = e.type === 'pointerup' && !back && (!p.on ? {} : 'day' in p.on.dataset ? { day: p.on.dataset.day } : { floor: p.on.dataset.floor }); // a cancel makes nothing
   plusHold = performance.now() + ms + 100;
   p.fab.classList.replace('lift', 'fly');
   p.fab.style.translate = '';

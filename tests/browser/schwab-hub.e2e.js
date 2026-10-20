@@ -397,6 +397,7 @@ async function join(p, link, o = {}) {
     check(t && t.aStart && t.aStop && t.items[0].done && t.status === 'Partial' && t.remain === 'Install box tomorrow', 'the PM phone holds the crew part: start, stop, tick, status, remaining');
     const feed = await until(async () => { const f = await pm.locator('.feed li').allTextContents(); return f.some(x => x.includes(S.s1.id) && /started/.test(x)) && f.some(x => x.includes(S.s1.id) && /Partial/.test(x)) && f; }, 30000);
     check(feed, `Activity feed: started and marked Partial lines for ${S.s1.id} (${(await pm.locator('.feed li').allTextContents()).slice(0, 5).join(' / ')})`);
+    if (await pm.locator('[data-act=liveFeedAll]').count()) { await pm.click('[data-act=liveFeedAll]'); await pm.waitForTimeout(200); } // the feed shows ten lines, then Show all
     const made = (await pm.locator('.feed li').allTextContents()).find(x => x.includes(S.s1.id) && /created/.test(x)) || '';
     check(/Dana Super created/.test(made) && (await taskOf(pm, S.s1.uid))?.by === 'Dana Super', `PHONE-UX-07: the sheet and the feed name the superintendent who made it (${made})`);
     check(await sinceMark(pm), 'still the same page: no reload');

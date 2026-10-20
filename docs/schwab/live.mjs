@@ -57,7 +57,7 @@ const MSG_MAX = 1000, PAGE = 100; // PAGE: rows a list draws before "Show more"
 const GOT = new Set(['live', 'syncing', 'offline', 'error']);
 
 // What this file remembers between draws (filters, what is open, the last answers from the hub).
-const fresh = () => ({ siteOpen: false, sub: '', q: '', crew: '', status: '', person: '', limit: PAGE, old: null, stats: undefined, want: false, archived: null, test: null, busy: '' });
+const fresh = () => ({ siteOpen: false, feedAll: false, sub: '', q: '', crew: '', status: '', person: '', limit: PAGE, old: null, stats: undefined, want: false, archived: null, test: null, busy: '' });
 const ui = fresh();
 export const resetUi = () => Object.assign(ui, fresh());
 
@@ -338,7 +338,7 @@ export function liveView(ctx) {
   // A quiet line on top: where the hub stands and one tap to ask it now (or, with none, the way to set it up).
   const head = st.state === 'off'
     ? `<div class="live-head"><p class="hint">${L('Not connected to a hub. This shows what is on this phone.')}</p><button class="link" data-go="settings">${L('Set up the hub')}</button></div>`
-    : `<div class="live-head"><p class="live-state"><i class="hub-dot" data-state="${esc(st.state)}"></i><b>${esc(hubLabel(st.state))}</b>
+    : `<div class="live-head"><p class="live-state"><i class="hub-dot" data-state="${esc(st.state)}" role="img" aria-label="${esc(hubLabel(st.state))}"></i>${st.state === 'live' ? '' : `<b>${esc(hubLabel(st.state))}</b>`}
         <span>${esc(updated ? L('Updated {ago}', { ago: ago(updated, now) }) : L('Waiting for the first update'))}</span></p><button class="link" data-act="liveRefresh">${L('Refresh')}</button></div>
       ${st.pending ? `<p class="hint">${esc(L('{n} not sent yet', { n: st.pending }))}</p>` : ''}
       ${(st.state === 'offline' || st.state === 'error') && st.message ? `<p class="hint">${esc(st.message)}</p>` : ''}`;
@@ -349,20 +349,29 @@ export function liveView(ctx) {
       <small>${esc(L('{d} of {n} done', { d: g.sheets.filter(finished).length, n: g.sheets.length }))}</small></h4>
       <div class="live-list">${g.sheets.map(t => (rank(t) === 6 ? doneRow(t) : sheetCard(ctx, t, now, dup.has(t.uid)))).join('')}</div>`).join('')
     : `<div class="empty">${icon('today', 'empty-ic')}<h2>${L('No task sheets for today yet')}</h2><button class="btn" data-go="day/${day}">${L('Open the Tasks tab')}</button></div>`;
-  const feed = live.events.slice(0, 50);
+  // The PM's shift adds from one sync (a week typed in) fold into one line a person; ten lines, then Show all.
+  const addedFor = e => { const s = shiftOf.get(e.ref); return s ? personNow(S, s).name : /^PM added a shift for (.*), /.exec(e.text || '')?.[1] || ''; };
+  const folded = live.events.slice(0, 50).reduce((out, e) => {
+    const last = out.at(-1);
+    if (e.kind === 'pm.add' && last?.e.kind === 'pm.add' && addedFor(e) === addedFor(last.e) && Math.abs(last.e.ts - e.ts) < 5 * 6e4) last.n++;
+    else out.push({ e, n: 1 });
+    return out;
+  }, []), feed = ui.feedAll ? folded : folded.slice(0, 10);
   // a clock line names the person as the roster has them now (by the shift it is about); a sheet line says the sheet's crew.
   // A sheet is named by its number: one without a number yet is a new task, and one not on this phone (deleted, or older
   // than it keeps) is "a task sheet", since its reference is a uid; a number some sheet here has is shown as it is.
   const ids = new Set(ctx.tasks().map(t => t.id).filter(Boolean));
-  const lineOf = e => {
+  const lineOf = (e, n) => {
     const task = String(e.kind).startsWith('task.'), t = task ? sheetOf(e.ref) : undefined, s = !task && shiftOf.get(e.ref);
     const p = s ? personNow(S, s) : personNow(S, { who: e.who }), crew = t ? crewById(S, t.crewId)?.name || t.crew : p.crew;
     const ref = !task ? e.ref : t ? t.id || L('New task') : ids.has(e.ref) ? e.ref : L('a task sheet');
-    return [t, `<span class="feed-x">${esc(eventLine({ ...e, who: p.name || e.who, name: s ? p.name : '', ref }))}${crew ? ` <span class="feed-crew">· ${esc(crew)}</span>` : ''}</span>`];
+    const words = n > 1 ? L('PM added {n} shifts for {who}', { n, who: addedFor(e) || L('a worker') }) : eventLine({ ...e, who: p.name || e.who, name: s ? p.name : '', ref });
+    return [t, `<span class="feed-x">${esc(words)}${crew ? ` <span class="feed-crew">· ${esc(crew)}</span>` : ''}</span>`];
   };
   const events = `<section class="live-feed"><h3 class="section-h">${L('Activity')}</h3>${feed.length
-    ? `<ol class="feed">${feed.map(e => { const [t, line] = lineOf(e);
+    ? `<ol class="feed">${feed.map(({ e, n }) => { const [t, line] = lineOf(e, n);
       return `<li><small>${esc(ago(e.ts, now))}</small>${t ? `<a href="${taskHref(t)}">${line}</a>` : line}</li>`; }).join('')}</ol>`
+      + (folded.length > feed.length ? `<button class="link" data-act="liveFeedAll">${L('Show all')} (${folded.length})</button>` : '')
     : `<p class="hint">${st.state === 'off' ? L('Connect the hub to see crews start, finish and clock in.') : L('Nothing yet. Crews starting, finishing and clocking in show up here.')}</p>`}</section>`;
   return `${crewKeyNote(ctx)}${head}${stats}${site}<h3 class="section-h">${L("Today's sheets")}<small>${sheets.length}</small></h3>${board}${events}`;
 }
@@ -377,7 +386,7 @@ function siteCard(S, here) {
   const groups = [...m].sort((a, b) => (a[0] === '') - (b[0] === '') || pos(a[0]) - pos(b[0]) || a[0].localeCompare(b[0]));
   const open = here.length <= SITE_FOLD || ui.siteOpen;
   const chip = p => `<span class="who-chip" style="${p.crew ? crewVar(S, p.crew, p.crewId) : ''}"><i aria-hidden="true">${esc(initials(p.who))}</i>
-    <span><b>${esc(p.who)}</b><small>${esc([p.crew, L('since {time}', { time: t12(p.in) })].filter(Boolean).join(' · '))}</small></span></span>`;
+    <span><b>${esc(p.who)}</b><small>${p.crew ? esc(p.crew) + ' · ' : ''}<span class="nw">${esc(L('since {time}', { time: t12(p.in) }))}</span></small></span></span>`;
   return `<section class="live-site"><h3 class="section-h">${L('On site now')}<small>${here.length}</small></h3>${!here.length ? `<p class="hint">${L('Nobody is clocked in right now.')}</p>`
     : open ? `<div class="onsite">${groups.flatMap(([, ps]) => ps).map(chip).join('')}</div>`
       : `<p class="hint">${groups.map(([crew, ps]) => `${crew ? esc(crew) : esc(L('Crew not set'))} ${ps.length}`).join(' · ')}</p>`}
@@ -403,7 +412,7 @@ function sheetCard(ctx, t, now, dup) {
         <span class="row-sub meta">${n ? `${esc(L('{d} of {n} steps done', { d, n }))} · ` : ''}<span class="stage" data-tone="${tone || ''}">${esc(label)}</span>${dup ? ` ${sameNo()}` : ''}</span>
         <span class="row-sub meta">${esc([last, t.reply && t.replyAt ? msgLine(ctx, t, now) : ''].filter(Boolean).join(' · '))}</span></span>${icon('chev', 'chev')}</a>
     ${note ? `<div class="live-note"><span class="caption">${L('Crew notes')}</span>${txView(ctx, clip(note, 240), langOf(t, nk))}</div>` : ''}
-    <div class="live-acts">${need ? `<button class="btn primary" data-act="liveReview" data-u="${esc(t.uid)}">${L('Review')}</button>` : ''}<button class="btn" data-act="liveMsg" data-u="${esc(t.uid)}">${L('Message')}</button></div></div>`;
+    <div class="live-acts">${need ? `<button class="btn" data-act="liveReview" data-u="${esc(t.uid)}">${L('Review')}</button>` : ''}<button class="btn" data-act="liveMsg" data-u="${esc(t.uid)}">${L('Message')}</button></div></div>`;
 }
 
 // What a message or a review writes into a sheet (office fields only), stamped so the newest wins on every phone. The text
@@ -489,7 +498,7 @@ export function recordsView(ctx, sub) {
   const body = sub === 'people' ? peopleSub(ctx) : sub === 'sheets' ? sheetsSub(ctx) : reportsSub(ctx); // a person open is a screen of its own: no segments over it
   return (ui.person ? '' : tabs) + body + olderCard(ctx, { people: 'shifts', sheets: 'tasks', reports: 'reports' }[sub]) + toolsCard(ctx);
 }
-const searchBox = (ph, aria) => `<input type="search" id="recQ" data-lv="q" data-enter="recSearch" enterkeyhint="search" autocomplete="off" value="${esc(ui.q)}" placeholder="${esc(ph)}" aria-label="${esc(aria)}">`;
+const searchBox = (ph, aria) => `<label class="find-box">${icon('search')}<input type="search" id="recQ" data-lv="q" data-enter="recSearch" enterkeyhint="search" autocomplete="off" value="${esc(ui.q)}" placeholder="${esc(ph)}" aria-label="${esc(aria)}"></label>`; // looks like Quick Find's box (its button hides here)
 const chip = (f, v, label, style = '') => `<button class="chip" data-act="recFilter" data-f="${f}" data-v="${esc(v)}" aria-pressed="${ui[f] === v}"${style ? ` style="${style}"` : ''}>${esc(label)}</button>`;
 
 function peopleSub(ctx) {
@@ -545,11 +554,12 @@ function sheetsList(ctx) {
     return `<h2 class="group-h"><span>${esc(niceDate(d))}</span><span>${ts.length}</span></h2>${ts.map(t => sheetRow(ctx, t, dup.has(t.uid))).join('')}`; }).join('')
     + (all.length > shown.length ? `<button class="btn" data-act="recMore">${L('Show more')} (${all.length - shown.length})</button>` : '');
 }
+// A sheet as the board draws it: the pie, the area and number, then the crew, the floor and where it stands.
 function sheetRow(ctx, t, dup) {
-  const [label, tone] = stage(t), where = [t.floor, t.area].filter(Boolean).join(' · ');
-  return `<div class="rec-row" style="${crewVar(ctx.S, t.crew, t.crewId)}"><a class="rec-main" href="${taskHref(t)}">
-      <span class="row1"><b class="tid">${esc(t.id || L('New task'))}</b>${pill(label, tone || '')}${dup ? sameNo() : ''}</span>
-      <small><i class="dot"></i> ${esc(t.crew || L('No crew yet'))}${where ? ' · ' + esc(where) : ''}</small>${t.scope ? `<small class="clamp">${txView(ctx, t.scope, langOf(t, 'scope'), getLang(), { toggle: false })}</small>` : ''}</a>
+  const [label, tone] = stage(t);
+  return `<div class="rec-row" style="${crewVar(ctx.S, t.crew, t.crewId)}"><span class="row-lead">${!finished(t) ? pieOf(t) : `<span class="pie full" role="img" aria-label="${esc(label)}">${icon('check')}</span>`}</span><a class="rec-main" href="${taskHref(t)}">
+      <span class="row1">${t.area ? `<span class="area">${esc(t.area)}</span>` : ''}<span class="tid">${esc(t.id || L('New task'))}</span>${dup ? sameNo() : ''}</span>
+      <small><i class="dot"></i> ${esc([t.crew || L('No crew yet'), t.floor].filter(Boolean).join(' · '))} · <span class="stage" data-tone="${tone || ''}">${esc(label)}</span></small>${t.scope ? `<small class="clamp">${txView(ctx, t.scope, langOf(t, 'scope'), getLang(), { toggle: false })}</small>` : ''}</a>
     ${ctx.role === 'pm' ? `<button class="rec-more" data-act="recMenu" data-kind="task" data-key="${esc(t.uid)}" aria-label="${esc(L('More actions'))}">⋯</button>` : ''}</div>`;
 }
 
@@ -785,7 +795,7 @@ function patchSettings(ctx, p) { // the stored settings keep the hub fields the 
 
 // ---------- taps and typing ----------
 
-const ACTS = new Set(['liveRefresh', 'liveSite', 'liveMsg', 'liveReview', 'recPerson', 'recFilter', 'recSearch', 'recMore', 'recMenu', 'recOlder', 'recCsv', 'recWeekCsv', 'recExport', 'recStats', 'recArchive',
+const ACTS = new Set(['liveRefresh', 'liveSite', 'liveFeedAll','liveMsg', 'liveReview', 'recPerson', 'recFilter', 'recSearch', 'recMore', 'recMenu', 'recOlder', 'recCsv', 'recWeekCsv', 'recExport', 'recStats', 'recArchive',
   'hubConnect', 'hubDisconnect', 'hubSync', 'hubTest', 'hubInvite', 'hubRotate', 'txToggle']);
 export const owns = a => ACTS.has(a);
 
@@ -796,6 +806,7 @@ export async function act(ctx, a, el) {
     switch (a) {
       case 'txToggle': { const box = el.closest('.tx'); if (box) box.dataset.view = box.dataset.view === 't' ? 'o' : 't'; break; }
       case 'liveSite': ui.siteOpen = !ui.siteOpen; ctx.render(); break;
+      case 'liveFeedAll': ui.feedAll = true; ctx.render(); break;
       case 'liveRefresh': el.disabled = true; el.textContent = L('Refreshing…'); await ctx.sync.cycle(); ctx.render(); break;
       case 'liveMsg': case 'liveReview': { const t = latest(ctx, el.dataset.u); if (t) (a === 'liveMsg' ? messageSheet : reviewSheet)(ctx, t); break; }
       case 'recPerson': ui.person = v; ui.q = ''; ui.old = null; ctx.render(); break;

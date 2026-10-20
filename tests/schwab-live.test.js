@@ -462,11 +462,12 @@ test('liveView: 12 crews, 60 events and 40 people stay fast and small', () => {
   assert.ok(ms < 400, `took ${ms}ms`);
   assert.ok(html.length < 600e3, `html is ${html.length} characters`);
   assert.equal((html.match(/class="live-crew"/g) || []).length, 12);
-  assert.equal((html.match(/<li><small>/g) || []).length, 50, 'the feed shows 50 events, newest first');
+  assert.equal((html.match(/<li><small>/g) || []).length, 10, 'the feed shows the 10 newest events, then Show all');
+  assert.match(html, /data-act="liveFeedAll">Show all \(50\)/, 'Show all counts the 50 events the feed keeps');
   assert.equal((html.match(/data-act="liveMsg"/g) || []).length, 48, 'one Message button per sheet that is not accepted');
   assert.equal((html.match(/class="live-done"/g) || []).length, 12, 'accepted sheets are one quiet line');
   assert.equal((html.match(/data-act="liveReview"/g) || []).length, 24, 'Review only where the crew has sent results and nobody has reviewed');
-  assert.match(html, /<p class="day-sum"><span>On site now: 41 people in 12 crews ·<\/span>/, '40 on the timesheet and a visitor the hub lists');
+  assert.match(html, /<p class="day-sum"><span>41 people in 12 crews ·<\/span>/, '40 on the timesheet and a visitor the hub lists');
   assert.match(html, /data-act="liveRefresh"/);
   assert.match(html, /Updated just now/);
   assert.ok(html.indexOf('T1019-3') > -1);
@@ -1059,7 +1060,7 @@ test('On site and the activity feed name people as the roster has them now, with
   ctx.sync.data.events = [{ rev: 2, ts: NOW - min(5), who: 'Jose L', role: 'crew', kind: 'clock.in', text: '', ref: 'o1' }, { rev: 1, ts: NOW - min(9), who: 'Jose L', role: 'crew', kind: 'clock.in', text: '', ref: 'o2' }];
   const v = live.liveView(ctx);
   assert.match(v, /<b>José Luis<\/b>/);
-  assert.match(v, /Crew Bravo · since 7:30 AM/, 'on site under the crew as it is called now');
+  assert.match(v, /Crew Bravo · <span class="nw">since 7:30 AM/, 'on site under the crew as it is called now');
   assert.match(v, /José Luis clocked in <span class="feed-crew">· Crew A<\/span>/, 'the feed line follows the roster through the shift it is about');
   assert.match(v, /Jose L clocked in <span class="feed-crew">· Crew Bravo<\/span>/);
 });

@@ -131,6 +131,10 @@ const TASKS = [
   await (a.cdp).send('Input.dispatchTouchEvent', { type: 'touchCancel', touchPoints: [] }); // the phone took the touch away (a call)
   await a.waitForTimeout(500);
   check((await added(a, before)).length === 0 && /#day\//.test(a.url()) && await a.locator('.fab.lift, .fab.fly, .plus-on').count() === 0, 'a drag the phone cancels makes nothing, and the + is back in its corner');
+  const c0 = await center(a, '.fab'), near = await finger(a, c0, { x: c0.x - 20, y: c0.y - 25 }, { hold: () => state(a) });
+  await a.waitForTimeout(500);
+  check(near.lifted && Math.abs(parseFloat(String(near.translate).split(' ')[1]) + 69) < 2 &&(await added(a, before)).length === 0 && /#day\//.test(a.url()) && await a.locator('.fab.lift, .fab.fly').count() === 0,
+    `the lifted + rides above the finger (translate ${near.translate}), and let go by its own corner it makes nothing (a change of mind)`);
 
   console.log('4. The page never scrolls under a drag of the +, and still scrolls under a drag of the list');
   await a.evaluate(() => scrollTo(0, 0));

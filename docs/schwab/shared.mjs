@@ -538,16 +538,17 @@ export const crewVar = (s, name, id = '') => { let i = id ? s.crews.findIndex(c 
 // < date >: the arrows move a day (a week: day is its Monday, here this week's), the date opens the calendar, and once
 // you have moved off it a chip leads back. v: the screen the arrows and the picker stay on (day, report, clock).
 // upcoming: the office board's chip to the next 7 days. The chips keep together, on their own line when the date needs it.
-export const dateBar = (day, v = 'day', { week = false, here = today(), upcoming = false } = {}) => `<div class="datebar daynav">
+// iconOnly: the title already says the date (a board off today), so the pill shows the calendar alone (the date stays for a screen reader).
+export const dateBar = (day, v = 'day', { week = false, here = today(), upcoming = false, iconOnly = false } = {}) => `<div class="datebar daynav">
   <button class="nav-btn" data-go="${v}/${addDays(day, week ? -7 : -1)}" aria-label="${week ? L('Previous week') : L('Previous day')}">${icon('back')}</button>
-  <label class="day">${icon('cal')}<span>${niceDate(day)}</span>
+  <label class="day${iconOnly ? ' icon-only' : ''}">${icon('cal')}<span>${niceDate(day)}</span>
     <input type="date" value="${day}" data-pick="${v}" aria-label="${week ? L('Pick a week') : L('Pick a date')}"></label>
   <button class="nav-btn" data-go="${v}/${addDays(day, week ? 7 : 1)}" aria-label="${week ? L('Next week') : L('Next day')}">${icon('chev')}</button>
   ${day === here && !upcoming ? '' : `<span class="datebar-chips">${day === here ? '' : `<button class="chip today-btn" data-go="${v}/${today()}">${week ? L('This week') : L('Today')}</button>`}${upcoming ? `<button class="chip up-btn" data-go="upcoming/${day}">${L('Upcoming')}</button>` : ''}</span>`}</div>`;
 
 // The day in one quiet line, as Things' Today has no stat tiles: only the parts that are not zero. The board: "6 sheets ·
-// 3 crews · 2 ready for review · 1 blocked · 14.5 of 18 crew-hrs"; Live, given here (who is on site): "On site now: 6 people
-// in 3 crews · 2 working · 2 ready for review · 1 blocked". Ready for review and blocked are taps in their status color
+// 2 ready for review · 1 blocked · 14.5 of 18 crew-hrs"; Live, given here (who is on site): "6 people in 3 crews
+// · 2 working · 2 ready for review · 1 blocked". Ready for review and blocked are taps in their status color
 // (data-act="sum"; data-uids: the sheets the app scrolls to). '' when there is nothing to say.
 export function daySummary(sheets, here = null) {
   const n1 = (n, one, many) => (!n ? '' : n === 1 ? one : many); // the words for n things, nothing for none
@@ -559,8 +560,8 @@ export function daySummary(sheets, here = null) {
   let parts;
   if (here) {
     const people = n1(here.length, L('1 person'), L('{n} people', { n: here.length }));
-    parts = [people && (ofCrews ? L('On site now: {people} in {crews}', { people, crews: ofCrews }) : L('On site now: {people}', { people })), n1(working, L('1 working'), L('{n} working', { n: working }))];
-  } else parts = [n1(sheets.length, L('1 sheet'), L('{n} sheets', { n: sheets.length })), ofCrews];
+    parts = [people && (ofCrews ? L('{people} in {crews}', { people, crews: ofCrews }) : people), n1(working, L('1 working'), L('{n} working', { n: working }))]; // the On site now heading is right under it
+  } else parts = [n1(sheets.length, L('1 sheet'), L('{n} sheets', { n: sheets.length }))]; // the board's crew chips are right under it
   parts = parts.map(esc);
   parts.push(tap(review, 'warn', n1(review.length, L('1 ready for review'), L('{n} ready for review', { n: review.length }))), tap(blocked, 'bad', n1(blocked.length, L('1 blocked'), L('{n} blocked', { n: blocked.length }))));
   if (!here && (est || act)) parts.push(esc(est ? L('{act} of {est} crew-hrs', { act: hrs(act), est: hrs(est) }) : L('{n} crew-hrs', { n: hrs(act) })));
@@ -667,6 +668,7 @@ export function toast(msg, tone = '', { undo, done } = {}) {
   if (undo) el.querySelector('.toast-undo').onclick = () => { el.offer?.tap(); el.classList.remove('show'); };
   el.dataset.tone = tone;
   el.classList.add('show');
+  el.at = Date.now(); // tasks.html route(): a toast older than the move to another screen goes
   clearTimeout(el.timer);
   el.timer = setTimeout(() => el.classList.remove('show'), undo ? UNDO_MS : TOAST_MS);
 }
@@ -1009,7 +1011,7 @@ export function settingsView(s, hub = '') {
       ${field(L('Your name'), 's.me', s.me, { ph: L('Used for "Assigned by", sign-offs') })}
       ${pickRow(L('Your role'), 's.role', s.role, roles.map(r => [r, L(r)]))}</div>`)}
     ${setSec(L('Office passcode'), `<div class="fgroup">${actRow('changePin', L('Change the passcode'))}</div>`,
-      L("Opens task setup, the daily report, settings and the PM's crew hours. Crew sheets and the time clock stay open to everyone. Use the same code on the PM's and the superintendent's phones. Crew phones learn it from the first task sheet they open."))}
+      L("Opens the office screens. Use the same code on the PM's and the superintendent's phones."))}
     ${setSec(L('Project'), `<div class="fgroup">${field(L('Project'), 's.project', s.project)}${field(L('Location'), 's.site', s.site)}
       ${field(L('Superintendent'), 's.super', s.super)}${field(L('Project manager'), 's.pm', s.pm)}</div>`)}
     ${setSec(L('Floors / levels'), linesBox('s.floors', s.floors, L('Floors / levels')), L('One per line. They show up as quick picks; you can still type any floor.'))}

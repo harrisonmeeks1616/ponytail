@@ -256,7 +256,7 @@ const check = (ok, what) => { log(ok ? '  ok  ' : '  FAIL', what); if (!ok) fail
   check(/East corridor T1014-01/.test(todayText) && /Crew A · Level 3/.test(todayText), 'Today card: crew, task, floor and area: ' + todayText.trim());
   await jose.click('#todayCard .tcard');
   await jose.waitForSelector('.brief');
-  check(/#task\//.test(jose.url()) && /Jose L \(you\), Luis M, Tre W/.test(await jose.textContent('.brief')) && await jose.isVisible('[data-act=sendResults]'), "tapping it opens the crew view, which marks him 'you'");
+  check(/#task\//.test(jose.url()) && /Jose L \(you\), Luis M, Tre W/.test(await jose.textContent('.tsheet .kv.info')) && await jose.isVisible('[data-act=sendResults]'), "tapping it opens the crew view, which marks him 'you'");
   await jose.goto(BASE + 'tasks.html#clock/2026-10-14');
   await jose.waitForSelector('[data-k="s.worker"]');
   check(jp.kind === 'hours' && jp.shifts.length === 1 && jp.shifts[0].who === 'Jose L' && jp.shifts[0].in === '06:58' && !('pin' in jp), 'clock-in text: the shift, the name, no office code');
@@ -466,7 +466,7 @@ const check = (ok, what) => { log(ok ? '  ok  ' : '  FAIL', what); if (!ok) fail
   await crew.screenshot({ path: OUT + '9-crew-es-320.png', fullPage: true });
   await pm.click('#langBtn');
   const esTabs = await tabNames(pm);
-  check(esTabs === 'Tareas | Horas | Reporte' && (await pm.textContent('#title')) === 'Horas de las cuadrillas', 'office tabs in Spanish, and the screen title: ' + esTabs);
+  check(esTabs === 'Tareas | Horas | Reporte' && (await pm.textContent('#title')) === 'Horas', 'office tabs in Spanish, and the screen title (as the tab says): ' + esTabs);
   await pm.click('#lockBtn');
   await pm.click('#officeTabs a[href^="#clock"]');
   await pm.waitForSelector('dialog .keypad');

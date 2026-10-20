@@ -100,7 +100,7 @@ const synced = async p => { await p.evaluate(() => import('./sync.mjs').then(m =
   log('1. The day summary on the office board');
   const sup = await open({ tasks: [...board(), ...week()] });
   await sup.waitForSelector('.day-sum');
-  check(await text(sup, '.day-sum') === '9 sheets · 3 crews · 2 ready for review · 1 blocked · 11 of 16 crew-hrs', `one quiet line, only non-zero parts: "${await text(sup, '.day-sum')}"`);
+  check(await text(sup, '.day-sum') === '9 sheets · 2 ready for review · 1 blocked · 11 of 16 crew-hrs', `one quiet line, only non-zero parts: "${await text(sup, '.day-sum')}"`);
   check(await sup.locator('.board-stats, .board .stat').count() === 0, 'the four stat tiles are gone');
   const tones = await sup.$$eval('.day-sum .sum-go', bs => bs.map(b => `${b.dataset.tone}:${b.textContent}:${Math.round(b.getBoundingClientRect().height)}`));
   check(tones.join() === 'warn:2 ready for review:24,bad:1 blocked:24' || (tones.length === 2 && /^warn:2 ready/.test(tones[0]) && /^bad:1 blocked/.test(tones[1])), `ready for review and blocked are buttons in their status color (${tones.join(' | ')})`);
@@ -132,7 +132,7 @@ const synced = async p => { await p.evaluate(() => import('./sync.mjs').then(m =
   await sup.click('.chip[data-act=filter][data-v="Crew A"]'); await sup.waitForTimeout(250);
   const fa = Object.fromEntries((await heads(sup, 'floor')).map(x => [x.key, x]));
   check(fa['Level 3'].pie === '0.667' && fa['Level 3'].name === 'Level 3: 4 of 6 steps done' && fa['Level 3'].n === '1' && !fa['Level 4'], 'the crew filter: Level 3 counts only Crew A sheets (4 of 6)');
-  check(await text(sup, '.day-sum') === '3 sheets · 1 crew · 1 ready for review · 10 of 10 crew-hrs', `the line follows the filter too: "${await text(sup, '.day-sum')}"`);
+  check(await text(sup, '.day-sum') === '3 sheets · 1 ready for review · 10 of 10 crew-hrs', `the line follows the filter too: "${await text(sup, '.day-sum')}"`);
   await sup.click('.chip[data-act=filter][data-v=""]'); await sup.waitForTimeout(200);
 
   log('3. Upcoming');
@@ -187,10 +187,10 @@ const synced = async p => { await p.evaluate(() => import('./sync.mjs').then(m =
   log('4. Spanish');
   await nav(sup, `#day/${DAY}`);
   await sup.click('#langBtn'); await sup.waitForTimeout(250);
-  check(await text(sup, '.day-sum') === '9 hojas · 3 cuadrillas · 2 listas para revisar · 1 bloqueada · 11 de 16 horas-cuadrilla', `the line in Spanish: "${await text(sup, '.day-sum')}"`);
+  check(await text(sup, '.day-sum') === '9 hojas · 2 listas para revisar · 1 bloqueada · 11 de 16 horas-cuadrilla', `the line in Spanish: "${await text(sup, '.day-sum')}"`);
   check((await heads(sup, 'floor')).find(x => x.key === 'Level 3')?.name === 'Level 3: 4 de 8 pasos hechos', 'the floor pie words in Spanish');
   await nav(sup, `#upcoming/${DAY}`);
-  check(await text(sup, '#title') === 'Próximos días' && (await heads(sup, 'day'))[0]?.shown === 'Mañana' && (await sup.locator('.day-none').allTextContents())[0] === 'vie a dom · nada planeado', `Upcoming in Spanish (${await text(sup, '#title')}, ${(await sup.locator('.day-none').allTextContents()).join(' | ')})`);
+  check(await text(sup, '#title') === 'Próximo' && (await heads(sup, 'day'))[0]?.shown === 'Mañana' && (await sup.locator('.day-none').allTextContents())[0] === 'vie a dom · nada planeado', `Upcoming in Spanish (${await text(sup, '#title')}, ${(await sup.locator('.day-none').allTextContents()).join(' | ')})`);
   await sup.click('#langBtn'); await sup.waitForTimeout(200);
 
   log('5. Live (hub): the same line, with who is on site');
@@ -198,13 +198,13 @@ const synced = async p => { await p.evaluate(() => import('./sync.mjs').then(m =
     crewHours: [shift('s1', 'Jose L', 'Crew A'), shift('s2', 'Luis M', 'Crew A'), shift('s3', 'Ana P', 'Crew B'), shift('s4', 'Tre W', '')] });
   await synced(pm); await synced(pm);
   await pm.waitForSelector('.day-sum').catch(() => {});
-  check(await text(pm, '.day-sum') === 'On site now: 4 people in 2 crews · 1 working · 2 ready for review · 1 blocked', `Live: "${await text(pm, '.day-sum')}"`);
+  check(await text(pm, '.day-sum') === '4 people in 2 crews · 1 working · 2 ready for review · 1 blocked', `Live: "${await text(pm, '.day-sum')}"`);
   check(await pm.locator('.live-stats, #app .stat').count() === 0, 'the Live tiles are gone');
   check(await pm.locator('.live-head + .day-sum').count() === 1, 'the line sits at the top, under the hub status');
   await pm.click('.day-sum [data-tone=bad]'); await pm.waitForTimeout(400);
   check(/^#task\/B1\//.test(await pm.evaluate(() => document.activeElement?.getAttribute('href') || '')), 'tapping "1 blocked" on Live goes to that sheet');
   await pm.click('#langBtn'); await pm.waitForTimeout(250);
-  check(await text(pm, '.day-sum') === 'En la obra ahora: 4 personas en 2 cuadrillas · 1 trabajando · 2 listas para revisar · 1 bloqueada', `Live in Spanish: "${await text(pm, '.day-sum')}"`);
+  check(await text(pm, '.day-sum') === '4 personas en 2 cuadrillas · 1 trabajando · 2 listas para revisar · 1 bloqueada', `Live in Spanish: "${await text(pm, '.day-sum')}"`);
   await pm.click('#langBtn'); await pm.waitForTimeout(150);
 
   log('6. Reduced motion, 320 px');
