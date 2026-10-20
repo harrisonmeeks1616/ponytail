@@ -2585,3 +2585,97 @@ test('a PM tablet rejecting a superintendent invite describes the invite without
   assert.equal(p.sync.hubStatus().state, 'off');
   assert.equal(p.settings().hubUrl, '', 'a refused invite changes no connection');
 });
+
+// ---------- a pull-first round that keeps offline edits (against the real hub) ----------
+
+const URL_NEW = 'https://script.google.com/macros/s/AKfycbNEWDEPLOY/exec'; // the hub redeployed: a new address on the same Sheet, so a phone's first round there starts with a pull
+test('against the real hub/Code.gs: a PM phone whose pull-first round keeps its offline edits never takes the other PM device\'s answers as seen', async () => {
+  const { mock, k, real } = realHub();
+  const sp = await makePhone(real, 'super', { key: k.super }), ph = await makePhone(real, 'pm', { key: k.pm }), tab = await makePhone(real, 'pm', { key: k.pm });
+  const step = async (...ps) => { for (const p of ps) { mock.advance(5e3); await p.cycle(); } };
+  const q = text => ({ q: text, rec: '', by: '', pm: '', pmNote: '' }), view = r => r && [r.pmReview, r.decisions.map(d => [d.q, d.pm])];
+  sp.editReport(DAY, r => Object.assign(r, { status: 'On plan', decisions: [q('Overtime Saturday?'), q('Second lift?'), q('Night shift?')] }));
+  await step(sp, ph, tab);
+  ph.net.down = true; // the PM phone, no signal: rewords one question, takes another out and writes the review
+  ph.editReport(DAY, r => { r.decisions[0].q = 'Overtime Saturday, 6 h max?'; r.decisions.splice(1, 1); r.pmReview = 'Reviewed on the drive'; }); await step(ph);
+  tab.editReport(DAY, r => { r.decisions[0].pm = 'Approved'; r.decisions[1].pm = 'Declined'; }); await step(tab); // the tablet answers both, as they were
+  ph.net.down = false;
+  assert.equal((await ph.sync.connect(URL_NEW, k.pm)).ok, true);
+  await step(ph, tab, sp, ph);
+  const want = ['Reviewed on the drive', [['Overtime Saturday, 6 h max?', ''], ['Night shift?', ''], ['Overtime Saturday?', 'Approved'], ['Second lift?', 'Declined']]];
+  assert.deepEqual([mock.entities('Reports').find(r => r.date === DAY), ph.reports()[DAY], tab.reports()[DAY], sp.reports()[DAY]].map(view), [want, want, want, want], "the tablet's answers stay under their own questions everywhere, and the review written offline stands");
+  assert.deepEqual([sp.toasts, ph.toasts, tab.toasts], [[], [], []]);
+});
+test('against the real hub/Code.gs: a pull-first round that keeps offline edits ends with the hub\'s value where another phone changed that field later', async () => {
+  const { mock, k, real } = realHub();
+  const a = await makePhone(real, 'super', { key: k.super }), b = await makePhone(real, 'pm', { key: k.pm });
+  const step = async (...ps) => { for (const p of ps) { mock.advance(5e3); await p.cycle(); } };
+  a.editReport(DAY, r => Object.assign(r, { status: 'On plan', results: 'Original results' }));
+  const uid = a.addTask({ scope: 'Original scope', sentAt: a.now() });
+  await step(a, b);
+  const edit = (p, w) => { p.editReport(DAY, r => { r.results = w + ' results'; }); p.save('schwab.settings', { ...p.settings(), site: w + ' site' }); p.editTask(uid, t => { t.scope = w + ' scope'; }); };
+  a.net.down = true; edit(a, 'Older'); await step(a); // both phones change the same fields, this one first, with no signal
+  edit(b, 'Newer'); await step(b);
+  a.net.down = false;
+  assert.equal((await a.sync.connect(URL_A, k.pm)).ok, true); // a new role: this round starts with a pull, which keeps the offline edits for the push
+  await step(a, b, a);
+  const onHub = () => [mock.entities('Tasks').find(t => t.uid === uid).scope, mock.entities('Reports').find(r => r.date === DAY).results, mock.entities('Config')[0].site];
+  const view = p => [p.task(uid).scope, p.reports()[DAY].results, p.settings().site], want = ['Newer scope', 'Newer results', 'Newer site'];
+  assert.deepEqual([onHub(), view(a), view(b)], [want, want, want], 'the newer edits win on the hub, and this phone shows them rather than its own older values as synced');
+  a.editTask(uid, t => { t.area = 'East wing'; }); await step(a, b); // a later edit here goes up from the hub's copy, not from the older one
+  assert.deepEqual([mock.entities('Tasks').find(t => t.uid === uid), a.task(uid), b.task(uid)].map(t => [t.scope, t.area]), Array(3).fill(['Newer scope', 'East wing']));
+  assert.deepEqual([a.toasts, b.toasts], [[], []]);
+});
+test('against the real hub/Code.gs: a task text opened on an office phone while its round is between push and pull never keeps the old copy over a newer hub copy', async () => {
+  const { mock, k, real } = realHub(), shared = await lib;
+  let opening = null; // run inside the round: after its push, before its pull is merged
+  const mid = { clock: real.clock, fetch: async (url, init) => { if (opening && JSON.parse(init.body).action === 'pull') { const f = opening; opening = null; f(); } return real.fetch(url, init); } };
+  const pm = await makePhone(real, 'pm', { key: k.pm }), sp = await makePhone(mid, 'super', { key: k.super });
+  const step = async (...ps) => { for (const p of ps) { mock.advance(5e3); await p.cycle(); } };
+  await step(pm, sp);
+  sp.net.down = true; // no signal since before the sheet was made
+  const uid = pm.addTask({ sentAt: pm.now(), floor: 'Level 3' });
+  await step(pm);
+  const text = { task: clone(pm.task(uid)), skew: pm.sync.hubStatus().skew }; // Send to crew: the text keeps the sheet as sent
+  mock.advance(10 * 60e3); pm.editTask(uid, t => { t.floor = 'Level 4'; }); await step(pm); // then the PM fixes it on the hub
+  sp.net.down = false;
+  opening = () => { // tasks.html openCode on an office phone that does not hold the sheet
+    const inc = shared.normTask(text.task);
+    assert.equal(sp.sync.fromText('t', inc.uid, 'assign', inc.assignAt || inc.sentAt, 0, text.skew !== undefined && inc), true);
+    sp.save('schwab.tasks', [...sp.tasks(), { ...inc, origin: 'mine', gotAt: sp.now() }]);
+  };
+  await step(sp);
+  assert.equal(opening, null, 'the text was opened during that round');
+  await step(sp, pm, sp);
+  assert.deepEqual([mock.entities('Tasks').find(t => t.uid === uid), sp.task(uid), pm.task(uid)].map(t => t.floor), ['Level 4', 'Level 4', 'Level 4'], "the PM's newer fix wins over the old text everywhere");
+  assert.equal(sp.sync.officeAt(sp.task(uid)), pm.sync.officeAt(pm.task(uid)), 'a day plan sent from here carries the stamp of the copy it shows');
+});
+test('against the real hub/Code.gs: a crew copy made before the phone joined the hub as an office phone becomes the office sheet when the hub copy arrives', async () => {
+  const { mock, k, real } = realHub(), shared = await lib;
+  const pm = await makePhone(real, 'pm', { key: k.pm }), sp = await makePhone(real, 'super', { url: '', key: '', noRole: true });
+  const step = async (...ps) => { for (const p of ps) { mock.advance(5e3); await p.cycle(); } };
+  const same = pm.addTask({ sentAt: pm.now(), floor: 'Level 3' }), older = pm.addTask({ id: 'T1019-02', sentAt: pm.now(), floor: 'Level 3' });
+  await step(pm);
+  for (const uid of [same, older]) sp.save('schwab.tasks', [...sp.tasks(), { ...shared.normTask(clone(pm.task(uid))), origin: 'link' }]); // opened as crew sheets before it had a hub
+  mock.advance(60e3); pm.editTask(older, t => { t.floor = 'Level 4'; }); await step(pm);
+  assert.equal((await sp.sync.connect(URL_A, k.super)).ok, true);
+  await step(sp);
+  assert.deepEqual([sp.task(same).origin, sp.task(older).origin, sp.task(older).floor], ['mine', 'mine', 'Level 4'], 'the copy just as the hub has it and the older one both become office sheets');
+  const cp = await makePhone(real, 'crew', { key: k.crew, crew: 'Crew A' }); // a phone that joined as a crew phone, then with its own superintendent key
+  await step(cp);
+  assert.deepEqual([cp.task(same).origin, cp.task(older).origin], ['link', 'link']);
+  assert.equal((await cp.sync.connect(URL_A, k.super)).ok, true);
+  await step(cp);
+  assert.deepEqual([cp.task(same).origin, cp.task(older).origin], ['mine', 'mine'], 'nothing changed on the hub, and they still become office sheets');
+});
+test('against the real hub/Code.gs: a person filled in on the PM phone\'s own shift is no PM edit', async () => {
+  const { mock, k, real } = realHub();
+  const pm = await makePhone(real, 'pm', { key: k.pm });
+  const step = async () => { mock.advance(5e3); await pm.cycle(); };
+  const id = pm.clockIn('Pat PM');
+  await step(); await step();
+  pm.editHours(id, s => { s.pid = 'pPat'; }); pm.editCrewHours(id, s => { s.pid = 'pPat'; }); // report.mjs attachShifts on the next load: the roster knows the name
+  await step(); await step();
+  assert.deepEqual([mock.entities('Hours').find(s => s.id === id).pid, pm.crewHours().find(s => s.id === id).pid], ['pPat', 'pPat'], 'the person goes up from the PM phone\'s own clock');
+  assert.deepEqual(mock.entities('Activity').filter(e => e.kind.startsWith('pm.')).map(e => e.text), [], "Activity says no 'PM edited'");
+});

@@ -4,8 +4,10 @@
 // reload its in-memory copies. Nothing here touches the DOM except the browser events initHub listens to.
 //
 // How a conflict is decided: a task or report has two parts, each with one owning role and a stamp (assignAt and
-// crewAt; updatedAt and pmAt). The newest stamp wins a part; a part this phone has not pushed yet is "mine" and is
-// stamped when the scan first sees it change. Per part, schwab.hubSync keeps s (hash of the local copy the hub
+// crewAt; updatedAt and pmAt). A part this phone has not pushed yet is "mine" and is stamped when the scan first sees it
+// change. A pulled part replaces mine unless mine is newer or changed since its base (keeps): then the push sends only what
+// changed, the hub merges it field by field (a field both changed goes to the newer stamp), and the push reply's merged
+// copy comes back here as a pull would (pushPhase). Per part, schwab.hubSync keeps s (hash of the local copy the hub
 // has), v and vh (stamp and content hash of the hub's version last seen), p and at (the unsynced copy and its stamp),
 // x (a copy the hub refused), b (the part as last had from the hub: a sheet's crewBase and assignBase, the settings' base),
 // tx (the time of a text merged here).
@@ -45,7 +47,7 @@ const TPARTS = [['assign', aPart, 'assignAt', aBase], ['crew', cPart, 'crewAt', 
 const supPart = r => { const { pmReview, pmLang, pmAt, updatedAt, filedAt, decisions, ...rest } = r; return { ...rest, decisions: decisions.map(d => [d.q, d.rec, d.by]) }; };
 const pmPart = r => ({ pmReview: r.pmReview, pmLang: r.pmLang, answers: r.decisions.filter(d => d.pm || d.pmNote).map(d => [d.q, d.pm, d.pmNote]) });
 // The superintendent part as this phone last had it from the hub, in wire form (supBase, HUB.md): the hub takes only what changed since.
-const sBase = r => { const { pmReview, pmLang, pmAt, updatedAt, filedAt, decisions, supBase, ...rest } = r; return { ...rest, decisions: decisions.map(d => ({ q: d.q, rec: d.rec, by: d.by })) }; };
+const sBase = r => { const { pmReview, pmLang, pmAt, updatedAt, filedAt, decisions, supBase, pmBase, ...rest } = r; return { ...rest, decisions: decisions.map(d => ({ q: d.q, rec: d.rec, by: d.by })) }; };
 const pBase = r => ({ pmReview: r.pmReview, pmLang: r.pmLang, decisions: r.decisions.map(d => ({ q: d.q, pm: d.pm, pmNote: d.pmNote })) }); // the PM part the same way (pmBase): two PM devices
 const RPARTS = [['sup', supPart, 'updatedAt', sBase], ['pm', pmPart, 'pmAt', pBase]];
 const PARTS = { t: TPARTS, r: RPARTS, g: [['v', s => cfgPart(s), 'at', s => cfgPart(s)]] };
@@ -81,6 +83,14 @@ const cutoff = (ms, days) => { const d = new Date(ms); d.setDate(d.getDate() - d
 const winDays = role => (role === 'crew' ? 14 : 60);
 const ent = (map, k) => (map[k] && typeof map[k] === 'object' ? map[k] : (map[k] = {}));
 const sameDoc = (a, b) => canon(a) === canon(b);
+// Whether my unsynced edit of a part (mine: its hash) stays over another hub copy of it (vh, stamped theirs): when it is
+// newer (its stamp at), or when it changed since its base b (the part as last had from the hub, hashed by fn): its push
+// sends only what changed and the hub merges it. A part still as its base (a texted copy, fromText) has nothing to merge,
+// so the hub's copy wins. A kept part is not marked as seen (v, vh): a PM answer from another device was not merged here.
+const keeps = (pr, mine, vh, theirs, fn) => mine !== pr.s && mine !== vh && (theirs <= num(pr.at) || (isObj(pr.b) && mine !== hs(fn(pr.b))));
+// What the PM changes on a shift in Crew hours. pid, crew and task links alone are no PM edit of the PM phone's own shift:
+// they follow its own clock (attachPeople fills a pid on every load), so they never go up as one ('PM edited' in Activity).
+const pmSide = s => [s.who, s.date, s.in, s.out, s.edited, s.gone];
 
 export function makeSync(o = {}) {
   const fetchImpl = o.fetchImpl || ((...a) => globalThis.fetch(...a));
@@ -278,7 +288,7 @@ export function makeSync(o = {}) {
       for (const s of list) {
         const pr = ent(ent(st[k], s.id), 'v'), h = hs(shiftPart(s, full));
         seen[k].add(s.id);
-        if (!can(s, pr, h)) pr.s = h;
+        if (!can(s, pr)) pr.s = h;
         else if (pr.s === h) delete pr.p;
         else if (pr.x !== h) {
           if (pr.p !== h) Object.assign(pr, { p: h, at: Math.max(skewed(st), num(pr.at) + 1) });
@@ -287,7 +297,7 @@ export function makeSync(o = {}) {
       }
     };
     shifts('h', lc.hours, s => c.dev && s.device === c.dev, false);
-    shifts('m', lc.crewH, (s, pr, h) => !(c.dev && s.device === c.dev) || s.gone || Object.values(s.edited).some(Boolean) || (pr.b && hs(shiftPart(pr.b, true)) !== h), true); // own punches go from the clock; corrections made in Crew hours go from its hub base
+    shifts('m', lc.crewH, (s, pr) => !(c.dev && s.device === c.dev) || s.gone || Object.values(s.edited).some(Boolean) || (pr.b && !sameDoc(pmSide(pr.b), pmSide(s))), true); // own punches go from the clock; corrections made in Crew hours go from its hub base
     const pr = ent(ent(st.g, 'c'), 'v'), cp = cfgPart(cfg()), h = hs(cp);
     if (c.role === 'crew') { /* never sends settings: left as the hub last had them, as an office part is above */ } else if (pr.s === h) { delete pr.p; delete pr.at; } else if (pr.x !== h) {
       if (pr.p !== h) Object.assign(pr, { p: h, at: Math.max(skewed(st), num(pr.v) + 1, num(pr.at) + 1) }); // the hub orders two office phones' settings by this stamp
@@ -330,7 +340,7 @@ export function makeSync(o = {}) {
       await sendBatch(batch.slice(mid), ep, out);
     }
   }
-  function ack(st, it, res) {
+  function ack(st, it, res, back) { // back: the hub's merged copies that differ from what went up (pushPhase merges them)
     const rec = ent(st[it.k], it.key);
     if (!res) return 0;
     if (res.status === 'rejected' && res.reason !== 'archived') { // reported once per version of the sheet; left alone until it changes
@@ -341,11 +351,13 @@ export function makeSync(o = {}) {
     }
     if (res.status !== 'ok' && res.reason !== 'archived') return 0; // archived: the hub already keeps it in its archive sheet, which is as good as synced
     const inc = it.k === 't' && res.task ? inT(res.task) : it.k === 'r' && res.report ? inR(res.report, it.key) : it.k === 'g' && isObj(res.config) ? inC(res.config) : null;
+    if (inc && Object.keys(it.sent).some(p => hs(PARTS[it.k].find(x => x[0] === p)[1](inc)) !== it.sent[p].h)) { if (it.k === 'g') back.config = res.config; else back[it.k === 't' ? 'tasks' : 'reports'].push(it.k === 't' ? res.task : res.report); }
     for (const p in it.sent) {
       const pr = ent(rec, p), { h, at, b } = it.sent[p], [, , stamp, base] = PARTS[it.k]?.find(x => x[0] === p) || [], theirs = inc ? num(inc[stamp]) : 0;
-      if (theirs > at && !b) continue; // someone's newer version won: the pull right behind this brings it (sent with a base, only what changed went in, so it is in)
+      if (theirs > at && !b) continue; // someone's newer version won: its copy in the reply is merged as a pull's (sent with a base, only what changed went in, so it is in)
       // v and vh name the hub's version: stamp and content, since two phones can tie on a stamp. A sheet, report or settings the
-      // hub merged with another phone's edits are not the copy here: vh stays this copy's, so the pull right behind brings the merged one.
+      // hub merged with another phone's edits, or kept a value both changed for the newer stamp, are not the copy here: vh stays
+      // this copy's, and the reply's copy is merged right after (pushPhase), since the pull may already be past it (a pull-first round).
       Object.assign(pr, { s: h, v: theirs || at, vh: h });
       if (base) pr.b = base(it.wire);
       if (pr.p === h) { delete pr.p; delete pr.at; }
@@ -367,7 +379,8 @@ export function makeSync(o = {}) {
       for (const batch of chunks(send)) {
         const done = [];
         try { await sendBatch(batch, ep, done); } finally { // what the hub did accept is recorded even if a later request fails
-          if (ep === epoch) { st = loadState(); for (const [it, res] of done) fresh += ack(st, it, res); saveState(st); }
+          // the hub's copies that differ from what went up are merged as a pull's, saved before their acks are (applyPull)
+          if (ep === epoch) { st = loadState(); const back = { more: true, tasks: [], reports: [] }; for (const [it, res] of done) fresh += ack(st, it, res, back); if (back.tasks.length || back.reports.length || back.config) applyPull(c, back, st.sig, st); else saveState(st); }
           // A record the PM deleted: the hub says so here, and its tombstone may never come in a pull (this phone can be past it), so it leaves now.
           const gone = ep === epoch ? done.filter(([, res]) => res?.reason === 'deleted') : [];
           if (gone.length) try { const s2 = loadState(), lc = readLocal(c), dirty = {}, kinds = new Set(); for (const [it] of gone) dropKey(lc, s2, dirty, { t: 'task', r: 'report' }[it.k] || 'shift', it.key); flush(lc, dirty, kinds); saveState(s2); notify(kinds); } catch { /* a full phone: it stays here, refused */ }
@@ -379,18 +392,16 @@ export function makeSync(o = {}) {
 
   // ---------- merge ----------
 
-  // A hub task into the local list. Per part: a version already held is skipped; my own unsynced edit stays if it is newer; else the hub's wins.
+  // A hub task into the local list. Per part: a version already held is skipped; my own unsynced edit stays while keeps says so; else the hub's wins.
   // The checklist is rebuilt from the assign side's structure with the crew side's ticks, by item id.
   function mergeTask(loc, inc, rec, writes, role, ts) {
+    if (loc?.origin === 'link' && role !== 'crew') loc = { ...loc, origin: 'mine' }; // a crew copy from before this phone joined as an office phone is the office's sheet (GATE3-02)
     const took = {};
     for (const [p, fn, at] of TPARTS) {
       const pr = ent(rec, p), theirs = num(inc[at]), vh = hs(fn(inc));
       if (loc && pr.v === theirs && pr.vh === vh) continue; // a version this phone already holds (its own push coming back, say)
       delete pr.x; // the hub changed since this was refused: it may take it now
-      if (loc && writes.includes(p)) {
-        const mine = hs(fn(loc));
-        if (mine !== pr.s && mine !== vh && (pr.b || theirs <= num(pr.at))) { Object.assign(pr, { v: theirs, vh }); continue; }
-      }
+      if (loc && writes.includes(p) && keeps(pr, hs(fn(loc)), vh, theirs, fn)) continue;
       took[p] = 1;
     }
     if (!Object.keys(took).length) return loc;
@@ -418,10 +429,7 @@ export function makeSync(o = {}) {
       const pr = ent(rec, p), theirs = num(inc[at]), vh = hs(fn(inc));
       if (loc && pr.v === theirs && pr.vh === vh) continue;
       delete pr.x;
-      if (loc && writes.includes(p)) {
-        const mine = hs(fn(loc));
-        if (mine !== pr.s && mine !== vh && (pr.b || theirs <= num(pr.at))) { Object.assign(pr, { v: theirs, vh }); continue; }
-      }
+      if (loc && writes.includes(p) && keeps(pr, hs(fn(loc)), vh, theirs, fn)) continue; // a kept PM part leaves rec.pm.v, so supBase.pmAt never claims an answer not merged here
       took[p] = 1;
     }
     if (!Object.keys(took).length) return loc;
@@ -504,8 +512,8 @@ export function makeSync(o = {}) {
   }
 
   // Merge a pull reply into the stores. Everything is computed first, saved to the stores, and only then recorded as synced.
-  function applyPull(c, rep, sig) {
-    const st = loadState(), kinds = new Set(), ts = now();
+  function applyPull(c, rep, sig, st = loadState()) { // st: a push's acks not saved yet (pushPhase)
+    const kinds = new Set(), ts = now();
     const win = winDays(c.role), cut = cutoff(ts, win);
     let moved = [];
     const news = []; // sheets an office message or follow-up just reached (a crew phone)
@@ -562,8 +570,7 @@ export function makeSync(o = {}) {
       if (isObj(rep.config)) {
         const inc = inC(rep.config), s0 = cfg(), pr = ent(ent(st.g, 'c'), 'v'), vh = hs(cfgPart(inc)), mine = hs(cfgPart(s0));
         if (!(pr.v === inc.at && pr.vh === vh)) {
-          if (c.role !== 'crew' && pr.s !== undefined && mine !== pr.s && mine !== vh && (pr.b || inc.at <= num(pr.at))) Object.assign(pr, { v: inc.at, vh });
-          else {
+          if (!(c.role !== 'crew' && pr.s !== undefined && keeps(pr, mine, vh, inc.at, cfgPart))) {
             // only fields that arrived with the right type: a damaged setting cannot blank a good one
             const patch = pick(cfgPart(rep.config), ['project', 'site', 'super', 'pm', 'floors', 'crews', 'people', 'checks'].filter(k => Array.isArray(rep.config[k]) === Array.isArray(CFG_TPL[k]) && typeof rep.config[k] === typeof CFG_TPL[k]));
             if (PIN_FORMAT.test(inc.pin) && !PIN_FORMAT.test(s0.pin) && !PIN_FORMAT.test(store.get(KEYS.pin, ''))) patch.pin = inc.pin; // a phone keeps the first code it learns
@@ -716,8 +723,8 @@ export function makeSync(o = {}) {
     epoch++; fails = 0; nextAllowed = 0;
     // The same hub, also after a Disconnect: everything this phone knew of it stays (bases, stamps, where it was), so its unsynced
     // work goes up first and merges step by step, as if it had never left. A different hub: only what changed is new work there.
-    // A required pull keeps unsynced parts with a base until the push: the hub merges their changed fields, rather than
-    // a newer part replacing unrelated offline work. A part without a base still follows its edit stamp.
+    // A round that starts pull-first keeps a part changed since its base until its push (mergeTask, keeps): the hub merges
+    // its changed fields, rather than a newer part replacing unrelated offline work. A part without a base follows its stamp.
     const same = url === (s.hubUrl || loadState().url);
     if (!same) store.set(ST, keepHashes());
     patchSettings({ hubUrl: url, hubKey: key, hubRole: rep.role, hubCrew: typeof extra.crew === 'string' ? extra.crew : same ? String(s.hubCrew || '') : '' });
