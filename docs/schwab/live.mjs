@@ -8,9 +8,9 @@
 //   tasks()      array of normalized task sheets (normTask), this phone's in-memory copy
 //   shifts()     array of normalized shifts (normShift) of the PM's crew timesheet (KEYS.crewHours), gone ones included; [] on other phones
 //   reports()    the touched daily reports (normReport), as an array or as the date-keyed object
-//   role         'pm' | 'super' | 'crew': the office role of this phone. Only 'pm' deletes, exports, sees hours and administers the hub
+//   role         'pm' | 'super' | 'crew': the office role of this phone. Only 'pm' deletes what the hub has, exports, sees hours and administers the hub
 //   day          'YYYY-MM-DD' the app is on (the Live board always shows the real today, from now())
-//   sync         the sync.mjs API: hubStatus, liveData, cycle, connect, disconnect, joinFrom, invite, translate, records, stats, purge, rotate, archive, selftest
+//   sync         the sync.mjs API: hubStatus, liveData, cycle, connect, disconnect, joinFrom, invite, translate, records, stats, purge, purgeLater, onHub, replyOnHub, rotate, archive, selftest
 //   go(hash)     navigate, hash without '#' (go('clock/2026-10-12'))
 //   render()     redraw the current screen after this file changed its own state
 //   toast(msg, tone)
@@ -19,7 +19,7 @@
 //                reviewer, followUp, assignAt, updatedAt). Store it in place of the sheet with the same uid, persist, file it as a review does, redraw.
 //   remove(kind, key)  Delete. Take the record out of this phone's stores the way the app's own delete does ('task': a sheet by uid,
 //                'report': by date) and persist; resolve true if it removed something. Called after the hub purge, so it may find nothing.
-//   ask(msg, yes, tone)  optional, defaults to shared.ask (tests pass their own)
+//   ask(msg, yes, tone), choose(msg, opts)  optional, default to shared.ask and shared.choose (tests pass their own)
 //
 // Wiring (tasks.html), all of it mechanical:
 //   routes     #live -> liveView(ctx);  #records/people|sheets|reports -> recordsView(ctx, sub);  Settings gets hubSettingsView(ctx)
@@ -28,11 +28,12 @@
 //   typing     onInput(ctx, el)                    (the search box and the translated previews; returns true if it used the event)
 //   header     statusDot(hubStatus(), getLang(), 'live') in .top-in; a phone opening a join link: joinSheet(ctx, data)
 //   text       txView(ctx, text, lang, viewerLang) wherever typed text is read-only; txField(...) where it is edited
-//   delete     a PM deleting a sheet or report anywhere should go through deleteRecord(ctx, kind, key), so the hub copy goes too
+//   delete     every phone deleting a sheet, and a hub phone deleting a report, goes through deleteRecord(ctx, kind, key), so the hub copy goes too or the phone says why not
 //   bar        these screens use no bottom bar: hide it, as Settings does
 //   paste      hubSettingsView on a phone with no hub offers the app's own data-act="paste" (Open a link someone sent you)
 
-import { KEYS, COMPANY, L, getLang, esc, iso, addDays, niceDate, t12, fmtMin, worked, nameKey, crewVar, field, sheet, ask, sendSheet, download, load, save, personById, crewById } from './shared.mjs';
+import { KEYS, COMPANY, L, getLang, esc, iso, addDays, niceDate, t12, fmtMin, worked, nameKey, crewVar, field, sheet, ask, choose, sendSheet, download, load, save, personById, crewById,
+  screenHead, icon, initials, setSec, actRow, UNDO_MS, people, langOf, daySummary } from './shared.mjs';
 import { monday, shiftMin, byPerson, personKey, timesheetCsv } from './report.mjs';
 import { duplicateShortIds } from './sync.mjs';
 
@@ -45,18 +46,18 @@ const nowOf = ctx => (typeof ctx.now === 'function' ? ctx.now() : Date.now());
 const dayOf = ms => iso(new Date(ms));
 const lg = l => (l === 'es' ? 'es' : 'en'); // a missing or unknown language is English
 const $ = id => globalThis.document?.getElementById(id);
-const roleName = r => (r === 'pm' ? L('Project manager') : r === 'super' ? L('Superintendent') : r === 'crew' ? L('Crew') : '');
+const roleName = (r, l) => (r === 'pm' ? L('Project manager', {}, l) : r === 'super' ? L('Superintendent', {}, l) : r === 'crew' ? L('Crew', {}, l) : '');
 const arrOf = x => (Array.isArray(x) ? x : []);
 const shiftsOf = ctx => arrOf(ctx.shifts?.());
 const sheetHref = u => (typeof u === 'string' && /^https:\/\/docs\.google\.com\/spreadsheets\/[\w\-/.?=&#%]{0,250}$/.test(u) ? u : ''); // the PM taps this: only a Google Sheet
-const sheetLink = u => (sheetHref(u) ? `<a class="btn" href="${esc(sheetHref(u))}" target="_blank" rel="noopener noreferrer">${L('Open the Google Sheet')}</a>` : '');
+const sheetLink = (u, cls = 'btn') => (sheetHref(u) ? `<a class="${cls}" href="${esc(sheetHref(u))}" target="_blank" rel="noopener noreferrer">${L('Open the Google Sheet')}</a>` : '');
 const pill = (label, tone = '') => `<span class="pill" data-tone="${tone}">${esc(label)}</span>`;
 const clip = (s, n) => (s.length > n ? s.slice(0, n - 1).trimEnd() + '…' : s);
 const MSG_MAX = 1000, PAGE = 100; // PAGE: rows a list draws before "Show more"
 const GOT = new Set(['live', 'syncing', 'offline', 'error']);
 
 // What this file remembers between draws (filters, what is open, the last answers from the hub).
-const fresh = () => ({ siteOpen: false, sub: '', q: '', crew: '', status: '', person: '', limit: PAGE, old: null, stats: undefined, want: false, archived: null, test: null, busy: '' });
+const fresh = () => ({ siteOpen: false, feedAll: false, sub: '', q: '', crew: '', status: '', person: '', limit: PAGE, old: null, stats: undefined, want: false, archived: null, test: null, busy: '' });
 const ui = fresh();
 export const resetUi = () => Object.assign(ui, fresh());
 
@@ -195,8 +196,10 @@ export const openShifts = shifts => shifts.filter(s => !s.gone && !s.out).map(s 
 
 // One server event as a sentence in the phone's language. The hub writes English text; names, ids and statuses are
 // carried over and the sentence is rebuilt, so only a kind this app doesn't know shows the hub's own words.
+// e.name: for a PM shift edit, the person as the roster has them now (else the name in the hub's text).
+// A phone with no name is named by the hub with its role code (who 'pm', role 'pm'): that shows as the role in words.
 export function eventLine(e, l = getLang()) {
-  const x = (en, v) => L(en, v, l), who = e.who || '', ref = e.ref || '', text = e.text || '';
+  const x = (en, v) => L(en, v, l), who = (e.who && e.who === e.role ? roleName(e.role, l) : e.who) || '', ref = e.ref || '', text = e.text || '';
   const end = words => words.find(w => text.endsWith(' ' + w));
   switch (e.kind) {
     case 'task.created': return who ? x('{who} created {ref}', { who, ref }) : x('New task {ref}', { ref });
@@ -207,6 +210,19 @@ export function eventLine(e, l = getLang()) {
     case 'clock.in': return x('{who} clocked in', { who });
     case 'clock.out': return x('{who} clocked out', { who });
     case 'report.sent': return /^\d{4}-\d{2}-\d{2}$/.test(ref) ? x('Daily report for {date} sent', { date: niceDate(ref, l) }) : text;
+    case 'pm.add': case 'pm.remove': case 'pm.edit': { // the hub: "PM added a shift for Jose L, 2026-10-19"
+      const m = /^PM (?:added a shift for|removed a shift for|edited) (.*), (\d{4}-\d{2}-\d{2})$/.exec(text);
+      if (!m) return text;
+      const v = { who: e.name || (m[1] === 'a worker' ? x('a worker') : m[1]), date: niceDate(m[2], l) };
+      return e.kind === 'pm.add' ? x('PM added a shift for {who} on {date}', v) : e.kind === 'pm.remove' ? x('PM removed a shift for {who} on {date}', v) : x('PM changed the hours of {who} on {date}', v);
+    }
+    case 'purge': { // "Deleted task <uid>": the record is gone, so its key means nothing to anyone
+      const m = /^Deleted (task|report|shift) (.*)$/.exec(text);
+      return !m ? text : m[1] === 'task' ? x('A task sheet was deleted') : m[1] === 'shift' ? x('A shift was deleted')
+        : /^\d{4}-\d{2}-\d{2}$/.test(m[2]) ? x('The {date} report was deleted', { date: niceDate(m[2], l) }) : text;
+    }
+    case 'key.rotated': return /^Crew /.test(text) ? x('The crew key was replaced') : /^Superintendent /.test(text) ? x('The superintendent key was replaced') : text;
+    case 'archive': { const m = /^Archived (\d+) rows older than (\d{4}-\d{2}-\d{2})$/.exec(text); return m ? x('{n} rows older than {date} archived', { n: m[1], date: niceDate(m[2], l) }) : text; }
     default: return text || e.kind || '';
   }
 }
@@ -218,10 +234,12 @@ export function hubLabel(state, l = getLang()) {
   return state === 'live' ? L('Live', {}, l) : state === 'syncing' ? L('Syncing', {}, l) : state === 'offline' ? L('Offline', {}, l) : state === 'error' ? L('Problem', {}, l) : L('Not connected', {}, l);
 }
 // The small header indicator: nothing without a hub. go: where a tap leads ('live' on office phones, 'settings' on crew phones).
-export function statusDot(status, l = getLang(), go = 'settings') {
+// badge: the dot alone, for the Live tab (tasks.html header: a fourth button in the brand strip would shrink the company names).
+export function statusDot(status, l = getLang(), go = 'settings', badge = false) {
   const s = status?.state;
   if (!GOT.has(s)) return '';
   const n = status.pending | 0, label = L('Hub: {state}', { state: hubLabel(s, l) }, l) + (n && s !== 'live' ? `, ${L('{n} not sent yet', { n }, l)}` : '');
+  if (badge) return `<i class="hubdot" data-state="${s}" role="img" aria-label="${esc(label)}" title="${esc(label)}"><i></i></i>`;
   return `<button type="button" class="icon-btn hubdot" data-go="${esc(go)}" data-state="${s}" aria-label="${esc(label)}" title="${esc(label)}"><i></i></button>`;
 }
 
@@ -233,6 +251,8 @@ export function statusDot(status, l = getLang(), go = 'settings') {
 const mem = new Map(), MEM_MAX = 400;
 const memGet = (f, t, s) => mem.get(`${f}>${t}|${s}`);
 const memPut = (f, t, s, v) => { mem.set(`${f}>${t}|${s}`, v); if (mem.size > MEM_MAX) mem.delete(mem.keys().next().value); };
+// The translation this session already has of a text, '' if none (Quick Find searches what the reader sees).
+export const txCached = (text, from, viewer = getLang()) => (lg(from) === lg(viewer) ? '' : memGet(lg(from), lg(viewer), String(text ?? '')) || '');
 
 function txInner(mode, state, orig, trans, toggle = true) { // every piece of text is escaped here
   const o = esc(orig), t = esc(trans);
@@ -292,6 +312,7 @@ export async function txApply(ctx, root = globalThis.document) {
     els.forEach((el, i) => {
       const trans = typeof out[i] === 'string' ? out[i] : texts[i];
       if (trans.trim() && trans !== texts[i]) memPut(from, to, texts[i], trans);
+      if (el.querySelector('.tx-o')?.textContent !== texts[i]) return; // a newer edit has its own pending request or debounce
       txSettle(ctx, el, texts[i], trans);
     });
   }));
@@ -299,115 +320,151 @@ export async function txApply(ctx, root = globalThis.document) {
 
 // ---------- Live ----------
 
+// Signed in on a phone the hub knows as a crew phone (it joined with a crew invite): the hub takes none of its office work,
+// which stays here until it joins as the office (OWNER3-02). On the Live and Tasks screens.
+export function crewKeyNote(ctx) {
+  const h = hub(ctx);
+  if (h.state !== 'off' && h.role === 'super' && ctx.S.role === 'Project manager' && ['pm', 'super'].includes(ctx.role)) return `<div class="banner" data-tone="warn" role="note"><b>${L('This phone is not connected with the PM key')}</b><p>${L('PM answers and crew hours are read-only. In Settings, disconnect and connect with the PM key to update them on the hub.')}</p></div>`;
+  return h.state === 'off' || h.role !== 'crew' || (ctx.role !== 'pm' && ctx.role !== 'super') ? '' : `<div class="banner" data-tone="warn" role="note"><b>${L('This phone is on the hub as a crew phone')}</b><p>${ctx.role === 'pm'
+    ? L('Sheets, reports and settings made here stay on this phone. In Settings, disconnect and connect again with the PM key: then they go up.')
+    : L('Sheets, reports and settings made here stay on this phone. Ask the PM for the superintendent invite and open it on this phone: then they go up.')}</p></div>`;
+}
+
 export function liveView(ctx) {
+  screenHead(L('Live'), { sub: niceDate(dayOf(nowOf(ctx))) });
   if (ctx.role !== 'pm' && ctx.role !== 'super') return `<div class="empty"><h2>${L('The live board is for the office')}</h2></div>`;
   const now = nowOf(ctx), day = dayOf(now), st = hub(ctx), live = { events: [], onsite: [], at: 0, info: {}, ...ctx.sync?.liveData?.() }, S = ctx.S;
   const sheets = ctx.tasks().filter(t => t.date === day), here = onSite([...openShifts(shiftsOf(ctx)), ...live.onsite], now, S);
   const sheetOf = sheetFinder(ctx.tasks()), shiftOf = new Map(shiftsOf(ctx).map(s => [s.id, s])), dup = duplicateShortIds(sheets);
   const updated = Math.max(live.at || 0, st.at || 0); // live.at moves only when something changed; st.at at every good round trip
-  const head = `<section class="card live-head">
-    <div class="row1"><span class="live-state"><i class="hub-dot" data-state="${esc(st.state)}"></i><b>${esc(hubLabel(st.state))}</b></span>
-      ${st.state === 'off' ? `<button class="btn" data-go="settings">${L('Set up the hub')}</button>` : `<button class="btn" data-act="liveRefresh">${L('Refresh')}</button>`}</div>
-    <p class="hint">${esc(st.state === 'off' ? L('Not connected to a hub. This shows what is on this phone.') : updated ? L('Updated {ago}', { ago: ago(updated, now) }) : L('Waiting for the first update'))}</p>
-    ${st.pending ? `<p class="hint">${esc(L('{n} not sent yet', { n: st.pending }))}</p>` : ''}
-    ${(st.state === 'offline' || st.state === 'error') && st.message ? `<p class="hint">${esc(st.message)}</p>` : ''}</section>`;
-  const review = sheets.filter(t => t.status && !t.review).length, working = sheets.filter(t => t.aStart && !t.status).length;
-  const stats = `<div class="stats three"><div class="stat"><b>${here.length}</b><span>${L('On site')}</span></div>
-    <div class="stat"><b>${working}</b><span>${L('Active')}</span></div>
-    <div class="stat"><b class="${review ? 'warn' : ''}">${review}</b><span>${L('To review')}</span></div></div>`;
+  // A quiet line on top: where the hub stands and one tap to ask it now (or, with none, the way to set it up).
+  const head = st.state === 'off'
+    ? `<div class="live-head"><p class="hint">${L('Not connected to a hub. This shows what is on this phone.')}</p><button class="link" data-go="settings">${L('Set up the hub')}</button></div>`
+    : `<div class="live-head"><p class="live-state"><i class="hub-dot" data-state="${esc(st.state)}" role="img" aria-label="${esc(hubLabel(st.state))}"></i>${st.state === 'live' ? '' : `<b>${esc(hubLabel(st.state))}</b>`}
+        <span>${esc(updated ? L('Updated {ago}', { ago: ago(updated, now) }) : L('Waiting for the first update'))}</span></p><button class="link" data-act="liveRefresh">${L('Refresh')}</button></div>
+      ${st.pending ? `<p class="hint">${esc(L('{n} not sent yet', { n: st.pending }))}</p>` : ''}
+      ${(st.state === 'offline' || st.state === 'error') && st.message ? `<p class="hint">${esc(st.message)}</p>` : ''}`;
+  const stats = daySummary(sheets, here); // the board's quiet line, with who is on site
   const site = siteCard(S, here);
   const groups = groupByCrew(sheets, S.crews.map(c => c.name));
-  const board = sheets.length ? groups.map(g => `<h3 class="live-crew" style="${crewVar(S, g.crew)}"><span><i class="dot"></i> ${esc(g.crew || L('No crew yet'))}</span>
-      <small>${esc(L('{d} of {n} done', { d: g.sheets.filter(finished).length, n: g.sheets.length }))}</small></h3>${g.sheets.map(t => (rank(t) === 6 ? doneRow(ctx, t) : sheetCard(ctx, t, now, dup.has(t.uid)))).join('')}`).join('')
-    : `<div class="empty"><h2>${L('No task sheets for today yet')}</h2><button class="btn" data-go="day/${day}">${L('Open the Tasks tab')}</button></div>`;
-  const feed = live.events.slice(0, 50);
-  // a clock line names the person as the roster has them now (by the shift it is about); a sheet line says the sheet's crew
-  const lineOf = e => {
+  const board = sheets.length ? groups.map(g => `<h4 class="live-crew" style="${crewVar(S, g.crew)}"><span><i class="dot"></i> ${esc(g.crew || L('No crew yet'))}</span>
+      <small>${esc(L('{d} of {n} done', { d: g.sheets.filter(finished).length, n: g.sheets.length }))}</small></h4>
+      <div class="live-list">${g.sheets.map(t => (rank(t) === 6 ? doneRow(t) : sheetCard(ctx, t, now, dup.has(t.uid)))).join('')}</div>`).join('')
+    : `<div class="empty">${icon('today', 'empty-ic')}<h2>${L('No task sheets for today yet')}</h2><button class="btn" data-go="day/${day}">${L('Open the Tasks tab')}</button></div>`;
+  // The PM's shift adds from one sync (a week typed in) fold into one line a person; ten lines, then Show all.
+  const addedFor = e => { const s = shiftOf.get(e.ref); return s ? personNow(S, s).name : /^PM added a shift for (.*), /.exec(e.text || '')?.[1] || ''; };
+  const addedKey = e => { const s = shiftOf.get(e.ref); return s ? personById(S, personKey(S, s))?.id || s.pid || '' : ''; }; // a name alone cannot distinguish two people
+  const folded = live.events.slice(0, 50).reduce((out, e) => {
+    const last = out.at(-1), key = e.kind === 'pm.add' ? addedKey(e) : '';
+    if (key && last?.e.kind === 'pm.add' && key === last.key && Math.abs(last.e.ts - e.ts) < 5 * 6e4) last.n++;
+    else out.push({ e, n: 1, key });
+    return out;
+  }, []), feed = ui.feedAll ? folded : folded.slice(0, 10);
+  // a clock line names the person as the roster has them now (by the shift it is about); a sheet line says the sheet's crew.
+  // A sheet is named by its number: one without a number yet is a new task, and one not on this phone (deleted, or older
+  // than it keeps) is "a task sheet", since its reference is a uid; a number some sheet here has is shown as it is.
+  const ids = new Set(ctx.tasks().map(t => t.id).filter(Boolean));
+  const lineOf = (e, n) => {
     const task = String(e.kind).startsWith('task.'), t = task ? sheetOf(e.ref) : undefined, s = !task && shiftOf.get(e.ref);
     const p = s ? personNow(S, s) : personNow(S, { who: e.who }), crew = t ? crewById(S, t.crewId)?.name || t.crew : p.crew;
-    return [t, `<span class="feed-x">${esc(eventLine({ ...e, who: p.name || e.who, ref: t?.id || e.ref }))}${crew ? ` <span class="feed-crew">· ${esc(crew)}</span>` : ''}</span>`];
+    const ref = !task ? e.ref : t ? t.id || L('New task') : ids.has(e.ref) ? e.ref : L('a task sheet');
+    const words = n > 1 ? L('PM added {n} shifts for {who}', { n, who: addedFor(e) || L('a worker') }) : eventLine({ ...e, who: p.name || e.who, name: s ? p.name : '', ref });
+    return [t, `<span class="feed-x">${esc(words)}${crew ? ` <span class="feed-crew">· ${esc(crew)}</span>` : ''}</span>`];
   };
-  const events = `<section class="card"><h2>${L('Activity')}</h2>${feed.length
-    ? `<ol class="feed">${feed.map(e => { const [t, line] = lineOf(e);
+  const events = `<section class="live-feed"><h3 class="section-h">${L('Activity')}</h3>${feed.length
+    ? `<ol class="feed">${feed.map(({ e, n }) => { const [t, line] = lineOf(e, n);
       return `<li><small>${esc(ago(e.ts, now))}</small>${t ? `<a href="${taskHref(t)}">${line}</a>` : line}</li>`; }).join('')}</ol>`
+      + (folded.length > feed.length ? `<button class="link" data-act="liveFeedAll">${L('Show all')} (${folded.length})</button>` : '')
     : `<p class="hint">${st.state === 'off' ? L('Connect the hub to see crews start, finish and clock in.') : L('Nothing yet. Crews starting, finishing and clocking in show up here.')}</p>`}</section>`;
-  return `${head}${stats}${site}<h2 class="group-h"><span>${L("Today's sheets")}</span><span>${sheets.length}</span></h2>${board}${events}`;
+  return `${crewKeyNote(ctx)}${head}${stats}${site}<h3 class="section-h">${L("Today's sheets")}<small>${sheets.length}</small></h3>${board}${events}`;
 }
 
-// Who is on site, by crew. Past a dozen people the list folds up to one line of counts, so it can't push the sheets off the screen.
+// Who is on site: a chip a person (initials in a ring of their crew's color, the name, since when), the crews in the
+// order of the crew list. Past a dozen people it folds up to one line of counts, so it can't push the sheets off the screen.
 const SITE_FOLD = 12;
 function siteCard(S, here) {
-  const m = new Map(), order = S.crews.map(c => c.name), ids = new Map(here.map(p => [p.crew, p.crewId]));
+  const m = new Map(), order = S.crews.map(c => c.name);
   for (const p of here) (m.get(p.crew) || m.set(p.crew, []).get(p.crew)).push(p);
   const pos = c => { const i = order.indexOf(c); return i < 0 ? order.length : i; };
   const groups = [...m].sort((a, b) => (a[0] === '') - (b[0] === '') || pos(a[0]) - pos(b[0]) || a[0].localeCompare(b[0]));
-  const label = c => (c ? `<i class="dot"></i> ${esc(c)}` : esc(L('Crew not set')));
   const open = here.length <= SITE_FOLD || ui.siteOpen;
-  return `<section class="card"><h2>${L('On site now')}</h2>${!here.length ? `<p class="hint">${L('Nobody is clocked in right now.')}</p>`
-    : open ? groups.map(([crew, ps]) => `<div class="onsite-g" style="${crew ? crewVar(S, crew, ids.get(crew)) : ''}"><span class="label">${label(crew)} · ${ps.length}</span>
-        <div class="onsite">${ps.map(p => `<span><b>${esc(p.who)}</b><small>${esc(L('since {time}', { time: t12(p.in) }))}</small></span>`).join('')}</div></div>`).join('')
+  const chip = p => `<span class="who-chip" style="${p.crew ? crewVar(S, p.crew, p.crewId) : ''}"><i aria-hidden="true">${esc(initials(p.who))}</i>
+    <span><b>${esc(p.who)}</b><small>${p.crew ? esc(p.crew) + ' · ' : ''}<span class="nw">${esc(L('since {time}', { time: t12(p.in) }))}</span></small></span></span>`;
+  return `<section class="live-site"><h3 class="section-h">${L('On site now')}<small>${here.length}</small></h3>${!here.length ? `<p class="hint">${L('Nobody is clocked in right now.')}</p>`
+    : open ? `<div class="onsite">${groups.flatMap(([, ps]) => ps).map(chip).join('')}</div>`
       : `<p class="hint">${groups.map(([crew, ps]) => `${crew ? esc(crew) : esc(L('Crew not set'))} ${ps.length}`).join(' · ')}</p>`}
     ${here.length > SITE_FOLD ? `<button class="link" data-act="liveSite">${ui.siteOpen ? L('Hide the list') : L('Show the list')}</button>` : ''}</section>`;
 }
-// An accepted sheet needs nothing more from the office: one line, so the sheets that do need it stay in view.
-const doneRow = (ctx, t) => `<a class="live-done" style="${crewVar(ctx.S, t.crew, t.crewId)}" href="#task/${esc(t.uid)}/assign"><b class="tid">${esc(t.id || L('New task'))}</b>
-  <span>${esc([t.floor, t.area].filter(Boolean).join(' · '))}</span>${pill(stage(t)[0], 'good')}</a>`;
+// A pie that fills as the steps are done, as on the Tasks board.
+const pieOf = t => { const { d, n } = progress(t); return n ? `<span class="pie" style="--p:${(d / n).toFixed(3)}" role="img" aria-label="${esc(L('{d} of {n} steps done', { d, n }))}"></span>` : '<span class="pie none" aria-hidden="true"></span>'; };
+// An accepted sheet needs nothing more from the office: one quiet row, so the sheets that do need it stay in view.
+const doneRow = t => `<a class="live-done" href="#task/${esc(t.uid)}/assign"><span class="pie full" role="img" aria-label="${esc(stage(t)[0])}">${icon('check')}</span>
+  <b class="tid">${esc(t.id || L('New task'))}</b><span>${esc([t.floor, t.area].filter(Boolean).join(' · '))}</span>${icon('chev', 'chev')}</a>`;
 
+// A sheet as a row: the pie, the number and where, then where it stands and the last sign of life; the crew's note under
+// it, and Review (once the crew has sent results) and Message.
 function sheetCard(ctx, t, now, dup) {
   const [label, tone] = stage(t), { d, n } = progress(t), la = lastActivity(t), need = t.status && !t.review;
   const where = [t.floor, t.area].filter(Boolean).join(' · ') || L('Floor not set');
-  const last = la ? L('Last activity {ago}', { ago: ago(la, now) }) : t.sentAt ? L('Sent {ago}', { ago: ago(t.sentAt, now) }) : L('Not started');
-  const note = t.status === 'Blocked' ? t.comments || t.remain : t.status === 'Partial' ? t.remain || t.comments : '';
-  return `<article class="tcard live-card" style="${crewVar(ctx.S, t.crew, t.crewId)}">
-    <a class="live-main" href="${taskHref(t)}">
-      <div class="row1"><span class="tid">${esc(t.id || L('New task'))}</span>${pill(label, tone || '')}${dup ? sameNo() : ''}</div>
-      <div class="meta"><span>${esc(where)}</span>${n ? `<span>${esc(L('{d} of {n} steps done', { d, n }))}</span>` : ''}</div>
-      ${n ? `<div class="progress" role="img" aria-label="${esc(L('{d} of {n} steps done', { d, n }))}"><i style="width:${d / n * 100}%"></i></div>` : ''}
-      <div class="meta"><span>${esc(last)}</span>${t.reply && t.replyAt ? `<span>${esc(L('Message sent {ago}', { ago: ago(t.replyAt, now) }))}</span>` : ''}</div></a>
-    ${note ? `<div class="live-note"><span class="label">${L('Crew notes')}</span>${txView(ctx, clip(note, 240), t.cLang)}</div>` : ''}
-    <div class="btns live-acts">${need ? `<button class="btn primary" data-act="liveReview" data-u="${esc(t.uid)}">${L('Review')}</button>` : ''}<button class="btn" data-act="liveMsg" data-u="${esc(t.uid)}">${L('Message')}</button></div></article>`;
+  const last = la ? L('Last activity {ago}', { ago: ago(la, now) }) : !t.sentAt ? L('Not started')
+    : hub(ctx).state !== 'off' && !ctx.sync.onHub?.(t.uid) ? L('Not on the hub yet') : L('Sent {ago}', { ago: ago(t.sentAt, now) }); // "Sent" only once the crew can get it from the hub
+  const nk = t.status === 'Blocked' ? (t.comments ? 'comments' : 'remain') : t.status === 'Partial' ? (t.remain ? 'remain' : 'comments') : '', note = nk && t[nk];
+  return `<div class="live-card">
+    <a class="row" href="${taskHref(t)}"><span class="row-lead">${pieOf(t)}</span>
+      <span class="row-main"><span class="row-title"><span class="tid">${esc(t.id || L('New task'))}</span> <span class="area">${esc(where)}</span></span>
+        <span class="row-sub meta">${n ? `${esc(L('{d} of {n} steps done', { d, n }))} · ` : ''}<span class="stage" data-tone="${tone || ''}">${esc(label)}</span>${dup ? ` ${sameNo()}` : ''}</span>
+        <span class="row-sub meta">${esc([last, t.reply && t.replyAt ? msgLine(ctx, t, now) : ''].filter(Boolean).join(' · '))}</span></span>${icon('chev', 'chev')}</a>
+    ${note ? `<div class="live-note"><span class="caption">${L('Crew notes')}</span>${txView(ctx, clip(note, 240), langOf(t, nk))}</div>` : ''}
+    <div class="live-acts">${need ? `<button class="btn" data-act="liveReview" data-u="${esc(t.uid)}">${L('Review')}</button>` : ''}<button class="btn" data-act="liveMsg" data-u="${esc(t.uid)}">${L('Message')}</button></div></div>`;
 }
 
-// What a message or a review writes into a sheet (office fields only), stamped so the newest wins on every phone.
-// ponytail: HUB.md has no language field for a reply, so it is read as the sheet's aLang. An office phone that types Spanish
-// on an English sheet gets its reply shown untranslated (or mistranslated); add replyLang to the contract when that happens.
-export function withMessage(t, text, ms, by) {
+// What a message or a review writes into a sheet (office fields only), stamped so the newest wins on every phone. The text
+// keeps the language it is typed in (l), whatever language the rest of the sheet was written in.
+export function withMessage(t, text, ms, by, l = getLang()) {
   const stamp = Math.max(ms, (t.assignAt || 0) + 1);
-  return { ...t, reply: text.trim().slice(0, MSG_MAX), replyAt: stamp, replyBy: by, assignAt: stamp };
+  return { ...t, reply: text.trim().slice(0, MSG_MAX), replyAt: stamp, replyBy: by, assignAt: stamp, aLangs: { ...t.aLangs, reply: l } };
 }
-export function withReview(t, review, note, ms, by) {
-  const stamp = Math.max(ms, (t.assignAt || 0) + 1);
-  return { ...t, review, reviewer: by, followUp: review === 'Follow-up needed' && note.trim() ? note.trim().slice(0, MSG_MAX) : t.followUp, assignAt: stamp, updatedAt: Math.max(ms, (t.updatedAt || 0) + 1) };
+export function withReview(t, review, note, ms, by, l = getLang()) {
+  const stamp = Math.max(ms, (t.assignAt || 0) + 1), followUp = review === 'Follow-up needed' && note.trim() ? note.trim().slice(0, MSG_MAX) : '';
+  return { ...t, review, reviewer: by, followUp: followUp || t.followUp, assignAt: stamp, updatedAt: Math.max(ms, (t.updatedAt || 0) + 1), ...(followUp && { aLangs: { ...t.aLangs, followUp: l } }) };
 }
 const latest = (ctx, uid) => ctx.tasks().find(t => t.uid === uid); // act on the sheet as it is now, not as it was when the sheet opened
 const byWho = ctx => ctx.S.me || roleName(ctx.role);
+// "Sent" only once the hub has the message: a draft's goes to the crew with the sheet, and one still on this phone waits for signal.
+const msgLine = (ctx, t, now) => (!t.sentAt ? L('Message goes out with the sheet') : ctx.sync.replyOnHub?.(t) ? L('Message sent {ago}', { ago: ago(t.replyAt, now) }) : L('Message not sent yet'));
 
 function messageSheet(ctx, t) {
   const now = nowOf(ctx);
   const d = sheet(`<h3>${esc(L('Message to {crew}', { crew: t.crew || L('the crew') }))}</h3>
     <p class="hint">${esc(L('Task {id}', { id: t.id }))} · ${L('The crew sees it on their sheet, in their language.')}</p>
-    ${t.reply ? `<p class="preview">${esc(t.reply)}<br><small>${esc(L('Last message {ago}. A new one replaces it.', { ago: ago(t.replyAt, now) }))}</small></p>` : ''}
+    ${t.reply ? `<p class="preview">${txView(ctx, t.reply, langOf(t, 'reply'), getLang(), { toggle: false })}<br><small>${esc(L('Last message {ago}. A new one replaces it.', { ago: ago(t.replyAt, now) }))}</small></p>` : ''}
     <label class="field"><span>${L('Your message')}</span><textarea rows="4" maxlength="${MSG_MAX}"></textarea></label>
     <div class="btns"><button class="btn primary" data-send>${L('Send')}</button></div>`);
+  after(ctx, d);
   d.querySelector('textarea').focus();
-  d.querySelector('[data-send]').onclick = () => {
+  d.querySelector('[data-send]').onclick = async () => {
     const text = d.querySelector('textarea').value;
     if (!text.trim()) return ctx.toast(L('Type a message first'), 'bad');
-    const cur = latest(ctx, t.uid);
+    const cur = latest(ctx, t.uid), crew = t.crew || L('the crew');
     if (!cur) { d.close(); return ctx.toast(L('That sheet is gone'), 'bad'); }
     ctx.saveTask(withMessage(cur, text, nowOf(ctx), byWho(ctx)));
     d.close();
-    ctx.toast(L('Message sent to {crew}', { crew: t.crew || L('the crew') }));
+    ctx.render();
+    if (!cur.sentAt) return ctx.toast(L('Message saved. It goes to {crew} with the sheet when you tap Send to crew.', { crew })); // the hub gives crews sent sheets only
+    ctx.toast(L('Sending…'));
+    const on = () => ctx.sync.replyOnHub?.(latest(ctx, t.uid));
+    for (let i = 0; i < 2 && !on(); i++) await ctx.sync.cycle(); // a round already running read the sheet before the message: the next one takes it
+    ctx.toast(on() ? L('Message sent to {crew}', { crew }) : L('Message saved on this phone. It goes to {crew} when the hub can be reached.', { crew }), on() ? '' : 'bad');
     ctx.render();
   };
 }
 
 function reviewSheet(ctx, t) {
-  const w = worked(t), { d: done, n } = progress(t), tx = text => txView(ctx, text, t.cLang, getLang(), { toggle: false });
+  const w = worked(t), { d: done, n } = progress(t), tx = k => t[k] && txView(ctx, t[k], langOf(t, k), getLang(), { toggle: false });
   const row = (k, html) => (html ? `<dt>${esc(k)}</dt><dd>${html}</dd>` : '');
   const d = sheet(`<h3>${esc(L('Review {id}', { id: t.id }))}</h3>
     <dl class="kv">${row(L('Status'), t.status && esc(L(t.status)))}${row(L('Steps'), n && esc(L('{d} of {n} done', { d: done, n })))}${row(L('Worked'), w && esc(fmtMin(w)))}
-      ${row(L('Completed'), t.doneText && tx(t.doneText))}${row(L('Remaining'), t.remain && tx(t.remain))}${row(L('Crew notes'), t.comments && tx(t.comments))}</dl>
+      ${row(L('Completed'), tx('doneText'))}${row(L('Remaining'), tx('remain'))}${row(L('Crew notes'), tx('comments'))}</dl>
     <div class="btns"><button class="btn primary" data-r="Accepted">${L('Accepted')}</button><button class="btn" data-r="Follow-up needed">${L('Follow-up needed')}</button></div>
     <label class="field" data-note hidden><span>${L('Follow-up / next step')}</span><textarea rows="3" maxlength="${MSG_MAX}">${esc(t.followUp)}</textarea></label>
     <div class="btns" data-save hidden><button class="btn primary" data-r="Follow-up needed" data-go-save>${L('Save follow-up')}</button></div>`);
@@ -435,14 +492,16 @@ const weekLabel = mon => L('{start} to {stop}', { start: niceDate(mon), stop: ni
 const crewDot = (S, crew, id = '') => (crew ? `<span style="${crewVar(S, crew, id)}"><i class="dot"></i> ${esc(crew)}</span>` : '');
 
 export function recordsView(ctx, sub) {
+  screenHead(L('Records'));
   if (ctx.role !== 'pm' && ctx.role !== 'super') return `<div class="empty"><h2>${L('Records are for the office')}</h2></div>`;
-  const subs = ctx.role === 'pm' ? ['people', 'sheets', 'reports'] : ['sheets', 'reports'], names = { people: L('By person'), sheets: L('Task sheets'), reports: L('Reports') };
+  const subs = ctx.role === 'pm' ? ['people', 'sheets', 'reports'] : ['sheets', 'reports'], names = { people: L('People'), sheets: L('Sheets'), reports: L('Reports') };
   if (!subs.includes(sub)) sub = subs[0];
   if (ui.sub !== sub) Object.assign(ui, { sub, q: '', crew: '', status: '', person: '', limit: PAGE, old: null });
-  const tabs = `<nav class="tabs" aria-label="${L('Records')}">${subs.map(s => `<a href="#records/${s}"${s === sub ? ' aria-current="page"' : ''}>${esc(names[s])}</a>`).join('')}</nav>`;
-  return tabs + (sub === 'people' ? peopleSub(ctx) : sub === 'sheets' ? sheetsSub(ctx) : reportsSub(ctx)) + olderCard(ctx, { people: 'shifts', sheets: 'tasks', reports: 'reports' }[sub]) + toolsCard(ctx);
+  const tabs = `<nav class="tabs rec-tabs" aria-label="${L('Records')}">${subs.map(s => `<a href="#records/${s}"${s === sub ? ' aria-current="page"' : ''}>${esc(names[s])}</a>`).join('')}</nav>`;
+  const body = sub === 'people' ? peopleSub(ctx) : sub === 'sheets' ? sheetsSub(ctx) : reportsSub(ctx); // a person open is a screen of its own: no segments over it
+  return (ui.person ? '' : tabs) + body + olderCard(ctx, { people: 'shifts', sheets: 'tasks', reports: 'reports' }[sub]) + toolsCard(ctx);
 }
-const searchBox = (ph, aria) => `<input type="search" id="recQ" data-lv="q" data-enter="recSearch" enterkeyhint="search" autocomplete="off" value="${esc(ui.q)}" placeholder="${esc(ph)}" aria-label="${esc(aria)}">`;
+const searchBox = (ph, aria) => `<label class="find-box">${icon('search')}<input type="search" id="recQ" data-lv="q" data-enter="recSearch" enterkeyhint="search" autocomplete="off" value="${esc(ui.q)}" placeholder="${esc(ph)}" aria-label="${esc(aria)}"></label>`; // looks like Quick Find's box (its button hides here)
 const chip = (f, v, label, style = '') => `<button class="chip" data-act="recFilter" data-f="${f}" data-v="${esc(v)}" aria-pressed="${ui[f] === v}"${style ? ` style="${style}"` : ''}>${esc(label)}</button>`;
 
 function peopleSub(ctx) {
@@ -461,13 +520,13 @@ function peopleList(ctx, all = peopleWeeks(shiftsOf(ctx), ctx.S, nowOf(ctx))) {
     const wk = d => p.weeks.find(w => w.mon === d), cur = wk(mon), open = p.weeks.reduce((n, w) => n + w.open, 0);
     return `<button class="rec-row" data-act="recPerson" data-v="${esc(p.key)}"><span class="rec-main"><b class="tid">${esc(p.who)}</b>
       <small>${crewDot(ctx.S, p.crew, p.crewId)}${p.crew ? ' · ' : ''}${esc(L('Last week: {n} hrs', { n: h2(wk(last)?.hours || 0) }))}</small>${open ? pill(L('No clock-out'), 'warn') : cur?.live ? pill(L('On the clock'), 'info') : ''}</span>
-      <span class="rec-side"><b>${h2(cur?.hours || 0)}</b><small>${L('This week')}</small></span></button>`;
+      <span class="rec-side"><b>${h2(cur?.hours || 0)}</b><small>${L('This week')}</small></span>${icon('chev', 'chev')}</button>`;
   }).join('');
 }
 function personDetail(ctx, p, now) {
   const pm = ctx.role === 'pm', byUid = new Map(ctx.tasks().map(t => [t.uid, t]));
-  return `<button class="link" data-act="recPerson" data-v="">‹ ${L('All people')}</button>
-    <section class="card person"><div class="row1"><h2>${esc(p.who)}</h2><b class="total">${esc(L('{n} hrs', { n: h2(p.hours) }))}</b></div>
+  screenHead(L('Records'), { back: { act: 'recPerson', v: '', label: L('All people') } });
+  return `<section class="card person"><div class="row1"><h2>${esc(p.who)}</h2><b class="total">${esc(L('{n} hrs', { n: h2(p.hours) }))}</b></div>
       <div class="chips">${crewDot(ctx.S, p.crew, p.crewId)}<span class="hint">${esc(p.shifts === 1 ? L('1 shift') : L('{n} shifts', { n: p.shifts }))}</span></div></section>
     ${p.weeks.map((w, i) => `<details class="card rec-week"${i === 0 ? ' open' : ''}>
       <summary><span class="rec-main"><b>${esc(weekLabel(w.mon))}</b>${w.open ? pill(L('No clock-out'), 'warn') : w.live ? pill(L('On the clock'), 'info') : ''}</span><b class="total">${esc(L('{n} hrs', { n: h2(w.hours) }))}</b></summary>
@@ -498,11 +557,12 @@ function sheetsList(ctx) {
     return `<h2 class="group-h"><span>${esc(niceDate(d))}</span><span>${ts.length}</span></h2>${ts.map(t => sheetRow(ctx, t, dup.has(t.uid))).join('')}`; }).join('')
     + (all.length > shown.length ? `<button class="btn" data-act="recMore">${L('Show more')} (${all.length - shown.length})</button>` : '');
 }
+// A sheet as the board draws it: the pie, the area and number, then the crew, the floor and where it stands.
 function sheetRow(ctx, t, dup) {
-  const [label, tone] = stage(t), where = [t.floor, t.area].filter(Boolean).join(' · ');
-  return `<div class="rec-row" style="${crewVar(ctx.S, t.crew, t.crewId)}"><a class="rec-main" href="${taskHref(t)}">
-      <span class="row1"><b class="tid">${esc(t.id || L('New task'))}</b>${pill(label, tone || '')}${dup ? sameNo() : ''}</span>
-      <small><i class="dot"></i> ${esc(t.crew || L('No crew yet'))}${where ? ' · ' + esc(where) : ''}</small>${t.scope ? `<small class="clamp">${esc(t.scope)}</small>` : ''}</a>
+  const [label, tone] = stage(t);
+  return `<div class="rec-row" style="${crewVar(ctx.S, t.crew, t.crewId)}"><span class="row-lead">${!finished(t) ? pieOf(t) : `<span class="pie full" role="img" aria-label="${esc(label)}">${icon('check')}</span>`}</span><a class="rec-main" href="${taskHref(t)}">
+      <span class="row1">${t.area ? `<span class="area">${esc(t.area)}</span>` : ''}<span class="tid">${esc(t.id || L('New task'))}</span>${dup ? sameNo() : ''}</span>
+      <small><i class="dot"></i> ${esc([t.crew || L('No crew yet'), t.floor].filter(Boolean).join(' · '))} · <span class="stage" data-tone="${tone || ''}">${esc(label)}</span></small>${t.scope ? `<small class="clamp">${txView(ctx, t.scope, langOf(t, 'scope'), getLang(), { toggle: false })}</small>` : ''}</a>
     ${ctx.role === 'pm' ? `<button class="rec-more" data-act="recMenu" data-kind="task" data-key="${esc(t.uid)}" aria-label="${esc(L('More actions'))}">⋯</button>` : ''}</div>`;
 }
 
@@ -518,7 +578,7 @@ function reportsList(ctx) {
   return rs.slice(0, ui.limit).map(r => { const wait = r.decisions.filter(d => d.q && !d.pm).length;
     return `<div class="rec-row"><a class="rec-main" href="#report/${esc(r.date)}">
         <span class="row1"><b class="tid">${esc(niceDate(r.date))}</b>${r.status ? pill(L(r.status), REPORT_TONE[r.status] || '') : ''}</span>
-        <small>${esc([r.super, wait ? L('{n} waiting', { n: wait }) : '', r.pmReview ? L('PM reviewed: {note}', { note: r.pmReview }) : ''].filter(Boolean).join(' · '))}</small>${r.results ? `<small class="clamp">${esc(r.results)}</small>` : ''}</a>
+        <small>${esc([r.super, wait ? L('{n} waiting', { n: wait }) : '', r.pmReview ? L('PM reviewed: {note}', { note: r.pmReview }) : ''].filter(Boolean).join(' · '))}</small>${r.results ? `<small class="clamp">${txView(ctx, r.results, r.lang, getLang(), { toggle: false })}</small>` : ''}</a>
       ${ctx.role === 'pm' ? `<button class="rec-more" data-act="recMenu" data-kind="report" data-key="${esc(r.date)}" aria-label="${esc(L('More actions'))}">⋯</button>` : ''}</div>`; }).join('')
     + (rs.length > ui.limit ? `<button class="btn" data-act="recMore">${L('Show more')} (${rs.length - ui.limit})</button>` : '');
 }
@@ -531,8 +591,8 @@ function olderCard(ctx, kind) {
   let body = '';
   if (kind === 'shifts' && items.length) body = peopleWeeks(items, S, nowOf(ctx)).map(p => `<details class="rec-old"><summary><b>${esc(p.who)}</b><span>${esc(L('{n} hrs', { n: h2(p.hours) }))}</span></summary>
       ${p.weeks.map(w => `<p class="hint">${esc(weekLabel(w.mon))} · ${esc(L('{n} hrs', { n: h2(w.hours) }))} · ${esc(L('{n} shifts', { n: w.shifts.length }))}</p>`).join('')}</details>`).join('');
-  if (kind === 'tasks') body = items.sort((a, b) => b.date.localeCompare(a.date)).slice(0, 200).map(t => oldTask(ctx, t)).join('');
-  if (kind === 'reports') body = items.sort((a, b) => b.date.localeCompare(a.date)).slice(0, 200).map(r => oldReport(r)).join('');
+  if (kind === 'tasks') body = items.sort((a, b) => b.date.localeCompare(a.date)).map(t => oldTask(ctx, t)).join('');
+  if (kind === 'reports') body = items.sort((a, b) => b.date.localeCompare(a.date)).map(r => oldReport(ctx, r)).join('');
   return `<section class="card"><h2>${L('Older records on the hub')}</h2>
     <p class="hint">${L('Records older than this phone keeps are on the hub. Loading them does not save them on this phone.')}</p>
     ${body}${o?.err ? `<p class="hint" role="alert">${esc(o.err)}</p>` : ''}${o && !o.busy && !o.cursor && !o.err ? `<p class="hint">${items.length ? L('That is everything the hub has.') : L('The hub has nothing older.')}</p>` : ''}
@@ -540,15 +600,16 @@ function olderCard(ctx, kind) {
 }
 const kv = (k, html) => (html ? `<dt>${esc(k)}</dt><dd>${html}</dd>` : '');
 function oldTask(ctx, t) {
-  const [label, tone] = stage(t);
+  const [label, tone] = stage(t), tx = k => t[k] && txView(ctx, t[k], langOf(t, k));
   return `<details class="rec-old"><summary><b>${esc(niceDate(t.date))} · ${esc(t.id)}</b><span>${esc(t.crew)}</span>${pill(label, tone || '')}</summary><dl class="kv">
-    ${kv(L('Floor / level'), esc([t.floor, t.area].filter(Boolean).join(' · ')))}${kv(L('Work, quantities and limits of scope'), t.scope && txView(ctx, t.scope, t.aLang))}${kv(L('Completed'), t.doneText && txView(ctx, t.doneText, t.cLang))}
-    ${kv(L('Remaining'), t.remain && txView(ctx, t.remain, t.cLang))}${kv(L('Crew notes'), t.comments && txView(ctx, t.comments, t.cLang))}${kv(L('Reviewed by'), esc([t.review ? L(t.review) : '', t.reviewer].filter(Boolean).join(' · ')))}
-    ${kv(L('Follow-up / next step'), t.followUp && txView(ctx, t.followUp, t.aLang))}${kv(L('Your message'), t.reply && txView(ctx, t.reply, t.aLang))}</dl></details>`;
+    ${kv(L('Floor / level'), esc([t.floor, t.area].filter(Boolean).join(' · ')))}${kv(L('Work, quantities and limits of scope'), tx('scope'))}${kv(L('Completed'), tx('doneText'))}
+    ${kv(L('Remaining'), tx('remain'))}${kv(L('Crew notes'), tx('comments'))}${kv(L('Reviewed by'), esc([t.review ? L(t.review) : '', t.reviewer].filter(Boolean).join(' · ')))}
+    ${kv(L('Follow-up / next step'), tx('followUp'))}${kv(L('Your message'), tx('reply'))}</dl></details>`;
 }
-function oldReport(r) {
+function oldReport(ctx, r) {
+  const tx = (k, l) => r[k] && txView(ctx, r[k], l);
   return `<details class="rec-old"><summary><b>${esc(niceDate(r.date))}</b><span>${esc(r.super)}</span>${r.status ? pill(L(r.status), REPORT_TONE[r.status] || '') : ''}</summary><dl class="kv">
-    ${kv(L('Overall status & today’s results'), esc(r.results))}${kv(L('Site issues, concerns & coordination'), esc(r.issues))}${kv(L('PM review / time'), esc(r.pmReview))}</dl></details>`;
+    ${kv(L('Overall status & today’s results'), tx('results', r.lang))}${kv(L('Site issues, concerns & coordination'), tx('issues', r.lang))}${kv(L('PM review / time'), tx('pmReview', r.pmLang))}</dl></details>`;
 }
 
 // ---------- Records: export, week CSV, hub storage ----------
@@ -611,101 +672,122 @@ async function exportAll(ctx) {
   download(new Blob([JSON.stringify(exportData(ctx, now, extra))], { type: 'application/json' }), `schwab-records-${dayOf(now)}.json`);
 }
 
-// ---------- delete (PM only, asks first, hub first) ----------
+// ---------- delete: gone at once with Undo for 6 seconds, then off the hub (the PM) ----------
 
+// The record leaves this phone at once (ctx.remove returns what puts it back) and the toast offers Undo. Only when the
+// offer is over does the hub purge go: a copy kept on the hub would come straight back, so if the hub can't take it,
+// the record comes back here too and the PM is told. The pending purge is stored (sync purgeLater), so closing the app
+// during the Undo does not keep the record on the hub. Only the PM's key purges: any other phone on a hub deletes only
+// what the hub has never had, and is told who can delete the rest.
 export async function deleteRecord(ctx, kind, key) {
-  if (ctx.role !== 'pm' || !['task', 'report'].includes(kind)) return false;
-  const h = hub(ctx), onHub = h.state !== 'off' && h.role === 'pm';
+  if (!['task', 'report'].includes(kind)) return false;
+  const h = hub(ctx), onHub = h.state !== 'off' && h.role === 'pm' && ctx.role === 'pm';
   const t = kind === 'task' ? ctx.tasks().find(x => x.uid === key) : list(ctx.reports()).find(r => r.date === key);
   if (!t) return false;
-  const base = kind === 'task' ? L("Delete task {id}? This can't be undone.", { id: t.id }) : L("Delete the {date} report? This can't be undone.", { date: niceDate(t.date) });
-  if (!await (ctx.ask || ask)(onHub ? `${base} ${L('It is also removed from the hub.')}` : base, L('Delete'), 'danger')) return false;
-  if (onHub) { // a copy kept on the hub would come straight back, so the hub goes first and a failure deletes nothing
+  if (h.state !== 'off' && !onHub && ctx.sync.onHub(key, kind)) { ctx.toast(L('Only the PM can delete what is on the hub. Ask the PM to delete it.'), 'bad'); return false; }
+  const unsaved = onHub && ctx.sync.purgeLater(kind, key, nowOf(ctx) + UNDO_MS) === false; // a full phone: the hub copy goes only if the app stays open
+  const back = await ctx.remove(kind, key), put = () => { if (onHub) ctx.sync.purgeLater(kind, key, 0); if (typeof back === 'function') back(); ctx.render(); };
+  const msg = kind === 'task' ? L('Task {id} deleted', { id: t.id || L('New task') }) : L('The {date} report was deleted', { date: niceDate(t.date) });
+  ctx.toast(onHub ? `${msg}. ${L('It is also removed from the hub.')}${unsaved ? ` ${L('This phone is out of space: keep the app open until Undo is gone, or the hub keeps it.')}` : ''}` : msg, unsaved ? 'bad' : '', { undo: put, done: async undone => {
+    if (undone || !onHub) return;
     const r = await ctx.sync.purge(kind, key);
-    if (!r.ok) { ctx.toast(r.message || L('The hub could not be reached, so nothing was deleted.'), 'bad'); return false; }
-  }
-  await ctx.remove(kind, key);
-  ctx.toast(L('Deleted'));
+    if (r.ok) return;
+    put();
+    ctx.toast(r.message || L('The hub could not be reached, so nothing was deleted.'), 'bad');
+  } });
   ctx.render();
   return true;
 }
 
 // ---------- Settings > Hub ----------
 
+// Grouped lists like the rest of Settings (shared.mjs setSec, actRow): connect; or where it stands, the test, the
+// invites and keys (PM), and Disconnect on its own.
 export function hubSettingsView(ctx) {
   const st = hub(ctx), now = nowOf(ctx), office = ctx.role === 'pm' || ctx.role === 'super';
   if (st.state === 'off') {
-    return office ? `<section class="card"><h2>${L('Hub')}</h2>
-        <p class="hint">${L('Optional. One shared log of hours, task sheets and reports, a live board, and translation of what people type. Paste the hub link and your key.')}</p>
-        <div class="grid"><label class="field wide"><span>${L('Hub link')}</span><input id="hubUrl" inputmode="url" autocomplete="off" autocapitalize="off" spellcheck="false" placeholder="https://script.google.com/macros/s/.../exec"></label>
-          <label class="field wide"><span>${L('Hub key')}</span><input id="hubKey" type="password" autocomplete="off" autocapitalize="off" spellcheck="false"></label></div>
-        <p class="hub-err" id="hubErr" role="alert"></p>
-        <div class="btns"><button class="btn primary" data-act="hubConnect">${L('Connect')}</button></div></section>`
-      : `<section class="card"><h2>${L('Hub')}</h2><p class="hint">${L('Not connected. Open the hub invite link your PM sent you.')}</p>
-        <div class="btns"><button class="btn" data-act="paste">${L('Open a link someone sent you')}</button></div></section>`;
+    return office ? setSec(L('Hub'), `<div class="fgroup">
+        <label class="field"><span>${L('Hub link')}</span><input id="hubUrl" inputmode="url" autocomplete="off" autocapitalize="off" spellcheck="false" placeholder="https://script.google.com/macros/s/.../exec"></label>
+        <label class="field"><span>${L('Hub key')}</span><input id="hubKey" type="password" autocomplete="off" autocapitalize="off" spellcheck="false"></label>
+        ${actRow('hubConnect', L('Connect'))}</div><p class="hub-err set-note" id="hubErr" role="alert"></p>`,
+      L('Optional. One shared log of hours, task sheets and reports, a live board, and translation of what people type. Paste the hub link and your key.'))
+      : setSec(L('Hub'), `<div class="fgroup">${actRow('paste', L('Open a link someone sent you'))}</div>`, L('Not connected. Open the hub invite link your PM sent you.'));
   }
-  const pm = st.role === 'pm', test = ui.test;
-  const results = test === 'running' ? `<p class="hint" role="status">${L('Testing…')}</p>` : test && !test.ok ? `<p class="hint" role="alert">${esc(test.message || L('The test could not run.'))}</p>`
+  const pm = st.role === 'pm', test = ui.test, row = (k, v) => `<div class="row"><span class="row-main">${k}</span><span class="row-end">${esc(v)}</span></div>`;
+  const results = test === 'running' ? `<p class="hint set-note" role="status">${L('Testing…')}</p>` : test && !test.ok ? `<p class="hint set-note" role="alert">${esc(test.message || L('The test could not run.'))}</p>`
     : test ? `<ul class="checks">${test.checks.map(c => `<li data-ok="${c.ok}"><span aria-hidden="true">${c.ok ? '✓' : '✗'}</span><span class="sr">${c.ok ? L('Passed') : L('Failed')}</span> ${esc(CHECKS()[c.name] || c.name)}${c.ok ? '' : ` <small>${esc(clip(c.detail, 40))}</small>`}</li>`).join('')}</ul>
-      ${test.checks.every(c => c.ok) ? pill(L('Everything works'), 'good') : pill(L('Something failed'), 'bad')}` : '';
-  return `<section class="card"><h2>${L('Hub')}</h2>
-      <div class="row1"><span class="live-state"><i class="hub-dot" data-state="${esc(st.state)}"></i><b>${esc(hubLabel(st.state))}</b></span><small class="hint">${esc(st.at ? L('Updated {ago}', { ago: ago(st.at, now) }) : '')}</small></div>
-      ${st.message && st.state !== 'live' ? `<p class="hint">${esc(st.message)}</p>` : ''}${st.pending ? `<p class="hint">${esc(L('{n} not sent yet', { n: st.pending }))}</p>` : ''}
-      <dl class="kv"><dt>${L('This phone')}</dt><dd>${esc(roleName(st.role))}</dd>${st.role === 'crew' && st.crew ? `<dt>${L('Crew')}</dt><dd>${esc(st.crew)}</dd>` : ''}</dl>
-      <div class="btns"><button class="btn" data-act="hubSync">${L('Sync now')}</button>${pm ? `<button class="btn" data-act="hubTest"${test === 'running' ? ' disabled' : ''}>${L('Test the hub')}</button>` : ''}</div>${results}</section>
-    ${pm ? `<section class="card"><h2>${L('Invite people')}</h2><p class="hint">${L('An invite link carries the hub key. Send it only to the person it is for. If a phone is lost, replace the key.')}</p>
-      <div class="btns"><button class="btn primary" data-act="hubInvite" data-v="crew">${L('Invite crew')}</button><button class="btn" data-act="hubInvite" data-v="super">${L('Invite superintendent')}</button></div>
-      <div class="btns"><button class="btn" data-act="hubRotate" data-v="crew">${L('Replace the crew key')}</button><button class="btn" data-act="hubRotate" data-v="super">${L('Replace the superintendent key')}</button></div>
-      <div class="btns">${sheetLink(ctx.sync.liveData?.().info?.sheetUrl)}</div></section>` : ''}
-    <section class="card"><div class="btns"><button class="btn danger" data-act="hubDisconnect">${L('Disconnect this phone')}</button></div>
-      <p class="hint">${L('Your work stays on this phone.')}</p></section>`;
+      <p class="set-note">${test.checks.every(c => c.ok) ? pill(L('Everything works'), 'good') : pill(L('Something failed'), 'bad')}</p>` : '';
+  return setSec(L('Hub'), `<div class="fgroup">
+      <div class="row"><span class="row-main"><span class="row-title live-state"><i class="hub-dot" data-state="${esc(st.state)}"></i><b>${esc(hubLabel(st.state))}</b></span>
+        ${st.at ? `<span class="row-sub">${esc(L('Updated {ago}', { ago: ago(st.at, now) }))}</span>` : ''}</span></div>
+      ${row(L('This phone'), roleName(st.role))}${st.role === 'crew' && st.crew ? row(L('Crew'), st.crew) : ''}
+      ${actRow('hubSync', L('Sync now'))}${pm ? actRow('hubTest', L('Test the hub'), test === 'running' ? ' disabled' : '') : ''}</div>${results}`,
+    [st.message && st.state !== 'live' ? esc(st.message) : '', st.pending ? esc(L('{n} not sent yet', { n: st.pending })) : ''].filter(Boolean))
+    + (pm ? setSec(L('Invite people'), `<div class="fgroup">${actRow('hubInvite', L('Invite crew'), ' data-v="crew"')}${actRow('hubInvite', L('Invite superintendent'), ' data-v="super"')}
+        ${actRow('hubRotate', L('Replace the crew key'), ' data-v="crew"')}${actRow('hubRotate', L('Replace the superintendent key'), ' data-v="super"')}${sheetLink(ctx.sync.liveData?.().info?.sheetUrl, 'row set-act')}</div>`,
+      L('An invite link carries the hub key. Send it only to the person it is for. If a phone is lost, replace the key.')) : '')
+    + `<section class="set"><div class="fgroup">${actRow('hubDisconnect', L('Disconnect this phone'), ' data-tone="bad"')}</div><p class="hint set-note">${L('Your work stays on this phone.')}</p></section>`;
 }
 const CHECKS = () => ({ write: L('Write a record'), read: L('Read it back'), 'merge rules': L('Who may change what'), translate: L('Translate a sentence with a drawing number'), delete: L('Delete the test record') });
 
 async function invite(ctx, role) {
   const make = async crew => {
-    const r = await ctx.sync.invite(role, crew);
+    // a "they pick" invite lists the job's crews: a new phone knows only its defaults; a crew invite, the crew's people, so the
+    // new phone taps its name as the roster spells it (a name typed another way would be a second person on Crew hours)
+    const r = await ctx.sync.invite(role, crew, names, role === 'crew' ? people(ctx.S).filter(p => !crew || p.crew === crew) : []);
     if (!r.ok) return ctx.toast(r.message || L('The invite link could not be made.'), 'bad');
     const msg = l => L('Join the {project} hub: open this link on your phone and follow the steps.', { project: ctx.S.project || COMPANY }, l);
-    sendSheet({ title: role === 'crew' ? L('Hub invite for the crew') : L('Hub invite for the superintendent'), url: r.url, text: role === 'crew' ? `${msg('en')}\n\n${msg('es')}` : msg('en') });
+    sendSheet({ title: role === 'crew' ? L('Hub invite for the crew') : L('Hub invite for the superintendent'), url: r.url, text: role === 'crew' ? `${msg('en')}\n\n${msg('es')}` : msg('en'),
+      note: L('An invite link carries the hub key. Send it only to the person it is for. If a phone is lost, replace the key.') }); // not a task link: no work details in it
   };
   const names = ctx.S.crews.map(c => c.name).filter(Boolean);
   if (role === 'super' || !names.length) return make('');
   const d = sheet(`<h3>${L('Which crew is this invite for?')}</h3><div class="menu">${names.map(n => `<button class="btn" data-crew="${esc(n)}" style="${crewVar(ctx.S, n)}"><i class="dot"></i>${esc(n)}</button>`).join('')}
     <button class="btn" data-crew="">${L('Not sure: they pick')}</button></div>`);
-  d.addEventListener('click', e => { const b = e.target.closest('[data-crew]'); if (b) { d.close(); make(b.dataset.crew); } });
+  // answered once the link is made: the Invite crew tap (busy in tasks.html) shows it working and takes no second tap meanwhile
+  const crew = await new Promise(done => { d.addEventListener('click', e => { const b = e.target.closest('[data-crew]'); if (b) { done(b.dataset.crew); d.close(); } }); d.addEventListener('close', () => done(null)); });
+  if (crew !== null) await make(crew);
 }
 
-// A phone opening a join link: name and crew, then the hub does the rest. data: the unpacked link.
+// A phone opening a join link: the person's name (and crew), then the hub does the rest. data: the unpacked link. A crew
+// invite carries its crew's people (data.people): one tap is the name as the roster spells it, and a typed one is matched to it.
 export function joinSheet(ctx, data) {
-  const crewRole = data?.role === 'crew', names = ctx.S.crews.map(c => c.name).filter(Boolean);
-  let crew = '';
+  const listed = Array.isArray(data?.crews) ? data.crews.filter(x => typeof x === 'string' && x.trim()).slice(0, 50).map(x => x.trim().slice(0, 60)) : []; // the job's crews, from the invite
+  const crewRole = data?.role === 'crew', names = listed.length ? listed : ctx.S.crews.map(c => c.name).filter(Boolean);
+  const roster = crewRole && Array.isArray(data.people) ? data.people.filter(p => typeof p?.name === 'string' && nameKey(p.name)).slice(0, 100)
+    .map(p => ({ name: p.name.replace(/\s+/g, ' ').trim().slice(0, 60), crew: typeof p.crew === 'string' ? p.crew : '' })) : [];
+  let crew = '', warned = '';
   const d = sheet(`<h3>${L('Join the hub')}</h3>
     <p class="hint">${crewRole ? L('This link connects this phone to the project hub, so your task sheets arrive by themselves.') : L('This link connects this phone to the project hub as the superintendent.')}</p>
-    ${crewRole ? `<label class="field"><span>${L('Your name')}</span><input name="who" autocomplete="name" value="${esc(ctx.S.worker)}" placeholder="${esc(L('First and last name'))}"></label>` : ''}
+    ${roster.length ? `<div class="field"><span>${L('Your name')}</span><div class="chips" role="group">${roster.map(p => `<button type="button" class="chip" data-who="${esc(p.name)}" data-pcrew="${esc(p.crew)}" aria-pressed="false">${esc(p.name)}</button>`).join('')}</div></div>` : ''}
+    <div class="fgroup"><label class="field"><span>${roster.length ? L('Or type it') : L('Your name')}</span><input name="who" autocomplete="name" value="${esc(crewRole ? ctx.S.worker : ctx.S.me || ctx.S.worker)}" placeholder="${esc(L('First and last name'))}"></label></div>
     ${crewRole && !data.crew && names.length ? `<div class="field"><span>${L('Your crew')}</span><div class="chips" role="group">${names.map(n => `<button type="button" class="chip" data-crew="${esc(n)}" aria-pressed="false" style="${crewVar(ctx.S, n)}"><i class="dot"></i>${esc(n)}</button>`).join('')}</div></div>` : ''}
     <p class="hub-err" role="alert" data-err></p>
-    <div class="btns"><button class="btn primary" data-join>${L('Join')}</button></div>`);
+    <button class="btn primary big wide" data-join>${L('Join')}</button>`);
   const err = m => { d.querySelector('[data-err]').textContent = m; };
-  (d.querySelector('[name=who]') || d.querySelector('[data-join]')).focus(); // the dialog would otherwise put the cursor on its close button
+  d.querySelector('[name=who]').focus(); // the dialog would otherwise put the cursor on its close button
   d.addEventListener('click', e => {
-    const b = e.target.closest('[data-crew]');
+    const w = e.target.closest('[data-who]'); // a name from the invite: it fills the box, and picks that person's crew when the crew is asked
+    if (w) { d.querySelector('[name=who]').value = w.dataset.who; d.querySelectorAll('[data-who]').forEach(x => x.setAttribute('aria-pressed', String(x === w))); }
+    const b = w ? [...d.querySelectorAll('[data-crew]')].find(x => x.dataset.crew === w.dataset.pcrew) : e.target.closest('[data-crew]');
     if (!b) return;
     crew = b.dataset.crew;
     d.querySelectorAll('[data-crew]').forEach(x => x.setAttribute('aria-pressed', String(x === b)));
   });
   d.querySelector('[data-join]').onclick = async e => {
-    const name = (d.querySelector('[name=who]')?.value || '').replace(/\s+/g, ' ').trim().slice(0, 60);
-    if (crewRole && !name) return err(L('Type your name first'));
+    const typed = d.querySelector('[name=who]').value.replace(/\s+/g, ' ').trim().slice(0, 60);
+    const name = roster.find(p => nameKey(p.name) === nameKey(typed))?.name || typed; // "ana r" is the roster's "Ana R"
+    if (!nameKey(name)) return err(L('Type your name first')); // the superintendent's too: it goes on the sheets they assign and the hub's feed
+    if (roster.length && !roster.some(p => p.name === name) && warned !== name) { warned = name; return err(L('This name is not on the crew list. Tap your name above, or tap Join again to use it as typed.')); }
     if (crewRole && !data.crew && names.length && !crew) return err(L('Pick your crew'));
     e.target.disabled = true;
     err('');
     const r = await ctx.sync.joinFrom({ ...data, ...(crewRole && crew && { crew }) });
     e.target.disabled = false;
     if (!r.ok) return err(r.message || L('That hub invite is not valid'));
-    if (crewRole) patchSettings(ctx, { worker: name });
+    patchSettings(ctx, crewRole ? { worker: name } : { me: name, worker: ctx.S.worker || name }); // the superintendent's own time clock too, as the first run does
     d.close();
-    ctx.toast(L('Connected to the hub'));
+    ctx.toast(!crewRole ? L('Connected as the superintendent') : r.crew ? L('Connected as a crew phone for {crew}', { crew: r.crew }) : L('Connected as a crew phone')); // which one: a wrong invite shows at once
     ctx.render();
   };
 }
@@ -716,7 +798,7 @@ function patchSettings(ctx, p) { // the stored settings keep the hub fields the 
 
 // ---------- taps and typing ----------
 
-const ACTS = new Set(['liveRefresh', 'liveSite', 'liveMsg', 'liveReview', 'recPerson', 'recFilter', 'recSearch', 'recMore', 'recMenu', 'recOlder', 'recCsv', 'recWeekCsv', 'recExport', 'recStats', 'recArchive',
+const ACTS = new Set(['liveRefresh', 'liveSite', 'liveFeedAll','liveMsg', 'liveReview', 'recPerson', 'recFilter', 'recSearch', 'recMore', 'recMenu', 'recOlder', 'recCsv', 'recWeekCsv', 'recExport', 'recStats', 'recArchive',
   'hubConnect', 'hubDisconnect', 'hubSync', 'hubTest', 'hubInvite', 'hubRotate', 'txToggle']);
 export const owns = a => ACTS.has(a);
 
@@ -727,6 +809,7 @@ export async function act(ctx, a, el) {
     switch (a) {
       case 'txToggle': { const box = el.closest('.tx'); if (box) box.dataset.view = box.dataset.view === 't' ? 'o' : 't'; break; }
       case 'liveSite': ui.siteOpen = !ui.siteOpen; ctx.render(); break;
+      case 'liveFeedAll': ui.feedAll = true; ctx.render(); break;
       case 'liveRefresh': el.disabled = true; el.textContent = L('Refreshing…'); await ctx.sync.cycle(); ctx.render(); break;
       case 'liveMsg': case 'liveReview': { const t = latest(ctx, el.dataset.u); if (t) (a === 'liveMsg' ? messageSheet : reviewSheet)(ctx, t); break; }
       case 'recPerson': ui.person = v; ui.q = ''; ui.old = null; ctx.render(); break;
@@ -745,9 +828,15 @@ export async function act(ctx, a, el) {
       case 'recStats': ui.stats = undefined; ctx.render(); break;
       case 'recArchive': await archive(ctx); break;
       case 'hubConnect': await connect(ctx, el); break;
-      case 'hubDisconnect':
-        if (await (ctx.ask || ask)(L('Disconnect this phone from the hub? Your work stays on this phone.'), L('Disconnect'), 'danger')) { ctx.sync.disconnect(); ui.test = null; ui.stats = undefined; ctx.render(); }
+      case 'hubDisconnect': { // the hub keeps only a fingerprint of the PM key: once it leaves this phone, only resetPmKey gets the PM back in
+        const pm = hub(ctx).role === 'pm', yes = pm
+          ? await (ctx.choose || choose)(L('Disconnect this phone from the hub? Your work stays on this phone. To connect again you need the PM key, which was shown only once. Copy it first. Without it, the hub owner must run resetPmKey in the hub script.'),
+            [['copy', L('Copy the PM key'), 'primary'], [true, L('Disconnect'), 'danger']])
+          : await (ctx.ask || ask)(L('Disconnect this phone from the hub? Your work stays on this phone.'), L('Disconnect'), 'danger');
+        if (yes === 'copy') { await navigator.clipboard.writeText(ctx.S.hubKey); ctx.toast(L('PM key copied. Keep it somewhere safe, not in a shared chat.')); }
+        else if (yes === true) { ctx.sync.disconnect(); ui.test = null; ui.stats = undefined; ctx.render(); }
         break;
+      }
       case 'hubSync': el.disabled = true; el.textContent = L('Refreshing…'); await ctx.sync.cycle(); ctx.render(); break;
       case 'hubTest': ui.test = 'running'; ctx.render(); ui.test = await ctx.sync.selftest(); ctx.render(); break;
       case 'hubInvite': await invite(ctx, v === 'super' ? 'super' : 'crew'); break;
@@ -767,7 +856,7 @@ async function connect(ctx, el) {
   if (!url.trim() || !key.trim()) return err(L('Paste the hub link and the key.'));
   el.disabled = true;
   err('');
-  const r = await ctx.sync.connect(url, key);
+  const r = await ctx.sync.connect(url, key, { office: true }); // only the office has this form: a crew key is refused (sync.mjs)
   el.disabled = false;
   if (!r.ok) return err(r.message || L('That did not work. Try again.'));
   ctx.toast(L('Connected as {role}', { role: roleName(r.role) }));

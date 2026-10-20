@@ -13,13 +13,14 @@
 <header class="top"><div class="top-in">
   <svg class="mark" viewBox="0 0 24 24" width="30" height="30" aria-hidden="true"><rect width="24" height="24" rx="6.5"/><path d="M13.6 3.5 6.5 13.4h4.6l-1.2 7.1 7.6-10.4h-4.7z"/></svg>
   <div class="brand"><h1>H.A. Sack-Electrical</h1><p>Sack Company-Electrical</p></div>
+  <span id="hubDot"></span>
   <button class="icon-btn lang" id="langBtn" data-act="toggleLang" aria-label="Español">ES</button>
   <button class="icon-btn" id="gearBtn" data-go="settings" hidden></button>
   <button class="icon-btn" id="lockBtn" data-act="lockBtn" aria-label="Office sign-in"></button>
 </div></header>
 <main>
   <div class="screen-head" id="head"><span id="headBack"></span><p class="proj" id="proj"></p>
-    <div class="title-row"><h2 class="large-title" id="title"></h2><span id="titleMore"></span></div><p class="subtitle" id="subtitle"></p></div>
+    <div class="title-row"><h2 class="large-title" id="title"></h2><button class="icon-btn find-btn" id="findBtn" data-act="find" hidden></button><span id="titleMore"></span></div><p class="subtitle" id="subtitle"></p></div>
   <div id="app"></div>
   <div class="bar" id="bar"></div>
 </main>
@@ -27,25 +28,29 @@
 <script>setTimeout(() => { const app = document.getElementById('app'); if (window.appStarted) return; let es = false; try { es = JSON.parse(localStorage.getItem('schwab.settings')).lang === 'es'; } catch {} app.innerHTML = es ? '<div class="empty"><h2>La app no termin\u00f3 de cargar</h2><p>Con se\u00f1al, vuelva a cargar.</p><button class="btn primary" onclick="location.reload()">Recargar</button></div>' : '<div class="empty"><h2>The app didn\u2019t finish loading</h2><p>Get signal, then reload. · La app no termin\u00f3 de cargar. Con se\u00f1al, vuelva a cargar.</p><button class="btn primary" onclick="location.reload()">Reload · Recargar</button></div>'; }, 6000); // a dropped file on the first open after an update; a Spanish phone gets Spanish only</script>
 <script type="module">
 import {
-  KEYS, esc, uid, load, save, loadSettings, nameKey, cleanName, people, findPerson, crewById, addPerson, normTask, newItem, mergeTask, cloneTask, pack, unpack, linkTo,
+  KEYS, DEFAULT_SETTINGS, esc, uid, load, save, loadSettings, nameKey, cleanName, people, findPerson, personById, crewById, addPerson, normTask, newItem, mergeTask, cloneTask, pack, unpack, linkTo, langOf, typedIn,
   nextId, renumberClashes, sameNumber, ensureDevice,
-  today, addDays, niceDate, nowHM, span, fmtMin, t12, stamp, hrs, timeOf, field, datalist, seg, setPath, getPath, readInput, dateBar,
+  today, addDays, niceDate, weekday, nowHM, span, fmtMin, t12, stamp, hrs, timeOf, field, datalist, seg, setPath, getPath, readInput, dateBar, daySummary,
   toast, sheet, ask, sendSheet, pasteSheet, makePdf, savePdf, fileAway, retryUploads, settingsView, settingsAct, restore,
   registerSW, crewVar as cv, L, setLang, getLang, COMPANY, COMPANY_ALT, COMPANIES, letterhead, icon, screenHead, busy,
-  UNLOCK, PIN_FORMAT, hasPin, adoptPin, setPin, pinHash, tryPin, unlocked, signIn, signOut,
+  UNLOCK, PIN_FORMAT, hasPin, adoptPin, setPin, pinHash, tryPin, unlocked, signIn, signOut, onSave,
+  findSheet, pullDown, daysNamed, initials,
 } from './shared.mjs';
-import { renderOffice, reportAct, reportInput, openReport, openHours, hoursInput, workerChange, fileReportIfChanged, reloadReports, sectionToggle, hasReports, attachShifts } from './report.mjs';
+import { renderOffice, reportAct, reportInput, openReport, openHours, hoursInput, workerChange, fileReportIfChanged, reloadReports, sectionToggle, hasReports, attachShifts,
+  reportsNow, crewNow, dropReport, setTextField } from './report.mjs';
+import * as sync from './sync.mjs';
+import { liveView, recordsView, hubSettingsView, statusDot, joinSheet, crewKeyNote, txView, txField, after as liveAfter, owns as liveOwns, act as liveAct, onInput as liveInput, deleteRecord, txCached } from './live.mjs';
 
 window.appStarted = true; // every file loaded (see the fallback above)
 registerSW();
 const app = document.getElementById('app'), bar = document.getElementById('bar');
-let S = loadSettings();
+const S = loadSettings(); // one object for the life of the page: reloads copy into it, so report.mjs, live.mjs and the hub sync share it
 setLang(S.lang);
 ensureDevice(); // this phone's hub identity; the time clock uses the older device id until it exists
 attachShifts(S);
 const loadTasks = () => load(KEYS.tasks, []).map(normTask).filter(t => t.uid); // a sheet with no usable id can't be opened or told apart
 let T = loadTasks();
-let day = today(), crewFilter = '', view = { v: 'board' };
+let day = today(), crewFilter = '', view = { v: 'board' }, openedFrom = null; // openedFrom: the Live or Records screen a sheet was opened from
 
 const persist = () => save(KEYS.tasks, T) || toast(L("This phone wouldn't save. Open Settings and download a backup."), 'bad');
 const find = u => T.find(t => t.uid === u);
@@ -53,11 +58,16 @@ const current = () => (view.v === 'task' ? find(view.uid) : null);
 const go = h => (location.hash === '#' + h ? route() : (location.hash = h));
 const crewVar = (name, id) => cv(S, name, id);
 const floorRank = f => { const i = S.floors.indexOf(f); return i < 0 ? 999 : i; };
+const byFloor = (a, b) => floorRank(a.floor) - floorRank(b.floor) || a.floor.localeCompare(b.floor) || a.pStart.localeCompare(b.pStart); // the board's order
 const doneCount = t => t.items.filter(i => i.done).length;
 const worked = t => (t.aStart && t.aStop ? Math.max(0, span(t.aStart, t.aStop) - t.delay) : 0); // same as shared.mjs; kept here so a stale cached shared.mjs can't break this page
 const isOpen = t => t.status !== 'Complete' && t.review !== 'Accepted';
 // Signed out, this is a crew phone: only the sheets sent to it show. The office passcode opens the rest.
 const office = () => unlocked();
+// The hub (HUB.md): hubOn, this phone is connected; role, its office role for the hub screens (the hub's word when it has
+// one, else Settings), 'crew' when signed out.
+const hubOn = () => sync.hubStatus().state !== 'off';
+const role = () => (!office() ? 'crew' : ['pm', 'super'].includes(S.hubRole) ? S.hubRole : isPM() ? 'pm' : 'super');
 const visible = () => (office() ? T : T.filter(t => t.origin === 'link'));
 const prevDay = () => [...new Set(visible().map(t => t.date))].filter(d => d < day).sort().at(-1);
 const dayTasks = () => visible().filter(t => t.date === day);
@@ -105,10 +115,11 @@ function enlist(t) {
 // The passcode guards the superintendent's parts: the daily report, settings, and making or changing
 // assignments (any sheet this phone didn't receive). On the PM's phone the time clock is the crew
 // timesheet, so it is guarded too. Crew sheets and everyone else's time clock are open.
-const VIEWS = ['clock', 'report', 'settings'];
+// #live, #records/<people|sheets|reports> and #hub (the hub's status, open to a crew phone) are the hub screens of live.mjs.
+const VIEWS = ['clock', 'report', 'settings', 'live', 'records', 'hub', 'upcoming']; // #upcoming/<day>: the 7 days after the board's day
 const isPM = () => S.role === 'Project manager';
 const crewPhone = () => S.role === 'Crew member'; // set on the first run: no office words on this phone unless Settings changes it
-const needsOffice = vw => ['report', 'settings'].includes(vw.v) || (vw.v === 'clock' && isPM()) || (vw.v === 'task' && find(vw.uid)?.origin !== 'link');
+const needsOffice = vw => ['report', 'settings', 'live', 'records', 'upcoming'].includes(vw.v) || (vw.v === 'clock' && isPM()) || (vw.v === 'task' && find(vw.uid)?.origin !== 'link');
 
 function route() {
   if (setup) return; // the first run is still asking; it routes when it's done
@@ -116,14 +127,21 @@ function route() {
   const pad = document.querySelector('dialog.pin[open]');
   if (pad) { if (pad.dataset.want === location.hash) return; pad.close(); }
   document.querySelectorAll('dialog.sheet[open]').forEach(x => x.dataset.at !== location.hash && x.close()); // a sheet left behind on the last screen would act on it
+  // A hint about the last screen does not follow to the next. A toast that came with this move (a link opened, signed out)
+  // stays, and so does one offering Undo. ponytail: "came with this move" is a 400 ms window (the hashchange right after
+  // the toast); a flag on toast() is the upgrade if a slow phone ever drops one.
+  const tt = document.getElementById('toast');
+  if (tt && !tt.offer && Date.now() - tt.at > 400) tt.classList.remove('show');
   fileIfChanged(current());
   fileReportIfChanged(S, day);
   const h = location.hash.slice(1);
   if (h.startsWith('p=')) return openCode(h.slice(2));
-  const [v, a, b] = h.split('/');
-  if (['day', 'clock', 'report'].includes(v) && /^\d{4}-\d{2}-\d{2}$/.test(a) && addDays(a, 0) === a) day = a; // a real day, not 2026-02-30
-  view = v === 'task' && find(a) ? { v: 'task', uid: a, tab: b || 'assign' } : { v: VIEWS.includes(v) ? v : 'board' };
+  const [v, a, b] = h.split('/'), was = view;
+  if (['day', 'clock', 'report', 'upcoming'].includes(v) && /^\d{4}-\d{2}-\d{2}$/.test(a) && addDays(a, 0) === a && a <= '9999-12-24') day = a; // a real day, not 2026-02-30, with Upcoming's 7 days after it
+  view = v === 'task' && find(a) ? { v: 'task', uid: a, tab: b || 'assign' } : { v: VIEWS.includes(v) ? v : 'board', sub: a };
+  if (view.v === 'task' && was?.uid !== view.uid) openedFrom = ['live', 'records', 'upcoming'].includes(was?.v) ? was : null; // its Back goes there (a tab of the sheet keeps it)
   if (view.v === 'task') day = find(a).date;
+  if (view.v === 'task') sawSheet(a); // Quick Find's recent sheets
   if (needsOffice(view) && !office()) { // the crew board stays behind the passcode pad
     view = { v: 'board' };
     render();
@@ -137,6 +155,7 @@ function route() {
 async function openCode(code) {
   let data;
   try { data = await unpack(code); } catch { toast(L('That link is damaged or cut off. Ask for it to be sent again.'), 'bad'); return location.replace('#day/' + day); }
+  if (data.kind === 'join') return openJoin(data);
   // A crew phone (or a new office phone) learns the office's code from its first link. A phone with
   // office-made sheets of its own never does, so no link can lock it out of its own records.
   if (['task', 'result', 'day', 'report'].includes(data.kind) && !T.some(x => x.origin === 'mine') && !hasReports()) adoptPin(S, data.pin);
@@ -153,31 +172,60 @@ async function openCode(code) {
   let t = find(inc.uid), firstSheet = false;
   if (!inc.uid || !['task', 'result'].includes(data.kind)) { toast(L('That link has no task sheet in it'), 'bad'); return location.replace('#day/' + day); }
   // An older text opened after a newer one (a re-sent sheet on the crew phone, results on the office phone) changes nothing.
-  const older = data.kind === 'task' ? t?.origin === 'link' && inc.sentAt && t.sentAt && inc.sentAt < t.sentAt
-    : t && t.origin !== 'link' && t.resultAt && inc.resultAt < t.resultAt;
-  if (older) { toast(L('This is an older copy of this sheet. The newer one is kept.')); return location.replace(`#task/${t.uid}/${data.kind === 'result' ? 'review' : 'assign'}`); }
+  // On a hub the text is a copy of what the hub delivers: it is merged only when newer than the hub copy here (sync.mjs fromText).
+  const merges = data.kind === 'task' ? t?.origin === 'link' : !!t && t.origin !== 'link';
+  const older = merges && (data.kind === 'task' ? inc.sentAt && t.sentAt && inc.sentAt < t.sentAt : t.resultAt && inc.resultAt < t.resultAt);
+  const held = merges && !older && !sync.fromText('t', t.uid, data.kind === 'task' ? 'assign' : 'crew', data.kind === 'task' ? inc.sentAt : inc.resultAt, data.skew);
+  if (older || held) {
+    toast(older ? L('This is an older copy of this sheet. The newer one is kept.') : L('This phone already has the newest copy of this sheet from the hub.'));
+    return location.replace(`#task/${t.uid}/${data.kind === 'result' ? 'review' : 'assign'}`);
+  }
   let moved = [];
   if (data.kind === 'task') {
-    if (!t) {
+    if (!t && ['pm', 'super'].includes(sync.hubStatus().role)) { // an office phone on a hub: its pull brings this sheet as the office's, so a text that comes first makes that copy, never a crew one (GATE3-02)
+      sync.fromText('t', inc.uid, 'assign', inc.assignAt || inc.sentAt, 0, inc); // the text is its base: only what is changed here goes up, and an unchanged copy waits for the hub's (GATE4-SEC-01)
+      T.push(t = Object.assign(inc, { origin: 'mine', gotAt: Date.now() }));
+    } else if (!t) {
       T.push(t = Object.assign(inc, { origin: 'link', gotAt: Date.now() })); // a crew phone opening its sheet
       firstSheet = !S.lang && !S.me && !T.some(x => x.origin === 'mine'); // a phone with a name in Settings is an office phone
     } else if (t.origin === 'link') mergeTask(t, inc, 'assign'); // re-sent sheet: new assignment, crew check-offs kept
-    moved = renumberClashes(T, t);
+    moved = renumberClashes(T, t, sync.onHub);
   } else if (!t || t.origin !== 'link') { // results reaching the superintendent (not the crew re-opening its own)
-    if (!t) T.push(t = Object.assign(inc, { origin: 'mine' }));
+    if (!t) { sync.fromText('t', inc.uid, 'assign', inc.assignAt || inc.sentAt, 0, inc, ['assign']); T.push(t = Object.assign(inc, { origin: 'mine' })); } // its office part goes up as old as the copy it is, never as the crew's last edit; the copy is its base, so only an office edit made here goes up (GATE4-SEC-01)
     else mergeTask(t, inc, 'crew');
     t.gotAt = Date.now();
-    moved = renumberClashes(T, t);
+    moved = renumberClashes(T, t, sync.onHub);
     toast(L('{crew} results for {id} received', { crew: t.crew || L('Crew'), id: t.id }) + renumbered(moved));
   }
   if (moved.length && data.kind === 'task') toast(renumbered(moved).trim());
   if (data.kind === 'result' && t.origin !== 'link') fileTask(t);
   persist();
   location.replace(`#task/${t.uid}/${data.kind === 'result' ? 'review' : 'assign'}`);
-  if (firstSheet) { // first sheet on a new crew phone: ask the language once
-    sheet(`<h3>Language · Idioma</h3><div class="btns"><button class="btn big" data-act="lang" data-v="en">English</button><button class="btn big primary" data-act="lang" data-v="es">Español</button></div>`)
-      .querySelector('.sheet-x').setAttribute('aria-label', 'Close · Cerrar'); // no language chosen yet
-  }
+  if (firstSheet) langSheet(); // first sheet on a new crew phone: ask the language once
+}
+// No language chosen yet, so both at once. Picking one closes it.
+function langSheet() {
+  const d = sheet(`<h3>Language · Idioma</h3><div class="btns"><button class="btn big" data-act="lang" data-v="en">English</button><button class="btn big primary" data-act="lang" data-v="es">Español</button></div>`);
+  d.querySelector('.sheet-x').setAttribute('aria-label', 'Close · Cerrar');
+  return d;
+}
+
+// A hub invite (kind join, made by the PM): the join sheet of live.mjs asks the name and crew and connects. A phone on
+// another hub, or on this one with another key, is asked first; a new crew phone picks its language before the sheet opens.
+async function openJoin(data) {
+  location.replace('#day/' + day);
+  const h = data.hub && typeof data.hub === 'object' ? data.hub : {};
+  if (S.hubRole === 'pm' && S.hubUrl === h.url) return toast(L('This is the PM phone. Send the invite to the person it is for.')); // its key is shown only once, at setup
+  if (data.role === 'super' && S.role === 'Project manager') return toast(L('That is a superintendent invite. This phone is set to Project manager, so connect in Settings with the PM key from the Execution log of the hub script.'), 'bad'); // sync.mjs connect refuses it after Join anyway (pm_invite): say so before the sheet
+  // an office phone kept its office screens as a crew phone, but the hub took nothing of its office work from then on
+  const crewSide = crewPhone() || S.hubRole === 'crew'; // signed in, still a crew phone: someone fixed its settings (a sign-in lasts 12 hours)
+  if (data.role === 'crew' && ((office() && !crewSide) || ['pm', 'super'].includes(S.hubRole) || T.some(x => x.origin === 'mine'))) return toast(L('This phone is for the office, so it does not join as a crew phone. Send the invite to the person it is for.'));
+  if (data.role === 'crew' && office()) { if (!await ask(L('This phone is signed in to the office screens. Sign out and join the hub as a crew phone?'), L('Sign out and join'))) return; signOut(); render(); } // OWNER3-03
+  if (S.hubUrl && S.hubKey && (S.hubUrl !== h.url || S.hubKey !== h.key)
+    && !await ask(L('This phone is already connected to a hub. Use this invite instead?'), L('Use this invite'))) return;
+  const open = () => joinSheet({ ...ctx(), sync: { ...sync, joinFrom: d => sync.joinFrom(d, { replace: true }) } }, data); // asked above
+  if (data.role === 'crew' && !S.lang && !S.me && !T.some(x => x.origin === 'mine')) return langSheet().addEventListener('close', open);
+  open();
 }
 
 async function importDay(data) {
@@ -185,9 +233,9 @@ async function importDay(data) {
   const inc = (Array.isArray(data.tasks) ? data.tasks : []).slice(0, 500).map(normTask).filter(t => t.uid);
   const fresh = inc.filter(t => !find(t.uid)), known = inc.filter(t => find(t.uid));
   if (inc.length && await ask(L('Load the task plan for {date}? New sheets: {fresh}. Updated: {known}. Check-offs already on this phone are kept.', { date: niceDate(date), fresh: fresh.length, known: known.length }), L('Load plan'))) {
-    for (const t of fresh) T.push(Object.assign(t, { origin: 'mine' }));
-    for (const t of known) mergeTask(find(t.uid), t, 'assign');
-    const moved = inc.flatMap(t => renumberClashes(T, find(t.uid)));
+    for (const t of fresh) { sync.fromText('t', t.uid, 'assign', t.assignAt || t.updatedAt, 0, t); T.push(Object.assign(t, { origin: 'mine' })); } // a sheet new here is the text's copy: its base, so only what is changed here goes up (GATE2-DATA-01, GATE4-SEC-01)
+    for (const t of known) if (sync.fromText('t', t.uid, 'assign', t.assignAt || t.updatedAt)) mergeTask(find(t.uid), t, 'assign'); // on a hub, only an office part newer than the hub copy here (its own stamp, hub time: sync.mjs officeAt; a text from an older version has none)
+    const moved = inc.flatMap(t => renumberClashes(T, find(t.uid), sync.onHub));
     persist();
     toast(L('Plan loaded') + renumbered(moved));
   }
@@ -199,8 +247,8 @@ const renumbered = moved => moved.map(([t, old]) => ' ' + L('Your sheet {old} is
 // ---------- views ----------
 
 // The tab bar: a crew phone (or any phone signed out) has Today and its time clock; signed in, the office screens.
-// Live and Records join here when the hub is wired: [view, label] in the list, an icon name in TAB_ICON.
-const TAB_ICON = { day: 'today', clock: 'clock', report: 'report' };
+// An office phone on a hub also has Live and Records (live.mjs).
+const TAB_ICON = { day: 'today', clock: 'clock', report: 'report', live: 'live', records: 'records' };
 function header() {
   const on = office(), lb = document.getElementById('langBtn'), lock = document.getElementById('lockBtn'), gear = document.getElementById('gearBtn'), tabs = document.getElementById('officeTabs');
   document.body.classList.toggle('office', on);
@@ -213,104 +261,144 @@ function header() {
   gear.setAttribute('aria-label', L('Settings'));
   document.getElementById('proj').textContent = [S.project, S.site].filter(Boolean).join(' · ');
   tabs.setAttribute('aria-label', L('Screens'));
-  const here = { clock: 'clock', report: 'report', settings: '' }[view.v] ?? 'day';
-  const list = on ? [['day', L('Tasks')], ['clock', isPM() ? L('Hours') : L('Time clock')], ['report', L('Report')]] : [['day', L('Today')], ['clock', L('Time clock')]];
+  const here = { clock: 'clock', report: 'report', live: 'live', records: 'records', settings: '', hub: '' }[view.v] ?? 'day';
+  const list = on ? [['day', L('Tasks')], ['clock', isPM() ? L('Hours') : L('Time clock')], ['report', L('Report')], ...(hubOn() ? [['live', L('Live')], ['records', L('Records')]] : [])]
+    : [['day', L('Today')], ['clock', L('Time clock')]];
+  const dot = badge => statusDot(sync.hubStatus(), getLang(), role() === 'crew' ? 'hub' : 'live', badge); // nothing without a hub
   tabs.innerHTML = list.map(([v, label]) => {
     const locked = v === 'clock' && isPM() && !on; // the PM's time clock is the crew timesheet, behind the passcode
-    return `<a href="#${v}/${day}"${v === here ? ' aria-current="page"' : ''}${locked ? ` aria-label="${esc(`${label}, ${L('needs the office passcode')}`)}"` : ''}>${icon(TAB_ICON[v])}<span>${label}${locked ? icon('lock', 'lock') : ''}</span></a>`;
+    return `<a href="#${v}${v === 'live' || v === 'records' ? '' : '/' + day}"${v === here ? ' aria-current="page"' : ''}${locked ? ` aria-label="${esc(`${label}, ${L('needs the office passcode')}`)}"` : ''}>${icon(TAB_ICON[v])}<span>${label}${locked ? icon('lock', 'lock') : ''}</span>${v === 'live' ? dot(true) : ''}</a>`;
   }).join('');
+  document.getElementById('hubDot').innerHTML = list.some(([v]) => v === 'live') ? '' : dot(); // signed in, the dot rides on the Live tab: with the gear, a fourth button here would shrink both company names
+  Object.assign(document.getElementById('findBtn'), { hidden: !FIND_ON.includes(view.v), innerHTML: icon('search') }).setAttribute('aria-label', L('Search')); // Quick Find, in the title row of the main screens
 }
 
 let drawnOn = today(); // the day the screen was last drawn, to notice midnight
+let dups = null; // with a hub: sheets sharing a day and a short id (sync.mjs duplicateShortIds), for the "Same number" pill
+const dayLabel = d => (d === today() ? L('Today') : niceDate(d)); // a Back to a board says its day, as the board's title does
 function render() {
   drawnOn = today();
+  dups = hubOn() ? sync.duplicateShortIds(T) : null;
   header();
   screenHead(''); // each screen sets its own title
-  bar.hidden = view.v === 'settings';
+  bar.hidden = ['settings', 'live', 'records', 'hub'].includes(view.v);
   bar.innerHTML = ''; // and puts its one primary action here
-  if (view.v === 'settings') { screenHead(L('Settings'), { back: { go: `day/${day}`, label: L('Back to task sheets') } }); app.innerHTML = settingsView(S); }
+  const back = { go: `day/${day}`, label: dayLabel(day) };
+  if (view.v === 'settings') { screenHead(L('Settings'), { back }); app.innerHTML = settingsView(S, hubSettingsView(ctx())); }
+  else if (view.v === 'hub') { screenHead(L('Hub'), { back }); app.innerHTML = `<div class="settings">${hubSettingsView(ctx())}</div>`; } // a crew phone's way to the hub (the dot)
+  else if (view.v === 'live') app.innerHTML = liveView(ctx());
+  else if (view.v === 'records') app.innerHTML = recordsView(ctx(), view.sub);
   else if (view.v === 'clock' || view.v === 'report') renderOffice(view.v, S, day);
   else if (view.v === 'task') renderTask(current());
+  else if (view.v === 'upcoming') renderUpcoming();
   else renderBoard();
+  if (office() && !['board', 'live'].includes(view.v)) { const note = crewKeyNote(ctx()); if (note) app.insertAdjacentHTML('afterbegin', note); }
 }
 
 function renderBoard() {
   const all = dayTasks();
-  const list = all.filter(t => !crewFilter || t.crew === crewFilter)
-    .sort((a, b) => floorRank(a.floor) - floorRank(b.floor) || a.floor.localeCompare(b.floor) || a.pStart.localeCompare(b.pStart));
+  const list = all.filter(t => !crewFilter || t.crew === crewFilter).sort(byFloor);
   // Finished sheets wait in their own group for review; accepted ones fold away at the bottom, like Things' Logbook.
   const toReview = list.filter(t => t.origin !== 'link' && t.status && !t.review);
   const accepted = list.filter(t => t.review === 'Accepted');
   const active = list.filter(t => !toReview.includes(t) && !accepted.includes(t));
   const floors = [...new Set(active.map(t => t.floor))];
-  const est = all.reduce((n, t) => n + t.est * (t.size || 1), 0);
-  const act = all.reduce((n, t) => n + worked(t) / 60 * (t.size || 1), 0);
-  const done = all.filter(t => !isOpen(t)).length, blocked = all.filter(t => t.status === 'Blocked').length;
   // The office can pick any crew (the + then starts a sheet for it); a crew phone only the crews it has sheets from.
   const crews = [...new Set([...(office() ? S.crews.map(c => c.name) : []), ...all.map(t => t.crew)].filter(Boolean))];
   const prev = prevDay();
   const rows = ts => `<div class="list lead">${ts.map(row).join('')}</div>`;
   const head = (text, n, cls = '') => `<h3 class="section-h${cls}">${text}<small>${n}</small></h3>`;
-  screenHead(day === today() ? L('Today') : niceDate(day), { sub: day === today() ? '' : day < today() ? L('Past day') : L('Planning ahead'), more: 'boardMenu' });
-  app.innerHTML = `<div class="board">${dateBar(day)}${all.length ? `
-    ${office() ? `<div class="stats board-stats">
-      <div class="stat"><b>${all.length}</b><span>${L('Task sheets')}</span></div>
-      <div class="stat"><b>${done}</b><span>${L('Complete')}</span></div>
-      <div class="stat"><b class="${blocked ? 'bad' : ''}">${blocked}</b><span>${L('Blocked')}</span></div>
-      <div class="stat"><b>${hrs(act)}<small> / ${hrs(est)}</small></b><span>${L('Crew-hrs actual / est.')}</span></div>
-    </div>` : ''}
+  screenHead(day === today() ? L('Today') : niceDate(day), { more: 'boardMenu' });
+  app.innerHTML = `<div class="board">${dateBar(day, 'day', { upcoming: office(), iconOnly: day !== today() })}${office() ? crewKeyNote(ctx()) : ''}${all.length ? `
+    ${office() ? daySummary(list) : ''}
     ${crews.length > 1 || crewFilter ? `<div class="chips scroll crew-filter" role="group" aria-label="${L('Show crew')}">
       <button class="chip" data-act="filter" data-v="" aria-pressed="${!crewFilter}">${L('All crews')}</button>
       ${crews.map(c => `<button class="chip" data-act="filter" data-v="${esc(c)}" aria-pressed="${crewFilter === c}" style="${crewVar(c)}"><i class="dot"></i>${esc(c)}</button>`).join('')}
     </div>` : ''}
     ${toReview.length ? head(L('Finished · ready for review'), toReview.length, ' review-h') + rows(toReview) : ''}
-    ${floors.map(f => { const ts = active.filter(t => t.floor === f); return head(esc(f || L('Floor not set')), ts.length) + rows(ts); }).join('')}
+    ${floors.map(f => { const ts = active.filter(t => t.floor === f); return pieHead(esc(f || L('Floor not set')), list.filter(t => t.floor === f), ts.length, `data-floor="${esc(f)}"`) + rows(ts); }).join('')}
     ${accepted.length ? `<details class="done-group logbook"><summary>${icon('check', 'logbook-ic')}<span>${L('Accepted')}</span><small>${accepted.length}</small>${icon('chev', 'chev')}</summary>${rows(accepted)}</details>` : ''}
     ${list.length ? '' : `<p class="hint board-none">${L('No sheets for this crew on this day.')}</p>`}
     ${office() ? '' : `<button class="btn wide open-link" data-act="paste">${L('Open a link')}</button>`}
     ${office() || crewPhone() ? '' : `<button class="link sign-in" data-act="lockBtn">${L('Office sign-in')}</button>`}`
     : !office()
-      ? `<div class="empty">${icon('today', 'empty-ic')}<h2>${L('No task sheets for {date}', { date: niceDate(day) })}</h2>
-        <p>${L('Open the link your superintendent texted you, or paste it here.')}</p>
+      ? `<div class="empty">${icon('today', 'empty-ic')}<h2>${L('No task sheets yet')}</h2>
+        <p>${S.hubRole === 'super' ? L('This phone is set up for the superintendent. Sign in with the office passcode the PM gives you.') : hubOn() ? L('Sheets for your crew show up here by themselves. A texted link still works too.') : L('Open the link your superintendent texted you, or paste it here.')}</p>
         <button class="btn primary" data-act="paste">${L('Open a link someone sent you')}</button>
         ${crewPhone() ? '' : `<button class="link" data-act="lockBtn">${L('Superintendent or PM? Sign in to the office screens')}</button>`}</div>`
-      : `<div class="empty">${icon('today', 'empty-ic')}<h2>${L('No task sheets for {date}', { date: niceDate(day) })}</h2>
+      : `<div class="empty">${icon('today', 'empty-ic')}<h2>${L('No task sheets yet')}</h2>
         <p>${L('Tap + to make one sheet for each crew, then send it to their phones.')}</p>
         ${prev ? `<button class="link" data-act="carryDay">${L('Copy unfinished from {date}', { date: niceDate(prev) })}</button>` : ''}</div>`}</div>`;
-  bar.innerHTML = office() ? `<button class="fab" data-act="new" aria-label="${L('New task')}">${icon('plus')}</button>` : ''; // the + floats over the list
+  bar.innerHTML = fab();
   if (crewFilter) app.querySelector('.crew-filter [aria-pressed=true]')?.scrollIntoView({ inline: 'nearest', block: 'nearest' }); // the chosen crew stays in sight
+}
+const fab = () => (office() ? `<button class="fab" data-act="new" aria-label="${L('New task')}">${icon('plus')}</button>` : ''); // the + floats over the list
+
+// A heading over sheets (a floor on the board, a day on Upcoming) with Things' project pie: their done steps over all their
+// steps, a check once every sheet is done, an empty ring when they have no steps. A screen reader hears "Level 3: 4 of 9
+// steps done". attr: the hook Magic Plus drops onto (data-floor, data-day); href: the heading opens that (a day's board).
+function pieHead(name, ts, n, attr, href = '') {
+  const steps = ts.flatMap(t => t.items), d = steps.filter(i => i.done).length, all = ts.every(t => !isOpen(t));
+  const pie = all ? `<span class="pie full" aria-hidden="true">${icon('check')}</span>` : `<span class="pie${steps.length ? '' : ' none'}" style="--p:${steps.length ? (d / steps.length).toFixed(3) : 0}" aria-hidden="true"></span>`;
+  const words = all ? L('All sheets done') : steps.length ? L('{d} of {n} steps done', { d, n: steps.length }) : '';
+  const inner = `${pie}<span class="head-name">${name}${words ? `<span class="sr">: ${esc(words)}</span>` : ''}</span><small>${n}</small>`;
+  return `<h3 class="section-h${href ? ' day-h' : ''}" ${attr}>${href ? `<a href="${href}">${inner}${icon('chev', 'chev')}</a>` : inner}</h3>`;
+}
+
+// Upcoming (office phones), as in Things: the 7 days after the board's day, each a heading with its pie (a tap opens that
+// day's board) over its sheets as board rows. Days with nothing fold into one quiet line between the headings.
+function renderUpcoming() {
+  const days = Array.from({ length: 7 }, (_, i) => addDays(day, i + 1)), tomorrow = addDays(today(), 1);
+  const quiet = ds => (ds.length ? `<p class="day-none">${esc(L('{days} · nothing planned', { days: ds.length > 1 ? L('{start} to {stop}', { start: weekday(ds[0]), stop: weekday(ds.at(-1)) }) : weekday(ds[0]) }))}</p>` : '');
+  let html = '', gap = [];
+  for (const d of days) {
+    const ts = visible().filter(t => t.date === d).sort(byFloor);
+    if (!ts.length) { gap.push(d); continue; }
+    html += quiet(gap) + pieHead(esc(d === tomorrow ? L('Tomorrow') : d === today() ? L('Today') : niceDate(d)), ts, ts.length, `data-day="${d}"`, `#day/${d}`) + `<div class="list lead">${ts.map(row).join('')}</div>`;
+    gap = [];
+  }
+  screenHead(L('Upcoming'), { sub: L('{start} to {stop}', { start: niceDate(days[0]), stop: niceDate(days[6]) }), back: { go: `day/${day}`, label: dayLabel(day) } });
+  app.innerHTML = `<div class="board upcoming">${html ? html + quiet(gap) : `<div class="empty">${icon('cal', 'empty-ic')}<h2>${L('Nothing planned for the next 7 days')}</h2>
+    <button class="btn primary" data-act="new" data-day="${days[0]}">${days[0] === tomorrow ? L('New sheet for tomorrow') : L('New sheet for {date}', { date: niceDate(days[0]) })}</button></div>`}</div>`;
+  bar.innerHTML = html ? fab() : ''; // an empty week has its one button
 }
 
 // One sheet on the board: a progress pie (a check once it is done), the area and number, then a quiet line with the
 // crew, the time and the status word in its color. .tcard and .tid are what the browser checks read.
-function row(t) {
-  const [label, tone] = stage(t), n = t.items.length, d = doneCount(t);
-  const lead = !isOpen(t) ? `<span class="pie full" role="img" aria-label="${esc(label)}">${icon('check')}</span>`
+const pieOf = t => {
+  const n = t.items.length, d = doneCount(t);
+  return !isOpen(t) ? `<span class="pie full" role="img" aria-label="${esc(stage(t)[0])}">${icon('check')}</span>`
     : n ? `<span class="pie" style="--p:${(d / n).toFixed(3)}" role="img" aria-label="${esc(L('{d} of {n} steps done', { d, n }))}"></span>`
       : '<span class="pie none" aria-hidden="true"></span>';
+};
+function row(t) {
+  const [label, tone] = stage(t), lead = pieOf(t);
   const when = t12(t.pStart);
   return `<a class="row tcard${!isOpen(t) ? ' is-done' : ''}" href="#task/${esc(t.uid)}/${t.status && !t.review ? 'review' : 'assign'}" style="${crewVar(t.crew, t.crewId)}">
     <span class="row-lead">${lead}</span>
     <span class="row-main"><span class="row-title">${t.area ? `<span class="area">${esc(t.area)}</span> ` : ''}<span class="tid">${esc(t.id || L('New task'))}</span></span>
       <span class="row-sub">${[`<span class="who"><i class="dot"></i> ${esc(t.crew || L('No crew yet'))}</span>`, when && `<span class="nw">${esc(when)}</span>`,
-        `<span class="stage" data-tone="${tone}">${esc(label)}</span>`].filter(Boolean).join(' ·&nbsp;')}</span>
-      ${sameNumber(T, t) ? `<span class="pill" data-tone="warn">${L('Same number as another sheet')}</span>` : ''}</span>
+        `<span class="stage" data-tone="${tone}">${esc(label)}</span>`].filter(Boolean).join('&nbsp;· ')}</span>
+      ${same(t) ? `<span class="pill" data-tone="warn">${L('Same number as another sheet')}</span>` : ''}${t.news ? `<span class="pill news" data-tone="info">${L('New message')}</span>` : ''}</span>
     ${t.est ? `<span class="row-end">${esc(L('{n} hrs', { n: t.est }))}</span>` : ''}${icon('chev', 'chev')}
   </a>`;
 }
 
 // Two sent sheets with the same date and number (made on two office phones offline): both say so until one is renumbered.
-const clash = (t, more = '') => (sameNumber(T, t) ? `<p class="hint"><span class="pill" data-tone="warn">${L('Same number as another sheet')}</span>${more}</p>` : '');
+// With a hub, any two (a sheet that came only through the hub was never texted, so it has no sentAt).
+const same = t => (dups ? dups.has(t.uid) : sameNumber(T, t));
+const clash = (t, more = '') => (same(t) ? `<p class="hint"><span class="pill" data-tone="warn">${L('Same number as another sheet')}</span>${more}</p>` : '');
 
 function renderTask(t) {
   const crewSide = t.origin === 'link';
+  if (t.news) { t.news = false; persist(); } // opened: the office's new message is on screen (sync.mjs marked it)
   const tabs = [['assign', L('Assign')], ['results', L('Crew results')], ['review', L('Review')]];
   screenHead(t.area || (t.id ? L('Task {id}', { id: t.id }) : L('New task')), {
     sub: [t.floor, t.area && t.id && L('Task {id}', { id: t.id })].filter(Boolean).join(' · '), more: crewSide ? 'crewMenu' : 'taskMenu',
-    back: { go: `day/${t.date}`, label: L('{date} task sheets', { date: niceDate(t.date) }) },
+    back: openedFrom ? { go: openedFrom.v + (openedFrom.sub ? '/' + openedFrom.sub : ''), label: { live: L('Live'), upcoming: L('Upcoming') }[openedFrom.v] || L('Records') } : { go: `day/${t.date}`, label: dayLabel(t.date) },
   });
   app.innerHTML = `<div class="tsheet">${crewSide
-    ? banner(t, true) + clash(t) + brief(t) + results(t)
+    ? banner(t, true) + clash(t) + brief(t, false) + results(t, info(t)) // the checkboxes first; the details under them, before Time & status
     : `<nav class="tabs" aria-label="${L('Task sheet')}">${tabs.map(([k, l]) => `<a href="#task/${esc(t.uid)}/${k}" data-act="tab" data-v="${k}"${k === view.tab ? ' aria-current="page"' : ''}>${l}</a>`).join('')}</nav>`
       + banner(t, false) + clash(t, ' ' + L('Change the Task ID on one of them.'))
       + (view.tab === 'results' ? brief(t) + results(t) : view.tab === 'review' ? review(t) : assign(t))}
@@ -321,10 +409,13 @@ function renderTask(t) {
 }
 
 // The calm note at the top of a sheet: on a crew phone, the office's message; on the office phone, where review stands.
+// The office's words show in the reader's language on a hub (live.mjs txView; as typed without one).
 function banner(t, crewSide) {
-  const box = (tone, title, text, foot, more = '') => `<div class="banner" data-tone="${tone}" role="note"><b>${esc(title)}</b>${text ? `<p>${esc(text)}</p>` : ''}${foot ? `<small>${esc(foot)}</small>` : ''}${more}</div>`;
-  if (crewSide) return t.reply ? box('info', L('Message from the office'), t.reply, [t.replyBy, t.replyAt && stamp(t.replyAt)].filter(Boolean).join(' · ')) : '';
-  if (t.review) return box(t.review === 'Accepted' ? 'good' : 'warn', L(t.review), t.followUp, t.reviewer && L('by {name}', { name: t.reviewer }));
+  const box = (tone, title, html, foot, more = '') => `<div class="banner" data-tone="${tone}" role="note"><b>${esc(title)}</b>${html ? `<p>${html}</p>` : ''}${foot ? `<small>${esc(foot)}</small>` : ''}${more}</div>`;
+  const cx = ctx(), tx = k => t[k] && txView(cx, t[k], langOf(t, k));
+  const reviewed = () => (t.review ? box(t.review === 'Accepted' ? 'good' : 'warn', L(t.review), tx('followUp'), t.reviewer && L('by {name}', { name: t.reviewer })) : '');
+  if (crewSide) return (t.reply ? box('info', L('Message from the office'), tx('reply'), [t.replyBy, t.replyAt && stamp(t.replyAt)].filter(Boolean).join(' · ')) : '') + reviewed(); // the review reaches a crew phone through the hub
+  if (t.review) return reviewed();
   if (t.status && view.tab !== 'review') return box('info', L('Finished · ready for review'), '', [L(t.status), t.gotAt && stamp(t.gotAt)].filter(Boolean).join(' · '),
     `<button class="link" data-act="tab" data-v="review">${L('Review')}${icon('chev')}</button>`);
   return '';
@@ -346,11 +437,11 @@ function assign(t) {
   const chips = people(S).filter(p => (t.crewId ? p.crewId === t.crewId : p.crew === t.crew)).map(p => ({ id: p.id, name: p.name }));
   t.members.forEach((name, i) => { if (memberAt({ members: chips.map(c => c.name), memberIds: chips.map(c => c.id) }, t.memberIds[i], name) < 0) chips.push({ id: t.memberIds[i], name }); });
   const on = p => memberAt(t, p.id, p.name) >= 0;
-  const checks = [...new Set([...S.checks, ...t.checks.map(c => c.text)])];
+  const checks = [...new Set([...S.checks, ...t.checks.map(c => c.text)])], cx = ctx(), tf = (label, k, o) => txField(cx, label, `t.${k}`, t[k], o, langOf(t, k)); // the PM and the superintendent may type in different languages
   return group(L('Assignment'), `
       ${field(L('Date'), 't.date', t.date, { type: 'date' })}${field(L('Assigned by'), 't.by', t.by)}
       ${field(L('Floor / level'), 't.floor', t.floor, { list: 'floors' })}${field(L('Task ID'), 't.id', t.id)}
-      ${field(L('Room / area'), 't.area', t.area, { list: 'areas', wide: true, ph: L('e.g. Elec room 3E, east corridor') })}
+      ${tf(L('Room / area'), 'area', { list: 'areas', wide: true, ph: L('e.g. Elec room 3E, east corridor') })}
       ${datalist('floors', S.floors)}${datalist('areas', T.map(x => x.area))}`)
   + group(L('Crew'), `
     <div class="field wide"><span>${L('Crew')}</span><div class="chips">${S.crews.map(c => `<button class="chip" data-act="crew" data-v="${esc(c.id)}" aria-pressed="${t.crewId ? t.crewId === c.id : t.crew === c.name}" style="${crewVar(c.name, c.id)}"><i class="dot"></i>${esc(c.name)}</button>`).join('')}</div></div>
@@ -359,8 +450,8 @@ function assign(t) {
       ${addRow('newMember', L('Add a name'), 'addMember')}</div>
     ${field(L('Crew lead'), 't.lead', t.lead)}${field(L('Crew size'), 't.size', t.size, { type: 'number', mode: 'numeric' })}`)
   + group(L('Assigned task & required finish'), `
-    ${field(L('Work, quantities and limits of scope'), 't.scope', t.scope, { rows: 4, ph: L('e.g. Pull and terminate 12 AWG for lighting circuits L3-14 to L3-18, east corridor. Stop at grid line 7.') })}
-    ${field(L('Drawing / detail references'), 't.refs', t.refs, { wide: true, ph: L('e.g. E-301, detail 4/E-502') })}
+    ${tf(L('Work, quantities and limits of scope'), 'scope', { rows: 4, ph: L('e.g. Pull and terminate 12 AWG for lighting circuits L3-14 to L3-18, east corridor. Stop at grid line 7.') })}
+    ${tf(L('Drawing / detail references'), 'refs', { wide: true, ph: L('e.g. E-301, detail 4/E-502') })}
     <div class="field wide"><span>${L('Steps the crew checks off')}</span><div class="checklist steps-edit">
       ${t.items.map((it, i) => `<div class="edit-row"><input data-k="t.items.${i}.text" value="${esc(it.text)}" aria-label="${esc(L('Step {n}', { n: i + 1 }))}"><button class="x" data-act="delItem" data-i="${i}" aria-label="${esc(L('Remove step {n}', { n: i + 1 }))}">✕</button></div>`).join('')}
       ${addRow('newItem', L('Add a step'), 'addItem')}</div></div>
@@ -370,22 +461,26 @@ function assign(t) {
   + group(L('Assigned work time & estimate'), `
       ${field(L('Allotted time (hrs)'), 't.allot', t.allot, { type: 'number', mode: 'decimal' })}
       ${field(L('Your estimate (hrs)'), 't.est', t.est, { type: 'number', mode: 'decimal' })}
-      ${field(L('Allotted notes'), 't.allotNote', t.allotNote)}${field(L('Estimate notes'), 't.estNote', t.estNote)}
+      ${tf(L('Allotted notes'), 'allotNote')}${tf(L('Estimate notes'), 'estNote')}
       ${field(L('Planned start'), 't.pStart', t.pStart, { type: 'time' })}${field(L('Planned stop'), 't.pStop', t.pStop, { type: 'time' })}${field(L('Check-in at'), 't.checkIn', t.checkIn, { type: 'time' })}
     <p class="hint out form-foot" data-out="crewHrs">${crewHrsLine(t)}</p>`);
 }
 
-// What the crew reads first: who it's for and where it stands, the scope in plain words, then the details.
-function brief(t) {
-  const [label, tone] = stage(t);
-  const row = (k, html) => (html ? `<dt>${esc(k)}</dt><dd>${html}</dd>` : ''); // html: already escaped
-  const note = n => (n ? ' · ' + esc(n) : '');
+// What the crew reads first: who it's for and where it stands, the scope in plain words, then the details
+// (withInfo false: the crew phone shows them under its checkboxes).
+function brief(t, withInfo = true) {
+  const [label, tone] = stage(t), c = ctx(), tx = k => txView(c, t[k], langOf(t, k)); // as typed with no hub
   return `<section class="brief" style="${crewVar(t.crew, t.crewId)}">
     <div class="brief-top"><span class="who"><i class="dot"></i> ${esc(t.crew || L('Crew'))}</span><span class="pill" data-tone="${tone}">${esc(label)}</span></div>
-    ${t.scope ? `<p class="scope-text">${esc(t.scope)}</p>` : ''}
-    <dl class="kv info">${row(L('Drawings'), esc(t.refs))}${row(L('Planned'), t.pStart && esc(fromTo(t.pStart, t.pStop)))}${row(L('Check in at'), esc(t12(t.checkIn)))}
-      ${row(L('Allotted'), t.allot && esc(L('{n} hrs', { n: t.allot })) + note(t.allotNote))}${row(L('Estimate'), t.est && esc(L('{n} hrs', { n: t.est })) + note(t.estNote))}
-      ${row(L('Crew'), t.members.map(m => esc(m) + (nameKey(m) && nameKey(m) === nameKey(S.worker) ? ` (${esc(L('you'))})` : '')).join(', '))}${row(L('Assigned'), esc(niceDate(t.date) + (t.by ? ' · ' + L('by {name}', { name: t.by }) : '')))}</dl></section>`;
+    ${t.scope ? `<p class="scope-text">${tx('scope')}</p>` : ''}${withInfo ? info(t) : ''}</section>`;
+}
+function info(t) {
+  const c = ctx(), tx = k => txView(c, t[k], langOf(t, k));
+  const row = (k, html, cls = '') => (html ? `<dt${cls}>${esc(k)}</dt><dd${cls}>${html}</dd>` : ''); // html: already escaped
+  const note = k => (t[k] ? ' · ' + tx(k) : '');
+  return `<dl class="kv info">${row(L('Drawings'), tx('refs'))}${row(L('Planned'), t.pStart && esc(fromTo(t.pStart, t.pStop)))}${row(L('Check in at'), esc(t12(t.checkIn)))}
+      ${row(L('Allotted'), t.allot && esc(L('{n} hrs', { n: t.allot })) + note('allotNote'))}${row(L('Estimate'), t.est && esc(L('{n} hrs', { n: t.est })) + note('estNote'))}
+      ${row(L('Crew'), t.members.map(m => esc(m) + (nameKey(m) && nameKey(m) === nameKey(S.worker) ? ` (${esc(L('you'))})` : '')).join(', '), ' class="long"')}${row(L('Assigned'), esc(niceDate(t.date) + (t.by ? ' · ' + L('by {name}', { name: t.by }) : '')))}</dl>`;
 }
 
 function workedLine(t) {
@@ -398,18 +493,19 @@ function workedLine(t) {
 }
 
 // The crew's part: big round checkboxes, one Time & status card (Start and Stop, the status), then the notes.
-function results(t) {
-  const d = doneCount(t), n = t.items.length, c = t.checks.filter(x => x.done).length;
-  const tick = (list, it, i) => `<button class="tick" data-act="tick" data-list="${list}" data-i="${i}" aria-pressed="${it.done}"><span class="box">✓</span><span class="txt">${esc(it.text)}</span>${it.at ? `<small>${timeOf(it.at)}</small>` : ''}</button>`;
+function results(t, details = '') {
+  const d = doneCount(t), n = t.items.length, c = t.checks.filter(x => x.done).length, cx = ctx();
+  // a step's words in the reader's language; no tap to the original inside the tick button (that tap ticks)
+  const tick = (list, it, i) => `<button class="tick" data-act="tick" data-list="${list}" data-i="${i}" aria-pressed="${it.done}"><span class="box">✓</span><span class="txt">${txView(cx, it.text, langOf(t, it.id), getLang(), { toggle: false })}</span>${it.at ? `<small>${timeOf(it.at)}</small>` : ''}</button>`;
   // Start and Stop: a big button until tapped, then the time it took, which can be fixed by hand.
   const clock = (k, label, now, primary) => `<div class="clockslot"><span>${label}</span>${t[k]
     ? `<input type="time" data-k="t.${k}" value="${esc(t[k])}" aria-label="${label}">`
-    : `<button class="btn big${primary ? ' primary' : ''}" data-act="clock" data-v="${k}">${now}</button>`}</div>`;
+    : `<button class="btn big${primary ? ' primary' : ''}" data-act="clock" data-v="${k}"${k === 'aStop' && !t.aStart ? ' disabled' : ''}>${now}</button>`}</div>`;
   return `${n ? `<section class="steps"><h3 class="section-h">${L('Check off as you go')}<small>${L('{d} of {n} done', { d, n })}</small></h3>
       <div class="checklist">${t.items.map((it, i) => tick('items', it, i)).join('')}</div></section>` : ''}
     ${t.checks.length ? `<section class="steps"><h3 class="section-h">${L('Required finish checks')}<small>${L('{d} of {n} done', { d: c, n: t.checks.length })}</small></h3>
       <div class="checklist">${t.checks.map((it, i) => tick('checks', it, i)).join('')}</div></section>` : ''}
-  <section class="card timecard"><h2>${L('Time & status')}</h2>
+  ${details}<section class="card timecard"><h2>${L('Time & status')}</h2>
     <div class="startstop">${clock('aStart', L('Actual start'), icon('play') + L('Start now'), true)}${clock('aStop', L('Actual stop'), icon('stop') + L('Stop now'), !!t.aStart)}</div>
     <p class="out" data-out="worked">${workedLine(t)}</p>
     <div class="field"><span>${L('Delay / interruption (minutes)')}</span><div class="edit-row stepper">
@@ -419,27 +515,27 @@ function results(t) {
     <div class="field"><span>${L('Status')}</span>${seg('t.status', t.status, [['Complete', 'good', L('Complete')], ['Partial', 'warn', L('Partial')], ['Blocked', 'bad', L('Blocked')]])}</div>
   </section>
   <section class="card notes"><h2>${L('Notes')}</h2>
-    ${field(L('Work / quantity completed (locations and details)'), 't.doneText', t.doneText, { rows: 3 })}
-    ${field(L('Work remaining'), 't.remain', t.remain, { rows: 2 })}
-    ${field(L('Crew comments / concerns'), 't.comments', t.comments, { rows: 3, ph: L('What helped or slowed the work? Quality, rework, support needed') })}
+    ${txField(cx, L('Work / quantity completed (locations and details)'), 't.doneText', t.doneText, { rows: 3 }, langOf(t, 'doneText'))}
+    ${txField(cx, L('Work remaining'), 't.remain', t.remain, { rows: 2 }, langOf(t, 'remain'))}
+    ${txField(cx, L('Crew comments / concerns'), 't.comments', t.comments, { rows: 3, ph: L('What helped or slowed the work? Quality, rework, support needed') }, langOf(t, 'comments'))}
     ${field(L('Crew / lead'), 't.lead', t.lead)}
   </section>`;
 }
 
 function review(t) {
-  const [label, tone] = stage(t), w = worked(t);
+  const [label, tone] = stage(t), w = worked(t), cx = ctx(), tx = k => t[k] && txView(cx, t[k], langOf(t, k)); // the crew's words in the reader's language
   const row = (k, html, cls = '') => (html ? `<dt${cls}>${esc(k)}</dt><dd${cls}>${html}</dd>` : ''), long = ' class="long"'; // long: typed text, stacked
   return `<section class="brief" style="${crewVar(t.crew, t.crewId)}"><div class="brief-top"><span class="who"><i class="dot"></i> ${esc(t.crew || L('Crew'))}</span><span class="pill" data-tone="${tone}">${esc(label)}</span></div>
     ${t.status || t.aStart ? `<dl class="kv info">${row(L('Status'), esc(t.status ? L(t.status) : L('In progress')))}${row(L('Steps'), t.items.length && esc(L('{d} of {n} done', { d: doneCount(t), n: t.items.length })))}
       ${row(L('Checks'), t.checks.length && esc(L('{d} of {n} done', { d: t.checks.filter(c => c.done).length, n: t.checks.length })))}
       ${row(L('Worked'), w && esc(`${fmtMin(w)} · ${L('{n} crew-hrs', { n: hrs(w / 60 * (t.size || 1)) })}`))}${row(L('Estimate'), t.est && esc(`${L('{n} hrs', { n: t.est })} · ${L('{n} crew-hrs', { n: hrs(t.est * (t.size || 1)) })}`))}
-      ${row(L('Delays'), t.delay && esc(L('{n} min', { n: t.delay })))}${row(L('Completed'), t.doneText && esc(t.doneText), long)}${row(L('Remaining'), t.remain && esc(t.remain), long)}${row(L('Crew notes'), t.comments && esc(t.comments), long)}
+      ${row(L('Delays'), t.delay && esc(L('{n} min', { n: t.delay })))}${row(L('Completed'), tx('doneText'), long)}${row(L('Remaining'), tx('remain'), long)}${row(L('Crew notes'), tx('comments'), long)}
       ${row(L('Received'), esc(stamp(t.gotAt)))}</dl>`
     : `<p class="hint">${L("No results from the crew yet. They'll show here when the crew sends them, or fill them in yourself on the Crew results tab.")}</p>`}</section>`
   + group(L('Lead / superintendent review'), `
     <div class="field wide">${seg('t.review', t.review, [['Accepted', 'good', L('Accepted')], ['Follow-up needed', 'warn', L('Follow-up needed')]])}</div>
     ${field(L('Reviewed by'), 't.reviewer', t.reviewer)}
-    ${field(L('Follow-up / next step'), 't.followUp', t.followUp, { rows: 3 })}
+    ${txField(cx, L('Follow-up / next step'), 't.followUp', t.followUp, { rows: 3 }, langOf(t, 'followUp'))}
     <div class="form-foot"><button class="btn wide" data-act="carry">${L('Carry open work to {date}', { date: niceDate(addDays(t.date, 1)) })}</button></div>`);
 }
 
@@ -463,11 +559,11 @@ function recordRows(t) {
 
 const record = t => makePdf('Electrical task sheet', letterhead(S), recordRows(t), `${COMPANIES} · Task ${t.id}`);
 const fileName = t => `${t.id} ${t.crew} ${t.floor}`.trim();
+// Marked filed when queued, on the sheet as it is now (by uid: a sync may have reloaded T since the caller got t).
 function fileTask(t) {
   if (!S.folderUrl) return;
-  t.filedAt = Date.now();
-  persist();
-  return fileAway(S, { date: t.date, name: fileName(t), bytes: record(t), v: t.updatedAt });
+  const { uid, updatedAt: v } = t;
+  return fileAway(S, { date: t.date, name: fileName(t), bytes: record(t), v }, () => { const n = find(uid); if (n) { n.filedAt = Math.max(n.filedAt || 0, v); persist(); } });
 }
 // A finished sheet edited after it was filed (say, a follow-up note typed after tapping the review
 // button) is filed again when you leave it, so the folder always has the last word.
@@ -539,11 +635,13 @@ async function firstRun() {
   const crew = 'Crew member', a = { lang: '', role: '', name: '' };
   let step = 'lang', msg = '';
   // Opened from a texted link: its names to pick from, and the office code it carries (kept in memory until the end).
-  let linked = [];
+  // A hub invite answers who uses this phone itself: after the language, its join sheet asks the rest (openJoin).
+  let linked = [], invite = null;
   const readLink = async () => {
     if (!location.hash.startsWith('#p=')) return;
     try {
       const data = await unpack(location.hash.slice(3));
+      if (data.kind === 'join') invite = data;
       linked = [data.task, ...(Array.isArray(data.tasks) ? data.tasks : [])].filter(Boolean).flatMap(x => normTask(x).members);
       if (['task', 'result', 'day', 'report'].includes(data.kind) && !hasPin(S) && PIN_FORMAT.test(data.pin)) S.pin = data.pin;
     } catch {} // a damaged link says so once the phone is set up
@@ -555,7 +653,7 @@ async function firstRun() {
   d.addEventListener('cancel', e => e.preventDefault()); // Escape doesn't skip it
   const brand = `<div class="fr-brand">${document.querySelector('.top .mark').outerHTML}<div><b>${COMPANY}</b><span>${COMPANY_ALT}</span></div></div>`;
   const back = to => `<button class="link fr-back" data-fr="back" data-v="${to}">${icon('back')}<span>${L('Back')}</span></button>`;
-  const dots = () => { const n = a.role && a.role !== crew ? 4 : 3, at = ['lang', 'role', 'name', 'pin'].indexOf(step); return `<div class="fr-dots" aria-hidden="true">${Array.from({ length: n }, (_, i) => `<i${i <= at ? ' class="on"' : ''}></i>`).join('')}</div>`; };
+  const dots = () => { const n = a.role === crew ? 3 : 4, at = ['lang', 'role', 'name', 'pin'].indexOf(step); return `<div class="fr-dots" aria-hidden="true">${Array.from({ length: n }, (_, i) => `<i${i <= at ? ' class="on"' : ''}></i>`).join('')}</div>`; };
   const option = (fr, v, title, sub = '') => `<button class="fr-opt" data-fr="${fr}" data-v="${esc(v)}"><span><b>${esc(title)}</b>${sub ? `<small>${esc(sub)}</small>` : ''}</span>${icon('chev', 'chev')}</button>`;
   const screens = {
     lang: () => `<h2 class="large-title" id="frQ" tabindex="-1">Language · Idioma</h2>
@@ -608,8 +706,11 @@ async function firstRun() {
       if (!b) return;
       const v = b.dataset.v;
       switch (b.dataset.fr) {
-        case 'lang': a.lang = v; setLang(v); step = 'role'; return draw();
-        case 'role': a.role = v; await readLink(); step = 'name'; return draw('#frName');
+        case 'lang':
+          a.lang = v; setLang(v); await readLink();
+          if (invite) { a.role = invite.role === 'crew' ? crew : 'Superintendent'; return finish(); }
+          step = 'role'; return draw();
+        case 'role': a.role = v; step = 'name'; return draw('#frName');
         case 'back': step = v; msg = ''; return draw();
         case 'pick': d.querySelector('#frName').value = v; return next(); // one tap on a known name answers
         case 'next': return next();
@@ -619,6 +720,58 @@ async function firstRun() {
     document.body.append(d);
     d.showModal();
     draw();
+  });
+}
+
+// ---------- Quick Find (shared.mjs findSheet): the search button, a pull down past the top, or "/" on a computer ----------
+// It finds only what this phone shows: on a crew phone its own sheets and its own name, never the office's records.
+// Sheets match their number, area, floor, crew, people, date, scope, drawings, steps and notes, as typed and as this
+// session has them translated; people their name and crew; days their name (shared.mjs daysNamed) or a report's text.
+const FIND_ON = ['board', 'upcoming', 'live', 'records', 'clock']; // the main screens
+const RECENT = 'schwab.recent'; // the last 5 sheets opened on this phone, newest first; a convenience, so not in backups
+const sawSheet = u => save(RECENT, [u, ...load(RECENT, []).filter(x => typeof x === 'string' && x !== u)].slice(0, 5));
+const canFind = () => FIND_ON.includes(view.v) && !setup && !document.querySelector('dialog[open]') && !document.activeElement?.matches?.('input, textarea, select');
+const strings = x => (typeof x === 'string' ? [x] : x && typeof x === 'object' ? Object.entries(x).flatMap(([k, v]) => (['date', 'lang', 'pmLang', 'status'].includes(k) ? [] : strings(v))) : []);
+// ponytail: each open folds every sheet's text once, and each keystroke scans them all: a few ms at a year of sheets.
+// Index the words if a phone ever holds many times that.
+function quickFind() {
+  if (stale()) return;
+  const here = today(), far = d => Math.abs(Date.parse(d) - Date.parse(here)) * 2 + (d < here); // nearest day first, a later one before an earlier
+  const has = words => x => words.every(w => x.hay.includes(w));
+  const sheets = visible().map(t => {
+    const typed = [['area', t.area], ['scope', t.scope], ['refs', t.refs], ...[...t.items, ...t.checks].map(i => [i.id, i.text]), ...['doneText', 'remain', 'comments', 'followUp', 'reply'].map(k => [k, t[k]])];
+    const texts = [t.id, t.floor || L('Floor not set'), t.crew, t.lead, ...t.members, niceDate(t.date), ...typed.flatMap(([k, s]) => [s, txCached(s, langOf(t, k))])].filter(Boolean);
+    return { t, texts, hay: nameKey(texts.join(' ')), lead: pieOf(t), title: t.area || t.id || L('New task'), tag: t.area && (t.id || L('New task')), sub: [t.crew || L('No crew yet'), t.floor, niceDate(t.date).replace(/ /g, '\u00a0')].filter(Boolean).join(' · '), // the date wraps whole
+      dot: true, style: crewVar(t.crew, t.crewId), go: `task/${t.uid}/${t.status && !t.review ? 'review' : 'assign'}` };
+  }).sort((a, b) => far(a.t.date) - far(b.t.date) || a.t.id.localeCompare(b.t.id));
+  // People: the PM opens their hours; this phone's own person, their time clock; the superintendent, their crew's sheets today.
+  const pm = isPM() && office(), mine = p => (S.workerId ? p.id === S.workerId : nameKey(p.name) === nameKey(S.worker));
+  const who = (office() ? people(S) : [personById(S, S.workerId) || { id: '', name: S.worker, crew: '', crewId: '' }]).filter(p => nameKey(p.name)).map(p => ({
+    hay: nameKey(`${p.name} ${p.crew}`), lead: `<span class="find-ini" aria-hidden="true">${esc(initials(p.name))}</span>`, style: crewVar(p.crew, p.crewId),
+    title: p.name, sub: [p.crew, pm ? L('Crew hours') : mine(p) ? L('Time clock') : ''].filter(Boolean).join(' · '),
+    go: pm || mine(p) ? `clock/${here}` : `day/${here}`, crew: pm || mine(p) ? undefined : p.crew, name: pm ? p.name : '' }));
+  const reps = (office() ? Object.values(reportsNow()) : []).filter(r => r.updatedAt).sort((a, b) => b.date.localeCompare(a.date)).map(r => {
+    const texts = [r.status && L(r.status), ...strings(r).flatMap(s => [s, txCached(s, r.lang)])].filter(Boolean);
+    return { r, texts, hay: nameKey(texts.join(' ')), lead: icon('report'), title: L('Daily report'), sub: [niceDate(r.date), r.status && L(r.status)].filter(Boolean).join(' · '), go: `report/${r.date}` };
+  });
+  const count = d => { const n = sheets.filter(x => x.t.date === d).length; return n === 1 ? L('1 task sheet') : n ? L('{n} task sheets', { n }) : ''; };
+  const rel = d => (d === here ? L('Today') : d === addDays(here, 1) ? L('Tomorrow') : d === addDays(here, -1) ? L('Yesterday') : '');
+  const days = words => {
+    const named = daysNamed(words, here);
+    return [...named.flatMap(d => [{ lead: icon('cal'), title: niceDate(d) + (d.slice(0, 4) === here.slice(0, 4) ? '' : ', ' + d.slice(0, 4)), sub: [rel(d), count(d)].filter(Boolean).join(' · '), go: `day/${d}` }, ...reps.filter(x => x.r.date === d)]),
+      ...reps.filter(x => !named.includes(x.r.date) && has(words)(x))];
+  };
+  const recent = load(RECENT, []).map(u => sheets.find(x => x.t.uid === u)).filter(Boolean);
+  findSheet(words => (!words.length ? [[L('Recent sheets'), recent]]
+    : [[L('Task sheets'), sheets.filter(has(words))], [L('People'), who.filter(has(words))], [L('Days'), days(words)]]), it => {
+    if (it.crew !== undefined) crewFilter = it.crew;
+    const was = location.hash, to = () => { // the PM lands on that person's hours, or is told there are none
+      const card = it.name && [...app.querySelectorAll('.card.person h2')].find(h => h.textContent === it.name)?.closest('.card');
+      if (card) card.scrollIntoView({ block: 'start' }); else if (it.name) toast(L('No hours for {name} this week', { name: it.name }));
+    };
+    if (was !== '#' + it.go) addEventListener('hashchange', to, { once: true }); // after route() has drawn the screen
+    go(it.go);
+    if (was === '#' + it.go) to();
   });
 }
 
@@ -643,7 +796,7 @@ function taskMsg(t, l) {
 
 async function send(kind, t) {
   if (kind === 'task') { t.sentAt = Date.now(); persist(); render(); }
-  const payload = kind === 'day' ? { v: 1, kind, pin: S.pin, date: day, tasks: dayTasks() } : { v: 1, kind, pin: S.pin, task: t };
+  const payload = { v: 1, kind, pin: S.pin, skew: sync.hubStatus().skew, ...(kind === 'day' ? { date: day, tasks: dayTasks().map(x => ({ ...x, assignAt: sync.officeAt(x) })) } : { task: t }) }; // skew: this phone's hub time offset, only from a phone on a hub (sync.mjs fromText)
   const url = linkTo('tasks.html', await pack(payload));
   if (kind === 'task') {
     // A crew that has answered in Spanish before gets the message in both languages.
@@ -662,13 +815,15 @@ async function send(kind, t) {
 async function act(a, el) {
   const t = current(), v = el.dataset.v;
   switch (a) {
-    case 'new': {
-      const nt = normTask({ uid: uid(), origin: 'mine', id: nextId(T, day), date: day, by: S.me, updatedAt: Date.now() });
-      if (crewFilter) pickCrew(nt, S.crews.find(c => c.name === crewFilter));
+    case 'new': { // Magic Plus (below) puts the floor or the Upcoming day it was dropped on in data-floor / data-day
+      const date = /^\d{4}-\d{2}-\d{2}$/.test(el.dataset.day) ? el.dataset.day : day;
+      const nt = normTask({ uid: uid(), origin: 'mine', id: nextId(T, date), date, floor: el.dataset.floor, by: S.me, updatedAt: Date.now() });
+      if (crewFilter && view.v === 'board') pickCrew(nt, S.crews.find(c => c.name === crewFilter)); // the board's chosen crew (Upcoming shows every crew)
       T.push(nt);
       persist();
       return go(`task/${nt.uid}/assign`);
     }
+    case 'find': return quickFind();
     case 'toggleLang': return act('lang', { dataset: { v: getLang() === 'es' ? 'en' : 'es' } });
     case 'lockBtn':
       if (office()) { signOut(); toast(L('Office screens locked')); return needsOffice(view) ? go('day/' + day) : render(); } // a worker's time clock stays open
@@ -707,8 +862,8 @@ async function act(a, el) {
         t.size = t.members.length;
         enlist(t);
       }
-      if (a === 'addItem') t.items.push(newItem(text));
-      if (a === 'addCheck' && !t.checks.some(c => c.text === text)) t.checks.push(newItem(text));
+      const it = a === 'addItem' || (a === 'addCheck' && !t.checks.some(c => c.text === text)) ? newItem(text) : null;
+      if (it) { t[a === 'addItem' ? 'items' : 'checks'].push(it); typedIn(t, it.id, getLang()); } // a step or a check typed in this phone's language
       t.updatedAt = Date.now();
       persist();
       render();
@@ -729,7 +884,12 @@ async function act(a, el) {
         render();
       } });
     }
-    case 'check': t.checks = t.checks.some(c => c.text === v) ? t.checks.filter(c => c.text !== v) : [...t.checks, newItem(v)]; break;
+    case 'check': { // a check from Settings keeps its own language: the defaults are English words; one added there, this phone's
+      const c = !t.checks.some(x => x.text === v) && newItem(v);
+      t.checks = c ? [...t.checks, c] : t.checks.filter(x => x.text !== v);
+      if (c) t.aLangs = { ...t.aLangs, [c.id]: DEFAULT_SETTINGS.checks.includes(v) ? 'en' : getLang() }; // not the sheet's: picking one is not typing
+      break;
+    }
     case 'tick': {
       const it = t[el.dataset.list][+el.dataset.i];
       it.done = !it.done;
@@ -738,7 +898,7 @@ async function act(a, el) {
       if (it.done && [...t.items, ...t.checks].every(i => i.done) && !t.status) toast(L('Everything is checked off. Set the status and send results.'));
       break;
     }
-    case 'clock': t[v] = nowHM(); break;
+    case 'clock': if (v === 'aStop' && !t.aStart) return; t[v] = nowHM(); break;
     case 'delay': t.delay = Math.max(0, t.delay + +v); break;
     case 'sendTask':
       if (!t.crew || !(t.scope || t.items.length)) return toast(L('Pick a crew and describe the work first'), 'bad');
@@ -749,7 +909,7 @@ async function act(a, el) {
         s?.scrollIntoView({ block: 'center' });
         s?.querySelector('button')?.focus({ preventScroll: true });
         s?.classList.remove('need'); void s?.offsetWidth; s?.classList.add('need'); // a short shake draws the eye (off with reduced motion)
-        return toast(L('Pick Complete, Partial or Blocked first'), 'bad');
+        return toast(L('Pick Complete, Partial or Blocked first')); // guidance, not a failure
       }
       t.cLang = getLang();
       t.resultAt = Date.now(); // the office phone keeps these over an older results text
@@ -761,7 +921,7 @@ async function act(a, el) {
     case 'boardMenu': {
       const prev = prevDay();
       return menu(office()
-        ? [dayTasks().length && ['sendDay', L('Send day plan')], prev && ['carryDay', L('Copy unfinished work from {date}', { date: niceDate(prev) })], ['paste', L('Open a link someone sent you')],
+        ? [['upcoming', L('Upcoming')], dayTasks().length && ['sendDay', L('Send day plan')], prev &&['carryDay', L('Copy unfinished work from {date}', { date: niceDate(prev) })], ['paste', L('Open a link someone sent you')],
           dayTasks().length && ['pdfDay', L("Save this day's sheets as one PDF")], ['settings', L('Settings, crews and backup')]]
         : [['paste', L('Open a link someone sent you')], dayTasks().length && ['pdfDay', L("Save this day's sheets as one PDF")], !crewPhone() && ['lockBtn', L('Office sign-in')]]);
     }
@@ -790,23 +950,20 @@ async function act(a, el) {
       toast(a === 'carry' ? L('Carried to {date}', { date: niceDate(date) }) : L('Duplicated. Change the crew or floor.'));
       return go(`task/${c.uid}/assign`);
     }
-    case 'del': { // gone at once, with Undo for 6 seconds instead of an "are you sure?"
-      const at = T.indexOf(t);
-      T = T.filter(x => x !== t);
-      persist();
-      go('day/' + t.date);
-      return toast(L('Task {id} deleted', { id: t.id || L('New task') }), '', { undo: () => {
-        if (find(t.uid)) return;
-        T.splice(Math.min(at, T.length), 0, t);
-        persist();
-        render();
-      } });
-    }
+    case 'del': return deleteRecord(ctx(), 'task', t.uid); // gone at once, with Undo for 6 seconds instead of an "are you sure?"; on a hub only the PM's phone deletes what the hub has (live.mjs)
     case 'pdfTask': return savePdf(`${fileName(t)}.pdf`, record(t));
     case 'pdfDay': return savePdf(`Task sheets ${day}.pdf`, makePdf(`Electrical task sheets · ${niceDate(day, 'en')}`, letterhead(S), dayTasks().flatMap(recordRows), `${COMPANIES} · ${niceDate(day, 'en')}`));
     case 'fileNow': return fileTask(t);
     case 'paste': return pasteSheet(code => go('p=' + code));
     case 'settings': return go('settings');
+    case 'upcoming': return go('upcoming/' + day);
+    case 'sum': { // the day summary's ready for review and blocked (shared.mjs daySummary): to those sheets, which glow a moment
+      const ids = el.dataset.uids.split(' '), rows = [...app.querySelectorAll('a[href^="#task/"]')].filter(r => ids.includes(r.getAttribute('href').split('/')[1]));
+      rows[0]?.scrollIntoView({ block: 'center', behavior: matchMedia('(prefers-reduced-motion: reduce)').matches ? 'auto' : 'smooth' });
+      rows[0]?.focus({ preventScroll: true });
+      for (const r of rows) { r.classList.remove('glow'); void r.offsetWidth; r.classList.add('glow'); }
+      return;
+    }
     case 'addCrew': case 'delCrew': case 'backup': case 'testFolder': case 'pEdit': case 'pDel': await settingsAct(a, S, el, f => { f(S); save(KEYS.settings, S); render(); }); break; // f: a removal's Undo, on the settings as they are by then
     case 'pAdd': { // keep the keyboard up in that crew's box for the next name
       const crew = el.dataset.crew;
@@ -827,15 +984,89 @@ document.addEventListener('click', e => {
   e.preventDefault();
   el.closest('dialog')?.close();
   if (stale()) return;
+  if (drawLater && (app.contains(el) || bar.contains(el))) return void drawSoon(); // drawn before a pull reloaded what it shows: redraw, the person taps again
   if (el.dataset.go) return go(el.dataset.go);
   const a = el.dataset.act;
   // A second tap on an action still running (sending, sharing, saving) does nothing; then the redrawn control plays its animation.
-  busy(el, () => ((view.v === 'clock' || view.v === 'report') && !SHELL.has(a) ? reportAct(a, el, S, day, view.v) : act(a, el)))
+  busy(el, () => (liveOwns(a) ? liveAct(ctx(), a, el) // the hub screens' own taps
+    : a === 'clear' && hubOn() ? deleteRecord(ctx(), 'report', day) // on a hub, Clear this report deletes it the way a sheet is deleted
+    : (view.v === 'clock' || view.v === 'report') && !SHELL.has(a) ? reportAct(a, el, S, day, view.v) : act(a, el)))
     .then(() => twin(el)?.classList.add('just'));
 });
 // The control as drawn again after a tap (a checkbox, a segment), found by its data attributes.
 const twin = el => (el.isConnected ? el : app.querySelector(['act', 'v', 'i', 'list', 'k'].filter(k => el.dataset[k] != null).map(k => `[data-${k}="${CSS.escape(el.dataset[k])}"]`).join('')));
-const SHELL = new Set(['toggleLang', 'lang', 'lockBtn']); // header buttons work on every screen
+const SHELL = new Set(['toggleLang', 'lang', 'lockBtn', 'find']); // header buttons work on every screen
+
+// ---------- Magic Plus (Things 3): drag the + to where the new sheet goes ----------
+// Pressed and moved past 8 px, the + lifts and follows the finger or the mouse (touch-action: none on it, so the page
+// stays still). Each floor heading on the board (data-floor) and day heading on Upcoming (data-day) is a drop target: the
+// one under the finger lights up, and near the top or bottom edge the list scrolls slowly. Let go and the + flies back to
+// its corner, then taps itself with that floor or day on it, so the sheet comes from the same tap as ever (the
+// dispatcher, busy(), act('new')); let go anywhere else and it is the plain +, but let go near where it started (a change
+// of mind) and it is nothing. The lifted + rides 44 px above the finger, so the heading under the finger stays in sight.
+// A press that never lifts is a plain tap.
+const DROPS = 'h3[data-floor], h3[data-day]';
+let plus = null, plusHold = 0; // the press on the + under way; until when the browser's click after a drop is no tap
+const buzz = () => navigator.userActivation?.hasBeenActive && navigator.vibrate?.(8); // nothing on an iPhone
+const band = () => { const tb = document.getElementById('officeTabs').getBoundingClientRect(); return [document.querySelector('.top').getBoundingClientRect().bottom, tb.height ? tb.top : innerHeight]; }; // the list's part of the screen
+function plusFollow() {
+  const p = plus, [top, bottom] = band();
+  if (!p.fab.isConnected) p.fab = bar.querySelector('.fab[data-act=new]') || p.fab; // drawn again under the finger (a hub pull): carry on with the new one
+  p.fab.classList.add('lift');
+  p.fab.style.translate = `${p.x - p.x0}px ${p.y - p.y0 - 44}px`;
+  const on = (p.y > top && p.y < bottom && [...document.querySelectorAll(DROPS)].find(h => { const r = h.getBoundingClientRect(); return r.height && p.y > r.top - 14 && p.y < r.bottom + 10 && p.x > r.left - 16 && p.x < r.right + 16; })) || null;
+  if (on !== p.on) { p.on?.classList.remove('plus-on'); on?.classList.add('plus-on'); p.on = on; }
+}
+function plusEdge(p) { // once the finger has been away from both edges (the + starts by the bottom one); at most 7 px a frame
+  if (p !== plus) return; // that drag is over
+  const [top, bottom] = band(), Z = 56, v = p.y < top + Z ? p.y - top - Z : p.y > bottom - Z ? p.y - bottom + Z : 0;
+  p.armed ||= !v;
+  if (p.armed && v) { scrollBy(0, Math.sign(v) * Math.ceil(Math.min(Math.abs(v), Z) / 8)); plusFollow(); }
+  requestAnimationFrame(() => plusEdge(p));
+}
+function plusDrop(e) {
+  if (e.pointerId !== plus?.id) return;
+  const p = plus, ms = matchMedia('(prefers-reduced-motion: reduce)').matches ? 0 : 180;
+  plus = null;
+  if (!p.lifted) return; // a plain tap: its own click is the + as before
+  p.on?.classList.remove('plus-on');
+  const back = !p.on && Math.hypot(p.x - p.x0, p.y - p.y0) < 48; // let go by its own corner: a change of mind
+  const where = e.type === 'pointerup' && !back && (!p.on ? {} : 'day' in p.on.dataset ? { day: p.on.dataset.day } : { floor: p.on.dataset.floor }); // a cancel makes nothing
+  plusHold = performance.now() + ms + 100;
+  p.fab.classList.replace('lift', 'fly');
+  p.fab.style.translate = '';
+  if (where) buzz();
+  setTimeout(() => {
+    p.fab.classList.remove('fly');
+    const fab = bar.querySelector('.fab[data-act=new]'); // gone: something else was tapped meanwhile
+    if (!where || !fab) return;
+    Object.assign(fab.dataset, where);
+    fab.click();
+    delete fab.dataset.day; delete fab.dataset.floor;
+  }, ms);
+}
+document.addEventListener('pointerdown', e => {
+  if (!e.isPrimary) return;
+  if (plus?.lifted) plusDrop({ pointerId: plus.id, type: 'pointercancel' }); // a drag whose end never came
+  const fab = !e.button && e.target.closest?.('.fab[data-act=new]');
+  plus = fab ? { fab, id: e.pointerId, x0: e.clientX, y0: e.clientY, x: e.clientX, y: e.clientY } : null;
+});
+document.addEventListener('pointermove', e => {
+  if (e.pointerId !== plus?.id) return;
+  Object.assign(plus, { x: e.clientX, y: e.clientY });
+  if (!plus.lifted) {
+    if (Math.hypot(plus.x - plus.x0, plus.y - plus.y0) < 8) return;
+    plus.lifted = true;
+    try { plus.fab.setPointerCapture(plus.id); } catch {} // a mouse keeps coming here off the button too
+    buzz();
+    plusEdge(plus);
+  }
+  plusFollow();
+});
+document.addEventListener('pointerup', plusDrop);
+document.addEventListener('pointercancel', plusDrop);
+// The browser's own click after a drag (a mouse, or a finger that moved only a little) is not a second +.
+document.addEventListener('click', e => { if (e.isTrusted && e.detail && (plus?.lifted || performance.now() < plusHold)) { e.preventDefault(); e.stopImmediatePropagation(); } }, true);
 
 // The sign-in ran out (or another tab locked) while this screen was up: office screens and the office board
 // go back behind the passcode before anything is saved; a worker's time clock and crew sheets stay and carry on.
@@ -848,23 +1079,28 @@ function stale() {
 
 document.addEventListener('input', e => {
   const el = e.target, k = el.dataset.k;
-  if (!k || stale()) return;
-  if (k.startsWith('r.')) return reportInput(el, S, day);
-  if (k.startsWith('h.')) return hoursInput(el, S, day);
+  if (!k) { if (el.dataset.lv && !stale()) liveInput(ctx(), el); return; } // the Records search box
+  if (stale()) return;
   const t = current();
+  // A pull deleted the sheet being typed in, or may have moved a list this field points into by position: redraw, write nothing.
+  if ((!t && k.startsWith('t.')) || (drawLater && /\.\d+\./.test(k))) { drawLater = false; return render(); }
+  if (k.startsWith('r.')) { reportInput(el, S, day); return liveInput(ctx(), el); } // and its translated preview, if it has one
+  if (k.startsWith('h.')) return hoursInput(el, S, day);
   if (k === 't.date' && !/^\d{4}-\d{2}-\d{2}$/.test(el.value)) return; // every sheet needs a real day; a cleared or half-typed date would hide it
   setPath({ t, s: S }, k, readInput(el));
   if (k.startsWith('s.')) {
+    if (k === 's.worker' && nameKey(personById(S, S.workerId)?.name) !== nameKey(S.worker)) S.workerId = ''; // another name typed: no longer that person (report.mjs attachShifts)
     save(KEYS.settings, S);
     if (k === 's.lang' || k === 's.role') { setLang(S.lang); render(); }
     return;
   }
-  // The language each part is typed in, so the hub can translate it for a reader of the other language.
-  if (/^t\.(scope|refs|allotNote|estNote|followUp|items\.\d+\.text)$/.test(k)) t.aLang = getLang();
-  if (/^t\.(doneText|remain|comments)$/.test(k)) t.cLang = getLang();
+  // The language each text is typed in (its field, or the step's id), so the hub can translate it for a reader of the other language.
+  const tm = /^t\.(?:(scope|refs|area|allotNote|estNote|followUp|doneText|remain|comments)|(items|checks)\.(\d+)\.text)$/.exec(k), tk = tm && (tm[1] || t[tm[2]][+tm[3]]?.id);
+  if (tk) typedIn(t, tk, getLang());
   t.updatedAt = Date.now();
   persist();
   for (const o of app.querySelectorAll('[data-out]')) o.textContent = OUT[o.dataset.out](t);
+  liveInput(ctx(), el); // a translated preview under the field asks again
 });
 
 document.addEventListener('change', e => {
@@ -876,16 +1112,79 @@ document.addEventListener('change', e => {
 });
 
 document.addEventListener('keydown', e => {
-  if (e.key === 'Enter' && e.target.dataset.enter) { e.preventDefault(); if (!stale()) act(e.target.dataset.enter, e.target); }
+  if (e.key === 'Enter' && e.target.dataset.enter) {
+    e.preventDefault();
+    const a = e.target.dataset.enter;
+    if (!stale()) liveOwns(a) ? liveAct(ctx(), a, e.target) : act(a, e.target);
+  }
 });
 
-// The other app (or another tab) changed shared data: reload so a stale copy here never overwrites it.
-const reload = () => {
-  S = loadSettings(); setLang(S.lang); T = loadTasks(); reloadReports(); attachShifts(S);
+// The other app (or another tab, or the hub sync) changed shared data: reload so a stale copy here never overwrites it.
+function reloadData() {
+  Object.assign(S, loadSettings()); setLang(S.lang); T = loadTasks(); reloadReports(); attachShifts(S);
   if (view.v === 'task' && !current()) view = { v: 'board' };
+}
+const reload = () => {
+  reloadData();
   if (document.body.classList.contains('office') && !office()) document.querySelectorAll('dialog[open]:not(.pin)').forEach(d => d.close()); // signed out elsewhere: an office question left open can't finish
+  if (hubOn()) return drawSoon(); // another tab's background sync saves too: the redraw waits for the field being typed in
   needsOffice(view) && !office() ? route() : render();
 };
+
+// ---------- the hub (HUB.md; sync.mjs keeps the stores in step, live.mjs draws the hub screens) ----------
+
+// What live.mjs is handed on every call; its header comment lists each piece.
+function ctx() {
+  const r = role();
+  return { S, tasks: () => T, shifts: () => (r === 'pm' ? crewNow() : []), reports: reportsNow, role: r, day, sync, go, render: drawSoon, toast, now: Date.now, saveTask, remove };
+}
+// Message and Review on the hub screens: the sheet with office fields changed, each changed part stamped past its last stamp.
+function saveTask(n) {
+  const i = T.findIndex(x => x.uid === n.uid), old = T[i];
+  if (!old) return;
+  const moved = ks => ks.some(k => JSON.stringify(n[k]) !== JSON.stringify(old[k]));
+  if (moved(sync.A_KEYS)) n.assignAt = Math.max(n.assignAt, old.assignAt + 1);
+  if (moved(sync.C_KEYS)) n.crewAt = Math.max(n.crewAt, old.crewAt + 1);
+  T[i] = n;
+  persist();
+  fileIfChanged(n); // a review is filed, as the Review tab files it
+}
+// A delete (the sheet's menu, live.mjs deleteRecord): gone from this phone at once. Returns what puts it back where it
+// was, for the Undo; null if this phone had no such record.
+function remove(kind, key) {
+  if (kind === 'report') return dropReport(key);
+  const at = T.findIndex(x => x.uid === key), t = T[at];
+  if (!t) return null;
+  T.splice(at, 1);
+  persist();
+  if (view.v === 'task' && view.uid === key) { view = { v: 'board' }; go('day/' + t.date); } // a sheet gone from under its own screen
+  return () => {
+    if (find(key)) return; // back already (another tab's Undo, or the hub)
+    T.splice(Math.min(at, T.length), 0, t);
+    persist();
+    render();
+  };
+}
+// The sync saved what it pulled: every in-memory copy reloads now, before any further tap. The screen redraws too, but
+// never under a field someone is typing in: then it waits until the field is left, and until the tap that left it lands.
+let drawLater = false;
+const typing = () => !!document.activeElement?.matches?.('textarea, select, input:not([type=checkbox]):not([type=radio]):not([type=button]):not([type=file])') && app.contains(document.activeElement);
+function drawSoon() {
+  if (typing()) return void (drawLater = true);
+  drawLater = false;
+  if (needsOffice(view) && !office()) return route();
+  // A background sync replaces rows: keep the focused task reachable by Enter after the redraw.
+  const focused = document.activeElement, href = app.contains(focused) && focused.matches('a.row[href^="#task/"], a.live-done[href^="#task/"]') ? focused.getAttribute('href') : '';
+  render();
+  if (href) app.querySelector(`a[href="${CSS.escape(href)}"]`)?.focus({ preventScroll: true });
+}
+document.addEventListener('focusout', () => { if (drawLater) setTimeout(() => drawLater && drawSoon(), 300); });
+const SYNCED = new Set([KEYS.tasks, KEYS.reports, KEYS.hours, KEYS.crewHours, KEYS.settings]);
+// A status change redraws the header dot, and the two screens that are about the hub; Settings redraws after its own taps.
+sync.initHub({ S, toast, onChange: () => { reloadData(); drawSoon(); }, onStatus: () => { if (!stale()) header(); if (view.v === 'live' || view.v === 'hub') drawSoon(); } }); // stale(): a sign-in that ran out goes behind the passcode
+onSave(k => SYNCED.has(k) && sync.poke()); // after every save; the sync's own timer and wake-ups catch anything else
+setTextField((label, k, v, o, lang) => txField(ctx(), label, k, v, o, lang)); // the daily report's typed text
+new MutationObserver(() => liveAfter(ctx(), app)).observe(app, { childList: true }); // after every draw: translate the typed text on screen
 addEventListener('storage', e => [...Object.values(KEYS), UNLOCK].includes(e.key) && reload());
 addEventListener('pageshow', e => e.persisted && reload());
 addEventListener('hashchange', route);
@@ -898,6 +1197,8 @@ addEventListener('visibilitychange', () => {
 });
 addEventListener('pagehide', () => { fileIfChanged(current()); fileReportIfChanged(S, day); }); // queued even if the upload can't finish; retried on next open
 app.addEventListener('toggle', sectionToggle, true);
+pullDown(canFind, quickFind, () => document.getElementById('findBtn')); // Quick Find: pull down past the top of a main screen, or "/" on a computer
+addEventListener('keydown', e => { if (e.key === '/' && !e.ctrlKey && !e.metaKey && !e.altKey && canFind()) { e.preventDefault(); quickFind(); } });
 if (isNewPhone()) firstRun().then(route); else route();
 retryUploads(S);
 </script>

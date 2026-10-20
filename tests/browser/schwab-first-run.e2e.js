@@ -29,6 +29,7 @@ const fails = [], check = (ok, what) => { console.log(ok ? '  ok  ' : '  FAIL', 
   await crew.keyboard.press('Escape');
   check(await crew.isVisible('dialog.firstrun') && !(await settings(crew)), 'it asks the language first; Escape does not skip it and nothing is saved yet');
   await crew.click(fr('lang', 'es'));
+  await crew.waitForSelector(fr('role')); // the linked task is decompressed before this screen appears
   check(/Quién usa este teléfono/.test(await crew.textContent('dialog.firstrun h2')) && await crew.locator(fr('role')).count() === 3, 'then, in Spanish, who is using the phone: three buttons');
   await crew.click(fr('role', 'Crew member'));
   await crew.waitForSelector(fr('pick'));

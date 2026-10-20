@@ -2,7 +2,7 @@
 // The hub screens (docs/schwab/live.mjs): relative time, sheet relevance, crew grouping, who is on site, per-person weekly
 // hours (the same hundredths as report.mjs), the accountant's CSV, search, the activity sentences, the header dot, the
 // typed-text translation helpers, every view's markup (escaping, who sees what, speed with 12 crews and 60 events) and the
-// taps that change things (delete asks first and goes to the hub first, connect, archive, rotate). No DOM and no network:
+// taps that change things (delete goes at once with Undo and reaches the hub after it, connect, archive, rotate). No DOM and no network:
 // a few fake elements and a fake sync stand in for them. ROOT=/path/to/docs/schwab runs it against another copy of the app.
 //   node --test tests/schwab-live.test.js
 
@@ -50,6 +50,7 @@ function mkSync(over = {}) {
     async cycle() { calls.push(['cycle']); return this.status; }, async translate(items, from, to) { calls.push(['translate', items, from, to]); return items.map(x => 'T:' + x); },
     async records(q) { calls.push(['records', q]); return { ok: true, items: [], cursor: '' }; }, async stats() { return { ok: true, rows: {}, cells: 7.5e6, cellLimit: 1e7, sheetUrl: '' }; },
     async purge(kind, key) { calls.push(['purge', kind, key]); return { ok: true, rev: 2 }; }, async rotate(role) { calls.push(['rotate', role]); return { ok: true, key: KEY }; },
+    purgeLater(kind, key, due) { calls.push(['purgeLater', kind, key, due]); }, onHub: () => false,
     async archive(before) { calls.push(['archive', before]); return { ok: true, sheetUrl: 'https://docs.google.com/spreadsheets/d/arch/edit', moved: { tasks: 3 } }; },
     async selftest() { return { ok: true, checks: [{ name: 'write', ok: true, detail: 'ok' }] }; },
     async connect(url, key) { calls.push(['connect', url, key]); return { ok: true, role: 'pm' }; }, disconnect() { calls.push(['disconnect']); },
@@ -66,6 +67,7 @@ function mkCtx(o = {}) {
   const ctx = { S, tasks: () => [], shifts: () => [], reports: () => [], role: 'pm', day: DAY, sync, now: () => NOW, calls, saved: [], removed: [],
     go: h => calls.push(['go', h]), render: () => calls.push(['render']), toast: (m, tone) => calls.push(['toast', m, tone]),
     saveTask: t => ctx.saved.push(t), remove: async (k, key) => { ctx.removed.push([k, key]); return true; }, ask: async () => true, ...o };
+  ctx.choose ||= async (m, opts) => ((await ctx.ask(m, opts.at(-1)[1])) ? opts.at(-1)[0] : null); // the action sheet's last button is its yes
   return ctx;
 }
 const toasts = ctx => ctx.calls.filter(c => c[0] === 'toast');
@@ -249,7 +251,14 @@ test('eventLine rebuilds the hub English into a sentence', () => {
   assert.equal(line(E('clock.in', 'Jose L', 'Jose L clocked in at 7:02 AM, 2026-10-19', 's1')), 'Jose L clocked in');
   assert.equal(line(E('clock.out', 'Jose L', '...', 's1')), 'Jose L clocked out');
   assert.equal(line(E('report.sent', 'Dana', 'Daily report for 2026-10-19 sent by Dana', '2026-10-19')), `Daily report for ${lib.niceDate('2026-10-19', 'en')} sent`);
-  assert.equal(line(E('purge', 'PM', 'Deleted task xyz', 'xyz')), 'Deleted task xyz', 'a kind the app does not know shows the hub words');
+  assert.equal(line(E('purge', 'PM', 'Deleted task xyz', 'xyz')), 'A task sheet was deleted', 'a deleted sheet is never named by its uid');
+  assert.equal(line(E('purge', 'PM', 'Deleted report 2026-10-19', '2026-10-19')), `The ${lib.niceDate('2026-10-19', 'en')} report was deleted`);
+  assert.equal(line(E('pm.add', 'PM', 'PM added a shift for Jose L, 2026-10-19', 's1')), `PM added a shift for Jose L on ${lib.niceDate('2026-10-19', 'en')}`);
+  assert.equal(line({ ...E('pm.edit', 'PM', 'PM edited Jose L, 2026-10-19', 's1'), name: 'José Luis' }), `PM changed the hours of José Luis on ${lib.niceDate('2026-10-19', 'en')}`, 'the roster name when the app knows the shift');
+  assert.equal(line(E('pm.remove', 'PM', 'PM removed a shift for a worker, 2026-10-19', 's1')), `PM removed a shift for a worker on ${lib.niceDate('2026-10-19', 'en')}`);
+  assert.equal(line(E('key.rotated', 'PM', 'Crew key replaced', '')), 'The crew key was replaced');
+  assert.equal(line(E('archive', 'PM', 'Archived 12 rows older than 2026-07-01', '2026-07-01')), `12 rows older than ${lib.niceDate('2026-07-01', 'en')} archived`);
+  assert.equal(line(E('purge', 'PM', 'Purged something', 'x')), 'Purged something', 'words the app does not know: the hub words');
   assert.equal(line(E('task.status', 'x', 'odd text', 'T1')), 'odd text', 'a status it does not know falls back to the hub words');
   assert.equal(line(E('mystery', '', '', '')), 'mystery');
 });
@@ -258,6 +267,55 @@ es('eventLine in Spanish keeps names and ids', () => {
   assert.equal(live.eventLine(E('task.status', 'Mike R', 'T1019-02 marked Blocked', 'T1019-02'), 'es'), 'T1019-02: estado Bloqueado');
   assert.equal(live.eventLine(E('clock.in', 'Jose L', '', ''), 'es'), 'Jose L marcó entrada');
   assert.equal(live.eventLine(E('task.reviewed', 'H', 'T1 reviewed: Accepted', 'T1'), 'es'), 'T1 revisada: Aceptado');
+  // a phone with no name: the hub writes its role code as who ('pm creó T1' on the Spanish feed); it reads as the role
+  assert.equal(live.eventLine({ ...E('task.created', 'pm', 'New task T1', 'T1'), role: 'pm' }, 'es'), 'Gerente de proyecto creó T1');
+  assert.equal(live.eventLine({ ...E('task.created', 'super', 'New task T1', 'T1'), role: 'super' }, 'en'), 'Superintendent created T1');
+  assert.equal(live.eventLine({ ...E('task.created', 'Dana', 'New task T1', 'T1'), role: 'super' }, 'es'), 'Dana creó T1', 'a real name stays');
+});
+
+// ---------- each typed text in its own language (PHONE-UX-08, PHONE-UX-10) ----------
+
+test('a message, a review and each typed text keep the language they were typed in, whatever the rest of the sheet is in', () => {
+  const t = task({ scope: 'Jale cable al tablero', aLang: 'es', aLangs: { scope: 'es', a: 'es' } }); // a Spanish superintendent's sheet
+  const m = live.withMessage(t, 'Start on level 4', NOW, 'Pat', 'en');
+  assert.deepEqual([lib.langOf(m, 'reply'), lib.langOf(m, 'scope'), lib.langOf(m, 'a')], ['en', 'es', 'es'], 'the English PM\'s message on a Spanish sheet is English');
+  const r = live.withReview(m, 'Follow-up needed', 'Label the panel', NOW + 1, 'Pat', 'en');
+  assert.deepEqual([lib.langOf(r, 'followUp'), lib.langOf(r, 'scope'), r.aLang], ['en', 'es', 'es'], 'an English follow-up relabels nothing else');
+  assert.deepEqual(t.aLangs, { scope: 'es', a: 'es' }, 'the sheet it started from is untouched');
+  // typed on a phone: a step by the PM, results by two crew members; the part's own language is only the first one typed
+  lib.typedIn(r, 'b', 'en'); lib.typedIn(r, 'remain', 'es'); lib.typedIn(r, 'comments', 'en');
+  assert.deepEqual([lib.langOf(r, 'b'), lib.langOf(r, 'a'), lib.langOf(r, 'remain'), lib.langOf(r, 'comments'), r.aLang, r.cLang], ['en', 'es', 'es', 'en', 'es', 'es']);
+  assert.equal(lib.langOf(task({ aLang: 'es' }), 'scope'), 'es', 'text typed before per-text languages reads its part\'s');
+  assert.deepEqual(lib.normTask({ uid: 'x', date: DAY, aLangs: { scope: 'fr', __proto__x: 'es', b: 'es' }, cLangs: [] }).aLangs, { b: 'es' }, 'only en or es, under a field or a step id');
+});
+
+test('Records shows the typed scope and results in the reader\'s language (PHONE-UX-10)', () => {
+  const ctx = mkCtx({ tasks: () => [task({ scope: 'Jale cable al tablero', aLangs: { scope: 'es' } })], reports: () => [report({ results: 'Todo bien hoy', lang: 'es' })] });
+  assert.match(live.recordsView(ctx, 'sheets'), /class="clamp"><span class="tx"[^>]*data-from="es" data-to="en"[^>]*><span class="tx-o">Jale cable al tablero/);
+  assert.match(live.recordsView(ctx, 'reports'), /class="clamp"><span class="tx"[^>]*data-from="es" data-to="en"[^>]*><span class="tx-o">Todo bien hoy/);
+});
+
+test('the daily report: every typed box goes through the translated-preview field, with the language of the part that typed it (PHONE-UX-10)', () => {
+  const store = new Map(), els = new Map(), prevDoc = globalThis.document, seen = {};
+  const el = id => els.get(id) || els.set(id, { innerHTML: '', textContent: '', querySelectorAll: () => [], querySelector: () => null }).get(id);
+  Object.defineProperty(globalThis, 'localStorage', { configurable: true, value: { getItem: k => store.get(k) ?? null, setItem: (k, v) => store.set(k, String(v)), removeItem: k => store.delete(k) } });
+  globalThis.document = { getElementById: el, querySelectorAll: () => [], documentElement: {} };
+  try {
+    const r = report({ lang: 'es', pmLang: 'en', notified: 'Se avisó al GC', needs: [{ item: 'Elevador de tijera' }], decisions: [{ q: 'Elevador', rec: 'Rentarlo dos semanas', pm: 'Approved', pmNote: 'One week only' }],
+      next: [{ step: 'Piso 5', prereq: 'Material' }], risks: [{ risk: 'Lluvia', impact: 'Un día', prevent: 'Lonas', fallback: 'Piso 4' }], pmReview: 'Looks good' });
+    lib.save(lib.KEYS.reports, { [DAY]: r });
+    lib.signIn();
+    rep.reloadReports();
+    rep.setTextField((label, k, v, o, from) => { seen[k] = from; return ''; });
+    rep.renderOffice('report', { ...structuredClone(lib.DEFAULT_SETTINGS), role: 'Project manager' }, DAY);
+  } finally {
+    rep.setTextField((label, k, v, o) => lib.field(label, k, v, o));
+    globalThis.document = prevDoc;
+    delete globalThis.localStorage;
+  }
+  for (const k of ['r.results', 'r.notified', 'r.needs.0.item', 'r.decisions.0.q', 'r.decisions.0.rec', 'r.next.0.step', 'r.next.0.prereq', 'r.risks.0.risk', 'r.risks.0.impact', 'r.risks.0.prevent', 'r.risks.0.fallback'])
+    assert.equal(seen[k], 'es', `${k}: the superintendent's words, with a preview for a reader of the other language`);
+  for (const k of ['r.decisions.0.pmNote', 'r.pmReview']) assert.equal(seen[k], 'en', `${k}: the PM's words carry the PM's language`);
 });
 
 // ---------- the header dot ----------
@@ -330,6 +388,35 @@ test('txApply: two calls at once do not translate the same text twice', async ()
   const sync = mkSync(), ctx = ctxHub('live', sync), el = fakeEl('Una vez', 'es', 'en'), root = rootOf([el]);
   await Promise.all([live.txApply(ctx, root), live.txApply(ctx, root)]);
   assert.equal(sync.calls.filter(x => x[0] === 'translate').length, 1);
+});
+test('translated previews keep a newer edit when an older request finishes before or after its debounce', async () => {
+  for (const oldFirst of [true, false]) {
+    const pending = [], queries = [], original = { textContent: 'Hola' };
+    const ctx = ctxHub('live', mkSync({ translate(texts) { queries.push(texts); return new Promise(done => pending.push(done)); } }));
+    const pre = fakeEl('', 'es', 'en', 'pre', { for: 'reply' }), root = rootOf([pre]);
+    pre.querySelector = () => original;
+    pre.parentNode = root;
+    const prevDoc = globalThis.document, prevTimer = globalThis.setTimeout;
+    let debounce;
+    globalThis.document = { querySelectorAll: () => [pre] };
+    globalThis.setTimeout = fn => { debounce = fn; return 0; };
+    try {
+      const first = live.txApply(ctx, root);
+      live.onInput(ctx, { dataset: { k: 'reply' }, value: 'Adiós' });
+      if (oldFirst) {
+        pending[0](['Hello']); await first;
+        assert.equal(pre.dataset.state, 'pending', 'the edit is still waiting for its own translation');
+        assert.equal(pre.innerHTML, '', 'a response for the old text is not shown');
+      }
+      const second = debounce();
+      assert.deepEqual(queries, [['Hola'], ['Adiós']], 'the debounce translates what is in the field now');
+      pending[1](['Goodbye']); await second;
+      if (!oldFirst) { pending[0](['Hello']); await first; }
+      assert.match(pre.innerHTML, /class="tx-o" hidden>Adiós<\/span>/);
+      assert.match(pre.innerHTML, /class="tx-t">Goodbye<\/span>/);
+      assert.doesNotMatch(pre.innerHTML, /Hello|Hola/);
+    } finally { globalThis.document = prevDoc; globalThis.setTimeout = prevTimer; }
+  }
 });
 test('txApply: offline, an error or quota show the original and say so; it never throws', async () => {
   const sync = mkSync({ async translate(items) { return items; } }), ctx = ctxHub('offline', sync);
@@ -404,11 +491,12 @@ test('liveView: 12 crews, 60 events and 40 people stay fast and small', () => {
   assert.ok(ms < 400, `took ${ms}ms`);
   assert.ok(html.length < 600e3, `html is ${html.length} characters`);
   assert.equal((html.match(/class="live-crew"/g) || []).length, 12);
-  assert.equal((html.match(/<li><small>/g) || []).length, 50, 'the feed shows 50 events, newest first');
+  assert.equal((html.match(/<li><small>/g) || []).length, 10, 'the feed shows the 10 newest events, then Show all');
+  assert.match(html, /data-act="liveFeedAll">Show all \(50\)/, 'Show all counts the 50 events the feed keeps');
   assert.equal((html.match(/data-act="liveMsg"/g) || []).length, 48, 'one Message button per sheet that is not accepted');
   assert.equal((html.match(/class="live-done"/g) || []).length, 12, 'accepted sheets are one quiet line');
   assert.equal((html.match(/data-act="liveReview"/g) || []).length, 24, 'Review only where the crew has sent results and nobody has reviewed');
-  assert.match(html, /<div class="stat"><b>41<\/b><span>On site<\/span>/, '40 on the timesheet and a visitor the hub lists');
+  assert.match(html, /<p class="day-sum"><span>41 people in 12 crews ·<\/span>/, '40 on the timesheet and a visitor the hub lists');
   assert.match(html, /data-act="liveRefresh"/);
   assert.match(html, /Updated just now/);
   assert.ok(html.indexOf('T1019-3') > -1);
@@ -485,7 +573,7 @@ test('recordsView: the PM sees three tabs and the tools, the superintendent sees
   const sup = live.recordsView(bigCtx({ role: 'super' }), 'people');
   assert.equal((sup.match(/<a href="#records\//g) || []).length, 2);
   assert.doesNotMatch(sup, /recExport|recMenu|recCsv|recArchive|recPerson/, 'no export, delete, hours or archive for the superintendent');
-  assert.match(sup, /aria-current="page">Task sheets/, 'People is not theirs: they land on sheets');
+  assert.match(sup, /aria-current="page">Sheets/, 'People is not theirs: they land on sheets');
   assert.match(live.recordsView(mkCtx({ role: 'crew' }), 'sheets'), /for the office/);
 });
 test('recordsView people: people, then weeks with totals, then shifts, and the way to edit', () => {
@@ -612,7 +700,7 @@ test('hubSettingsView: who sees what', () => {
   assert.match(sup, /hubDisconnect/);
   assert.doesNotMatch(sup, /hubInvite|hubRotate|hubTest/);
   const crew = mk('crew', 'Crew B');
-  assert.match(crew, /<dt>Crew<\/dt><dd>Crew B<\/dd>/);
+  assert.match(crew, /<span class="row-main">Crew<\/span><span class="row-end">Crew B<\/span>/);
   assert.match(crew, /hubSync/);
   assert.match(crew, /hubDisconnect/);
   assert.doesNotMatch(crew, /hubInvite|hubRotate|hubTest|Open the Google Sheet/, 'crew phones see only status, their crew and disconnect');
@@ -655,49 +743,74 @@ test('withMessage and withReview stamp the office part so the newest wins, and k
 
 // ---------- delete ----------
 
-test('deleteRecord: PM only, asks first, the hub first, nothing deleted if the hub fails', async () => {
+test('deleteRecord: gone at once with Undo; the PM\'s hub purge is stored until the Undo is over, then sent, back if the hub fails; another hub phone deletes only what the hub never had', async () => {
   const t = task({ uid: 'del1', id: 'T9-09' });
-  // not the PM
-  let ctx = mkCtx({ role: 'super', tasks: () => [t] });
+  const offer = ctx => toasts(ctx).at(-1)[3]; // the toast's { undo, done }
+  // a removal that can be put back, as the app's own remove() does
+  const mk = (o = {}) => { const order = [], ctx = mkCtx({ tasks: () => [t], ...o, remove: async (k, key) => { order.push(`remove ${k} ${key}`); ctx.removed.push([k, key]); return () => order.push('put back'); } }); ctx.order = order; ctx.toast = (m, tone, opts) => ctx.calls.push(['toast', m, tone, opts]); return ctx; };
+  const purges = ctx => ctx.sync.calls.filter(c => c[0] === 'purgeLater').map(c => c.slice(1));
+  // DATA-08: a superintendent (or crew) phone on a hub: a sheet or report the hub has stays, and the phone says who can delete it
+  const other = (role, onHub) => { const s = mkSync({ onHub: (key, kind) => onHub.includes(kind) }); s.status.role = role; return mk({ role, sync: s, reports: () => [report({ date: '2026-10-17' })] }); };
+  for (const [role, kind, key] of [['super', 'task', 'del1'], ['super', 'report', '2026-10-17'], ['crew', 'task', 'del1']]) {
+    const c = other(role, [kind]);
+    assert.equal(await live.deleteRecord(c, kind, key), false, `${role} ${kind}`);
+    assert.deepEqual([c.removed.length, c.sync.calls.length], [0, 0]);
+    assert.deepEqual(toasts(c).at(-1).slice(1, 3), ['Only the PM can delete what is on the hub. Ask the PM to delete it.', 'bad']);
+  }
+  // a draft the hub never had: gone from this phone with Undo, and the hub is never asked
+  let ctx = other('super', []);
+  assert.equal(await live.deleteRecord(ctx, 'task', 'del1'), true);
+  assert.deepEqual([ctx.order, toasts(ctx).at(-1)[1]], [['remove task del1'], 'Task T9-09 deleted']);
+  await offer(ctx).done(false);
+  assert.equal(ctx.sync.calls.length, 0);
+  // the PM's own phone not signed in to the office (a crew phone as far as the app knows): no purge without the passcode
+  ctx = mk({ role: 'crew', sync: mkSync({ onHub: () => true }) });
   assert.equal(await live.deleteRecord(ctx, 'task', 'del1'), false);
   assert.deepEqual([ctx.removed.length, ctx.sync.calls.length], [0, 0]);
-  // unknown record, unknown kind: no question, no change
-  ctx = mkCtx({ tasks: () => [t] });
+  // an unknown record; hours: nothing happens
+  ctx = mk();
   assert.equal(await live.deleteRecord(ctx, 'task', 'nope'), false);
   assert.equal(await live.deleteRecord(ctx, 'shift', 'del1'), false, 'hours are removed on the Crew hours screen, not here');
-  // says no
-  const asked = [];
-  ctx = mkCtx({ tasks: () => [t], ask: async (msg, yes, tone) => { asked.push([msg, yes, tone]); return false; } });
-  assert.equal(await live.deleteRecord(ctx, 'task', 'del1'), false);
-  assert.equal(asked.length, 1);
-  assert.deepEqual([asked[0][1], asked[0][2]], ['Delete', 'danger']);
-  assert.match(asked[0][0], /Delete task T9-09\? This can't be undone\. It is also removed from the hub\./);
-  assert.deepEqual([ctx.removed.length, ctx.sync.calls.filter(c => c[0] === 'purge').length], [0, 0]);
-  // yes, with a hub: purge, then remove
-  const order = [];
-  const sync = mkSync({ async purge(kind, key) { order.push('purge ' + kind + ' ' + key); return { ok: true, rev: 3 }; } });
-  ctx = mkCtx({ tasks: () => [t], sync, remove: async (k, key) => { order.push('remove ' + k + ' ' + key); return true; } });
+  // with a hub: off this phone at once, the toast says the hub copy goes too and offers Undo; no purge yet
+  ctx = mk();
   assert.equal(await live.deleteRecord(ctx, 'task', 'del1'), true);
-  assert.deepEqual(order, ['purge task del1', 'remove task del1']);
+  assert.deepEqual(ctx.order, ['remove task del1']);
+  assert.match(toasts(ctx).at(-1)[1], /^Task T9-09 deleted\. It is also removed from the hub\.$/);
+  assert.equal(typeof offer(ctx).undo, 'function');
+  assert.equal(ctx.sync.calls.filter(c => c[0] === 'purge').length, 0, 'nothing goes to the hub while Undo is offered');
+  assert.deepEqual(purges(ctx), [['task', 'del1', NOW + 6000]], 'DATA-09: the purge is stored before the sheet leaves, due when the Undo runs out, so closing the app does not lose it');
+  assert.equal(ctx.sync.calls[0][0], 'purgeLater');
   assert.ok(ctx.calls.some(c => c[0] === 'render'));
-  // the hub says no (offline): nothing is deleted anywhere
-  const down = mkSync({ async purge() { return { ok: false, error: 'offline', message: 'No signal.' }; } });
-  ctx = mkCtx({ tasks: () => [t], sync: down });
-  assert.equal(await live.deleteRecord(ctx, 'task', 'del1'), false);
-  assert.equal(ctx.removed.length, 0);
-  assert.deepEqual(toasts(ctx)[0].slice(1), ['No signal.', 'bad']);
-  // no hub: this phone only, and the question does not mention a hub
-  const q = [];
-  ctx = mkCtx({ tasks: () => [t], reports: () => [report({ date: '2026-10-17' })], sync: mkSync({ hubStatus: () => ({ state: 'off' }) }), ask: async m => (q.push(m), true) });
+  await offer(ctx).done(false); // the 6 seconds are over
+  assert.deepEqual(ctx.sync.calls.filter(c => c[0] === 'purge'), [['purge', 'task', 'del1']]);
+  assert.deepEqual(ctx.order, ['remove task del1'], 'and it stays gone');
+  // Undo: back on this phone, and the hub is never asked
+  ctx = mk();
+  await live.deleteRecord(ctx, 'task', 'del1');
+  offer(ctx).undo();
+  await offer(ctx).done(true);
+  assert.deepEqual([ctx.order, ctx.sync.calls.filter(c => c[0] === 'purge').length], [['remove task del1', 'put back'], 0]);
+  assert.deepEqual(purges(ctx), [['task', 'del1', NOW + 6000], ['task', 'del1', 0]], 'the Undo takes the stored purge back');
+  // the hub says no (offline): it comes back on this phone too, and the PM is told
+  ctx = mk({ sync: mkSync({ async purge() { return { ok: false, error: 'offline', message: 'No signal.' }; } }) });
+  await live.deleteRecord(ctx, 'task', 'del1');
+  await offer(ctx).done(false);
+  assert.deepEqual(ctx.order, ['remove task del1', 'put back']);
+  assert.deepEqual(toasts(ctx).at(-1).slice(1, 3), ['No signal.', 'bad']);
+  assert.deepEqual(purges(ctx).at(-1), ['task', 'del1', 0], 'put back, so nothing is left to purge later');
+  // no hub: this phone only, and the toast does not mention a hub
+  ctx = mk({ reports: () => [report({ date: '2026-10-17' })], sync: mkSync({ hubStatus: () => ({ state: 'off' }) }) });
   assert.equal(await live.deleteRecord(ctx, 'report', '2026-10-17'), true);
   assert.deepEqual(ctx.removed, [['report', '2026-10-17']]);
-  assert.ok(!/hub/.test(q[0]) && /report/.test(q[0]));
+  assert.ok(!/hub/.test(toasts(ctx).at(-1)[1]) && /report/.test(toasts(ctx).at(-1)[1]));
+  await offer(ctx).done(false);
   assert.equal(ctx.sync.calls.length, 0);
   // a superintendent's hub key cannot purge: treated as no hub for the PM's own phone
   const superKey = mkSync();
   superKey.status.role = 'super';
-  ctx = mkCtx({ tasks: () => [t], sync: superKey, ask: async m => (q.push(m), true) });
+  ctx = mk({ sync: superKey });
   await live.deleteRecord(ctx, 'task', 'del1');
+  await offer(ctx).done(false);
   assert.equal(superKey.calls.filter(c => c[0] === 'purge').length, 0);
 });
 
@@ -738,6 +851,47 @@ test('connect: both boxes first, errors stay on the form, success redraws', () =
   assert.ok(names(ctx.calls).includes('render'));
   assert.equal(toasts(ctx).at(-1)[1], 'Connected as Project manager');
 }));
+// The real sync engine (sync.mjs makeSync) on a fake hub that answers every request with `answer` (or throws).
+const realSync = async (answer, settings) => {
+  const { makeSync } = await load('sync.mjs'), m = new Map(settings ? [['schwab.settings', JSON.stringify(settings)]] : []);
+  const storage = { get: (k, fb) => (m.has(k) ? JSON.parse(m.get(k)) : fb), set: (k, v) => !!m.set(k, JSON.stringify(v)) };
+  return makeSync({ storage, now: () => NOW, ensureDevice: async () => '', timers: { set: () => 0, clear: () => {} },
+    fetchImpl: async () => { if (!answer) throw new TypeError('Failed to fetch'); return { status: 200, json: async () => ({ now: NOW, rev: 0, ...answer }) }; } });
+};
+const connectForm = sync => withDoc({ hubUrl: { value: 'https://script.google.com/macros/s/X/exec' }, hubKey: { value: 'c'.repeat(32) }, hubErr: { textContent: '' } }, async () => {
+  await live.act(mkCtx({ sync }), 'hubConnect', { dataset: {}, disabled: false });
+  return globalThis.document.getElementById('hubErr').textContent;
+});
+test('OWNER3-02: an office phone never runs as a crew phone on the hub unawares: Connect refuses the crew key, and a signed-in crew phone says so on Live and Tasks', async () => {
+  const sync = await realSync({ ok: true, role: 'crew' });
+  assert.match(await connectForm(sync), /^That is the crew key: crew phones join with the crew invite\. On this phone, paste the PM key/);
+  assert.equal(sync.hubStatus().state, 'off', 'refused before anything is saved');
+  // a superintendent who joined with a crew invite, then signed in with the office passcode
+  const crew = mkSync({ onHub: () => false });
+  crew.status.role = 'crew';
+  const html = live.liveView(mkCtx({ role: 'super', sync: crew, tasks: () => [task({ sentAt: NOW - min(1) })] }));
+  assert.match(html, /This phone is on the hub as a crew phone.*Ask the PM for the superintendent invite and open it on this phone/s);
+  assert.ok(html.includes('Not on the hub yet') && !/Sent (just now|1 min ago)/.test(html), 'a sheet the hub does not have is never "Sent"');
+  assert.match(live.crewKeyNote(mkCtx({ role: 'pm', sync: crew })), /connect again with the PM key/);
+  assert.deepEqual([live.crewKeyNote(mkCtx({ role: 'super' })), live.crewKeyNote(mkCtx({ role: 'crew', sync: crew }))], ['', ''], 'not for a phone the hub knows as the office, nor one signed out');
+  assert.match(live.liveView(mkCtx({ tasks: () => [task({ sentAt: NOW - min(1) })], sync: mkSync({ onHub: () => true }) })), /Sent 1 min ago/);
+});
+test('GATE2-OWNER-01: a phone set to Project manager connects with the PM key only, also after a Disconnect, and a refusal changes nothing', async () => {
+  const answer = { ok: true, role: 'super' }, sync = await realSync(answer, { role: 'Project manager', me: 'Pat PM' });
+  const refused = /^That is not the PM key\. This phone is set to Project manager, so it connects only with the PM key/;
+  assert.match(await connectForm(sync), refused, 'the superintendent key');
+  assert.deepEqual([sync.hubStatus().state, sync.hubStatus().role], ['off', ''], 'refused before anything is saved');
+  answer.role = 'pm'; assert.equal(await connectForm(sync), '', 'the PM key connects');
+  sync.disconnect(); answer.role = 'super';
+  assert.match(await connectForm(sync), refused, 'after a Disconnect too');
+  answer.role = 'crew'; assert.match(await connectForm(sync), refused, 'and the crew key');
+  assert.deepEqual([sync.hubStatus().state, sync.hubStatus().role], ['off', '']);
+});
+test('OWNER3-07: Connect that cannot reach the hub names the deployment\'s access setting; a crew invite with no signal does not', async () => {
+  assert.match(await connectForm(await realSync(null)), /Check the signal and try again\. If it still fails, check that the hub deployment is set to Who has access: Anyone\./);
+  const r = await (await realSync(null)).joinFrom({ v: 1, kind: 'join', role: 'crew', crew: 'Crew A', hub: { url: 'https://script.google.com/macros/s/X/exec', key: 'c'.repeat(32) } });
+  assert.equal(r.message, 'That did not work. Try again.');
+});
 test('disconnect and rotate ask first', async () => {
   let ctx = mkCtx({ ask: async () => false });
   await live.act(ctx, 'hubDisconnect', { dataset: {} });
@@ -748,6 +902,28 @@ test('disconnect and rotate ask first', async () => {
   await live.act(ctx, 'hubRotate', { dataset: { v: 'super' } });
   await live.act(ctx, 'hubRotate', { dataset: { v: 'pm' } });
   assert.deepEqual(ctx.sync.calls, [['disconnect'], ['rotate', 'super'], ['rotate', 'crew']], 'a role it does not know is the crew key, never the PM key');
+});
+test('PHONE-UX-16: the PM\'s Disconnect says the PM key was shown only once, offers to copy it, and names resetPmKey', async () => {
+  const asked = [], copied = [];
+  Object.defineProperty(globalThis.navigator, 'clipboard', { configurable: true, value: { writeText: async t => { copied.push(t); } } });
+  try {
+    let pick = 'copy';
+    const ctx = mkCtx({ choose: async (m, opts) => { asked.push([m, opts.map(o => o[1])]); return pick; } });
+    ctx.S.hubKey = KEY;
+    await live.act(ctx, 'hubDisconnect', { dataset: {} });
+    assert.match(asked[0][0], /PM key, which was shown only once\. Copy it first\. Without it, the hub owner must run resetPmKey/);
+    assert.deepEqual(asked[0][1], ['Copy the PM key', 'Disconnect']);
+    assert.deepEqual([copied, ctx.sync.calls], [[KEY], []], 'Copy copies the key and keeps the phone connected');
+    assert.equal(toasts(ctx).at(-1)[1], 'PM key copied. Keep it somewhere safe, not in a shared chat.');
+    pick = true;
+    await live.act(ctx, 'hubDisconnect', { dataset: {} });
+    assert.deepEqual(ctx.sync.calls, [['disconnect']]);
+    // a superintendent or crew phone has no such key to lose: the short question
+    const sup = mkSync(); sup.status.role = 'super';
+    const said = [], c2 = mkCtx({ sync: sup, role: 'super', ask: async m => { said.push(m); return false; } });
+    await live.act(c2, 'hubDisconnect', { dataset: {} });
+    assert.deepEqual([said, sup.calls], [['Disconnect this phone from the hub? Your work stays on this phone.'], []]);
+  } finally { delete globalThis.navigator.clipboard; }
 });
 test('archive: a real date, at least 30 days back, asked first', () => withDoc({ recArch: { value: '' } }, async () => {
   const box = globalThis.document.getElementById('recArch'), ctx = mkCtx(), el = { dataset: {} };
@@ -807,6 +983,25 @@ test('older records: a hub error is shown, and the button stays so it can be tri
   assert.match(html, /role="alert">No signal\./);
   assert.match(html, /data-act="recOlder" data-kind="reports">Load more/);
 });
+test('older records keep every task and report visible after a full 200-record page', async () => {
+  for (const [kind, sub] of [['tasks', 'sheets'], ['reports', 'reports']]) {
+    live.resetUi();
+    const items = Array.from({ length: 201 }, (_, i) => {
+      const date = lib.addDays('2025-01-01', i), label = `OLDER-${i}`;
+      return kind === 'tasks' ? lib.normTask({ uid: label, id: label, date }) : lib.normReport({ date, super: label, updatedAt: 1 });
+    });
+    const pages = [{ ok: true, items: items.slice(0, 200), cursor: '202' }, { ok: true, items: items.slice(200), cursor: '' }];
+    const ctx = mkCtx({ sync: mkSync({ records: async () => pages.shift() }) });
+    live.recordsView(ctx, sub);
+    await live.act(ctx, 'recOlder', { dataset: { kind } });
+    await live.act(ctx, 'recOlder', { dataset: { kind } });
+    const html = live.recordsView(ctx, sub);
+    assert.equal((html.match(/class="rec-old"/g) || []).length, 201, kind);
+    for (let i = 0; i < 201; i++) assert.ok(html.includes(`OLDER-${i}<`), `${kind}: record ${i} is visible`);
+    assert.match(html, /That is everything the hub has\./);
+    assert.doesNotMatch(html, /data-act="recOlder"/);
+  }
+});
 test('exportData merges what the hub has with this phone, this phone winning, reports only if touched', () => {
   const mine = task({ uid: 'm1', scope: 'mine' }), theirs = task({ uid: 'm1', scope: 'hub copy' }), other = task({ uid: 'm2' });
   const ctx = mkCtx({ tasks: () => [mine], shifts: () => [shift({ id: 's1' })], reports: () => [report(), lib.normReport({ date: '2026-10-01' })] });
@@ -838,6 +1033,27 @@ test('messageSheet and reviewSheet act on the sheet as it is now', async () => {
     await live.act(ctx, 'liveReview', { dataset: { u: 'live1' } });
     assert.match(opened[1].innerHTML, /Review T1019-01/);
     assert.match(opened[1].innerHTML, /data-r="Accepted"/);
+  } finally { globalThis.document = prev; globalThis.location = prevLoc; }
+});
+
+test('Message says sent only once the hub has it: a draft\'s goes with the sheet, one with no signal waits on this phone (PHONE-UX-06)', async () => {
+  const hubHas = new Set(), sync = mkSync({ replyOnHub: t => hubHas.has(t?.uid), async cycle() { sync.calls.push(['cycle']); if (sync.up) hubHas.add('s1'); return sync.status; } });
+  let tasks = [task({ uid: 'd1', sentAt: 0 }), task({ uid: 's1', id: 'T1019-02' })];
+  const ctx = mkCtx({ sync, tasks: () => tasks, saveTask: t => { tasks = tasks.map(x => (x.uid === t.uid ? t : x)); } });
+  const els = new Map(), el = sel => els.get(sel) || els.set(sel, { focus() {}, value: '', hidden: false }).get(sel);
+  const prev = globalThis.document, prevLoc = globalThis.location;
+  globalThis.location = { hash: '#live' };
+  globalThis.document = { getElementById: () => null, querySelector: () => null, body: { append() {} },
+    createElement: () => ({ innerHTML: '', dataset: {}, style: {}, firstElementChild: { append() {}, focus() {} }, addEventListener() {}, showModal() {}, close() {}, querySelector: el, querySelectorAll: () => [] }) };
+  const send = async (u, text) => { els.clear(); await live.act(ctx, 'liveMsg', { dataset: { u } }); el('textarea').value = text; await el('[data-send]').onclick(); return toasts(ctx).at(-1).slice(1); };
+  try {
+    assert.deepEqual(await send('d1', 'Meet at the gang box'), ['Message saved. It goes to Crew A with the sheet when you tap Send to crew.', undefined], 'a draft never reaches a crew phone');
+    assert.deepEqual(await send('s1', 'Stop at grid line 7'), ['Message saved on this phone. It goes to Crew A when the hub can be reached.', 'bad'], 'no signal: not sent');
+    const html = live.liveView(ctx);
+    assert.ok(html.includes('Message goes out with the sheet') && html.includes('Message not sent yet') && !html.includes('Message sent'), 'the cards claim nothing either');
+    sync.up = true;
+    assert.deepEqual(await send('s1', 'Stop at grid line 7'), ['Message sent to Crew A', ''], 'sent once the hub took it');
+    assert.match(live.liveView(ctx), /Message sent just now/);
   } finally { globalThis.document = prev; globalThis.location = prevLoc; }
 });
 
@@ -892,9 +1108,20 @@ test('On site and the activity feed name people as the roster has them now, with
   ctx.sync.data.events = [{ rev: 2, ts: NOW - min(5), who: 'Jose L', role: 'crew', kind: 'clock.in', text: '', ref: 'o1' }, { rev: 1, ts: NOW - min(9), who: 'Jose L', role: 'crew', kind: 'clock.in', text: '', ref: 'o2' }];
   const v = live.liveView(ctx);
   assert.match(v, /<b>José Luis<\/b>/);
-  assert.match(v, /Crew Bravo · 1/);
+  assert.match(v, /Crew Bravo · <span class="nw">since 7:30 AM/, 'on site under the crew as it is called now');
   assert.match(v, /José Luis clocked in <span class="feed-crew">· Crew A<\/span>/, 'the feed line follows the roster through the shift it is about');
   assert.match(v, /Jose L clocked in <span class="feed-crew">· Crew Bravo<\/span>/);
+});
+test('activity folding keeps distinct people with the same name separate and folds only a known person', () => {
+  const { ctx } = twoJoses();
+  ctx.sync.data.events = ['j3', 'j2', 'j1', 'missing1', 'missing2'].map((ref, i) => ({
+    rev: 5 - i, ts: NOW - min(i + 1), role: 'pm', kind: 'pm.add', who: 'Harrison', ref, text: 'PM added a shift for Jose L, 2026-10-13',
+  }));
+  const feed = live.liveView(ctx).split('<ol class="feed">')[1].split('</ol>')[0];
+  assert.equal((feed.match(/<li>/g) || []).length, 4, 'only the two shifts belonging to p1 fold together');
+  assert.match(feed, /PM added 2 shifts for Jose L <span class="feed-crew">· Crew A<\/span>/);
+  assert.match(feed, /PM added a shift for Jose L on [^<]+ <span class="feed-crew">· Crew B<\/span>/);
+  assert.doesNotMatch(feed, /PM added [3-5] shifts/);
 });
 test('sheets go by uid: two sheets with one number both show, each opens itself, both say so; a shift opens the sheet it was on', () => {
   const a = task({ uid: 'ua', id: 'T1019-01', crew: 'Crew A' }), b = task({ uid: 'ub', id: 'T1019-01', crew: 'Crew B' }), c = task({ uid: 'uc', id: 'T1019-02' }), old = task({ uid: 'uo', id: 'T1019-03', date: '2026-10-12' });
@@ -909,6 +1136,12 @@ test('sheets go by uid: two sheets with one number both show, each opens itself,
   assert.deepEqual([...feed.matchAll(/href="#task\/(\w+)\//g)].map(m => m[1]), ['ub', 'uc']);
   assert.match(feed, /Mike started T1019-01/);
   assert.doesNotMatch(feed, /started ub/, 'a uid is never shown as the number');
+  ctx.sync.data.events = [{ rev: 5, ts: NOW, kind: 'task.created', who: 'Dana', ref: 'gone7', text: '' }, { rev: 4, ts: NOW, kind: 'task.created', who: 'Dana', ref: 'unum', text: '' }];
+  const nonum = task({ uid: 'unum', id: '' });
+  const feed2 = live.liveView({ ...ctx, tasks: () => [a, b, c, old, nonum] }).split('class="feed"')[1];
+  assert.match(feed2, /Dana created a task sheet/, 'a sheet not on this phone: no uid');
+  assert.match(feed2, /Dana created New task/, 'a sheet with no number yet');
+  assert.doesNotMatch(feed2, /gone7|created unum/);
   const s = shift({ id: 'h1', who: 'Mike R', date: '2026-10-12', out: '15:00', tasks: [{ uid: 'uo', id: 'T1019-09' }, { uid: 'gone', id: 'T1019-07' }] });
   const pctx = mkCtx({ tasks: () => [old], shifts: () => [s] });
   live.recordsView(pctx, 'people'); // on the By person tab first, as a tap would be
@@ -924,4 +1157,24 @@ test('live.mjs imports where there is no DOM and writes no em dashes', () => {
   assert.equal(r.status, 0, r.stderr);
   assert.equal(r.stdout.trim(), 'function');
   for (const f of [path.join(ROOT, 'live.mjs'), __filename]) assert.ok(!fs.readFileSync(f, 'utf8').includes(String.fromCharCode(0x2014)), `${path.basename(f)} has an em dash`);
+});
+
+test('Settings PM on a superintendent key shows a localized read-only warning even though nothing is queued', () => {
+  const sync = mkSync(); sync.status.role = 'super'; sync.status.pending = 0;
+  const ctx = mkCtx({ role: 'super', sync }); ctx.S.role = 'Project manager';
+  assert.match(live.crewKeyNote(ctx), /not connected with the PM key/);
+  assert.match(live.crewKeyNote(ctx), /PM answers and crew hours are read-only/);
+  lib.setLang('es');
+  assert.match(live.crewKeyNote(ctx), /solo lectura/);
+  lib.setLang('en');
+  sync.status.role = 'crew'; ctx.role = 'pm';
+  assert.match(live.crewKeyNote(ctx), /Sheets, reports and settings made here stay on this phone/, 'a crew key keeps the broader local-only office-work warning');
+  sync.status.role = 'pm'; assert.equal(live.crewKeyNote(ctx), '', 'actual PM key needs no warning');
+  sync.status.state = 'off'; sync.status.role = ''; assert.equal(live.crewKeyNote(ctx), '', 'no-hub workflow needs no warning');
+});
+
+test('deleteRecord: a PM delete whose pending purge cannot be stored says so, so the PM keeps the app open through the Undo (D4S-06)', async () => {
+  const t = task({ uid: 'del1', id: 'T9-09' }), ctx = mkCtx({ tasks: () => [t], sync: mkSync({ purgeLater() { return false; } }) });
+  assert.equal(await live.deleteRecord(ctx, 'task', 'del1'), true);
+  assert.deepEqual(toasts(ctx).at(-1).slice(1, 3), ['Task T9-09 deleted. It is also removed from the hub. This phone is out of space: keep the app open until Undo is gone, or the hub keeps it.', 'bad']);
 });

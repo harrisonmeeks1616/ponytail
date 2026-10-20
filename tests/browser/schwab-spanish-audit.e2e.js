@@ -8,11 +8,10 @@
 //   --only runs the screens whose name contains the text; --list prints the screen names; --dump prints every string
 //   with how it was accounted for (to check the audit itself). AUDIT_JSON=path moves the JSON copy of the results
 //   (default: $TMPDIR/schwab-spanish-audit.json).
-//   --hub adds the hub screens (Live, Records, joining, hub settings). They are for when the hub (docs/schwab/sync.mjs,
-//   live.mjs) is wired into the app, which it is not yet, and they need a local hub dev server (HUBDEV, default
-//   http://127.0.0.1:8780/). Their phones use the address https://script.google.com/macros/s/TESTHUB/exec, which the
-//   audit forwards to the local hub; a translation comes back as the typed token with ZQtr in front (typed data, so it
-//   is accounted for like any typed text).
+//   --hub adds the hub screens (Live, Records, joining, hub settings). They need a local hub dev server running
+//   (node tests/browser/hub-dev-server.js 8780; HUBDEV, default http://127.0.0.1:8780/). Their phones use the address
+//   https://script.google.com/macros/s/TESTHUB/exec, which the audit forwards to the local hub; a translation comes back
+//   as the typed token with ZQtr in front (typed data, so it is accounted for like any typed text).
 //
 // Puts the app in Spanish mode, visits every screen and state as the right role, and collects every
 // piece of text a person could see or hear: visible text nodes; the attributes aria-label, placeholder,
@@ -497,6 +496,34 @@ async function officeBoardNothingOpen(h) {
   await h.step('new task: send without a crew', async () => { await click(p, '[data-act=sendTask]'); await h.after(p, 'Task sheet, new and empty (Assign)'); });
 }
 
+async function upcomingScreens(h) {
+  // The 7 days after the board's day: tomorrow and next Wednesday have sheets, the days between fold into quiet lines.
+  const ahead = [task({ uid: 'zqup1', id: 'T1015-01', date: TOMO, status: '', aStart: '', aStop: '', delay: 0 }), task({ uid: 'zqup2', id: 'T1021-01', date: NEXTWK, crew: 'Crew B', status: 'Complete', review: 'Accepted' })];
+  const p = await h.open({ role: 'super', tasks: [...boardTasks('mine'), ...ahead], hash: `#upcoming/${TODAY}` });
+  await h.snap(p, 'Upcoming, with sheets');
+  await nav(p, '#upcoming/2026-10-25'); await h.snap(p, 'Upcoming, empty week'); // the button names the day
+  await nav(p, `#day/${TODAY}`); await click(p, '#titleMore [data-act=boardMenu]'); await click(p, 'dialog [data-act=upcoming]'); await h.after(p, 'Upcoming, with sheets'); // from the board's menu
+  const q = await h.open({ role: 'super', tasks: [task({ date: TODAY })], hash: `#upcoming/${TODAY}` });
+  await h.snap(q, 'Upcoming, empty week'); // from today: "for tomorrow"
+}
+
+async function quickFindScreens(h) {
+  // Quick Find: the hint on an empty box, the sheets opened last, results in every group (sheets with Show all, people,
+  // days, a daily report), and no match.
+  const p = await h.open({ role: 'super', tasks: [...boardTasks('mine'), ...yesterdayOpen()], reports: { [YEST]: report({ date: YEST }) }, settings: { crews: IDCREWS, people: ROSTER } });
+  const find = async (q, screen) => { await p.fill('dialog.find input', q); await settle(p, 250); await h.snap(p, screen); };
+  await click(p, '#findBtn'); await h.snap(p, 'Quick Find, empty box');
+  await esc1(p); await click(p, '.board .tcard'); await nav(p, `#day/${TODAY}`); // a sheet opened: it is a recent one now
+  await click(p, '#findBtn'); await h.snap(p, 'Quick Find, recent sheets');
+  await find('zqpull12awg', 'Quick Find, results'); // whole typed tokens: a match is bold, so part of one would read as a word of its own
+  await click(p, 'dialog.find .find-all'); await h.after(p, 'Quick Find, results');
+  await find('zqjose', 'Quick Find, results');
+  await find('mañana', 'Quick Find, days');
+  await find('ayer', 'Quick Find, days');
+  await find('ZQnada', 'Quick Find, no match');
+  await esc1(p);
+}
+
 async function officeTask(h) {
   const full = task({ uid: 'zqfull', id: 'T1014-21', review: 'Follow-up needed', reviewer: 'ZQDana', followUp: 'ZQfollowup' });
   const working = task({ uid: 'zqwork', id: 'T1014-23', status: '', aStop: '', delay: 0, resultAt: 0 });
@@ -790,6 +817,10 @@ async function crewHoursVariants(h) {
   p = await h.open({ role: 'pm', crewHours: closedShifts(), hash: `#clock/${TODAY}` });
   await h.snap(p, 'Crew hours, all shifts closed');
   await click(p, '[data-act=hSend]'); await h.after(p, 'Crew hours, all shifts closed');
+  // A day added by hand and the worker's own taps for it: the row says both count, and Send to accountant asks first.
+  p = await h.open({ role: 'pm', crewHours: [...closedShifts(), shift({ who: 'ZQRay', date: TODAY, in: '06:45', out: '15:15', device: 'zqdev5' })], hash: `#clock/${TODAY}` });
+  await h.snap(p, 'Crew hours, a day added by hand and from the phone');
+  await click(p, '[data-act=hSend]'); await p.waitForSelector('dialog .ask'); await h.snap(p, 'Accountant warning ask, a day added by hand and from the phone'); await click(p, 'dialog [data-a="0"]');
   // Weeks with nothing in them.
   await nav(p, `#clock/${LASTWK}`); await h.snap(p, 'Crew hours, empty week (past)'); // no Send to accountant: Add a shift is the one action
   await nav(p, `#clock/${NEXTWK}`); await h.snap(p, 'Crew hours, empty week (ahead)');
@@ -987,7 +1018,7 @@ async function hubSettings(h) {
   await click(p, 'dialog [data-crew="Crew A"]'); await p.waitForSelector('dialog .linkbox'); await h.snap(p, 'Share sheet: hub invite for a crew'); await esc1(p);
   await click(p, '[data-act=hubInvite][data-v=super]'); await p.waitForSelector('dialog .linkbox'); await h.snap(p, 'Share sheet: hub invite for the superintendent', { office: true }); await esc1(p);
   for (const v of ['crew', 'super']) { await click(p, `[data-act=hubRotate][data-v=${v}]`); await p.waitForSelector('dialog .ask'); await h.snap(p, 'Replace a hub key ask'); await click(p, 'dialog [data-a="0"]'); }
-  await click(p, '[data-act=hubDisconnect]'); await p.waitForSelector('dialog .ask'); await h.snap(p, 'Disconnect from the hub ask'); await click(p, 'dialog [data-a="0"]');
+  await click(p, '[data-act=hubDisconnect]'); await p.waitForSelector('dialog .ask'); await h.snap(p, 'Disconnect from the hub ask'); await click(p, 'dialog [data-a="1"]'); await h.after(p, 'Settings, the PM key copied'); // the PM's: copy the key first
   const c = await h.open({ role: 'crew', hash: '#hub' });
   await h.snap(c, 'Hub page, crew phone, not connected');
   // The hub down, and a key it refuses: the status line, the dot and the message.
@@ -1018,6 +1049,9 @@ async function liveBoard(h) {
   await h.step('live: refresh', async () => { await click(p, '[data-act=liveRefresh]'); await settle(p, 900); await h.after(p, 'Live, with data'); });
   const s = await h.open({ role: 'super', hash: '#live', hub: hubOf('super'), tasks: hubData().tasks });
   await synced(s); await h.snap(s, 'Live, superintendent');
+  await h.step('a sheet the hub has: the superintendent cannot delete it', async () => {
+    await nav(s, '#task/zqh0/assign'); await click(s, '#titleMore [data-act=taskMenu]'); await click(s, 'dialog [data-act=del]'); await h.after(s, 'Delete on the hub, superintendent');
+  });
   const none = await h.open({ role: 'pm', hash: '#live', tasks: hubData().tasks.slice(0, 3) });
   await h.snap(none, 'Live, no hub');
   const empty = await h.open({ role: 'pm', hash: '#live', now: '2026-12-01T10:00:00Z' });
@@ -1035,15 +1069,16 @@ async function recordsScreens(h) {
   await nav(p, '#records/sheets'); await h.snap(p, 'Records, task sheets');
   for (const v of ['review', 'Blocked', 'Accepted', 'Follow-up needed']) { await click(p, `[data-act=recFilter][data-f=status][data-v="${v}"]`); await h.snap(p, 'Records, task sheets, filtered'); }
   await click(p, '[data-act=recFilter][data-f=status][data-v=""]'); await click(p, '[data-act=recFilter][data-f=crew][data-v="Crew B"]'); await h.snap(p, 'Records, task sheets, filtered');
+  await click(p, '[data-act=recFilter][data-f=crew][data-v=""]'); // all crews again: this phone's own sheets have no Crew B one, so the sheet menu below needs the filter off (else it waits on what earlier screens left on the hub)
   await p.fill('#recQ', 'zzzz'); await settle(p); await h.snap(p, 'Records, task sheets, no match'); await p.fill('#recQ', ''); await settle(p);
   await click(p, '[data-act=recOlder]'); await settle(p, 900); await openAll(p); await settle(p, 600); await h.snap(p, 'Records, older task sheets from the hub');
   await click(p, '.rec-more[data-kind=task]'); await p.waitForSelector('dialog [data-del]'); await h.snap(p, 'Records, sheet menu');
-  await click(p, 'dialog [data-del]'); await p.waitForSelector('dialog .ask'); await h.snap(p, 'Delete a sheet ask, on the hub'); await click(p, 'dialog [data-a="0"]');
+  await click(p, 'dialog [data-del]'); await p.waitForSelector('#toast .toast-undo'); await h.snap(p, 'Sheet deleted, with Undo, on the hub'); await click(p, '#toast .toast-undo'); // gone at once with Undo, no ask (DESIGN.md)
   await nav(p, '#records/reports'); await h.snap(p, 'Records, reports');
   await p.fill('#recQ', 'zzzz'); await settle(p); await h.snap(p, 'Records, reports, no match'); await p.fill('#recQ', ''); await settle(p);
   await click(p, '[data-act=recOlder]'); await settle(p, 900); await openAll(p); await h.snap(p, 'Records, older reports from the hub');
   await click(p, '.rec-more[data-kind=report]'); await p.waitForSelector('dialog [data-del]'); await h.snap(p, 'Records, report menu');
-  await click(p, 'dialog [data-del]'); await p.waitForSelector('dialog .ask'); await h.snap(p, 'Delete a report ask, on the hub'); await click(p, 'dialog [data-a="0"]');
+  await click(p, 'dialog [data-del]'); await p.waitForSelector('#toast .toast-undo'); await h.snap(p, 'Report deleted, with Undo, on the hub'); await click(p, '#toast .toast-undo');
   await click(p, '[data-act=recStats]'); await settle(p, 900); await h.snap(p, 'Records, hub storage');
   await p.fill('#recArch', TODAY); await click(p, '[data-act=recArchive]'); await h.after(p, 'Records, archive');
   await p.fill('#recArch', '2026-07-01'); await click(p, '[data-act=recArchive]'); await p.waitForSelector('dialog .ask'); await h.snap(p, 'Archive older records ask'); await click(p, 'dialog [data-a="0"]');
@@ -1077,6 +1112,10 @@ async function joinScreens(h) {
   const r = await h.open({ role: 'crew' }); // a "they pick" invite carries the job's crews
   await nav(r, '#p=' + await invite({ crews: ['ZQLighting', 'ZQPower'] })); await r.waitForSelector('dialog [data-join]');
   await h.snap(r, 'Join sheet, crews from the invite');
+  const n = await h.open({ role: 'crew' }); // a crew invite carries its people: a name to tap, and a typed one the list lacks is questioned once
+  await nav(n, '#p=' + await invite({ crew: 'Crew A', people: [{ name: 'ZQAna', crew: 'Crew A' }, { name: 'ZQJose', crew: 'Crew A' }] })); await n.waitForSelector('dialog [data-who]');
+  await h.snap(n, 'Join sheet, names from the invite');
+  await n.fill('dialog [name=who]', 'ZQAnaRodriguez'); await click(n, 'dialog [data-join]'); await h.after(n, 'Join sheet, names from the invite'); // not on the crew list
   const own = await h.open({ role: 'pm', hub: hubOf('pm') }); // the PM opens the crew invite it just made
   await nav(own, '#p=' + await invite({ crew: 'Crew A' })); await h.after(own, 'Join: the PM phone opens its own invite');
   const s = await h.open({ role: 'super' });
@@ -1122,6 +1161,8 @@ const SCREENS = [
   ['Crew task sheets', crewTaskScreens],
   ['Office board', officeBoard],
   ['Office board, nothing open, new task', officeBoardNothingOpen],
+  ['Upcoming, full and empty', upcomingScreens],
+  ['Quick Find: empty, results, no match', quickFindScreens],
   ['Task sheet tabs, menus, asks, share', officeTask],
   ['Share sheet, long link', longLink],
   ['Task sheet with the review folder', officeTaskWithFolder],

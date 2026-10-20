@@ -42,7 +42,7 @@ const check = (ok, what) => { log(ok ? '  ok  ' : '  FAIL', what); if (!ok) fail
     const [dl] = await Promise.all([p.waitForEvent('download'), click()]);
     const file = OUT + dl.suggestedFilename();
     await dl.saveAs(file);
-    return execFileSync('pdftotext', ['-layout', file, '-']).toString();
+    return execFileSync('pdftotext', ['-enc', 'UTF-8', '-layout', file, '-']).toString();
   };
   // The emulated phone's real width: under iPhone emulation innerWidth grows to fit wide content, so it can't be the yardstick.
   const noSideScroll = p => p.evaluate(w => document.documentElement.scrollWidth <= w, p.viewportSize().width);
@@ -256,7 +256,7 @@ const check = (ok, what) => { log(ok ? '  ok  ' : '  FAIL', what); if (!ok) fail
   check(/East corridor T1014-01/.test(todayText) && /Crew A · Level 3/.test(todayText), 'Today card: crew, task, floor and area: ' + todayText.trim());
   await jose.click('#todayCard .tcard');
   await jose.waitForSelector('.brief');
-  check(/#task\//.test(jose.url()) && /Jose L \(you\), Luis M, Tre W/.test(await jose.textContent('.brief')) && await jose.isVisible('[data-act=sendResults]'), "tapping it opens the crew view, which marks him 'you'");
+  check(/#task\//.test(jose.url()) && /Jose L \(you\), Luis M, Tre W/.test(await jose.textContent('.tsheet .kv.info')) && await jose.isVisible('[data-act=sendResults]'), "tapping it opens the crew view, which marks him 'you'");
   await jose.goto(BASE + 'tasks.html#clock/2026-10-14');
   await jose.waitForSelector('[data-k="s.worker"]');
   check(jp.kind === 'hours' && jp.shifts.length === 1 && jp.shifts[0].who === 'Jose L' && jp.shifts[0].in === '06:58' && !('pin' in jp), 'clock-in text: the shift, the name, no office code');
@@ -403,7 +403,7 @@ const check = (ok, what) => { log(ok ? '  ok  ' : '  FAIL', what); if (!ok) fail
     await csvDl.saveAs(OUT + 'timesheet.csv'); await pdfDl.saveAs(OUT + 'timesheet.pdf');
     const csv = fs.readFileSync(OUT + 'timesheet.csv', 'utf8');
     check(csv.startsWith('\ufeffName,Crew,Date,Day,Clock in,Clock out,Hours,Tasks,Note\r\n') && csv.includes('Jose L,Crew A,2026-10-14,Wed,6:58 AM,3:31 PM,8.55,T1014-01,') && csv.includes('Ana P,Crew B,2026-10-13,Tue,7:00 AM,3:30 PM,8.50,,Edited by PM') && csv.includes('All crew,,,,,Week total,17.05,,'), 'CSV rows and totals, with crew and tasks');
-    const pdf = execFileSync('pdftotext', ['-layout', OUT + 'timesheet.pdf', '-']).toString();
+    const pdf = execFileSync('pdftotext', ['-enc', 'UTF-8', '-layout', OUT + 'timesheet.pdf', '-']).toString();
     check(/WEEKLY TIMESHEET/.test(pdf) && /H\.A\. Sack-Electrical · Sack Company-Electrical/.test(pdf) && /JOSE L · CREW A · 8\.55 HRS/.test(pdf) && /task T1014-01/.test(pdf) && /Pat PM/.test(pdf), 'PDF timesheet: company names, people with crews, tasks, totals, approved by');
   }
   await card('Ana P').locator('[data-act=hRename]').click();
@@ -466,7 +466,7 @@ const check = (ok, what) => { log(ok ? '  ok  ' : '  FAIL', what); if (!ok) fail
   await crew.screenshot({ path: OUT + '9-crew-es-320.png', fullPage: true });
   await pm.click('#langBtn');
   const esTabs = await tabNames(pm);
-  check(esTabs === 'Tareas | Horas | Reporte' && (await pm.textContent('#title')) === 'Horas de las cuadrillas', 'office tabs in Spanish, and the screen title: ' + esTabs);
+  check(esTabs === 'Tareas | Horas | Reporte' && (await pm.textContent('#title')) === 'Horas', 'office tabs in Spanish, and the screen title (as the tab says): ' + esTabs);
   await pm.click('#lockBtn');
   await pm.click('#officeTabs a[href^="#clock"]');
   await pm.waitForSelector('dialog .keypad');

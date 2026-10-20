@@ -10,6 +10,7 @@ import {
   toast, sheet, ask, sendSheet, pasteSheet, makePdf, savePdf, download, fileAway, dateBar, crewVar, letterhead, L, getLang, unlocked,
   nameKey, cleanName, people, findPerson, personById, crewById, addPerson, renamePerson, assignmentFor, taskLinks, deviceId, choose, screenHead, icon,
 } from './shared.mjs';
+import { hubStatus, cycle, fromText } from './sync.mjs';
 
 const obj = x => (x && typeof x === 'object' && !Array.isArray(x) ? x : {});
 export const loadReports = () => Object.fromEntries(Object.entries(obj(load(KEYS.reports, {}))).map(([d, r]) => [d, normReport(r)]));
@@ -17,11 +18,30 @@ const loadShifts = key => load(key, []).map(normShift).filter(Boolean);
 let R = loadReports(), MY = loadShifts(KEYS.hours), CREW = loadShifts(KEYS.crewHours);
 const open = new Set(['sum']);
 export const reloadReports = () => { R = loadReports(); MY = loadShifts(KEYS.hours); CREW = loadShifts(KEYS.crewHours); }; // the time clock too
+// What the hub screens read (live.mjs): the reports and the PM's timesheet as this page holds them.
+export const reportsNow = () => R, crewNow = () => CREW;
+// A report the PM deleted (live.mjs deleteRecord): gone from this phone at once; returns what puts it back (the Undo),
+// or null if this phone had none.
+export const dropReport = d => {
+  const was = R[d];
+  if (!was?.updatedAt) return null;
+  delete R[d];
+  persist();
+  return () => { if (!R[d]?.updatedAt) { R[d] = was; persist(); } };
+};
+// The field for typed report text: the app hands in live.mjs txField (a translated preview under it, with a hub); lang is
+// the language the report was typed in.
+let tf = (label, k, v, o) => field(label, k, v, o);
+export const setTextField = f => { tf = f; };
 const unsaved = () => toast(L("This phone wouldn't save. Open Settings and download a backup."), 'bad');
 // Only reports someone has touched get stored; browsing an empty day leaves nothing behind.
 const persist = () => save(KEYS.reports, Object.fromEntries(Object.entries(R).filter(([, r]) => r.updatedAt))) || unsaved();
 const keep = (key, list) => save(key, list) || unsaved();
 const isPM = S => S.role === 'Project manager';
+// A connected hub owns PM answers by its authenticated role; text-link-only phones keep their local workflow.
+const canEditPM = () => { const h = hubStatus(); return h.state === 'off' || h.role === 'pm'; };
+const pmReadOnly = () => L('PM answers are read-only with this hub key. Use the PM phone to update them.');
+const hoursReadOnly = () => L('Crew hours are read-only with this hub key. Connect with the PM key to add or change shifts.');
 // Daily reports of its own make this an office phone.
 export const hasReports = () => Object.values(R).some(r => r.updatedAt);
 const rep = (S, day) => (R[day] ||= normReport({
@@ -72,6 +92,10 @@ const h2 = c => (c / 100).toFixed(2);
 // The shift this phone is clocked in on. One open longer than any real shift (16 hours) was a missed
 // clock-out: the next tap starts a new shift, and the PM fills in the missing time.
 const onShift = (now = Date.now()) => MY.filter(s => !s.out && now - started(s) < 16 * 36e5).sort(byTime).at(-1);
+// The hub may answer, so a clock tap waits for its own round instead of opening a text: the last round went through, one is
+// running (the first one after the app opens too, while the last good time stored is from yesterday), or none has run yet.
+// After a round that failed (no signal, busy, a refused key) the text opens at once.
+const hubAnswers = () => { const h = hubStatus(); return h.state === 'live' || h.state === 'syncing' || (h.state === 'offline' && !h.message); };
 // The id the hub derives from this phone's secret (HUB.md, Identity); the older random id only until that exists.
 const deviceOf = S => deviceId() || S.device || ((S.device = uid()), save(KEYS.settings, S), S.device);
 const sheetsHere = () => load(KEYS.tasks, []).map(normTask).filter(t => t.uid);
@@ -137,7 +161,8 @@ function clockView(S) {
     <h3 class="section-h">${L('This week')}</h3>
     ${week.length ? `<div class="list kv clock-week">${week.map(row).join('')}</div>` : `<p class="hint">${L('No hours yet this week.')}</p>`}
     <p class="clock-total"><b class="out">${esc(L('Week total: {n} hrs', { n: h2(total(week)) }))}</b><span class="out">${esc(L('Last week: {n} hrs', { n: h2(total(last)) }))}</span></p>
-    <p class="hint">${L('Each Clock in and Clock out opens a text to the PM. Send it every time: it carries your last two weeks, so a missed text catches up. Only the PM can change hours.')}</p>`;
+    <p class="hint">${hubStatus().state === 'off' ? L('Each Clock in and Clock out opens a text to the PM. Send it every time: it carries your last two weeks, so a missed text catches up. Only the PM can change hours.')
+      : L('Clock in and Clock out go to the PM through the hub. With no signal, a text to the PM opens instead. Only the PM can change hours.')}</p>`;
   clearTimeout(cutoff); // redraw the moment the open shift turns into a missed clock-out
   if (on) cutoff = setTimeout(() => location.hash.startsWith('#clock') && go(location.hash.slice(1)), started(on) + 16 * 36e5 - Date.now() + 1000);
   tickClock();
@@ -162,22 +187,27 @@ async function sendMine(S, s, what) {
   sendSheet({ title: L('Send your hours to the PM'), url, text: `${text} Open the link on the PM's phone to log it.` });
 }
 
+// A day the PM entered whole by hand (with a clock-out) that s, a shift from a worker's phone, falls on: the same person's
+// day, by roster id when both shifts have one (two people may share a name), else by name. Both would count.
+const byHand = (log, s) => !!s.device && log.some(x => !x.gone && !x.device && x.out && x.date === s.date && (x.pid && s.pid ? x.pid === s.pid : nameKey(x.who) === nameKey(s.who)));
 // A worker's link opened on the PM's phone (at: when it was sent): new shifts are added, and what the PM
 // hasn't changed follows the worker's phone (a clock-out since; a name fixed in a newer text). A shift the PM
 // removed stays removed, and a link only speaks for shifts its own phone made. The person, crew and tasks are the
 // worker's too: a text only ever adds to them, so an older one opened late can't take one away. Returns what changed.
-export function importShifts(log, shifts, at = 0) {
+// hub: this phone is on a hub, where the hub and every text keep a worker's own taps (HUB.md, Worker rules).
+export function importShifts(log, shifts, at = 0, hub = false) {
   let added = 0, updated = 0, skipped = 0;
-  // The same person's day: by roster id when both shifts have one (two people may share a name), else by name.
-  const same = (a, b) => a.date === b.date && (a.pid && b.pid ? a.pid === b.pid : nameKey(a.who) === nameKey(b.who));
   for (const s of shifts) {
     if (!s.device) continue;
     const m = log.find(x => x.id === s.id);
     if (!m) {
-      // ponytail: the PM already added this person's day by hand (the texts never came), so the PM's entry
-      // stands and this one is filed as removed, never doubling the day. A real second shift that day is
-      // added back by hand; match on overlapping times instead if split shifts become common.
-      const twin = log.some(x => !x.gone && !x.device && same(x, s));
+      // ponytail: with no hub, the PM already added this person's whole day by hand (the texts never came), so the PM's
+      // entry stands and this one is filed as removed, never doubling the day. A real second shift that day is
+      // added back by hand; match on overlapping times instead if split shifts become common. A day the PM
+      // added with no clock-out is waiting for this phone's times: they are added for the PM to see. On a hub a
+      // removal here would reach the hub and take the real punches off the worker's own clock: they stay as a
+      // second row, flagged on Crew hours (byHand), for the PM to settle.
+      const twin = !hub && byHand(log, s);
       log.push({ ...s, at, edited: { who: false, in: false, out: false }, gone: twin });
       if (twin) skipped++; else added++;
       continue;
@@ -196,9 +226,10 @@ export function importShifts(log, shifts, at = 0) {
 }
 // Returns the latest day in the link, to open that week.
 export function openHours(data, S) {
+  if (!canEditPM()) { toast(hoursReadOnly(), 'bad'); return ''; }
   const inc = (Array.isArray(data.shifts) ? data.shifts : []).slice(0, 200).map(normShift).filter(Boolean);
   if (!inc.length) { toast(L('That link has no hours in it'), 'bad'); return ''; }
-  const { added, updated, skipped } = importShifts(CREW, inc, Number.isFinite(data.at) ? data.at : 0);
+  const { added, updated, skipped } = importShifts(CREW, inc, Number.isFinite(data.at) ? data.at : 0, hubStatus().state !== 'off');
   if (S) attachPeople(S, CREW);
   keep(KEYS.crewHours, CREW);
   const who = inc.at(-1).who || L('the crew');
@@ -228,8 +259,14 @@ export function attachPeople(S, shifts) {
   for (const s of shifts) { const p = !s.pid && whoIs(S, s); if (p) { s.pid = p.id; n++; } }
   return n;
 }
-// On this phone's own hours and the PM's timesheet; the app runs it when it loads settings.
-export const attachShifts = S => { if (attachPeople(S, CREW)) keep(KEYS.crewHours, CREW); if (attachPeople(S, MY)) keep(KEYS.hours, MY); };
+// On this phone's own hours and the PM's timesheet; the app runs it when it loads settings. The time clock's person is
+// workerId: a name the PM fixed in Settings (a rename keeps the id) becomes this phone's name, so the next tap stays theirs.
+// Typing another name in the box lets go of the id first (tasks.html), so this never takes a typed name back.
+export const attachShifts = S => {
+  const me = personById(S, S.workerId);
+  if (me && me.name !== S.worker) { S.worker = me.name; save(KEYS.settings, S); }
+  if (attachPeople(S, CREW)) keep(KEYS.crewHours, CREW); if (attachPeople(S, MY)) keep(KEYS.hours, MY);
+};
 // One timesheet per person, in name order, each with key (for the buttons) and pid. A person on S's roster shows under
 // the roster's current name, so a rename keeps their history together; else under the first spelling seen. The crew
 // is the latest shift's that names one (by the crew's current name), else the person's crew in S.
@@ -254,12 +291,13 @@ const crewStats = (week, S) => `<div class="stat"><b>${byPerson(week, undefined,
   <div class="stat"><b class="${week.some(s => !s.out) ? 'warn' : ''}">${week.filter(s => !s.out).length}</b><span>${L('Open shifts')}</span></div>`;
 
 function crewView(S, day) {
-  const mon = monday(day), week = weekOf(day), people = byPerson(week, undefined, S);
-  const time = (s, f) => `<label class="field${s.edited[f] ? ' edited' : ''}"><span>${f === 'in' ? L('In') : L('Out')}</span><input type="time" data-k="h.${s.id}.${f}" value="${s[f]}"></label>`;
+  const mon = monday(day), week = weekOf(day), people = byPerson(week, undefined, S), editable = canEditPM();
+  const time = (s, f) => `<label class="field${s.edited[f] ? ' edited' : ''}"><span>${f === 'in' ? L('In') : L('Out')}</span><input type="time" data-k="h.${s.id}.${f}" value="${s[f]}"${editable ? '' : ' disabled'}></label>`;
   const shiftRow = s => `<div class="shift${s.out ? '' : ' open'}"><div class="shift-top"><span class="shift-day"><b>${esc(niceDate(s.date))}</b>
       ${taskIds(s).length ? `<span class="hint">${esc(taskIds(s).length === 1 ? L('Task {id}', { id: taskIds(s)[0] }) : L('Tasks {ids}', { ids: taskIds(s).join(', ') }))}</span>` : ''}</span>
       <span class="out" data-out="shift" data-id="${s.id}">${shiftLine(s)}</span>
-      <button class="x" data-act="hDel" data-id="${s.id}" aria-label="${esc(L('Remove the {date} shift', { date: niceDate(s.date) }))}">✕</button></div>
+      ${editable ? `<button class="x" data-act="hDel" data-id="${s.id}" aria-label="${esc(L('Remove the {date} shift', { date: niceDate(s.date) }))}">✕</button>` : ''}</div>
+    <p class="clock-missed" data-out="twice" data-id="${s.id}"${byHand(week, s) ? '' : ' hidden'}>${L('You also entered this day by hand, and both count. If it is the same work, remove one.')}</p>
     <div class="grid two">${time(s, 'in')}${time(s, 'out')}</div></div>`;
   screenHead(L('Crew hours'), { more: 'hPmMenu',
     sub: `${mon === monday(today()) ? L('This week') : mon < today() ? L('Past week') : L('Week ahead')} · ${L('to {date}', { date: niceDate(addDays(mon, 6)) })}` });
@@ -268,11 +306,11 @@ function crewView(S, day) {
     ${people.map((p, i) => `<section class="card person"><div class="person-h"><div class="person-who"><h2>${esc(p.who)}</h2>${crewLine(S, p)}</div>
         <b class="total" data-out="who" data-i="${i}">${L('{n} hrs', { n: h2(p.hours) })}</b></div>
       <div class="shifts">${p.shifts.map(shiftRow).join('')}</div>
-      <div class="person-acts"><button class="link" data-act="hAdd" data-v="${esc(p.key)}">${esc(L('+ Add a shift for {name}', { name: p.who }))}</button>
-        <button class="link" data-act="hRename" data-v="${esc(p.key)}">${L('Rename')}</button></div></section>`).join('')
+      ${editable ? `<div class="person-acts"><button class="link" data-act="hAdd" data-v="${esc(p.key)}">${esc(L('+ Add a shift for {name}', { name: p.who }))}</button>
+        <button class="link" data-act="hRename" data-v="${esc(p.key)}">${L('Rename')}</button></div>` : ''}</section>`).join('')
     || `<div class="empty"><h2>${L('No hours logged this week')}</h2><p>${L("Each worker's Clock in and Clock out texts you a link. Tap it on this phone to log their hours here.")}</p>
-      <button class="btn primary" data-act="hAdd">${L('Add a shift')}</button></div>`}
-    <p class="hint">${L("Only this phone changes hours. Times you change are marked edited and stay as you set them when that worker's next text comes in.")}</p>`;
+      ${editable ? `<button class="btn primary" data-act="hAdd">${L('Add a shift')}</button>` : ''}</div>`}
+    <p class="hint">${editable ? L("Only this phone changes hours. Times you change are marked edited and stay as you set them when that worker's next text comes in.") : hoursReadOnly()}</p>`;
   $('bar').innerHTML = week.length ? `<div class="bar-in"><button class="btn primary big" data-act="hSend">${L('Send to accountant')}</button></div>` : '';
 }
 
@@ -281,7 +319,7 @@ function crewView(S, day) {
 function crewLine(S, p) {
   const lost = !personById(S, p.pid) && p.shifts[0].who && !findPerson(S, p.who), c = crewById(S, p.crewId) || S.crews.find(x => x.name && x.name === p.crew);
   return p.crew || lost ? `<div class="chips">${p.crew ? `<span class="hint" style="${crewVar(S, p.crew, p.crewId)}"><i class="dot"></i> ${esc(p.crew)}</span>` : ''}
-    ${lost ? `<span class="pill" data-tone="warn">${L('Not on a crew list')}</span>${c ? `<button class="link" data-act="hCrew" data-v="${esc(p.key)}" data-crew="${esc(c.id)}">${esc(L('Add to {crew}', { crew: c.name }))}</button>`
+    ${lost ? `<span class="pill" data-tone="warn">${L('Not on a crew list')}</span>${!canEditPM() ? '' : c ? `<button class="link" data-act="hCrew" data-v="${esc(p.key)}" data-crew="${esc(c.id)}">${esc(L('Add to {crew}', { crew: c.name }))}</button>`
       : S.crews.some(x => x.name) ? `<button class="link" data-act="hCrew" data-v="${esc(p.key)}">${L('Add to a crew')}</button>` : ''}` : ''}</div>` : '';
 }
 // Every logged shift of one timesheet (key from byPerson), in every week.
@@ -292,6 +330,7 @@ const shiftsOf = (S, key) => CREW.filter(s => !s.gone && personKey(S, s) === key
 // shifts take the person's id (one already on the shifts is kept). The page redraws in place, so a PM working down
 // the list keeps their place.
 function putOnCrew(S, day, key, crewId) {
+  if (!canEditPM()) return toast(hoursReadOnly(), 'bad');
   const g = group(S, key), c = crewById(S, crewId), ss = shiftsOf(S, key), p = g && c && addPerson(S, g.who, c.id, g.pid);
   if (p) {
     for (const s of ss) s.pid = p.id;
@@ -314,16 +353,18 @@ function joinCrew(S, day, key) {
 
 // Typing a time on the timesheet: data-k="h.<shift id>.in|out". A shift keeps its clock-in; remove it instead.
 export function hoursInput(el, S, day) {
+  if (!canEditPM()) return toast(hoursReadOnly(), 'bad');
   const [, id, f] = el.dataset.k.split('.'), s = CREW.find(x => x.id === id);
   if (!s || !['in', 'out'].includes(f) || (f === 'in' && !el.value)) return;
   s[f] = el.value;
-  s.edited[f] = true;
-  el.closest('.field')?.classList.add('edited'); // the dot on the box the PM changed
+  s.edited[f] = !!el.value; // a clock-out box cleared again is the worker's clock-out to fill, not the PM's
+  el.closest('.field')?.classList.toggle('edited', s.edited[f]); // the dot on the box the PM changed
   el.closest('.shift')?.classList.toggle('open', !s.out);
   keep(KEYS.crewHours, CREW);
   const week = weekOf(day), people = byPerson(week, undefined, S); // the same order as the cards' data-i
   for (const o of $('app').querySelectorAll('[data-out]')) {
     if (o.dataset.out === 'shift') o.innerHTML = shiftLine(CREW.find(x => x.id === o.dataset.id));
+    if (o.dataset.out === 'twice') o.hidden = !byHand(week, CREW.find(x => x.id === o.dataset.id)); // a clock-out typed on the day added by hand
     if (o.dataset.out === 'who') o.textContent = L('{n} hrs', { n: h2(people[o.dataset.i]?.hours ?? 0) });
   }
   $('hoursStats').innerHTML = crewStats(week, S);
@@ -339,6 +380,7 @@ function addShift(S, day, key = '') {
     ${datalist('crewNames', [...people(S).map(p => p.name), ...byPerson(CREW.filter(s => !s.gone), undefined, S).map(p => p.who)])}
     <div class="btns"><button class="btn primary" data-save>${L('Add the shift')}</button></div>`);
   d.querySelector('[data-save]').onclick = () => {
+    if (!canEditPM()) return toast(hoursReadOnly(), 'bad');
     const v = n => d.querySelector(`[name=${n}]`).value;
     // That timesheet's person while the name is unchanged; else a name on the roster takes its spelling and crew from there.
     const g2 = g && nameKey(v('who')) === nameKey(g.who) ? g : null, p = g2 ? personById(S, g2.pid) : findPerson(S, v('who'));
@@ -361,20 +403,22 @@ function renameWorker(S, day, key) {
   const d = sheet(`<h3>${esc(L('Rename {name}', { name: g.who }))}</h3><label class="field"><span>${L('Name on the timesheet')}</span><input name="who" value="${esc(g.who)}" autocomplete="off"></label>
     <div class="btns"><button class="btn primary" data-save>${L('Rename')}</button></div>`);
   d.querySelector('[data-save]').onclick = async () => {
+    if (!canEditPM()) return toast(hoursReadOnly(), 'bad');
     const name = cleanName(d.querySelector('[name=who]').value);
     if (!nameKey(name)) return toast(L('Type the name'), 'bad'); // punctuation alone is no name: it would drop them from their crew
     d.close();
-    const ss = shiftsOf(S, key), mine = personById(S, g.pid), other = nameKey(name) !== nameKey(g.who) && findPerson(S, name, g.crewId); // a spelling fix asks nothing
+    const mine = personById(S, g.pid), other = nameKey(name) !== nameKey(g.who) && findPerson(S, name, g.crewId); // a spelling fix asks nothing
     let pid = mine?.id || g.pid;
     if (other && other.id !== mine?.id) {
       const pick = await choose(L('{name} on {crew} already has that name. Is that the same person?', { name: other.name, crew: other.crew || L('the list') }),
         [['same', L('Same person: move these hours to {name}', { name: other.name }), 'primary'], ['two', L('Someone else: keep two people named {name}', { name })]]);
       if (!pick) return;
+      if (!canEditPM()) return toast(hoursReadOnly(), 'bad'); // the key may have changed while the choice was open
       if (pick === 'same') pid = other.id;
       else if (!mine) pid = addPerson(S, name, crewById(S, g.crewId) ? g.crewId : '')?.id || pid; // a name alone would land on the other person
     }
     if (pid === mine?.id) renamePerson(S, pid, name);
-    for (const s of ss) Object.assign(s, { who: pid === other?.id ? other.name : name, pid, edited: { ...s.edited, who: true } });
+    for (const s of shiftsOf(S, key)) Object.assign(s, { who: pid === other?.id ? other.name : name, pid, edited: { ...s.edited, who: true } }); // as they are after the question: a pull may have reloaded them
     keep(KEYS.crewHours, CREW);
     keep(KEYS.settings, S);
     go('clock/' + day);
@@ -405,6 +449,9 @@ async function toAccountant(S, day) {
   if (!week.length) return toast(L('No hours logged this week'), 'bad');
   if (gaps && !await ask(gaps === 1 ? L('1 shift has no clock-out and counts as 0 hours. Fill in the out times first, or send anyway?')
     : L('{n} shifts have no clock-out and count as 0 hours. Fill in the out times first, or send anyway?', { n: gaps }), L('Send anyway'))) return;
+  const twice = week.filter(s => byHand(week, s)).length;
+  if (twice && !await ask(twice === 1 ? L("1 shift from a worker's phone is on a day you also entered by hand, and both count. Remove one first if it is the same work, or send anyway?")
+    : L("{n} shifts from workers' phones are on days you also entered by hand, and both count. Remove one first where it is the same work, or send anyway?", { n: twice }), L('Send anyway'))) return;
   const name = `Timesheet week of ${mon}`;
   const files = [new File(['﻿' + timesheetCsv(people)], `${name}.csv`, { type: 'text/csv' }), new File([timesheetPdf(S, mon, people)], `${name}.pdf`, { type: 'application/pdf' })];
   // Phones get the share sheet (Mail to the accountant, Save to Files); computers download both files.
@@ -459,23 +506,23 @@ function reportView(S, day) {
     ${grp(field(L('Superintendent'), 'r.super', r.super), field(L('Shift start'), 'r.shiftStart', r.shiftStart, { type: 'time' }), field(L('Shift end'), 'r.shiftEnd', r.shiftEnd, { type: 'time' }))}
     <div class="secs">
     ${sec(st, 'sum', 1, L('Overall status & today’s results'), seg('r.status', r.status, STATUS())
-      + grp(field(L('Most important results today, planned work missed, and effect on the job'), 'r.results', r.results, { rows: 4 })))}
-    ${sec(st, 'wins', 2, L('Good results & lessons to repeat'), grp(field(L('Crew wins, quality improvements, faster methods, repeat-floor lessons'), 'r.wins', r.wins, { rows: 3 })))}
-    ${sec(st, 'issues', 3, L('Site issues, concerns & coordination'), grp(field(L('Safety / quality issues, other trades, access, inspections, scope changes'), 'r.issues', r.issues, { rows: 3 }),
-      field(L('Who was notified / when'), 'r.notified', r.notified)))}
+      + grp(tf(L('Most important results today, planned work missed, and effect on the job'), 'r.results', r.results, { rows: 4 }, r.lang)))}
+    ${sec(st, 'wins', 2, L('Good results & lessons to repeat'), grp(tf(L('Crew wins, quality improvements, faster methods, repeat-floor lessons'), 'r.wins', r.wins, { rows: 3 }, r.lang)))}
+    ${sec(st, 'issues', 3, L('Site issues, concerns & coordination'), grp(tf(L('Safety / quality issues, other trades, access, inspections, scope changes'), 'r.issues', r.issues, { rows: 3 }, r.lang),
+      tf(L('Who was notified / when'), 'r.notified', r.notified, {}, r.lang)))}
     ${sec(st, 'needs', 4, L('Material, equipment & manpower'), r.needs.map((n, i) => `<div class="item fgroup">
-        ${field(L('Item / resource'), `r.needs.${i}.item`, n.item, { wide: true, ph: L('e.g. 2" EMT, scissor lift, 2 more journeymen') })}
+        ${tf(L('Item / resource'), `r.needs.${i}.item`, n.item, { wide: true, ph: L('e.g. 2" EMT, scissor lift, 2 more journeymen') }, r.lang)}
         ${field(L('Quantity'), `r.needs.${i}.qty`, n.qty)}${field(L('Floor / crew'), `r.needs.${i}.where`, n.where, { list: 'floors' })}
         ${field(L('Needed by'), `r.needs.${i}.by`, n.by, { type: 'datetime-local' })}
         <label class="switch"><input type="checkbox" data-k="r.needs.${i}.confirmed"${n.confirmed ? ' checked' : ''}> ${L('Availability confirmed')}</label>
         ${remove('needs', i, L('Remove need'))}</div>`).join('') + addTo('needs', L('+ Add a need')))}
     ${sec(st, 'pm', 5, L('Project manager decision help'), `<p class="hint">${L('State the decision, your recommendation, and when you need an answer. The PM answers right here.')}</p>`
       + r.decisions.map((d, i) => `<div class="item fgroup">
-        ${field(L('Decision / support needed'), `r.decisions.${i}.q`, d.q, { rows: 2 })}
-        ${field(L('Recommendation'), `r.decisions.${i}.rec`, d.rec, { wide: true })}${field(L('Needed by'), `r.decisions.${i}.by`, d.by, { type: 'datetime-local' })}
+        ${tf(L('Decision / support needed'), `r.decisions.${i}.q`, d.q, { rows: 2 }, r.lang)}
+        ${tf(L('Recommendation'), `r.decisions.${i}.rec`, d.rec, { wide: true }, r.lang)}${field(L('Needed by'), `r.decisions.${i}.by`, d.by, { type: 'datetime-local' })}
         ${d.by && !d.pm && new Date(d.by) < new Date() ? `<p class="frow"><span class="pill" data-tone="bad">${L('Past due')}</span></p>` : ''}
         <div class="field"><span>${L('PM response')}</span>${seg(`r.decisions.${i}.pm`, d.pm, [['Approved', 'good', L('Approved')], ['Declined', 'bad', L('Declined')], ['Discuss', 'info', L('Discuss')]])}</div>
-        ${field(L('PM note'), `r.decisions.${i}.pmNote`, d.pmNote)}
+        ${tf(L('PM note'), `r.decisions.${i}.pmNote`, d.pmNote, {}, r.pmLang)}
         ${remove('decisions', i, L('Remove decision'))}</div>`).join('') + addTo('decisions', L('+ Add a decision')))}
     ${sec(st, 'floors', 6, L('Floor reports · crew detail'), r.floors.map((f, fi) => `<div class="floor">
         <div class="fgroup"><div class="edit-row">${field(L('Actual floor / level'), `r.floors.${fi}.floor`, f.floor, { list: 'floors' })}<button class="x" data-act="delFloor" data-i="${fi}" aria-label="${L('Remove floor')}">✕</button></div></div>
@@ -485,25 +532,27 @@ function reportView(S, day) {
         <div class="btns"><button class="btn" data-act="addFloor">${L('+ Add floor')}</button><button class="btn" data-act="fill">${L('Fill from task sheets')}</button></div>
         ${datalist('floors', S.floors)}`)}
     ${sec(st, 'next', 7, L('Next steps & completion forecast'), r.next.map((x, i) => `<div class="item fgroup">
-        ${field(L('Next step / floor / crew'), `r.next.${i}.step`, x.step, { rows: 2 })}
-        ${field(L('Prerequisites / resources'), `r.next.${i}.prereq`, x.prereq)}
+        ${tf(L('Next step / floor / crew'), `r.next.${i}.step`, x.step, { rows: 2 }, r.lang)}
+        ${tf(L('Prerequisites / resources'), `r.next.${i}.prereq`, x.prereq, {}, r.lang)}
         ${field(L('Planned start'), `r.next.${i}.start`, x.start, { type: 'datetime-local' })}${field(L('Estimated duration'), `r.next.${i}.dur`, x.dur, { ph: L('e.g. 2 days') })}
         ${field(L('Expected finish'), `r.next.${i}.finish`, x.finish, { type: 'datetime-local' })}${field(L('Required deadline'), `r.next.${i}.deadline`, x.deadline, { type: 'datetime-local' })}
         ${field(L('Responsible lead'), `r.next.${i}.lead`, x.lead)}${field(L('Confirm / check-in by'), `r.next.${i}.checkin`, x.checkin, { type: 'datetime-local' })}
         <p class="out ${isLate(x) ? 'late' : ''}" data-out="late" data-i="${i}">${lateLine(x)}</p>
         ${remove('next', i, L('Remove step'))}</div>`).join('') + addTo('next', L('+ Add next step')))}
     ${sec(st, 'risks', 8, L('Potential delays & workarounds'), r.risks.map((x, i) => `<div class="item fgroup">
-        ${field(L('Risk / affected floor & crew'), `r.risks.${i}.risk`, x.risk, { rows: 2 })}
-        ${field(L('Expected impact / time at risk'), `r.risks.${i}.impact`, x.impact)}
-        ${field(L('Prevention / workaround'), `r.risks.${i}.prevent`, x.prevent, { rows: 2 })}
-        ${field(L('Fallback work if blocked'), `r.risks.${i}.fallback`, x.fallback)}
+        ${tf(L('Risk / affected floor & crew'), `r.risks.${i}.risk`, x.risk, { rows: 2 }, r.lang)}
+        ${tf(L('Expected impact / time at risk'), `r.risks.${i}.impact`, x.impact, {}, r.lang)}
+        ${tf(L('Prevention / workaround'), `r.risks.${i}.prevent`, x.prevent, { rows: 2 }, r.lang)}
+        ${tf(L('Fallback work if blocked'), `r.risks.${i}.fallback`, x.fallback, {}, r.lang)}
         ${field(L('Action owner'), `r.risks.${i}.owner`, x.owner)}${field(L('Action needed by'), `r.risks.${i}.by`, x.by, { type: 'datetime-local' })}
         ${remove('risks', i, L('Remove risk'))}</div>`).join('') + addTo('risks', L('+ Add a risk'))
       + `<p class="hint">${L('Escalate urgent issues when you find them, and note who you told in section 3.')}</p>`)}
-    ${sec(st, 'sign', 9, L('Sign-off'), grp(field(L('Prepared by'), 'r.preparedBy', r.preparedBy), field(L('PM review / time'), 'r.pmReview', r.pmReview))
-      + (isPM(S) ? `<button class="btn" data-act="stampPM">${L('Stamp my review now')}</button>` : ''))}
+    ${sec(st, 'sign', 9, L('Sign-off'), grp(field(L('Prepared by'), 'r.preparedBy', r.preparedBy), tf(L('PM review / time'), 'r.pmReview', r.pmReview, {}, r.pmLang))
+      + (isPM(S) && canEditPM() ? `<button class="btn" data-act="stampPM">${L('Stamp my review now')}</button>` : ''))}
     </div>
+    ${!canEditPM() ? `<p class="hint">${pmReadOnly()}</p>` : ''}
     <p class="hint">${L('Changes save on this phone as you type.')}${S.folderUrl ? ` ${L('Sending the report also files a PDF in the review folder.')}` : ''}</p>`;
+  if (!canEditPM()) for (const el of $('app').querySelectorAll('[data-k]')) if (PM_PART.test(el.dataset.k)) el.disabled = true;
   $('bar').innerHTML = `<div class="bar-in"><button class="btn primary big" data-act="send">${isPM(S) ? L('Send back to Supt.') : L('Send to PM')}</button></div>`;
 }
 
@@ -527,10 +576,10 @@ function crewBlock(S, r, fi, ci, c) {
       field(L('Members'), `${k}.members`, c.members, { wide: true }), field(L('Room / area'), `${k}.area`, c.area), field(L('Task / drawing ref.'), `${k}.ref`, c.ref),
       field(L('Work start'), `${k}.start`, c.start, { type: 'time' }), field(L('Work stop'), `${k}.stop`, c.stop, { type: 'time' }),
       `<p class="out" data-out="lh" data-f="${fi}" data-c="${ci}">${OUT.lh(r, { f: fi, c: ci })}</p>`,
-      field(L('Work completed: installation, quantities, exact locations, remaining work'), `${k}.done`, c.done, { rows: 3 }),
-      field(L('Quality / testing / accuracy'), `${k}.quality`, c.quality, { rows: 2 }),
-      field(L('Hold-ups / delays: cause, duration, workers affected, action taken'), `${k}.holdups`, c.holdups, { rows: 2 }),
-      field(L('Good results / improvements'), `${k}.good`, c.good, { rows: 2 }))}</div>`;
+      tf(L('Work completed: installation, quantities, exact locations, remaining work'), `${k}.done`, c.done, { rows: 3 }, r.lang),
+      tf(L('Quality / testing / accuracy'), `${k}.quality`, c.quality, { rows: 2 }, r.lang),
+      tf(L('Hold-ups / delays: cause, duration, workers affected, action taken'), `${k}.holdups`, c.holdups, { rows: 2 }, r.lang),
+      tf(L('Good results / improvements'), `${k}.good`, c.good, { rows: 2 }, r.lang))}</div>`;
 }
 
 // ---------- PDF and the review folder ----------
@@ -557,7 +606,12 @@ const recordSecs = r => [
 ];
 
 const record = (S, r) => makePdf('Superintendent daily report', letterhead(S, dayEn(r.date)), recordSecs(r), `${COMPANIES} · Daily report ${r.date}`);
-const fileReport = (S, r) => { if (!S.folderUrl) return; r.filedAt = Date.now(); persist(); return fileAway(S, { date: r.date, name: `Daily Report ${r.date}`, bytes: record(S, r), v: r.updatedAt }); };
+// Marked filed when queued, on the report as it is now (by date: a sync may have reloaded R since the caller got r).
+const fileReport = (S, r) => {
+  if (!S.folderUrl) return;
+  const { date, updatedAt: v } = r;
+  return fileAway(S, { date, name: `Daily Report ${date}`, bytes: record(S, r), v }, () => { const n = R[date]; if (n) { n.filedAt = Math.max(n.filedAt || 0, v); persist(); } });
+};
 // A sent report edited afterwards is filed again when you leave it.
 export const fileReportIfChanged = (S, day) => { const r = R[day]; return r?.submittedAt && r.updatedAt > r.filedAt && fileReport(S, r); };
 
@@ -569,12 +623,16 @@ export async function openReport(data, S) {
   if (!inc.date) { toast(L('That link has no report in it'), 'bad'); return ''; }
   const mine = R[inc.date], pmSent = data.from === 'Project manager';
   if (mine?.updatedAt && mine.updatedAt !== inc.updatedAt && pmSent !== isPM(S)) {
+    // On a hub the text is a copy of what the hub delivers: merged only when newer than the hub copy here (sync.mjs fromText).
+    if (!fromText('r', inc.date, pmSent ? 'pm' : 'sup', inc.updatedAt, data.skew)) { toast(L('This phone already has the newest copy of this report from the hub.')); return inc.date; }
     // Normal back-and-forth: neither side's work is lost, so there's nothing to ask.
-    R[inc.date] = pmSent ? mergeAnswers(mine, inc) : mergeAnswers(inc, mine);
+    R[inc.date] = pmSent ? mergeAnswers(mine, inc) : mergeAnswers(inc, mine, true);
     R[inc.date].updatedAt = Date.now();
     toast(pmSent ? L('PM answers added to your report') : L('Updated report loaded. Your answers are kept.'));
     open.add('pm');
     fileReport(S, R[inc.date]);
+  } else if (!mine?.updatedAt && !fromText('r', inc.date, pmSent ? 'pm' : 'sup', inc.updatedAt, data.skew, data.skew !== undefined && inc)) { // no copy here: a text from a hub phone is a copy of the hub's (skew: it was on a hub)
+    toast(L('This phone already has the newest copy of this report from the hub.')); return inc.date;
   } else if (!mine?.updatedAt || mine.updatedAt === inc.updatedAt
     || await ask(L('Replace your copy of the {date} report with the one in this link? Link copy saved {link}. Yours saved {mine}.',
       { date: niceDate(inc.date), link: stamp(inc.updatedAt), mine: stamp(mine.updatedAt) }), L('Use the link copy'))) {
@@ -595,7 +653,7 @@ async function send(S, day) {
   r.updatedAt = Date.now();
   persist();
   reportView(S, day);
-  const url = linkTo('tasks.html', await pack({ v: 1, kind: 'report', from: S.role, pin: S.pin, report: r }));
+  const url = linkTo('tasks.html', await pack({ v: 1, kind: 'report', from: S.role, pin: S.pin, skew: hubStatus().skew, report: r })); // skew only from a phone on a hub (sync.mjs fromText)
   const answered = r.decisions.filter(d => d.q && d.pm).length, asked = r.decisions.filter(d => d.q).length;
   const firstDue = waiting(r).map(d => d.by).filter(Boolean).sort()[0];
   sendSheet(isPM(S)
@@ -616,6 +674,8 @@ const menu = items => sheet(`<h3>${L('More')}</h3><div class="menu">${items.filt
 const undoTo = (v, S, day, put) => () => { put(); const [hv, hd] = location.hash.slice(1).split('/'); if (hv === v && (!hd || hd === day)) renderOffice(v, S, day); };
 
 export async function reportAct(a, el, S, day, v) {
+  if (!canEditPM() && (a === 'stampPM' || (a === 'set' && PM_PART.test(el.dataset.k)))) return toast(pmReadOnly(), 'bad');
+  if (!canEditPM() && ['hAdd', 'hCrew', 'hRename', 'hDel'].includes(a)) return toast(hoursReadOnly(), 'bad');
   const r = rep(S, day), val = el.dataset.v, i = +el.dataset.i;
   switch (a) {
     case 'set': { const ctx = { r, s: S }; setPath(ctx, el.dataset.k, getPath(ctx, el.dataset.k) === val ? '' : val); break; }
@@ -692,7 +752,15 @@ export async function reportAct(a, el, S, day, v) {
       keep(KEYS.hours, MY);
       navigator.vibrate?.(12);
       renderOffice(v, S, day);
-      return sendMine(S, s, on ? 'out' : 'in');
+      // At once, not after the usual short wait. The text to the PM opens unless the tap's own round got through (signal gone, hub busy,
+      // key replaced). A round already running (opening the app starts one) read the hours before the tap, so the tap's is the next one.
+      const late = hubStatus().state === 'syncing';
+      if (hubAnswers() && (await cycle()).state === 'live' && (!late || (await cycle()).state === 'live')) {
+        if (MY.some(x => x.id === s.id)) return toast(L('Saved. Your hours go to the PM through the hub.'));
+        // the hub filed it as removed (HUB.md, Shift: the PM entered this whole day by hand), so it left this clock: say so
+        return toast(L('The PM has already set your hours for {date}, so this tap was not added. Tell the PM if they are wrong.', { date: niceDate(s.date) }), 'bad');
+      }
+      return sendMine(S, s, on ? 'out' : 'in'); // no hub, or no answer from it lately: the text to the PM
     }
     case 'hWho': S.workerId = val; keep(KEYS.settings, S); return renderOffice(v, S, day); // which of the people sharing this name
     case 'hResend': return S.worker.trim() ? sendMine(S, null, 'all') : toast(L('Type your name first'), 'bad');
@@ -708,9 +776,9 @@ export async function reportAct(a, el, S, day, v) {
       s.gone = true;
       keep(KEYS.crewHours, CREW);
       renderOffice(v, S, day);
-      return toast(L('Shift removed'), '', { undo: undoTo(v, S, day, () => { const x = CREW.find(y => y.id === s.id); if (x) { x.gone = false; keep(KEYS.crewHours, CREW); } }) });
+      return toast(L('Shift removed'), '', { undo: undoTo(v, S, day, () => { if (!canEditPM()) return toast(hoursReadOnly(), 'bad'); const x = CREW.find(y => y.id === s.id); if (x) { x.gone = false; keep(KEYS.crewHours, CREW); } }) });
     }
-    case 'hPmMenu': return menu([['hAdd', L('Add a shift')], ['paste', L('Open a link someone sent you')], ['settings', L('Settings, crews and backup')]]);
+    case 'hPmMenu': return menu([canEditPM() && ['hAdd', L('Add a shift')], ['paste', L('Open a link someone sent you')], ['settings', L('Settings, crews and backup')]]);
     default: return;
   }
   r.updatedAt = Date.now();
@@ -718,6 +786,8 @@ export async function reportAct(a, el, S, day, v) {
   renderOffice(v, S, day);
 }
 
+// The PM's part of a report (HUB.md, Report): the PM typing an answer does not change the language of the rest.
+export const PM_PART = /^r\.(decisions\.\d+\.(pm|pmNote)|pmReview)$/;
 // Typing in a report field: data-k="r.path.to.field".
 export function applyInput(r, k, val) {
   setPath({ r }, k, val);
@@ -727,9 +797,10 @@ export function applyInput(r, k, val) {
   }
 }
 export function reportInput(el, S, day) {
+  if (PM_PART.test(el.dataset.k) && !canEditPM()) return toast(pmReadOnly(), 'bad');
   const r = rep(S, day);
   applyInput(r, el.dataset.k, readInput(el));
-  r.lang = getLang(); // the language it is being typed in, for the hub's translation
+  r[PM_PART.test(el.dataset.k) ? 'pmLang' : 'lang'] = getLang(); // the language each part is typed in (the PM and the superintendent may use different ones), for the hub's translation
   r.updatedAt = Date.now();
   persist();
   for (const o of $('app').querySelectorAll('[data-out]')) if (OUT[o.dataset.out]) o.textContent = OUT[o.dataset.out](r, o.dataset);

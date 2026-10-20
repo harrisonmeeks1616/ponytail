@@ -7,10 +7,12 @@ import ES from './es.mjs';
 
 // The passcode also keeps a key of its own: a tab still running the version before it (phones keep old
 // tabs open for days) rewrites settings without it, and an old backup has none. hours: this phone's own
-// clock-ins; crewHours: the PM's timesheet of everyone's; device: this phone's hub secret, in a key of its own for the
-// same reason as the passcode. roster: the people and crews with their ids, kept apart for the same reason (see
-// loadSettings). Backups and restores carry every key here (a backup leaves out the hub key).
-export const KEYS = { settings: 'schwab.settings', tasks: 'schwab.tasks', reports: 'schwab.reports', pin: 'schwab.pin', hours: 'schwab.hours', crewHours: 'schwab.crewHours', device: 'schwab.device', roster: 'schwab.roster' };
+// clock-ins; crewHours: the PM's timesheet of everyone's; device: this phone's hub secret, and hub: the hub link, key, role
+// and crew (HUB_FIELDS), each in a key of its own for the same reason as the passcode. roster: the people and crews with
+// their ids, kept apart for the same reason (see normSettings). Backups and restores carry every key here (a backup
+// leaves out the hub key).
+export const KEYS = { settings: 'schwab.settings', tasks: 'schwab.tasks', reports: 'schwab.reports', pin: 'schwab.pin', hours: 'schwab.hours', crewHours: 'schwab.crewHours', device: 'schwab.device', roster: 'schwab.roster', hub: 'schwab.hub' };
+export const HUB_FIELDS = ['hubUrl', 'hubKey', 'hubRole', 'hubCrew'];
 export const COMPANY = 'H.A. Sack-Electrical', COMPANY_ALT = 'Sack Company-Electrical', COMPANIES = `${COMPANY} · ${COMPANY_ALT}`;
 // The top lines of every PDF: who did the work, then the job.
 export const letterhead = (s, more = '') => `${COMPANIES}\n${[s.project, s.site, more].filter(Boolean).join(' · ')}`;
@@ -60,9 +62,13 @@ export function save(key, val) {
   try {
     localStorage.setItem(key, JSON.stringify(val));
     if (key === KEYS.settings && Array.isArray(val?.people) && Array.isArray(val.crews)) localStorage.setItem(KEYS.roster, JSON.stringify(rosterOf(val)));
-    return true;
   } catch { return false; }
+  saved(key);
+  return true;
 }
+// The app's one hook into every save (tasks.html pokes the hub sync with it); nothing by default.
+let saved = () => {};
+export const onSave = f => { saved = f; };
 
 // hubKey is a secret: never in a backup, a link or the hub's config. hubRole and hubCrew are set by the sync engine.
 // workerId: the roster person this phone's time clock name is (empty when the name matches nobody here).
@@ -80,7 +86,10 @@ export const DEFAULT_SETTINGS = {
   checks: ['Supports / strapping', 'Labeling', 'Terminations / torque', 'Testing', 'Covers / plates', 'Cleanup'],
 };
 // Settings from storage, a backup or the hub: known fields only, every crew and person with an id, the roster checked.
+// Settings with no people (a tab on a version before the roster saved them, see below) take this phone's roster back.
 export function normSettings(raw) {
+  const roster = raw && typeof raw === 'object' && !Array.isArray(raw.people) && load(KEYS.roster, null);
+  if (Array.isArray(roster?.people)) raw = withRoster(raw, shape(ROSTER_TPL, roster));
   const s = raw ? shape(SETTINGS_TPL, raw) : structuredClone(DEFAULT_SETTINGS);
   fixRoster(s, Array.isArray(raw?.people));
   return s;
@@ -93,11 +102,11 @@ export function normSettings(raw) {
 // ponytail: a crew renamed in the old tab matches no name, so it gets a new id and its people show under "Not on a
 // crew" (ids kept). Match by members too if old tabs ever rename crews.
 export function loadSettings() {
-  const raw = load(KEYS.settings, null), roster = load(KEYS.roster, null), pin = load(KEYS.pin, '');
-  const old = raw && typeof raw === 'object' && !Array.isArray(raw.people) && Array.isArray(roster?.people);
-  const s = normSettings(old ? withRoster(raw, shape(ROSTER_TPL, roster)) : raw);
+  const raw = load(KEYS.settings, null), pin = load(KEYS.pin, ''), hub = load(KEYS.hub, null);
+  const s = normSettings(raw);
   if (raw && Array.isArray(raw.people)) save(KEYS.roster, rosterOf(s)); // kept current from the first open of this version
   if (PIN_FORMAT.test(pin)) s.pin = pin;
+  if (hub && typeof hub === 'object') for (const k of HUB_FIELDS) s[k] = typeof hub[k] === 'string' ? hub[k] : ''; // its own key wins over an old tab's settings, a disconnect included
   return s;
 }
 const ROSTER_TPL = { crews: [{ id: '', name: '' }], people: [{ id: '', name: '', crewId: '' }] };
@@ -120,9 +129,9 @@ export const nameKey = name => String(name ?? '').normalize('NFD').replace(/[\u0
 // A name as the lists keep it: no comma (the members list is comma separated), single spaces, up to 60 characters.
 export const cleanName = name => String(name ?? '').replace(/,/g, ' ').trim().replace(/\s+/g, ' ').slice(0, 60);
 const split = members => (members || '').split(',').map(cleanName).filter(nameKey);
-// ponytail: an id made while migrating comes from the name (a 53-bit hash), so phones migrating the same lists agree,
-// and a tab still on the old version (its save drops people and crew ids) re-migrates to the same ids. Someone renamed
-// in between gets a new id that one time. New people and crews get random ids.
+// ponytail: an id made while migrating comes from the name (a 53-bit hash), so phones migrating the same lists agree.
+// New people and crews get random ids. A tab still on the old version (its save drops people and crew ids) gets the
+// roster back from its own key (KEYS.roster, normSettings), so random ids and two people sharing a name survive it.
 const hash = s => {
   let a = 0xdeadbeef, b = 0x41c6ce57;
   for (let i = 0; i < s.length; i++) { const c = s.charCodeAt(i); a = Math.imul(a ^ c, 2654435761); b = Math.imul(b ^ c, 1597334677); }
@@ -195,22 +204,27 @@ export function assignmentFor(tasks, name, day, pid = '') {
 
 const ITEM = { id: '', text: '', done: false, at: 0 };
 // crewId and memberIds (one per name in members, '' for a name typed before people had ids) are who the sheet is for;
-// crew and members are the names it was made with. aLang and cLang: the language the office and the crew typed in.
+// crew and members are the names it was made with. aLangs and cLangs: the language each office and crew text was typed in, by
+// its field ('scope', 'remain') or a step's id (typedIn, langOf); aLang and cLang: each part's first one, for text typed before those.
 // reply: the office's message to the crew. assignAt and crewAt: when the office part and the crew part last changed (the hub's merge stamps).
+// news (this phone only): an office message or follow-up reached this crew phone through the hub; the board marks it until the sheet is opened.
 export const TASK_TPL = {
   uid: '', origin: '', from: '', id: '', date: '', by: '', floor: '', area: '', crew: '', crewId: '', lead: '', members: [''], memberIds: [''], size: 0,
-  scope: '', refs: '', items: [ITEM], checks: [ITEM], aLang: '',
+  scope: '', refs: '', items: [ITEM], checks: [ITEM], aLang: '', aLangs: {},
   allot: 0, allotNote: '', est: 0, estNote: '', pStart: '', pStop: '', checkIn: '',
-  aStart: '', aStop: '', delay: 0, status: '', doneText: '', remain: '', comments: '', cLang: '',
-  review: '', reviewer: '', followUp: '', reply: '', replyAt: 0, replyBy: '', sentAt: 0, resultAt: 0, gotAt: 0, updatedAt: 0, filedAt: 0, assignAt: 0, crewAt: 0,
+  aStart: '', aStop: '', delay: 0, status: '', doneText: '', remain: '', comments: '', cLang: '', cLangs: {},
+  review: '', reviewer: '', followUp: '', reply: '', replyAt: 0, replyBy: '', sentAt: 0, resultAt: 0, gotAt: 0, updatedAt: 0, filedAt: 0, assignAt: 0, crewAt: 0, news: false,
 };
 // Ids, dates and times end up in addresses and page markup, so they must keep their exact format.
 // Anything else in them (a damaged or crafted link) is dropped here, once, for every link, backup and save.
 const FORMAT = { uid: /^[\w-]{1,40}$/, date: /^\d{4}-\d{2}-\d{2}$/, time: /^([01]\d|2[0-3]):[0-5]\d(?::[0-5]\d)?$/ };
 const isDay = d => FORMAT.date.test(d) && addDays(d, 0) === d; // a real calendar day, not 2026-02-30
 const isId = x => typeof x === 'string' && FORMAT.uid.test(x); // not undefined, which a regex reads as 'undefined'
+const LANG_KEY = /^[A-Za-z0-9][\w-]{0,39}$/; // a field name or a step id; never "__proto__"
+const langsOf = m => Object.fromEntries(Object.entries(m && typeof m === 'object' && !Array.isArray(m) ? m : {}).filter(([k, v]) => LANG_KEY.test(k) && (v === 'en' || v === 'es')).slice(0, 300));
 export function normTask(t) {
   const n = shape(TASK_TPL, t);
+  for (const k of ['aLangs', 'cLangs']) n[k] = langsOf(t?.[k]);
   if (!FORMAT.uid.test(n.uid)) n.uid = '';
   if (!FORMAT.uid.test(n.crewId)) n.crewId = '';
   n.memberIds = n.members.map((_, i) => (isId(n.memberIds[i]) ? n.memberIds[i] : ''));
@@ -225,9 +239,19 @@ export function normTask(t) {
   return n;
 }
 export const newItem = text => ({ id: uid(), text, done: false, at: 0 });
+// The language a sheet's typed text is in: its own (k: the field, or a step's or check's id), else its part's. The PM and the
+// superintendent, or two crew phones, may type in different languages, so each text keeps the one it was typed in.
+const CREW_TEXT = new Set(['doneText', 'remain', 'comments']);
+export const langOf = (t, k) => (CREW_TEXT.has(k) ? t.cLangs?.[k] || t.cLang : t.aLangs?.[k] || t.aLang);
+export function typedIn(t, k, l) {
+  const crew = CREW_TEXT.has(k), m = crew ? 'cLangs' : 'aLangs', part = crew ? 'cLang' : 'aLang';
+  t[m] = { ...t[m], [k]: l }; // a new object: a template's or another sheet's map is never changed
+  t[part] ||= l;
+  return t;
+}
 
-const ASSIGN = ['id', 'date', 'by', 'floor', 'area', 'crew', 'crewId', 'members', 'memberIds', 'size', 'scope', 'refs', 'aLang', 'allot', 'allotNote', 'est', 'estNote', 'pStart', 'pStop', 'checkIn', 'reply', 'replyAt', 'replyBy'];
-const CREW = ['lead', 'aStart', 'aStop', 'delay', 'status', 'doneText', 'remain', 'comments', 'cLang', 'resultAt'];
+const ASSIGN = ['id', 'date', 'by', 'floor', 'area', 'crew', 'crewId', 'members', 'memberIds', 'size', 'scope', 'refs', 'aLang', 'aLangs', 'allot', 'allotNote', 'est', 'estNote', 'pStart', 'pStop', 'checkIn', 'reply', 'replyAt', 'replyBy'];
+const CREW = ['lead', 'aStart', 'aStop', 'delay', 'status', 'doneText', 'remain', 'comments', 'cLang', 'cLangs', 'resultAt'];
 
 // part 'crew': take the crew's results and check-offs, keep my assignment.
 // part 'assign': take the new assignment and checklist, keep check-offs already made here.
@@ -242,16 +266,19 @@ export function mergeTask(local, inc, part) {
   return local;
 }
 
-// The PM owns the decision answers and the review stamp; the superintendent owns everything else.
-// An answer whose question was reworded since is added as its own entry, never dropped.
-export function mergeAnswers(base, answers) {
+// The PM owns the decision answers and the review stamp; the superintendent owns everything else. answers is the
+// PM's copy. own: it is this phone's own (the PM phone), so it decides, an answer the PM took back included. Else it is
+// a text of unknown age (the superintendent phone, no hub to order it): it only adds, so an older text never takes a
+// newer answer back. One whose question was reworded since is added as its own entry, never dropped.
+export function mergeAnswers(base, answers, own) {
   for (const d of answers.decisions) {
-    if (!d.pm && !d.pmNote) continue;
+    if (!own && !d.pm && !d.pmNote) continue;
     const m = base.decisions.find(x => x.q === d.q);
     if (m) Object.assign(m, { pm: d.pm, pmNote: d.pmNote });
-    else base.decisions.push(d);
+    else if (d.pm || d.pmNote) base.decisions.push(d);
   }
-  base.pmReview = answers.pmReview || base.pmReview;
+  base.pmReview = own ? answers.pmReview : answers.pmReview || base.pmReview;
+  base.pmLang = answers.pmLang || base.pmLang;
   return base;
 }
 
@@ -260,7 +287,7 @@ export function cloneTask(t, date, onlyOpen) {
   const c = normTask(structuredClone(t));
   for (const k of CREW) if (k !== 'lead') c[k] = TASK_TPL[k];
   for (const k of ['review', 'reviewer', 'followUp', 'reply', 'replyAt', 'replyBy', 'sentAt', 'gotAt', 'assignAt', 'crewAt']) c[k] = TASK_TPL[k];
-  for (const list of ['items', 'checks']) c[list] = c[list].filter(i => !onlyOpen || !i.done).map(i => newItem(i.text));
+  for (const list of ['items', 'checks']) c[list] = c[list].filter(i => !onlyOpen || !i.done).map(i => { const n = newItem(i.text); if (c.aLangs[i.id]) c.aLangs[n.id] = c.aLangs[i.id]; return n; }); // a step keeps its language under its new id
   return Object.assign(c, { uid: uid(), origin: 'mine', date, updatedAt: Date.now() });
 }
 
@@ -275,10 +302,11 @@ export function nextId(tasks, date) {
 }
 // A sheet arrived (a link now, the hub later) with the date and number of one of this phone's own sheets. Ours takes
 // the next free number when it was never sent, since no one else has seen its number; returns [[sheet, old id]].
-export function renumberClashes(tasks, inc) {
+// onHub(uid): the sheet is on the hub already, so other phones know its number and it keeps it.
+export function renumberClashes(tasks, inc, onHub = () => false) {
   const out = [];
   for (const t of tasks) {
-    if (t === inc || t.uid === inc.uid || t.origin !== 'mine' || t.sentAt || !t.id || t.id !== inc.id || t.date !== inc.date) continue;
+    if (t === inc || t.uid === inc.uid || t.origin !== 'mine' || t.sentAt || !t.id || t.id !== inc.id || t.date !== inc.date || onHub(t.uid)) continue;
     out.push([t, t.id]);
     t.id = nextId(tasks, t.date);
     t.updatedAt = Date.now();
@@ -297,7 +325,7 @@ export const REPORT_TPL = {
   floors: [{ floor: '', crews: [CREW_TPL] }],
   next: [{ step: '', prereq: '', start: '', dur: '', finish: '', deadline: '', lead: '', checkin: '' }],
   risks: [{ risk: '', impact: '', prevent: '', fallback: '', owner: '', by: '' }],
-  preparedBy: '', pmReview: '', updatedAt: 0, filedAt: 0, lang: '', pmAt: 0, // lang: the language it was typed in; pmAt: the PM part's merge stamp
+  preparedBy: '', pmReview: '', updatedAt: 0, filedAt: 0, lang: '', pmLang: '', pmAt: 0, // lang, pmLang: the language the superintendent's part and the PM's (answers, review) are typed in; pmAt: the PM part's merge stamp
 };
 const REPORT_STATUS = ['On plan', 'At risk', 'Behind plan', 'No work today']; // same list as STATUS in report.mjs
 export function normReport(r) {
@@ -419,8 +447,11 @@ export const deviceId = () => devRec()?.id || '';
 export const deviceSecret = () => devRec()?.secret || '';
 const idOf = async secret => hex(await crypto.subtle.digest('SHA-256', new TextEncoder().encode(secret))).slice(0, 32);
 // Makes the secret once (a restored backup brings the old phone's back). Resolves to the id, or '' where the phone
-// can't (no crypto.subtle off https): the time clock then keeps using the older settings.device.
-export async function ensureDevice() {
+// can't (no crypto.subtle off https): the time clock then keeps using the older settings.device. Calls made while one is
+// still working share it, so two first calls can never make two secrets.
+let making = null;
+export const ensureDevice = () => (making ||= makeDevice().finally(() => { making = null; }));
+async function makeDevice() {
   try {
     let secret = load(KEYS.device, null)?.secret;
     if (!/^[A-Za-z0-9]{32}$/.test(secret)) {
@@ -485,6 +516,7 @@ export const iso = d => `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.get
 export const today = () => iso(new Date());
 export const addDays = (day, n) => { const [y, m, d] = day.split('-').map(Number); return iso(new Date(y, m - 1, d + n)); };
 export const niceDate = (day, l = lang) => new Date(day + 'T12:00').toLocaleDateString(locale(l), { weekday: 'short', month: 'short', day: 'numeric' });
+export const weekday = (day, l = lang) => new Date(day + 'T12:00').toLocaleDateString(locale(l), { weekday: 'short' }); // "Thu" ("jue")
 const hm = d => `${pad(d.getHours())}:${pad(d.getMinutes())}`;
 export const nowHM = () => hm(new Date());
 export const toMin = t => { const m = /^(\d{1,2}):(\d{2})/.exec(t || ''); return m ? +m[1] * 60 + +m[2] : null; };
@@ -505,12 +537,37 @@ export const crewVar = (s, name, id = '') => { let i = id ? s.crews.findIndex(c 
 
 // < date >: the arrows move a day (a week: day is its Monday, here this week's), the date opens the calendar, and once
 // you have moved off it a chip leads back. v: the screen the arrows and the picker stay on (day, report, clock).
-export const dateBar = (day, v = 'day', { week = false, here = today() } = {}) => `<div class="datebar daynav">
+// upcoming: the office board's chip to the next 7 days. The chips keep together, on their own line when the date needs it.
+// iconOnly: the title already says the date (a board off today), so the pill shows the calendar alone (the date stays for a screen reader).
+export const dateBar = (day, v = 'day', { week = false, here = today(), upcoming = false, iconOnly = false } = {}) => `<div class="datebar daynav">
   <button class="nav-btn" data-go="${v}/${addDays(day, week ? -7 : -1)}" aria-label="${week ? L('Previous week') : L('Previous day')}">${icon('back')}</button>
-  <label class="day">${icon('cal')}<span>${niceDate(day)}</span>
+  <label class="day${iconOnly ? ' icon-only' : ''}">${icon('cal')}<span>${niceDate(day)}</span>
     <input type="date" value="${day}" data-pick="${v}" aria-label="${week ? L('Pick a week') : L('Pick a date')}"></label>
   <button class="nav-btn" data-go="${v}/${addDays(day, week ? 7 : 1)}" aria-label="${week ? L('Next week') : L('Next day')}">${icon('chev')}</button>
-  ${day === here ? '' : `<button class="chip today-btn" data-go="${v}/${today()}">${week ? L('This week') : L('Today')}</button>`}</div>`;
+  ${day === here && !upcoming ? '' : `<span class="datebar-chips">${day === here ? '' : `<button class="chip today-btn" data-go="${v}/${today()}">${week ? L('This week') : L('Today')}</button>`}${upcoming ? `<button class="chip up-btn" data-go="upcoming/${day}">${L('Upcoming')}</button>` : ''}</span>`}</div>`;
+
+// The day in one quiet line, as Things' Today has no stat tiles: only the parts that are not zero. The board: "6 sheets ·
+// 2 ready for review · 1 blocked · 14.5 of 18 crew-hrs"; Live, given here (who is on site): "6 people in 3 crews
+// · 2 working · 2 ready for review · 1 blocked". Ready for review and blocked are taps in their status color
+// (data-act="sum"; data-uids: the sheets the app scrolls to). '' when there is nothing to say.
+export function daySummary(sheets, here = null) {
+  const n1 = (n, one, many) => (!n ? '' : n === 1 ? one : many); // the words for n things, nothing for none
+  const crews = xs => new Set(xs.map(x => x.crew).filter(Boolean)).size, c = here ? crews(here) : crews(sheets);
+  const ofCrews = n1(c, L('1 crew'), L('{n} crews', { n: c }));
+  const tap = (ts, tone, words) => (ts.length ? `<button type="button" class="sum-go" data-act="sum" data-tone="${tone}" data-uids="${esc(ts.map(t => t.uid).join(' '))}">${esc(words)}</button>` : '');
+  const per = f => sheets.reduce((n, t) => n + f(t) * (t.size || 1), 0), est = per(t => t.est), act = per(t => worked(t) / 60);
+  const review = sheets.filter(t => t.origin !== 'link' && t.status && !t.review), blocked = sheets.filter(t => t.status === 'Blocked'), working = sheets.filter(t => t.aStart && !t.status).length;
+  let parts;
+  if (here) {
+    const people = n1(here.length, L('1 person'), L('{n} people', { n: here.length }));
+    parts = [people && (ofCrews ? L('{people} in {crews}', { people, crews: ofCrews }) : people), n1(working, L('1 working'), L('{n} working', { n: working }))]; // the On site now heading is right under it
+  } else parts = [n1(sheets.length, L('1 sheet'), L('{n} sheets', { n: sheets.length }))]; // the board's crew chips are right under it
+  parts = parts.map(esc);
+  parts.push(tap(review, 'warn', n1(review.length, L('1 ready for review'), L('{n} ready for review', { n: review.length }))), tap(blocked, 'bad', n1(blocked.length, L('1 blocked'), L('{n} blocked', { n: blocked.length }))));
+  if (!here && (est || act)) parts.push(esc(est ? L('{act} of {est} crew-hrs', { act: hrs(act), est: hrs(est) }) : L('{n} crew-hrs', { n: hrs(act) })));
+  const shown = parts.filter(Boolean);
+  return shown.length ? `<p class="day-sum">${shown.map((p, i) => `<span>${p}${i < shown.length - 1 ? ' ·' : ''}</span>`).join(' ')}</p>` : ''; // a line breaks between parts, never before a dot
+}
 
 export const attr = (k, v) => v ? ` ${k}="${esc(v)}"` : '';
 
@@ -567,19 +624,21 @@ const ICONS = {
   message: '<path d="M12 4c4.97 0 9 3.36 9 7.5S16.97 19 12 19c-1.1 0-2.15-.16-3.12-.46L4 20.5l1.4-3.7C3.9 15.5 3 13.6 3 11.5 3 7.36 7.03 4 12 4z"/>',
   mail: '<rect x="3" y="5" width="18" height="14" rx="2.5"/><path d="m3.5 7.5 8.5 6 8.5-6"/>',
   link: '<path d="M10 14a4.5 4.5 0 0 0 6.4 0l3.1-3.1a4.5 4.5 0 0 0-6.4-6.4l-1.1 1.1"/><path d="M14 10a4.5 4.5 0 0 0-6.4 0l-3.1 3.1a4.5 4.5 0 0 0 6.4 6.4l1.1-1.1"/>',
+  search: '<circle cx="10.5" cy="10.5" r="6.5"/><path d="m20 20-4.9-4.9"/>',
 };
 export const icon = (name, cls = '') => `<svg class="i${cls ? ' ' + cls : ''}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${ICONS[name] || ''}</svg>`;
 
 // The large title each screen opens with: the title, a quiet line under it (sub), the screen's ⋯ menu (more: the
-// data-act it opens) and, on a drill-in screen, the way back (back: { go, label }, a data-go address). render() clears
-// it, so a screen that doesn't call it shows no stale title.
+// data-act it opens) and, on a drill-in screen, the way back (back: { go, label }, a data-go address; or { act, v,
+// label }, a tap the screen handles). render() clears it, so a screen that doesn't call it shows no stale title.
 export function screenHead(title, { sub = '', more = '', back = null } = {}) {
   const $ = id => globalThis.document?.getElementById(id);
   if (!$('title')) return;
   $('title').textContent = title;
   $('subtitle').textContent = sub;
   $('titleMore').innerHTML = more ? `<button class="icon-btn more" data-act="${esc(more)}" aria-label="${L('More actions')}">${icon('more')}</button>` : '';
-  $('headBack').innerHTML = back ? `<button class="link back" data-go="${esc(back.go)}">${icon('back')}<span>${esc(back.label)}</span></button>` : '';
+  const to = back?.act ? `data-act="${esc(back.act)}" data-v="${esc(back.v ?? '')}"` : `data-go="${esc(back?.go)}"`; // a drill-in inside a screen goes back by its tap
+  $('headBack').innerHTML = back ? `<button class="link back" ${to}>${icon('back')}<span>${esc(back.label)}</span></button>` : '';
 }
 
 // An Undo offer that lasts ms. tap() runs undo once, if the offer is still open; it ends by itself after ms, or when
@@ -609,6 +668,7 @@ export function toast(msg, tone = '', { undo, done } = {}) {
   if (undo) el.querySelector('.toast-undo').onclick = () => { el.offer?.tap(); el.classList.remove('show'); };
   el.dataset.tone = tone;
   el.classList.add('show');
+  el.at = Date.now(); // tasks.html route(): a toast older than the move to another screen goes
   clearTimeout(el.timer);
   el.timer = setTimeout(() => el.classList.remove('show'), undo ? UNDO_MS : TOAST_MS);
 }
@@ -708,7 +768,7 @@ export const ask = async (msg, yes, tone = 'primary') => (await choose(msg, [[tr
 // The share sheet: the message, then one big row per way to send it (Share, Text message, Email, Copy link). The link
 // itself sits quietly at the bottom, for when copying is refused and it has to be selected by hand. The title's hyphens
 // don't break (T1019-01 stays on one line).
-export function sendSheet({ title, text, url }) {
+export function sendSheet({ title, text, url, note = L('The work details are inside the link itself.') }) { // note: the line under the ways to send it
   const msg = `${text}\n${url}`, way = (ic, label) => `${icon(ic)}<span>${label}</span>`;
   const d = sheet(`<h3>${esc(title).replace(/(\w)-(\w)/g, '$1\u2011$2')}</h3><p class="preview">${esc(text)}</p>
     <div class="btns share-acts">
@@ -717,7 +777,7 @@ export function sendSheet({ title, text, url }) {
       <a class="btn" href="mailto:?subject=${encodeURIComponent(title)}&body=${encodeURIComponent(msg)}">${way('mail', L('Email'))}</a>
       <button class="btn" data-s="copy">${way('link', L('Copy link'))}</button>
     </div>
-    <p class="hint">${url.length > 1800 ? L('Long link: send by iMessage, WhatsApp or email. Some plain SMS apps cut long links.') + ' ' : ''}${L('The work details are inside the link itself.')}</p>
+    <p class="hint">${url.length > 1800 ? L('Long link: send by iMessage, WhatsApp or email. Some plain SMS apps cut long links.') + ' ' : ''}${note}</p>
     <textarea class="linkbox" readonly rows="2" aria-label="${L('Link')}">${esc(url)}</textarea>`);
   d.classList.add('share');
   d.addEventListener('click', e => {
@@ -868,8 +928,11 @@ export async function savePdf(filename, bytes) {
 
 const OUTBOX = 'schwab.outbox';
 // A record with no valid date (saved before blank dates were fixed) is refused forever; drop it.
-// Its sheet is re-dated on load and filed again, so nothing is lost.
-const box = () => load(OUTBOX, []).filter(x => isDay(x?.date));
+// Its sheet is re-dated on load and filed again, so nothing is lost. A backup file gets passed around, so only a PDF
+// (base64 of %PDF-...) and only its own fields go out: whatever else a crafted item carries (ping, url) is never sent.
+const clean = list => (Array.isArray(list) ? list : []).filter(x => isDay(x?.date) && typeof x.pdf === 'string' && x.pdf.length % 4 === 0 && /^JVBERi[0-3][A-Za-z0-9+/]*={0,2}$/.test(x.pdf))
+  .map(({ date, name, pdf, v }) => ({ date, name, pdf, v }));
+const box = () => clean(load(OUTBOX, []));
 const same = (a, b) => a.date === b.date && a.name === b.name;
 const sameCopy = (a, b) => same(a, b) && a.pdf === b.pdf && a.v === b.v;
 export const queue = item => save(OUTBOX, [...box().filter(x => !same(x, item)), item]);
@@ -911,7 +974,7 @@ export const flush = s => (flushing ||= (async () => {
     } catch (e) {
       if (!(e instanceof TypeError)) { // refused: back of the line, so it can't hold up the records behind it
         error = e.message;
-        save(OUTBOX, [...box().filter(x => !sameCopy(x, item)), item]);
+        if (box().some(x => sameCopy(x, item))) save(OUTBOX, [...box().filter(x => !sameCopy(x, item)), item]); // a newer edit already replaced this refused copy
       }
       break; // no signal or a refusal: one try per flush keeps a wrong site code from re-sending every PDF
     }
@@ -921,17 +984,21 @@ export const flush = s => (flushing ||= (async () => {
 
 // file: { date, name, bytes, v }. v is the record's last edit time, preserved in the receiver's
 // metadata so an older offline edit can be distinguished without deleting newer records.
-export async function fileAway(s, f) {
-  if (!s.folderUrl) return;
+// onQueued() runs once the PDF is queued, before any upload: the caller marks its record filed there, so a screen left
+// mid-upload (or a page closed) doesn't queue the same version again with a new "Saved" minute, a second PDF.
+export async function fileAway(s, f, onQueued) {
+  if (!s.folderUrl) return false;
   const item = { date: f.date, name: f.name, pdf: b64(f.bytes), v: f.v || 0 };
-  if (!isDay(item.date)) return; // the folder refuses an impossible day; never claim it was filed
-  if (!queue(item)) return toast(L("This phone is out of space, so the PDF wasn't queued. Use Save as PDF."), 'bad');
+  if (!isDay(item.date)) return false; // the folder refuses an impossible day; never claim it was filed
+  if (!queue(item)) { toast(L("This phone is out of space, so the PDF wasn't queued. Use Save as PDF."), 'bad'); return false; }
+  onQueued?.();
   const waiting = () => box().some(x => sameCopy(x, item));
   let r = await flush(s);
   if (waiting()) r = await flush(s); // another upload was mid-way, or a refused record went first; go again for this one
   // Report on this record only; another record's refusal is not this one's failure.
   toast(!waiting() ? L('Saved to the review folder') : r.error ? L('Review folder said: {error}. Kept on this phone; check Settings.', { error: folderSays(r.error) })
     : L('Saved on this phone. It goes to the review folder when there is signal.'), waiting() && r.error ? 'bad' : '');
+  return true; // queued durably, even if delivery must retry later
 }
 
 export function retryUploads(s) {
@@ -941,7 +1008,8 @@ export function retryUploads(s) {
 
 // ---------- settings (office only: behind the passcode) ----------
 
-export function settingsView(s) {
+// hub: the Settings > Hub group (live.mjs hubSettingsView), between the checks and the review folder.
+export function settingsView(s, hub = '') {
   const roles = ['Crew member', 'Superintendent', 'Project manager']; // a crew phone (set on its first run) shows no office words
   const n = queued();
   return `<div class="settings">
@@ -950,7 +1018,7 @@ export function settingsView(s) {
       ${field(L('Your name'), 's.me', s.me, { ph: L('Used for "Assigned by", sign-offs') })}
       ${pickRow(L('Your role'), 's.role', s.role, roles.map(r => [r, L(r)]))}</div>`)}
     ${setSec(L('Office passcode'), `<div class="fgroup">${actRow('changePin', L('Change the passcode'))}</div>`,
-      L("Opens task setup, the daily report, settings and the PM's crew hours. Crew sheets and the time clock stay open to everyone. Use the same code on the PM's and the superintendent's phones. Crew phones learn it from the first task sheet they open."))}
+      L("Opens the office screens. Use the same code on the PM's and the superintendent's phones."))}
     ${setSec(L('Project'), `<div class="fgroup">${field(L('Project'), 's.project', s.project)}${field(L('Location'), 's.site', s.site)}
       ${field(L('Superintendent'), 's.super', s.super)}${field(L('Project manager'), 's.pm', s.pm)}</div>`)}
     ${setSec(L('Floors / levels'), linesBox('s.floors', s.floors, L('Floors / levels')), L('One per line. They show up as quick picks; you can still type any floor.'))}
@@ -959,6 +1027,7 @@ export function settingsView(s) {
       ${s.people.some(p => !p.crewId) ? `<div class="crew-edit"><h4 class="caption">${L('Not on a crew')}</h4><div class="fgroup">${whoRows(s, '')}</div></div>` : ''}
       <button class="btn wide" data-act="addCrew">${L('+ Add crew')}</button>`)}
     ${setSec(L('Finish / accuracy checks'), linesBox('s.checks', s.checks, L('Finish / accuracy checks')), L('One per line. Tap them onto a task as required checks.'))}
+    ${hub}
     ${setSec(L('Review folder'), `<div class="fgroup">${field(L('Folder upload link'), 's.folderUrl', s.folderUrl, { wide: true, ph: 'https://script.google.com/macros/s/.../exec', mode: 'url' })}
       ${field(L('Site code'), 's.siteCode', s.siteCode, { type: 'password' })}${actRow('testFolder', L('Test the connection'))}</div>`,
       [n ? L('Waiting to upload: {n}', { n }) : L('Nothing waiting to upload.'), L('Optional PDF filing needs an owner-approved Google Drive receiver. Enter its upload link and code manually on each phone that should upload. Task links do not carry the upload code or change these settings.')])}
@@ -970,8 +1039,8 @@ export function settingsView(s) {
 }
 // iOS Settings: a caption over each grouped list and quiet notes under it. Fields are .fgroup rows (the Daily
 // report's); a choice is a row that opens the phone's own picker; an action is a tinted row.
-const setSec = (title, body, notes = []) => `<section class="set"><h3 class="caption">${title}</h3>${body}${[].concat(notes).map(t => `<p class="hint set-note">${t}</p>`).join('')}</section>`;
-const actRow = (act, label) => `<button type="button" class="row set-act" data-act="${act}">${label}</button>`;
+export const setSec = (title, body, notes = []) => `<section class="set"><h3 class="caption">${title}</h3>${body}${[].concat(notes).map(t => `<p class="hint set-note">${t}</p>`).join('')}</section>`;
+export const actRow = (act, label, attrs = '') => `<button type="button" class="row set-act" data-act="${act}"${attrs}>${label}</button>`;
 const linesBox = (k, list, label) => `<div class="fgroup"><label class="field"><textarea data-k="${k}" data-lines rows="6" aria-label="${esc(label)}">${esc(list.join('\n'))}</textarea></label></div>`;
 // The name on the left, the value on the right; the select lies over the whole row, so a tap anywhere opens the
 // phone's picker. A value not in the list (no role yet) shows blank, so picking the first option still counts.
@@ -992,7 +1061,7 @@ function crewEditor(s, c, i, ph) {
     </div><button class="link danger" data-act="delCrew" data-i="${i}">${L('Remove {name}', { name: esc(crew) })}</button></div>`;
 }
 // The people on a crew (crewId '': on none) as rows. The initials are drawn by CSS from data-ini, so a row's text is the name alone.
-const initials = name => name.split(' ').slice(0, 2).map(w => Array.from(w)[0]).join('').toUpperCase();
+export const initials = name => name.split(' ').slice(0, 2).map(w => Array.from(w)[0]).join('').toUpperCase();
 const whoRows = (s, crewId) => s.people.filter(p => p.crewId === crewId).map(p =>
   `<button type="button" class="row who-row" data-act="pEdit" data-pid="${esc(p.id)}" data-ini="${esc(initials(p.name))}"><span class="row-main">${esc(p.name)}</span>${icon('chev', 'chev')}</button>`).join('');
 
@@ -1077,17 +1146,24 @@ export async function settingsAct(act, s, el, change = f => { f(s); save(KEYS.se
   save(KEYS.settings, s);
 }
 
-// Everything this phone keeps, as stored, except the hub key: a backup file gets passed around, and the PM can send a
+// Everything this phone keeps, including pending PDFs, as stored, except the hub key: a backup file gets passed around, and the PM can send a
 // new invite. The device secret goes along, so a restored phone keeps its own hours.
+const SYNC = 'schwab.hubSync'; // sync.mjs keeps it, and restoreData below says why it travels with a backup
 export function backupData() {
-  const data = Object.fromEntries(Object.values(KEYS).map(k => [k, load(k, null)]));
-  if (data[KEYS.settings] && typeof data[KEYS.settings] === 'object') data[KEYS.settings] = { ...data[KEYS.settings], hubKey: '' };
+  const data = Object.fromEntries([...Object.values(KEYS), OUTBOX, SYNC].map(k => [k, load(k, null)]));
+  for (const k of [KEYS.settings, KEYS.hub]) if (data[k] && typeof data[k] === 'object') data[k] = { ...data[k], hubKey: '' };
   return data;
 }
 export const isBackup = data => !!data && typeof data === 'object' && Object.values(KEYS).some(k => k in data);
 // Writes every key the backup has; false if the phone ran out of space part way. A backup's settings bring their own
-// roster (or, from before people had ids, none), never this phone's old one.
-export const restoreData = data => (data[KEYS.settings] == null || save(KEYS.roster, null)) && Object.values(KEYS).every(k => data[k] == null || save(k, data[k]));
+// roster (or, from before people had ids, none), never this phone's old one. The hub sync's record of what the hub had of
+// each record (sync.mjs schwab.hubSync) comes along and is written last: it describes the restored records, so only what
+// was unsynced at backup time goes up and what the hub got since comes back. This phone's own record described the old
+// stores, so it goes first; with none in the backup (or a restore cut short) the next round merges pull-first.
+export const restoreData = data => {
+  try { localStorage.removeItem(SYNC); } catch {}
+  return (data[KEYS.settings] == null || save(KEYS.roster, null)) && [...Object.values(KEYS), OUTBOX, SYNC].every(k => data[k] == null || save(k, k === OUTBOX ? clean(data[k]) : data[k]));
+};
 
 export async function restore(file) {
   let data;
@@ -1100,4 +1176,120 @@ export async function restore(file) {
 
 export function registerSW() {
   if ('serviceWorker' in navigator && isSecureContext) navigator.serviceWorker.register('sw.js').catch(() => {});
+}
+
+// ---------- Quick Find (Things 3): search everything on this phone ----------
+// The search sheet, the days a search names, the matches in bold and the pull down that opens it. What there is to find
+// is the app's (tasks.html quickFind): only what this phone shows, so a crew phone never finds the office's records.
+
+// Every typed word must be found (AND); case, accents and punctuation don't count, as in nameKey ('jose l3' finds 'José, L3-14').
+export const findWords = q => [...new Set(nameKey(q).split(' ').filter(Boolean))];
+// Each character folded on its own the way nameKey folds, with where it came from, so a match maps back to what was typed.
+function fold(text) {
+  const cs = Array.from(String(text ?? '')), at = [];
+  let f = '';
+  cs.forEach((c, i) => { const k = c.normalize('NFD').replace(/[\u0300-\u036f]/g, '').replace(/[^\p{L}\p{N}]/gu, ' ').toLowerCase(); for (let j = 0; j < k.length; j++) at.push(i); f += k; });
+  return { cs, at, f };
+}
+// The text, escaped, with every match of a word in bold (an accent typed as its own mark stays with its letter).
+export function marked(text, words) {
+  const { cs, at, f } = fold(text), on = cs.map(() => false), has = new Set(at);
+  for (const w of words) for (let p = f.indexOf(w); p >= 0; p = f.indexOf(w, p + 1)) for (let i = at[p]; i <= at[p + w.length - 1]; i++) on[i] = true;
+  for (let i = 1; i < cs.length; i++) if (!has.has(i)) on[i] = on[i - 1];
+  return cs.map((c, i) => (on[i] && !on[i - 1] ? '<b>' : '') + esc(c) + (on[i] && !on[i + 1] ? '</b>' : '')).join('');
+}
+// A long text from a little before its first match, on one line (the end is cut by CSS).
+function around(text, words) {
+  const { cs, at, f } = fold(text), p = Math.min(...words.map(w => f.indexOf(w)).filter(x => x >= 0)), i = at[p] ?? 0;
+  const sp = i > 24 ? cs.indexOf(' ', i - 18) : -1, start = sp >= 0 && sp < i ? sp + 1 : i > 24 ? i - 18 : 0;
+  return (start ? '…' : '') + cs.slice(start).join('').replace(/\s+/g, ' ');
+}
+
+// Quick Find's days: those a search names ('tomorrow', 'oct 21', 'mié 21', '10/21', '2026-10-21'), nearest to here first
+// (a year either way, at most 31). A word with a letter starts a word of the day's name in English or Spanish (weekday,
+// month, today, tomorrow, yesterday); a number is one of its numbers. A lone number names no day: '3' is not a date.
+let dayWords = null; // [day, its words] for the year either side of here, made once a day
+export function daysNamed(words, here = today()) {
+  if (!words.length || (words.length === 1 && !/\D/.test(words[0]))) return [];
+  if (dayWords?.here !== here) {
+    const names = (k, d) => ['en', 'es'].flatMap(l => ['long', 'short'].map(w => new Intl.DateTimeFormat(locale(l), { [k]: w }).format(d)));
+    const wd = Array.from({ length: 7 }, (_, i) => names('weekday', new Date(2026, 0, 4 + i, 12))), mo = Array.from({ length: 12 }, (_, i) => names('month', new Date(2026, i, 15, 12))); // 2026-01-04 is a Sunday
+    const rel = { [here]: 'Today', [addDays(here, 1)]: 'Tomorrow', [addDays(here, -1)]: 'Yesterday' };
+    dayWords = { here, list: Array.from({ length: 731 }, (_, i) => addDays(here, i % 2 ? (i + 1) / 2 : -i / 2)).map(d => {
+      const dt = new Date(d + 'T12:00'), [y, m, n] = d.split('-');
+      return [d, nameKey([...wd[dt.getDay()], ...mo[dt.getMonth()], y, m, n, +m, +n, ...(rel[d] ? ['en', 'es'].map(l => L(rel[d], {}, l)) : [])].join(' ')).split(' ')];
+    }) };
+  }
+  return dayWords.list.filter(([, ks]) => words.every(w => (/\D/.test(w) ? ks.some(k => k.startsWith(w)) : ks.includes(w)))).slice(0, 31).map(([d]) => d);
+}
+
+// The Quick Find sheet: a search box, focused at once so the phone's keyboard opens, and the results as you type under
+// small headings, 8 a group until Show all. search(words) returns [[heading, items]] of matches (no words: the recent
+// sheets). An item is { lead (markup), title, tag (quiet, after the title), sub (plain text), dot (a crew dot before sub),
+// style, texts (everything it was found in) } and whatever pick needs; a word the title, tag and sub lack shows in a line
+// of the text it was found in.
+// A tap on a result, or Enter for the first, closes the sheet and calls pick(item). Esc, the ✕ or a swipe down closes it.
+const FIND_MAX = 8;
+export function findSheet(search, pick) {
+  const d = sheet(`<h3 class="sr">${L('Quick Find')}</h3><div class="find-top"><label class="find-box">${icon('search')}<input type="search" enterkeyhint="search" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false" aria-label="${L('Search sheets, people and days')}" placeholder="${L('Sheets, people and days')}"></label></div>
+    <p class="sr" role="status"></p><div class="find-out"></div>`);
+  d.classList.add('find');
+  d.querySelector('.find-top').append(d.querySelector('.sheet-in > form')); // the ✕ stays beside the box while the results scroll
+  const box = d.querySelector('.find-box input'), out = d.querySelector('.find-out'), say = d.querySelector('[role=status]'), all = new Set();
+  let shown = [], timer = 0;
+  const row = (it, words) => {
+    const seen = nameKey(`${it.title} ${it.tag} ${it.sub}`), miss = words.filter(w => !seen.includes(w)), more = miss.length ? (it.texts || []).find(s => miss.some(w => nameKey(s).includes(w))) : '';
+    shown.push(it);
+    return `<button type="button" class="row" data-find="${shown.length - 1}"${it.style ? ` style="${it.style}"` : ''}><span class="row-lead">${it.lead}</span><span class="row-main"><span class="row-title">${marked(it.title, words)}${it.tag ? ` <span class="find-tag">${marked(it.tag, words)}</span>` : ''}</span>`
+      + `${it.sub ? `<span class="row-sub">${it.dot ? '<i class="dot"></i> ' : ''}${marked(it.sub, words)}</span>` : ''}${more ? `<span class="row-sub find-more">${marked(around(more, words), words)}</span>` : ''}</span>${icon('chev', 'chev')}</button>`;
+  };
+  const draw = () => {
+    const q = box.value.trim(), words = findWords(q), groups = search(words).filter(([, items]) => items.length), n = groups.reduce((s, [, items]) => s + items.length, 0);
+    shown = [];
+    out.innerHTML = groups.map(([head, items]) => {
+      const some = all.has(head) ? items : items.slice(0, FIND_MAX);
+      return `<h4 class="caption find-h">${esc(head)}</h4><div class="list lead" data-g="${esc(head)}">${some.map(it => row(it, words)).join('')}</div>`
+        + (some.length < items.length ? `<button type="button" class="link find-all" data-all="${esc(head)}">${L('Show all')} (${items.length})</button>` : '');
+    }).join('') || `<p class="find-none">${esc(words.length ? L('No matches for “{q}”', { q }) : L('Try a room, a name or a day, like “tomorrow”.'))}</p>`;
+    say.textContent = !words.length ? '' : n === 1 ? L('1 result') : n ? L('{n} results', { n }) : L('No matches for “{q}”', { q });
+  };
+  d.addEventListener('click', e => {
+    const a = e.target.closest('[data-all]'), r = e.target.closest('[data-find]');
+    if (a) { all.add(a.dataset.all); draw(); out.querySelector(`[data-g="${CSS.escape(a.dataset.all)}"]`)?.children[FIND_MAX]?.focus(); } // focus goes on to the first row it showed
+    if (r) { d.close(); pick(shown[+r.dataset.find]); }
+  });
+  box.addEventListener('input', () => { clearTimeout(timer); timer = setTimeout(draw, 80); });
+  box.addEventListener('keydown', e => {
+    if (e.key === 'Escape') { e.preventDefault(); d.close(); }
+    if (e.key !== 'Enter') return;
+    e.preventDefault();
+    clearTimeout(timer);
+    draw();
+    if (shown[0]) { d.close(); pick(shown[0]); }
+  });
+  draw();
+  box.focus();
+  return d;
+}
+
+// Pull down past the top of the page by about 64 px and let go: open(), as in Things. Touch only, only while can() says so,
+// and never from the + (it drags). The page's own bounce is left alone. mark() is the element that shows the pull (the
+// search button): it grows a little as the finger pulls, and fills in once letting go will open it.
+export function pullDown(can, open, mark) {
+  let y0 = null, x0 = 0, el = null;
+  const show = p => {
+    el ||= mark();
+    el?.style.setProperty('--pull', p.toFixed(2));
+    el?.classList.toggle('armed', p >= 1);
+  };
+  const stop = () => { y0 = null; if (el) { show(0); el = null; } };
+  addEventListener('touchstart', e => { x0 = e.touches[0].clientX; y0 = e.touches.length === 1 && scrollY <= 0 && !e.target.closest?.('.fab') && can() ? e.touches[0].clientY : null; }, { passive: true });
+  addEventListener('touchmove', e => {
+    if (y0 == null) return;
+    const dy = e.touches[0].clientY - y0;
+    if (dy < -8 || scrollY > 0 || e.touches.length > 1 || Math.abs(e.touches[0].clientX - x0) > Math.max(24, dy)) return stop(); // a scroll, a pinch or a sideways swipe
+    show(Math.min(1, Math.max(0, dy) / 64));
+  }, { passive: true });
+  addEventListener('touchend', () => { const go = y0 != null && !!el?.classList.contains('armed'); stop(); if (go && can()) open(); });
+  addEventListener('touchcancel', stop);
 }

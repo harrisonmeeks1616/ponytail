@@ -107,15 +107,27 @@ check('repeat identical receipt returns prior link without another PDF', () => {
   assert.equal(r.ok, true); assert.equal(r.duplicate, true);
   assert.equal(s.changes.filter(x => x.type === 'create').length, 0);
 });
+check('retry of the last allowed PDF still returns its receipt after the daily cap', () => {
+  const s = session({ duplicate: true, properties: {
+    RATE_UTC_DAY: new Date().toISOString().slice(0, 10), RATE_COUNT: '300' } });
+  const r = s.request(body());
+  assert.equal(r.ok, true); assert.equal(r.duplicate, true);
+  assert.equal(s.state.RATE_COUNT, '300', 'a retry uses no upload capacity');
+  assert.deepEqual(s.changes, [{ type: 'unlock' }], 'no folder or PDF created');
+});
 check('PDF creation failure preserves earlier files and releases lock', () => {
   const s = session({ failCreate: true }); const r = s.request(body());
   assert.equal(r.ok, false); assert.deepEqual(s.changes, [{ type: 'unlock' }]);
 });
-check('daily cap prevents new date folders as well as PDF creation', () => {
-  const s = session({ newDay: true, properties: {
-    RATE_UTC_DAY: new Date().toISOString().slice(0, 10), RATE_COUNT: '300' } });
-  assert.equal(s.request(body()).ok, false);
-  assert.equal(s.changes.filter(x => x.type === 'create').length, 0);
+check('a new receipt at the daily cap is refused without a date folder, a PDF or used capacity', () => {
+  for (const newDay of [true, false]) {
+    const s = session({ newDay, properties: {
+      RATE_UTC_DAY: new Date().toISOString().slice(0, 10), RATE_COUNT: '300' } });
+    const r = s.request(body());
+    assert.equal(r.ok, false); assert.equal(r.error, 'Daily upload limit reached; ask the owner');
+    assert.equal(s.state.RATE_COUNT, '300');
+    assert.deepEqual(s.changes, [{ type: 'unlock' }], 'no folder or PDF created');
+  }
 });
 check('manifest requests only drive.file and starts owner-only', () => {
   const manifest = JSON.parse(fs.readFileSync(path.join(dir, 'appsscript.json'), 'utf8'));

@@ -78,18 +78,18 @@ function doPost(e) {
     const utcDay = now.toISOString().slice(0, 10);
     const lastDay = props.getProperty('RATE_UTC_DAY');
     const count = lastDay === utcDay ? Number(props.getProperty('RATE_COUNT') || 0) : 0;
-    if (!Number.isSafeInteger(count) || count >= MAX_UPLOADS_PER_UTC_DAY) {
-      return reply_({ ok: false, error: 'Daily upload limit reached; ask the owner' });
-    }
-    const day = dayFolder_(d.date, root);
-    const existing = Drive.Files.list({
+    const capped = !Number.isSafeInteger(count) || count >= MAX_UPLOADS_PER_UTC_DAY;
+    // A lost response to the last allowed upload must still be acknowledged on retry.
+    const day = dayFolder_(d.date, root, !capped);
+    const existing = day ? Drive.Files.list({
       q: "'" + day.id + "' in parents and trashed = false and appProperties has { key='schwabReceipt' and value='" + receipt + "' }",
       pageSize: 1,
       fields: 'files(id,webViewLink)'
-    }).files || [];
+    }).files || [] : [];
     if (existing.length) {
       return reply_({ ok: true, duplicate: true, url: existing[0].webViewLink || '' });
     }
+    if (capped) return reply_({ ok: false, error: 'Daily upload limit reached; ask the owner' });
     // Reserve capacity before creation: a failed create never deletes an old file.
     props.setProperties({ RATE_UTC_DAY: utcDay, RATE_COUNT: String(count + 1) });
     const suffix = now.toISOString().replace(/[-:.]/g, '') + '-' + receipt.slice(0, 12);
@@ -122,7 +122,7 @@ function requireFolder_() {
   return folder.id;
 }
 
-function dayFolder_(date, root) {
+function dayFolder_(date, root, create) {
   const found = Drive.Files.list({
     q: "'" + root + "' in parents and trashed = false and mimeType = 'application/vnd.google-apps.folder' and appProperties has { key='schwabDay' and value='" + date + "' }",
     pageSize: 2,
@@ -132,6 +132,7 @@ function dayFolder_(date, root) {
     throw new Error('Ambiguous app-created date folder');
   }
   if ((found.files || []).length) return found.files[0];
+  if (!create) return null;
   return Drive.Files.create({
     name: date,
     mimeType: 'application/vnd.google-apps.folder',

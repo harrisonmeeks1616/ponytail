@@ -43,7 +43,7 @@ const HUB_TZ = 'America/New_York'; // the job's time zone; appsscript.json sets 
 const MAX_BODY = 1000000, MAX_PER_KIND = 200, MAX_ENTITY = 45000, MAX_CELL = 49000, MAX_LIST = 500;
 const MAX_TR_ITEMS = 25, MAX_TR_CHARS = 2000, TR_CACHE_S = 21600, TR_CAP_DEFAULT = 1500;
 const SKEW_MS = 5 * 60 * 1000, TOMBSTONE_DAYS = 90, OPEN_SHIFT_MS = 16 * 36e5;
-const BAD_KEY_LIMIT = 30, WINDOW_S = 60, PUSH_CAP_KEY = 300, PUSH_CAP_DEV = 40; // per minute
+const WINDOW_S = 60, PUSH_CAP_KEY = 300, PUSH_CAP_DEV = 40; // per minute
 const CELL_LIMIT = 10000000, SELFTEST_DAY = '2000-01-01';
 const FORMAT = {
   uid: /^[\w-]{1,40}$/, date: /^\d{4}-\d{2}-\d{2}$/, time: /^([01]\d|2[0-3]):[0-5]\d(?::[0-5]\d)?$/,
@@ -75,16 +75,24 @@ const KINDS = { task: 'tasks', tasks: 'tasks', shift: 'shifts', shifts: 'shifts'
 // 's' = short text (200 chars), 't' = long text (8000), 0 = number >= 0, false/true = boolean (the default is kept).
 // Local-only task fields (origin, from, gotAt, filedAt, updatedAt) are not here: they never leave a phone.
 const ASSIGN = ['id', 'date', 'by', 'floor', 'area', 'crew', 'crewId', 'members', 'memberIds', 'size', 'scope', 'refs', 'allot', 'allotNote', 'est', 'estNote', 'pStart', 'pStop', 'checkIn'];
-const CREW = ['lead', 'aStart', 'aStop', 'delay', 'status', 'doneText', 'remain', 'comments', 'cLang', 'resultAt'];
-const OFFICE_EXTRA = ['review', 'reviewer', 'followUp', 'reply', 'replyAt', 'replyBy', 'aLang', 'sentAt'];
+const CREW = ['lead', 'aStart', 'aStop', 'delay', 'status', 'doneText', 'remain', 'comments', 'cLang', 'cLangs', 'resultAt'];
+const OFFICE_EXTRA = ['review', 'reviewer', 'followUp', 'reply', 'replyAt', 'replyBy', 'aLang', 'aLangs', 'sentAt'];
 const ITEM = { id: 's', text: 's', done: false, at: 0 };
 const TASK = {
   uid: 's', id: 's', date: 's', by: 's', floor: 's', area: 's', crew: 's', crewId: 's', members: ['s'], memberIds: ['s'], size: 0, scope: 't', refs: 't',
   allot: 0, allotNote: 't', est: 0, estNote: 't', pStart: 's', pStop: 's', checkIn: 's',
   items: [ITEM], checks: [ITEM],
-  review: 's', reviewer: 's', followUp: 't', reply: 't', replyAt: 0, replyBy: 's', aLang: 's', sentAt: 0, assignAt: 0,
-  lead: 's', aStart: 's', aStop: 's', delay: 0, status: 's', doneText: 't', remain: 't', comments: 't', cLang: 's', resultAt: 0, crewAt: 0,
+  review: 's', reviewer: 's', followUp: 't', reply: 't', replyAt: 0, replyBy: 's', aLang: 's', aLangs: {}, sentAt: 0, assignAt: 0,
+  lead: 's', aStart: 's', aStop: 's', delay: 0, status: 's', doneText: 't', remain: 't', comments: 't', cLang: 's', cLangs: {}, resultAt: 0, crewAt: 0,
 };
+// aLangs (office part) and cLangs (crew part): the language each typed text is in, by its field or a step's id ({scope: 'es',
+// reply: 'en', <step id>: 'es'}), so a PM and a superintendent, or two crew phones, can type in different languages.
+const LANG_KEY = /^[A-Za-z0-9][\w-]{0,39}$/;
+function langs_(m) {
+  const out = {};
+  if (isObj_(m)) Object.keys(m).slice(0, 300).forEach(function (k) { if (LANG_KEY.test(k) && (m[k] === 'en' || m[k] === 'es')) out[k] = m[k]; });
+  return out;
+}
 // A shift names the person (pid), the crew (crewId) and the task sheets (uid) by id; who, crew and tasks[].id are the labels
 // they had then, for reading.
 const SHIFT = { id: 's', device: 's', who: 's', pid: 's', date: 's', in: 's', out: 's', crew: 's', crewId: 's', tasks: [{ uid: 's', id: 's' }], edited: { who: false, in: false, out: false }, gone: false, at: 0 };
@@ -96,7 +104,7 @@ const REPORT = {
   floors: [{ floor: 's', crews: [CREW_BLOCK] }],
   next: [{ step: 't', prereq: 't', start: 's', dur: 's', finish: 's', deadline: 's', lead: 's', checkin: 's' }],
   risks: [{ risk: 't', impact: 't', prevent: 't', fallback: 't', owner: 's', by: 's' }],
-  preparedBy: 's', pmReview: 't', updatedAt: 0, lang: 's', pmAt: 0,
+  preparedBy: 's', pmReview: 't', updatedAt: 0, lang: 's', pmLang: 's', pmAt: 0,
 };
 // people is the roster (the source of truth); crews[].members is the derived name list older phones still read.
 const CONFIG = { project: 's', site: 's', super: 's', pm: 's', floors: ['s'], crews: [{ id: 's', name: 's', lead: 's', members: 't' }], people: [{ id: 's', name: 's', crewId: 's' }], checks: ['s'], pin: 's', at: 0 };
@@ -338,12 +346,13 @@ function bump_(cache, name, now) {
     return n;
   } catch (e) { return 0; }
 }
-function trip_(cache) { try { cache.put('busy', '1', WINDOW_S); cache.remove('badkeys'); } catch (e) { /* fail open */ } }
-function isBusy_(cache) { try { return !!cache.get('busy'); } catch (e) { return false; } }
 
+// ponytail: wrong keys are not throttled. Apps Script gives no caller address, so a breaker can only be global, and a global
+// one let anyone with the link stop every phone with 30 junk requests a minute. A 32-character key cannot be guessed online;
+// junk still costs one execution and one properties read, so a big enough flood can use up the daily Properties quota.
+// Caching the key hashes in CacheService would make a wrong key cost no properties read.
 function handle_(e) {
   const cache = CacheService.getScriptCache(), now = Date.now();
-  if (isBusy_(cache)) fail_('busy');
   const body = e && e.postData && e.postData.contents;
   if (typeof body !== 'string') fail_('bad_request');
   if (body.length > MAX_BODY) fail_('too_large');
@@ -352,10 +361,7 @@ function handle_(e) {
   if (!isObj_(req) || req.v !== 1 || typeof req.action !== 'string') fail_('bad_request');
   const P = PropertiesService.getScriptProperties().getProperties(); // one read: keys, rev, sheet id
   const role = roleOf_(req.key, P);
-  if (!role) {
-    if (bump_(cache, 'badkeys', now) >= BAD_KEY_LIMIT) trip_(cache);
-    fail_('unauthorized');
-  }
+  if (!role) fail_('unauthorized');
   if (!own_(ACTIONS, req.action)) fail_('bad_request');
   const rule = ACTIONS[req.action];
   if (rule.roles.indexOf(role) < 0) fail_('forbidden');
@@ -378,13 +384,21 @@ function locked_(ctx, key, run) {
     if (roleOf_(key, ctx.P) !== ctx.role) fail_('unauthorized'); // rotated while this request waited
     ctx.state.rev = Number(ctx.P.REV) || 0;
     const rev0 = ctx.state.rev;
-    try { return run(ctx); } finally { if (ctx.state.rev !== rev0) props.setProperty('REV', String(ctx.state.rev)); }
+    try {
+      if (ctx.P.ARCHIVE_PENDING) {
+        const pending = JSON.parse(ctx.P.ARCHIVE_PENDING), done = finishArchive_(ctx, pending);
+        if (ctx.req.action === 'archive' && ctx.req.before === pending.before) return done;
+      }
+      if (ctx.P.WEEKLY_DIRTY === '1') rewriteWeekly_(ctx); // repair a prior partial write before accepting another one
+      return run(ctx);
+    } finally { if (ctx.state.rev !== rev0) props.setProperty('REV', String(ctx.state.rev)); }
   });
 }
 function nextRev_(ctx) { return ++ctx.state.rev; } // one revision per row written, so paging by rev is exact
 
 function whoami_(ctx) {
-  const out = { role: ctx.role, rev: ctx.state.rev, now: ctx.now, tz: HUB_TZ, version: HUB_VERSION };
+  // dev: the device id this request's devSecret proves ('' without a valid one), so a phone can check it is the one it labels its shifts with
+  const out = { role: ctx.role, rev: ctx.state.rev, now: ctx.now, tz: HUB_TZ, version: HUB_VERSION, dev: ctx.dev };
   if (ctx.role === 'pm' && ctx.id) out.sheetUrl = sheetUrl_(ctx.id);
   return out;
 }
@@ -542,6 +556,8 @@ function prefetch_(ctx, wants) { // wants: {name: [index entries]}; fills ctx.me
 function newBatch_() { return { upd: [], add: {}, del: {}, hours: false }; }
 function rowRange_(name, row) { const t = TABS[name]; return a1_(t, 0, row, t.head.length - 1, row); }
 function flush_(ctx, b) {
+  // The source row can land before a later Sheets call fails. An identical retry must still rebuild its totals.
+  if (b.hours) PropertiesService.getScriptProperties().setProperty('WEEKLY_DIRTY', '1');
   for (let i = 0; i < b.upd.length; i += 100) apiValuesBatchUpdate_(ctx.id, b.upd.slice(i, i + 100));
   const names = Object.keys(b.del);
   if (names.length) { // one atomic request; each tab's runs go bottom up so the row numbers stay right
@@ -601,19 +617,20 @@ function reportRow_(r, rev, now, json) {
 }
 function configRow_(c, rev, now, json) { return rowBase_(TABS.config, [c.project, c.site, c.super, c.pm, stampText_(now)], 'config', rev, json); }
 
-function addEvent_(ctx, b, kind, who, text, ref) { // server-written, append only
+// Server-written, append only. label: what the readable Ref cell shows when the ref is not for people (a task's uid).
+function addEvent_(ctx, b, kind, who, text, ref, label) {
   if (ctx.system) return; // the selftest leaves no trace in the feed
   const rev = nextRev_(ctx), ev = { rev: rev, ts: ctx.now, who: clip_(who || ctx.role, 100), role: ctx.role, kind: kind, text: clip_(text, 300), ref: clip_(ref, 60) };
   const json = JSON.stringify(ev);
-  appendRow_(ctx, b, 'events', [stampText_(ev.ts), ev.who, ev.text, ev.ref, String(rev), rev, json]);
+  appendRow_(ctx, b, 'events', [stampText_(ev.ts), ev.who, ev.text, label ? clip_(label, 60) : ev.ref, String(rev), rev, json]);
   (b.warm || (b.warm = {}))['en:events:' + rev + ':' + rev] = json;
 }
 
-// Load the stored rows for these keys (and every row on these dates, for the twin check) as entries.
-function loadEntries_(ctx, name, norm, keys, dates) {
+// Load the stored rows for these keys as entries.
+function loadEntries_(ctx, name, norm, keys) {
   const idx = readIndex_(ctx, name), want = dict_(), byKey = dict_();
   keys.forEach(function (k) { want[k] = true; });
-  const rows = idx.filter(function (r) { return want[r.key] || (dates && dates[r.date]); });
+  const rows = idx.filter(function (r) { return want[r.key]; });
   const data = readData_(ctx, name, rows.map(function (r) { return r.row; }));
   rows.forEach(function (r) {
     const raw = data[r.row], obj = raw ? norm(raw, ctx.now) : null;
@@ -646,10 +663,13 @@ function normTask_(raw, now) {
   if (!FORMAT.uid.test(t.uid) || !isDay_(t.date)) return null;
   ['pStart', 'pStop', 'checkIn', 'aStart', 'aStop'].forEach(function (k) { if (!FORMAT.time.test(t[k])) t[k] = ''; });
   ['aLang', 'cLang'].forEach(function (k) { if (t[k] !== 'en' && t[k] !== 'es') t[k] = ''; });
+  t.aLangs = langs_(raw.aLangs); t.cLangs = langs_(raw.cLangs);
   if (!FORMAT.uid.test(t.crewId)) t.crewId = '';
   t.memberIds = t.memberIds.map(function (id) { return FORMAT.uid.test(id) ? id : ''; }); // '' keeps the places: memberIds may run next to members
   ['assignAt', 'crewAt', 'replyAt', 'sentAt', 'resultAt'].forEach(function (k) { t[k] = clampStamp_(t[k], now); }); // never more than 5 minutes ahead
   t.items = listIds_(t.items, now); t.checks = listIds_(t.checks, now);
+  // crewBase and assignBase: a part as the phone last had it from the hub, read like a task (one level deep) and never stored
+  ['crewBase', 'assignBase'].forEach(function (k) { if (isObj_(raw[k])) t[k] = normTask_(Object.assign({ date: t.date }, raw[k], { crewBase: null, assignBase: null, uid: t.uid }), now); });
   return t;
 }
 // A task's short id as typed, kept only as a label: printable, at most 40 characters, never starting like a formula.
@@ -674,6 +694,8 @@ function normShift_(raw, now) {
   }).slice(0, 50);
   ['in', 'out'].forEach(function (k) { if (!FORMAT.time.test(s[k])) s[k] = ''; });
   s.at = clampStamp_(s.at, now);
+  s.pmAt = clampStamp_(raw.pmAt, now); // the hub's own merge stamp for PM edits (mergeShift_); phones do not keep it
+  if (isObj_(raw.base)) s.base = normShift_(Object.assign({}, raw.base, { id: s.id, base: null }), now); // a PM push's base: read like a shift, never stored
   return FORMAT.uid.test(s.id) && isDay_(s.date) && s.in ? s : null; // no id, day or clock-in: nothing to log
 }
 function normReport_(raw, now) {
@@ -681,8 +703,10 @@ function normReport_(raw, now) {
   const r = shape_(REPORT, raw);
   if (!isDay_(r.date)) return null;
   if (REPORT_STATUS.indexOf(r.status) < 0) r.status = '';
-  if (r.lang !== 'en' && r.lang !== 'es') r.lang = '';
+  ['lang', 'pmLang'].forEach(function (k) { if (r[k] !== 'en' && r[k] !== 'es') r[k] = ''; });
   ['submittedAt', 'updatedAt', 'pmAt'].forEach(function (k) { r[k] = clampStamp_(r[k], now); });
+  // supBase, pmBase: the superintendent part and the PM part as the phone last had them from the hub, read like a report and never stored; null: it never had one
+  ['supBase', 'pmBase'].forEach(function (k) { if (isObj_(raw[k])) r[k] = normReport_(Object.assign({}, raw[k], { date: r.date, supBase: undefined, pmBase: undefined }), now); else if (raw[k] === null) r[k] = null; });
   return r;
 }
 function normConfig_(raw, now) {
@@ -709,12 +733,39 @@ function structure_(incoming, stored) { // the office decides which items exist;
     return { id: i.id, text: i.text, done: s ? s.done : false, at: s ? s.at : 0 };
   });
 }
-// ponytail: the crew part is replaced whole by the newest stamp, so two crew phones ticking different steps while
-// offline keep only the newer phone's ticks. Upgrade: a stamp per step (untick must carry one too: it sets at to 0).
-function ticks_(stored, incoming) { // the crew ticks items that exist; it cannot add, remove or reword one
+// A crew value the phone sends goes in: with no base, always (its newer stamp took the whole part); with a base, only when
+// the phone changed it since then, and the stored value is still the base's or the phone's stamp is the newer one.
+function takes_(base, newer, mine, was, cur) { const j = JSON.stringify; return !base || (j(mine) !== j(was) && (newer || j(cur) === j(was))); }
+// A list the same way (a sheet's steps, the roster, floors): entries the phone added, removed or changed since its base go
+// in, field by field as above; the stored list's other entries (another phone's adds and edits) stay, and one another phone
+// removed stays removed. Entries match by key_. Without a base the phone's list is taken whole.
+function key_(x) { return isObj_(x) ? x.id || '#' + nameKey_(x.name) : String(x); } // an id; a crew from an older phone by name; a floor or check as itself
+function list3_(stored, mine, base, newer) {
+  if (!base) return mine;
+  const by = function (l) { const m = dict_(); l.forEach(function (x) { m[key_(x)] = x; }); return m; }, S = by(stored), B = by(base);
+  const out = mine.filter(function (x) { return !(B[key_(x)] !== undefined && S[key_(x)] === undefined); }).map(function (x) {
+    const b = B[key_(x)], s = S[key_(x)], o = isObj_(x) && b !== undefined && s !== undefined ? clone_(s) : x;
+    if (o !== x) Object.keys(x).forEach(function (f) { if (takes_(base, newer, x[f], b[f], s[f])) o[f] = x[f]; });
+    return o;
+  });
+  const placed = by(out);
+  let at = 0;
+  stored.forEach(function (x) { // another phone's additions, each after the entry it followed
+    const k = key_(x);
+    if (placed[k] !== undefined) at = out.indexOf(placed[k]) + 1; else if (B[k] === undefined) out.splice(at++, 0, x);
+  });
+  return out;
+}
+function map3_(stored, mine, base, newer) { // a text-language map key by key the same way: each text keeps the language of the phone whose words it has
+  if (!base) return mine;
+  const out = langs_(stored);
+  Object.keys(mine).concat(Object.keys(base)).forEach(function (k) { if (takes_(base, newer, mine[k], base[k], stored[k])) { if (mine[k]) out[k] = mine[k]; else delete out[k]; } });
+  return out;
+}
+function ticks_(stored, incoming, base, newer) { // the crew ticks items that exist; it cannot add, remove or reword one
   return stored.map(function (s) {
-    const i = incoming.find(function (x) { return x.id === s.id; });
-    return i ? { id: s.id, text: s.text, done: i.done, at: i.at } : s;
+    const i = incoming.find(function (x) { return x.id === s.id; }), b = base && (base.find(function (x) { return x.id === s.id; }) || { done: false, at: 0 });
+    return i && takes_(base, newer, [i.done, i.at], b && [b.done, b.at], [s.done, s.at]) ? { id: s.id, text: s.text, done: i.done, at: i.at } : s;
   });
 }
 
@@ -725,22 +776,33 @@ function mergeTask_(ctx, stored, inc) {
   const office = ctx.role !== 'crew';
   if (!stored && !office) return { reason: 'forbidden' }; // only the office creates a task
   const t = stored ? clone_(stored) : shape_(TASK, { uid: inc.uid }), was = stored ? clone_(stored) : null;
-  if (office && (!stored || (inc.assignAt > 0 && inc.assignAt >= t.assignAt))) {
-    ASSIGN.concat(OFFICE_EXTRA).forEach(function (k) { t[k] = inc[k]; });
-    t.items = structure_(inc.items, t.items); t.checks = structure_(inc.checks, t.checks);
-    t.assignAt = inc.assignAt;
+  // Two office phones (assignBase) or two phones on one crew (crewBase): with a base only what this phone changed goes over
+  // the stored part, so neither wipes the other's edits; a field or step both changed goes to the newer stamp. Without
+  // one, the newer stamp takes the whole part.
+  const anew = inc.assignAt > 0 && inc.assignAt >= t.assignAt, abase = stored && inc.assignAt > 0 ? inc.assignBase : null;
+  if (office && (!stored || anew || abase)) {
+    const langs = map3_(t.aLangs, inc.aLangs, abase && abase.aLangs, anew); // key by key, not as one field
+    ASSIGN.concat(OFFICE_EXTRA).forEach(function (k) { if (takes_(abase, anew, inc[k], abase && abase[k], t[k])) t[k] = inc[k]; });
+    t.aLangs = langs;
+    t.items = structure_(list3_(t.items, inc.items, abase && abase.items, anew), t.items); t.checks = structure_(list3_(t.checks, inc.checks, abase && abase.checks, anew), t.checks);
+    t.assignAt = Math.max(t.assignAt, inc.assignAt);
   }
-  if (ctx.role === 'crew' ? inc.crewAt > 0 && inc.crewAt >= t.crewAt : inc.crewAt > t.crewAt) {
-    CREW.forEach(function (k) { t[k] = inc[k]; });
-    t.items = ticks_(t.items, inc.items); t.checks = ticks_(t.checks, inc.checks);
-    t.crewAt = inc.crewAt;
+  const newer = ctx.role === 'crew' ? inc.crewAt > 0 && inc.crewAt >= t.crewAt : inc.crewAt > t.crewAt, base = stored && inc.crewAt > 0 ? inc.crewBase : null;
+  if (newer || base) {
+    const langs = map3_(t.cLangs, inc.cLangs, base && base.cLangs, newer);
+    CREW.forEach(function (k) { if (takes_(base, newer, inc[k], base && base[k], t[k])) t[k] = inc[k]; });
+    t.cLangs = langs;
+    t.items = ticks_(t.items, inc.items, base && base.items, newer); t.checks = ticks_(t.checks, inc.checks, base && base.checks, newer);
+    t.crewAt = Math.max(t.crewAt, inc.crewAt);
   }
-  const ref = t.id || t.uid, ev = [];
-  if (!was) ev.push(['task.created', t.by, 'New task ' + ref + (t.crew ? ' for ' + t.crew : '') + (t.floor ? ', ' + t.floor : ''), ref]);
-  if (t.aStart && !(was && was.aStart)) ev.push(['task.started', t.lead || t.crew, (t.crew || 'Crew') + ' started ' + ref + ' at ' + t12_(t.aStart), ref]);
-  if (['Complete', 'Partial', 'Blocked'].indexOf(t.status) >= 0 && !(was && was.status === t.status)) ev.push(['task.status', t.lead || t.crew, ref + ' marked ' + t.status, ref]);
-  if (t.review && !(was && was.review === t.review)) ev.push(['task.reviewed', t.reviewer, ref + ' reviewed: ' + t.review, ref]);
-  if (t.reply && !(was && was.reply === t.reply && was.replyAt === t.replyAt)) ev.push(['task.replied', t.replyBy, 'Message sent on ' + ref, ref]);
+  // An event points at the sheet by uid (short ids can collide); its text names the short id people read.
+  const name = t.id || t.uid, ref = t.uid, ev = [];
+  if (!was) ev.push(['task.created', t.by, 'New task ' + name + (t.crew ? ' for ' + t.crew : '') + (t.floor ? ', ' + t.floor : ''), ref]);
+  if (t.aStart && !(was && was.aStart)) ev.push(['task.started', t.lead || t.crew, (t.crew || 'Crew') + ' started ' + name + ' at ' + t12_(t.aStart), ref]);
+  if (['Complete', 'Partial', 'Blocked'].indexOf(t.status) >= 0 && !(was && was.status === t.status)) ev.push(['task.status', t.lead || t.crew, name + ' marked ' + t.status, ref]);
+  if (t.review && !(was && was.review === t.review)) ev.push(['task.reviewed', t.reviewer, name + ' reviewed: ' + t.review, ref]);
+  if (t.reply && !(was && was.reply === t.reply && was.replyAt === t.replyAt)) ev.push(['task.replied', t.replyBy, 'Message sent on ' + name, ref]);
+  ev.forEach(function (e) { e.push(name); }); // the Activity tab's Ref cell shows the short id
   return { obj: t, events: ev };
 }
 
@@ -748,22 +810,19 @@ function mergeTask_(ctx, stored, inc) {
 // The phone is ctx.dev, proven by its devSecret: the device a request or a shift claims never picks whose shifts it writes.
 const noEdits_ = { who: false, in: false, out: false };
 function edited_(s) { return s.edited.who || s.edited.in || s.edited.out; }
-function samePerson_(a, b) { return a.pid && b.pid ? a.pid === b.pid : nameKey_(a.who) === nameKey_(b.who); } // two people may share a name
-function mergeShift_(ctx, stored, inc, state) {
-  const plain = ctx.dev !== '' && inc.device === ctx.dev && !inc.gone && !edited_(inc);
+function mergeShift_(ctx, stored, inc) {
+  // Own clock taps carry no pmAt; a timesheet edit does, including Undo with every flag clear.
+  const plain = ctx.dev !== '' && inc.device === ctx.dev && !inc.pmAt && !inc.gone && !edited_(inc), base = stored && inc.base;
+  delete inc.base; // read, never stored
   const ev = [], line = function (verb, s) { return verb + ' ' + (s.who || 'a worker') + ', ' + s.date; };
   let s;
   if (ctx.role !== 'pm' || plain) { // worker rules
     if (ctx.dev === '') return { reason: 'device' };                       // no device secret: no phone to speak for
     if (inc.device === '') return { reason: 'forbidden' };                 // a PM-added shift is the PM's alone
     if (stored && stored.device !== ctx.dev) return { reason: 'device' };  // a key only speaks for the phone it came from
-    if (!stored) {
-      const twin = Object.keys(state.byKey).some(function (k) { // the PM already added this person's day by hand: it stands, this one is filed removed
-        const x = state.byKey[k].obj;
-        return x && x.date === inc.date && !x.gone && !x.device && samePerson_(x, inc);
-      });
-      s = Object.assign({}, inc, { device: ctx.dev, edited: clone_(noEdits_), gone: twin }); // the client never sets edited or gone for itself
-      if (!twin) ev.push([inc.out ? 'clock.out' : 'clock.in', s.who, s.who + (inc.out ? ' clocked out at ' + t12_(s.out) : ' clocked in at ' + t12_(s.in)) + ', ' + s.date, s.id]);
+    if (!stored) { // added even when the PM has entered that day by hand: these are the real punches, for the PM to see and settle
+      s = Object.assign({}, inc, { device: ctx.dev, edited: clone_(noEdits_), gone: false, pmAt: 0 }); // the client never sets edited, gone or pmAt for itself
+      ev.push([inc.out ? 'clock.out' : 'clock.in', s.who, s.who + (inc.out ? ' clocked out at ' + t12_(s.out) : ' clocked in at ' + t12_(s.in)) + ', ' + s.date, s.id]);
     } else {
       s = clone_(stored);
       if (!s.gone) { // a removed shift is never revived
@@ -774,40 +833,94 @@ function mergeShift_(ctx, stored, inc, state) {
         if (s.out && !stored.out) ev.push(['clock.out', s.who, s.who + ' clocked out at ' + t12_(s.out) + ', ' + s.date, s.id]);
       }
     }
-  } else { // PM rules: stored as sent, with two guards
-    s = clone_(inc);
-    if (stored) {
-      s.device = stored.device;                                    // a shift never changes phones
-      if (!s.out && !s.edited.out && stored.out) s.out = stored.out; // a PM phone that has not pulled the clock-out yet must not erase it
-      if (!s.edited.who && stored.at > inc.at) s.who = stored.who;   // nor undo a newer name from the worker's phone
-      s.at = Math.max(stored.at, inc.at);
-    }
+  } else { // PM rules
+    // pmAt orders two PM devices (the PM phone's edit stamp). base: the shift as that PM phone last had it from the hub. With
+    // it only what the phone changed since goes in, a time with its edited flag, as with a sheet's assignBase: a fix on the
+    // laptop and one on the phone both stand, a value both changed goes to the newer pmAt, and a phone that has not pulled a
+    // clock-out or a newer name yet changes neither. Without one the newer pmAt takes the whole shift, with two guards.
+    const newer = !stored || inc.pmAt >= stored.pmAt;
+    if (base) {
+      s = clone_(stored);
+      ['who', 'in', 'out'].forEach(function (f) { if (takes_(base, newer, [inc[f], inc.edited[f]], [base[f], base.edited[f]], [s[f], s.edited[f]])) { s[f] = inc[f]; s.edited[f] = inc.edited[f]; } });
+      ['pid', 'crew', 'crewId', 'tasks', 'date', 'gone'].forEach(function (k) { if (takes_(base, newer, inc[k], base[k], s[k])) s[k] = inc[k]; });
+    } else if (newer) {
+      s = clone_(inc);
+      if (stored) {
+        s.device = stored.device;                                    // a shift never changes phones
+        if (!s.out && !s.edited.out && stored.out) s.out = stored.out; // a PM phone that has not pulled the clock-out yet must not erase it
+        if (!s.edited.who && stored.at > inc.at) s.who = stored.who;   // nor undo a newer name from the worker's phone
+      }
+    } else s = clone_(stored);
+    if (stored) { s.at = Math.max(stored.at, inc.at); s.pmAt = Math.max(stored.pmAt, inc.pmAt); }
     ev.push([stored ? (s.gone && !stored.gone ? 'pm.remove' : 'pm.edit') : 'pm.add', 'PM',
       line(!stored ? 'PM added a shift for' : s.gone && !stored.gone ? 'PM removed a shift for' : 'PM edited', s), s.id]);
   }
   return { obj: s, events: ev };
 }
 
+// A report's superintendent part three ways (supBase), as takes_ and list3_ do a sheet's assignBase: a value this phone
+// changed since its base goes over the stored one; list entries match by their first field (needs by item, decisions by
+// question, floors by floor and a floor's crews by name, next steps by step, risks by risk; the nth of a repeated one to the
+// nth) and merge the same way; another phone's added entries stay, and so does an entry one phone took out and the other
+// changed. ponytail: an entry renamed on one phone and edited on another becomes two entries; nothing typed is lost.
+const SUPER_PART = (function () { const t = clone_(REPORT); ['date', 'updatedAt', 'pmReview', 'pmLang', 'pmAt'].forEach(function (k) { delete t[k]; }); t.decisions = [{ q: 't', rec: 't', by: 's' }]; return t; })();
+function merge3_(tpl, s, m, b, newer) {
+  if (!isObj_(tpl) && !Array.isArray(tpl)) return takes_(true, newer, m, b, s) ? m : s;
+  const o = {};
+  if (!Array.isArray(tpl)) { Object.keys(tpl).forEach(function (k) { o[k] = merge3_(tpl[k], s[k], m[k], b[k], newer); }); return o; }
+  const j = function (x) { return JSON.stringify(shape_(tpl[0], x)); }; // the template's fields only: a decision's PM answer is not the superintendent's part
+  const f = Object.keys(tpl[0])[0], keys = function (l) { const n = dict_(); return l.map(function (x) { const t = String(x[f]); n[t] = (n[t] || 0) + 1; return t + '\n' + n[t]; }); };
+  const ks = keys(s), kb = keys(b), out = [], put = dict_();
+  keys(m).forEach(function (k, i) {
+    const si = ks.indexOf(k), bi = kb.indexOf(k);
+    if (si < 0 && bi >= 0 && j(m[i]) === j(b[bi])) return; // another phone took it out, and this one did not change it
+    out.push(put[k] = si < 0 ? m[i] : merge3_(tpl[0], s[si], m[i], bi < 0 ? shape_(tpl[0], {}) : b[bi], newer));
+  });
+  let at = 0;
+  s.forEach(function (x, i) { // another phone's entries, each after the one it followed; one this phone took out stays out unless the other changed it
+    const k = ks[i], bi = kb.indexOf(k);
+    if (put[k]) at = out.indexOf(put[k]) + 1; else if (bi < 0 || j(x) !== j(b[bi])) out.splice(at++, 0, x);
+  });
+  return out;
+}
+
 // Report. The superintendent owns everything except the PM's decision answers and review.
+// supBase (HUB.md, Report): with it only what this phone changed since goes in (merge3_), so the PM typing one line never
+// wipes the superintendent's report; null is a phone that never had the hub's copy, so everything it has, it added.
+// Without it the newer stamp takes the whole part.
 function mergeReport_(ctx, stored, inc) {
   if (ctx.role === 'crew') return { reason: 'forbidden' };
   const r = stored ? clone_(stored) : shape_(REPORT, { date: inc.date }), was = stored ? clone_(stored) : null, pm = ctx.role === 'pm';
-  if (!stored || (pm ? inc.updatedAt > r.updatedAt : inc.updatedAt > 0 && inc.updatedAt >= r.updatedAt)) {
-    const answers = r.decisions;
-    Object.keys(REPORT).forEach(function (k) { if (k !== 'decisions' && k !== 'pmReview' && k !== 'pmAt') r[k] = inc[k]; });
-    const kept = inc.decisions.map(function (d) {
+  const newer = pm ? inc.updatedAt > r.updatedAt : inc.updatedAt > 0 && inc.updatedAt >= r.updatedAt;
+  const base = stored && inc.updatedAt > 0 && inc.supBase !== undefined ? inc.supBase || shape_(REPORT, { date: inc.date }) : null;
+  if (!stored || newer || base) {
+    const answers = r.decisions, sup = base ? merge3_(SUPER_PART, r, inc, base, newer) : inc;
+    Object.keys(SUPER_PART).forEach(function (k) { if (k !== 'decisions') r[k] = sup[k]; });
+    r.updatedAt = Math.max(r.updatedAt, inc.updatedAt);
+    const kept = sup.decisions.map(function (d) {
       const a = d.q ? answers.find(function (x) { return x.q === d.q; }) : null;
       return { q: d.q, rec: d.rec, by: d.by, pm: a ? a.pm : '', pmNote: a ? a.pmNote : '' };
     });
-    answers.forEach(function (a) { if ((a.pm || a.pmNote) && !kept.some(function (k) { return k.q === a.q; })) kept.push(a); }); // an answer is never dropped
+    // An answer is never dropped, unless the phone had it (its base's pmAt, the PM part it last had) and took its question out or reworded it.
+    // ponytail: by the whole PM part's stamp; an answer to any question since keeps every answered one this push left out, for the next edit.
+    if (!base || base.pmAt < r.pmAt) answers.forEach(function (a) { if ((a.pm || a.pmNote) && !kept.some(function (k) { return k.q === a.q; })) kept.push(a); });
     r.decisions = kept;
   }
-  if (pm && (inc.pmAt > 0 || !stored) && inc.pmAt >= r.pmAt) {
+  // pmBase the same way for the PM part: only the answers (by question) and the review this PM device changed since go in,
+  // so a PM phone and a PM laptop answering different decisions both stand; one both changed goes to the newer pmAt.
+  const pnew = inc.pmAt >= r.pmAt, pbase = stored && inc.pmAt > 0 && inc.pmBase !== undefined ? inc.pmBase || shape_(REPORT, { date: inc.date }) : null;
+  if (pm && (inc.pmAt > 0 || !stored) && (pnew || pbase)) {
+    const none = { pm: '', pmNote: '' }, part = function () { return JSON.stringify([r.decisions, r.pmReview, r.pmLang]); }, before = part();
     inc.decisions.forEach(function (d) {
-      const m = d.q ? r.decisions.find(function (x) { return x.q === d.q; }) : null;
+      const m = d.q ? r.decisions.find(function (x) { return x.q === d.q; }) : null, s = m || none;
+      const b = pbase && ((d.q && pbase.decisions.find(function (x) { return x.q === d.q; })) || none);
+      if (!takes_(pbase, pnew, [d.pm, d.pmNote], b && [b.pm, b.pmNote], [s.pm, s.pmNote])) return;
       if (m) { m.pm = d.pm; m.pmNote = d.pmNote; } else if (d.pm || d.pmNote) r.decisions.push({ q: d.q, rec: d.rec, by: d.by, pm: d.pm, pmNote: d.pmNote });
     });
-    r.pmReview = inc.pmReview; r.pmAt = inc.pmAt;
+    ['pmReview', 'pmLang'].forEach(function (k) { if (takes_(pbase, pnew, inc[k], pbase && pbase[k], r[k])) r[k] = inc[k]; });
+    // pmAt is the PM part's version: it moves past the stored one whenever the PM part changes, also by an older-stamped
+    // answer from a second PM device, so a supBase.pmAt from before that merge reads as not having seen it (GATE2-DATA-02)
+    r.pmAt = Math.max(r.pmAt + (part() !== before ? 1 : 0), inc.pmAt);
   }
   const ev = r.submittedAt > (was ? was.submittedAt : 0) ? [['report.sent', r.super, 'Daily report for ' + r.date + ' sent' + (r.super ? ' by ' + r.super : ''), r.date]] : [];
   return { obj: r, events: ev };
@@ -831,22 +944,25 @@ function pushKind_(ctx, b, name, list) {
     const n = K.norm(raw, ctx.now);
     return n ? { i: i, n: n, key: K.key(n) } : { i: i, key: '', reason: 'invalid' };
   });
-  const good = prep.filter(function (p) { return p.n; }), dates = dict_();
-  good.forEach(function (p) { dates[p.n.date] = true; });
-  const byKey = good.length ? loadEntries_(ctx, name, K.norm, good.map(function (p) { return p.key; }), name === 'shifts' ? dates : null) : dict_();
-  const state = { byKey: byKey };
+  const good = prep.filter(function (p) { return p.n; });
+  const byKey = good.length ? loadEntries_(ctx, name, K.norm, good.map(function (p) { return p.key; })) : dict_();
   prep.forEach(function (p) {
     const rej = function (reason) { res.push({ i: p.i, key: p.key, status: 'rejected', reason: reason }); };
     if (!p.n) return rej(p.reason);
     const entry = byKey[p.key] || (byKey[p.key] = { row: 0, rev: 0, obj: null, json: '' });
-    if ((!entry.obj || ctx.memo.tombs) && tombstones_(ctx)[name + '|' + p.key]) return rej('deleted'); // a purged record is never revived by a stale phone
+    // A purged record is never revived by a stale phone. A report is its day: one sent by a phone that never had the cleared
+    // copy (supBase null) is that day's new report, and its tombstone goes, so a phone that missed the clear does not remove it.
+    const tk = name + '|' + p.key, tomb = (!entry.obj || ctx.memo.tombs) && tombstones_(ctx)[tk];
+    const fresh = tomb && tomb !== true && name === 'reports' && p.n.supBase === null && p.n.updatedAt > 0;
+    if (tomb && !fresh) return rej('deleted');
     const horizon = ctx.system ? '' : ctx.P[K.horizon] || '';
     if (horizon && [p.n.date, entry.obj && entry.obj.date].some(function (d) { return d && d < horizon; })) return rej('archived');
-    const r = K.merge(ctx, entry.obj, p.n, state);
+    const r = K.merge(ctx, entry.obj, p.n);
     if (r.reason) return rej(r.reason);
     if (JSON.stringify(r.obj).length > MAX_CELL) return rej('too_large');
+    if (fresh) { delRow_(b, 'deleted', tomb); delete tombstones_(ctx)[tk]; }
     if (save_(ctx, b, name, entry, r.obj, K.row)) {
-      r.events.forEach(function (e) { addEvent_(ctx, b, e[0], e[1], e[2], e[3]); });
+      r.events.forEach(function (e) { addEvent_(ctx, b, e[0], e[1], e[2], e[3], e[4]); });
       if (name === 'shifts') b.hours = true;
     }
     const o = clone_(entry.obj), item = { i: p.i, key: p.key, status: 'ok' };
@@ -858,16 +974,41 @@ function pushKind_(ctx, b, name, list) {
 
 function pushConfig_(ctx, b, raw) {
   if (ctx.role === 'crew') return { configStatus: 'rejected', configReason: 'forbidden' };
-  const n = JSON.stringify(raw).length > MAX_ENTITY ? null : normConfig_(raw, ctx.now);
+  let n = JSON.stringify(raw).length > MAX_ENTITY ? null : normConfig_(raw, ctx.now);
   if (!n) return { configStatus: 'rejected', configReason: 'invalid' };
   // Config has no stamp in the contract: an optional `at` orders two office phones, otherwise the last push wins.
   n.at = n.at || ctx.now;
-  const entry = loadEntries_(ctx, 'config', normConfig_, ['config'], null).config || { row: 0, rev: 0, obj: null, json: '' };
-  const roster = function (c) { return JSON.stringify(c ? [c.people, c.crews] : [[], []]); }, was = roster(entry.obj);
-  if ((!entry.obj || n.at >= entry.obj.at) && save_(ctx, b, 'config', entry, n, configRow_) && roster(n) !== was) b.hours = true; // Weekly totals show the roster's names
+  const entry = loadEntries_(ctx, 'config', normConfig_, ['config']).config || { row: 0, rev: 0, obj: null, json: '' };
+  if (entry.obj) keepRoster_(n, entry.obj, raw);
+  // base: the settings as this phone last had them from the hub. With it only what the phone changed since goes in, as with
+  // a sheet's assignBase: two office phones adding people at once both keep theirs.
+  const s = entry.obj, base = s && isObj_(raw.base) ? normConfig_(raw.base, ctx.now) : null, newer = !s || n.at >= s.at;
+  if (base) {
+    const m = clone_(s);
+    Object.keys(CONFIG).forEach(function (k) { if (k !== 'at') m[k] = Array.isArray(m[k]) ? list3_(m[k], n[k], base[k], newer) : takes_(base, newer, n[k], base[k], m[k]) ? n[k] : m[k]; });
+    m.at = Math.max(s.at, n.at);
+    n = m;
+  }
+  const roster = function (c) { return JSON.stringify(c ? [c.people, c.crews] : [[], []]); }, was = roster(s);
+  if ((newer || base) && save_(ctx, b, 'config', entry, n, configRow_) && roster(n) !== was) b.hours = true; // Weekly totals show the roster's names
   const c = clone_(entry.obj);
   c.rev = entry.rev;
   return { config: c, configStatus: 'ok' };
+}
+
+// A phone on an older version knows no roster and no crew ids. Its config never wipes them: with no people list the
+// stored people stay, and a crew that arrives without an id takes the stored id of the crew with that name (unless
+// another crew in the push already has it). Its other edits (project, floors, leads, a new crew) still apply.
+function keepRoster_(n, stored, raw) {
+  if (!Array.isArray(raw.people)) n.people = clone_(stored.people);
+  const taken = dict_();
+  n.crews.forEach(function (c) { if (c.id) taken[c.id] = true; });
+  n.crews.forEach(function (c) {
+    const k = nameKey_(c.name);
+    if (c.id || !k) return;
+    const s = stored.crews.filter(function (x) { return x.id && !taken[x.id] && nameKey_(x.name) === k; })[0];
+    if (s) { c.id = s.id; taken[s.id] = true; }
+  });
 }
 
 function push_(ctx) {
@@ -956,6 +1097,8 @@ function rewriteWeekly_(ctx) {
   const rows = weeklyRows_(vr[0].values || [], names_(ctx, vr[1].values || []));
   apiValuesClear_(ctx.id, a1_(TABS.weekly, 0, 2, 4));
   for (let i = 0; i < rows.length; i += 200) apiValuesAppend_(ctx.id, rowRange_('weekly', 1), rows.slice(i, i + 200));
+  PropertiesService.getScriptProperties().deleteProperty('WEEKLY_DIRTY');
+  delete ctx.P.WEEKLY_DIRTY;
 }
 
 // ---------- pull ----------
@@ -985,6 +1128,22 @@ function fetchEntities_(ctx, name, rows, norm, keyOf, keep) {
   });
   return list;
 }
+// Which sheets a pull for these crew names gets. The names are looked up in the stored roster: a sheet whose crew id is
+// a roster crew goes by that id, so a renamed crew keeps the sheets made under its old name and a new crew that took
+// the old name does not get them. By name only where the id cannot tell: a sheet with no crew id or one the roster no
+// longer has, or a name the roster does not know (a phone that has not heard of a rename yet).
+// Answers true (these crews' sheet), false (another roster crew's: it moved there) or null (a name the roster does not know).
+function crewSheets_(names, cfg) {
+  const ids = dict_(), known = dict_(), named = dict_();
+  let byId = false;
+  (cfg ? cfg.crews : []).forEach(function (c) {
+    if (c.name) named[c.name] = true;
+    if (!c.id) return;
+    known[c.id] = true;
+    if (names.indexOf(c.name) >= 0) { ids[c.id] = true; byId = true; }
+  });
+  return function (t) { return byId && t.crewId && known[t.crewId] ? !!ids[t.crewId] : names.indexOf(t.crew) >= 0 || (named[t.crew] ? false : null); };
+}
 function pullOnce_(ctx, since) {
   const r = ctx.req, role = ctx.role, rev = ctx.state.rev, office = role !== 'crew', pm = role === 'pm';
   const days = Math.min(90, Math.max(1, Math.floor(Number(r.days)) || 14)), today = today_(), cutoff = addDays_(today, -days);
@@ -999,15 +1158,22 @@ function pullOnce_(ctx, since) {
   const fresh = function (rows) { return rows.filter(function (x) { return x.rev > since && x.date >= cutoff; }); };
 
   loadAllIndex_(ctx); // from the cache when another phone already pulled this revision
-  const taskRows = fresh(readIndex_(ctx, 'tasks')).filter(function (x) { return !crews || crews.indexOf(x.crew) >= 0; });
+  // ponytail: with a crews filter every sheet in the window is read, because a sheet's crew id is only in its data
+  // (the cache serves the rows after the first reader). Upgrade: a crew id column in the Tasks index.
+  const taskRows = fresh(readIndex_(ctx, 'tasks'));
   const hoursIdx = readIndex_(ctx, 'shifts'), shiftRows = fresh(hoursIdx);
   const reportRows = office ? fresh(readIndex_(ctx, 'reports')) : [];
   const eventRows = office ? readIndex_(ctx, 'events').filter(function (x) { return x.rev > since; }).slice(since ? -100 : -50) : [];
   const openRows = office ? hoursIdx.filter(function (x) { return x.date >= addDays_(today, -1) && x.date <= today; }) : []; // who is on site now
-  const cfgRows = readIndex_(ctx, 'config').filter(function (x) { return x.rev > since; });
-  prefetch_(ctx, { tasks: taskRows, shifts: shiftRows.concat(openRows), reports: reportRows, events: eventRows, config: cfgRows });
+  const cfgAll = readIndex_(ctx, 'config'), cfgRows = cfgAll.filter(function (x) { return x.rev > since; });
+  prefetch_(ctx, { tasks: taskRows, shifts: shiftRows.concat(openRows), reports: reportRows, events: eventRows, config: crews ? cfgAll : cfgRows });
+  const cfgOf = function (rows) { return fetchEntities_(ctx, 'config', rows, normConfig_, function () { return 'config'; })[0]; };
 
-  out.tasks = cut(fetchEntities_(ctx, 'tasks', taskRows, normTask_, function (o) { return o.uid; }));
+  const pid = typeof r.pid === 'string' && FORMAT.uid.test(r.pid) ? r.pid : ''; // the person a crew phone is: a sheet that lists them comes too, whatever its crew
+  const listed = function (o) { return pid !== '' && o.memberIds.indexOf(pid) >= 0; };
+  const crewKeep = crews && crewSheets_(crews, cfgOf(cfgAll)), keep = function (o) { return !crewKeep || crewKeep(o) === true || listed(o); };
+  const sent = fetchEntities_(ctx, 'tasks', taskRows, normTask_, function (o) { return o.uid; }, function (o) { return office || o.sentAt > 0; }); // a crew key gets a sheet once it was sent, never a draft
+  out.tasks = cut(sent.filter(keep));
   const mine = function (o) { return pm || (ctx.dev !== '' && o.device === ctx.dev); }; // crew and super see their own phone's hours only
   out.shifts = cut(fetchEntities_(ctx, 'shifts', shiftRows, normShift_, function (o) { return o.id; }, mine));
   if (office) {
@@ -1016,11 +1182,17 @@ function pullOnce_(ctx, since) {
     out.onsite = fetchEntities_(ctx, 'shifts', openRows, normShift_, function (o) { return o.id; }, function (o) {
       const st = startedMs_(o);
       return !o.gone && !o.out && ctx.now - st < OPEN_SHIFT_MS && st <= ctx.now + SKEW_MS;
-    }).sort(function (a, b) { return startedMs_(a) - startedMs_(b); }).map(function (o) { return { who: o.who, in: o.in, date: o.date }; });
+    }).sort(function (a, b) { return startedMs_(a) - startedMs_(b); }).map(function (o) { // the person and crew by id, so two people with one name stay apart
+      return { who: o.who, in: o.in, date: o.date, pid: o.pid, crewId: o.crewId, crew: o.crew };
+    });
   }
-  if (cfgRows.length) { const c = fetchEntities_(ctx, 'config', cfgRows, normConfig_, function () { return 'config'; }); if (c.length) out.config = c[0]; }
-  out.deleted = readIndex_(ctx, 'deleted').filter(function (x) { return x.rev > since && (office || x.kind !== 'reports'); })
-    .map(function (x) { return { kind: x.kind, key: x.key, rev: x.rev }; });
+  const cfg = cfgOf(cfgRows);
+  if (cfg) out.config = cfg;
+  // a sent sheet that changed and is now another crew's (moved there) leaves these crews' phones as a deleted one does,
+  // marked moved: a phone keeps one it has work on that has not gone up, or got only by text (HUB.md, pull)
+  const left = sent.filter(function (o) { return crewKeep && crewKeep(o) === false && !listed(o); }).map(function (o) { return { kind: 'tasks', key: o.uid, rev: o.rev, moved: true }; });
+  out.deleted = cut(readIndex_(ctx, 'deleted').filter(function (x) { return x.rev > since && (office || x.kind !== 'reports'); })
+    .map(function (x) { return { kind: x.kind, key: x.key, rev: x.rev }; }).concat(left));
   if (limit < rev) { out.rev = limit; out.more = true; }
   return out;
 }
@@ -1204,19 +1376,34 @@ function archive_(ctx) {
   });
   const wk = weeklyRows_(hours, names_(ctx, apiValuesGet_(ctx.id, configCells_()).values || []));
   for (let i = 0; i < wk.length; i += 200) apiValuesAppend_(aid, rowRange_('weekly', 1), wk.slice(i, i + 200));
+  // Every row is copied. Retain this receipt until deletion and the archive horizons both finish; a later write
+  // completes it under the same lock before it can revive old records. A retry reuses the copy already made.
+  const pending = { before: before, hoursCut: hoursCut, url: sheetUrl_(aid), at: ctx.now, moved: moved };
+  PropertiesService.getScriptProperties().setProperty('ARCHIVE_PENDING', JSON.stringify(pending));
+  return finishArchive_(ctx, pending);
+}
+function finishArchive_(ctx, pending) {
+  const before = pending.before, moved = pending.moved, hoursCut = pending.hoursCut;
+  const cuts = { tasks: before, shifts: hoursCut, reports: before, events: before };
   const b = newBatch_();
-  Object.keys(plan).forEach(function (n) { plan[n].forEach(function (row) { delRow_(b, n, row); }); });
+  b.hours = moved.shifts > 0;
+  Object.keys(cuts).forEach(function (n) {
+    readIndex_(ctx, n).filter(function (x) { return x.date && x.date < cuts[n]; }).forEach(function (x) { delRow_(b, n, x.row); });
+  });
   pruneTombstones_(ctx, b);
-  addEvent_(ctx, b, 'archive', 'PM', 'Archived ' + (moved.tasks + moved.shifts + moved.reports + moved.events) + ' rows older than ' + before, before);
+  addEvent_(Object.assign({}, ctx, { role: 'pm' }), b, 'archive', 'PM', 'Archived ' + (moved.tasks + moved.shifts + moved.reports + moved.events) + ' rows older than ' + before, before);
   flush_(ctx, b);
   if (moved.shifts) rewriteWeekly_(ctx);
-  const props = PropertiesService.getScriptProperties(), url = sheetUrl_(aid), list = JSON.parse(ctx.P.ARCHIVES || '[]');
-  list.push({ url: url, before: before, at: ctx.now });
-  props.setProperties({
+  const props = PropertiesService.getScriptProperties(), url = pending.url, list = JSON.parse(ctx.P.ARCHIVES || '[]');
+  list.push({ url: url, before: before, at: pending.at });
+  const saved = {
     ARCHIVED_BEFORE: before > (ctx.P.ARCHIVED_BEFORE || '') ? before : ctx.P.ARCHIVED_BEFORE,
     ARCHIVED_HOURS: hoursCut > (ctx.P.ARCHIVED_HOURS || '') ? hoursCut : ctx.P.ARCHIVED_HOURS,
-    ARCHIVES: JSON.stringify(list.slice(-20)),
-  });
+    ARCHIVES: JSON.stringify(list.slice(-20)), ARCHIVE_PENDING: '',
+  };
+  props.setProperties(saved);
+  Object.assign(ctx.P, saved); // the write that resumed this archive uses the completed horizons
+  ctx.memo = {}; // deleted rows changed every later row number
   return { sheetUrl: url, moved: moved };
 }
 

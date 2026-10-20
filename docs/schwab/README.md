@@ -55,9 +55,12 @@ screens") until someone signs in and changes the role in **Settings → This pho
   into **Crew hours**, a Monday to Sunday timesheet with each person's shifts and week total. Only this
   screen changes hours: fix an in or out time, **+ Add a shift**, remove one, or **Rename** a person (a name
   typo). What the PM changes is marked *edited* and stays as set when that worker's next text comes in; a
-  removed shift stays removed. A day the PM added by hand stays as entered: a late text for the same person
-  and day is filed as removed, with a warning. Each shift keeps the name it was clocked in with, so a borrowed
-  phone never moves its owner's hours. Hours links opened on any other phone change nothing.
+  removed shift stays removed. A whole day the PM added by hand (with a clock-out) stays as entered: a late text
+  for the same person and day is filed as removed, with a warning. With a hub, the worker's own taps for that day are
+  kept as a second row under that person (they are the real punches, whether they come through the hub or in a text),
+  for the PM to settle: both rows count, so the row says so and **Send to accountant** asks first. A day added with
+  no clock-out yet takes the worker's own Clock in and Clock out as a second row under that person, for the PM to
+  settle. Each shift keeps the name it was clocked in with, so a borrowed phone never moves its owner's hours. Hours links opened on any other phone change nothing.
 - **One list of people:** **Settings → People and crews** holds the app's list of people. Each crew is one group with its people as
   rows: tap a name to rename the person, move them to another crew or take them off the list, and type in
   **Add people** (several names at once with commas). Every person and every crew has a permanent id, so a
@@ -88,9 +91,40 @@ screens") until someone signs in and changes the role in **Settings → This pho
 
 1. GitHub repo **Settings → Pages**.
 2. **Source:** Deploy from a branch. **Branch:** `main` (or this PR's branch to try it first), folder **`/docs`**. Save.
-3. After a minute the app is at `https://harrisonmeeks1616.github.io/ponytail/schwab/`.
+3. Wait for the Pages deployment to succeed, then open the site's `/schwab/` path.
 
 Any static host works too (Netlify Drop: drag this folder onto the page). It must be HTTPS for offline mode.
+
+## Release day
+
+1. After the combined checks pass and the owner approves the release, merge the PR into the branch configured
+   in **Settings → Pages** (`main` with `/docs` for the setup above). Every release,
+   including a rollback, needs a new, unused `CACHE` name in `sw.js`. Wait for the GitHub Pages deployment to
+   succeed for that commit before telling people to update; a merge alone does not mean the site is ready.
+2. On one backed-up phone, open the app with signal so it can download the complete update, then close every copy
+   and reopen it. Use this open-close-open sequence for the first update from the old v7 worker too; two opens
+   alone do not prove the browser has installed it. With the new worker, later releases wait until every old
+   copy is fully closed: swipe the iPhone home-screen app away and close any Safari app tabs, or close every
+   Chrome app tab. Going to the Home Screen or reloading one open tab is not the same as closing every copy.
+3. Check that the phone still has its records, the changed screen works in English and Spanish, and the app
+   reopens with signal off; turn signal back on afterwards. If the hub is configured, also run **Test the hub**
+   on the PM phone. Use fictional records for any write test. Keep the rollout on that one phone until it passes.
+4. If the release needs rolling back, prepare a reviewed revert of the app changes on the Pages branch. Keep the
+   complete-release worker strategy, match its `FILES` list to the restored app, and give `CACHE` a new, unused
+   name; blindly reverting `sw.js` would bring back the old partial-refresh behavior. Run the offline and upgrade
+   checks, then obtain the owner's release approval and wait for the replacement Pages deployment. Repeat the phone check.
+   Reverting static app code does not undo phone records, Sheet changes or an Apps Script deployment.
+
+**Text to send after the one-phone check**
+
+- English: Update: with signal, use the app or browser where you normally keep your work. Leave the app open while the update downloads.
+  Swipe the app fully closed, close any other app tabs, then reopen it. If it still looks unchanged, repeat
+  with a reliable connection. Your saved work stays on the phone.
+- Español (usted): Actualización: con señal, use la aplicación o el navegador donde normalmente guarda su trabajo.
+  Deje la aplicación abierta mientras se descarga la actualización.
+  Deslícela para cerrarla por completo, cierre las demás pestañas de la aplicación y vuelva a abrirla.
+  Si todavía no ve los cambios, repita estos pasos con una conexión estable. El trabajo que guardó permanece
+  en el teléfono.
 
 ## Optional review folder (owner setup required)
 
@@ -120,6 +154,137 @@ Schwab Field Records/
 - **No signal:** the PDF waits on the phone and uploads when the app is next opened or the phone reconnects. Settings shows how many are waiting.
 - **Any time:** every screen's **⋯** menu has **Save as PDF** (phones get the share sheet: Save to Files, Mail, AirDrop, Drive; computers download it).
 
+## Hub (optional)
+
+Without it the app works as described above: phones pass work by texted links. The hub adds one shared, lasting record
+and live updates. It is one Google Apps Script web app plus one Google Sheet, both in the owner's Google account
+(`hub/Code.gs`, `hub/appsscript.json`; the contract between the pieces is `HUB.md`).
+
+**What it does**
+
+- Task sheets reach the crew's phones by themselves once you tap **Send to crew** (a draft stays on the office phones),
+  and ticks, start, stop and results reach the office as they happen. **Send results** still opens a text, and texted
+  links still work.
+- **Clock in** and **Clock out** reach the PM's **Crew hours** without a text. When that does not get through (no signal,
+  the hub busy, a replaced key) the text opens as before.
+- Office phones get two more tabs. **Live**: who is on site, today's sheets by crew with their progress, and the activity
+  of the day; **Message** and **Review** there reach the crew's sheet. **Records**: **People** (hours by person and week,
+  PM only), **Sheets** and **Reports**, each with a search box, older records loaded from the hub, and for the PM **Download all (JSON)**, a week as CSV, the Sheet's
+  storage meter and **Archive older records**.
+- What people type shows in the reader's language (Google Translate), marked **Auto-translated**, with one tap to the
+  original. Drawing and task numbers, quantities and trade abbreviations are kept as typed.
+- The owner can open the Sheet on any phone: tabs for Tasks, Hours, Weekly totals, Reports and Activity.
+
+**One-time setup (the owner, on a computer)**
+
+Before connecting any phone that already has work, sign in to the office screens and use **Settings → Backup →
+Download backup** on that phone; keep the file private. Start with the PM phone whose project, floors, people and crews should seed the new
+hub. A later phone takes the hub's shared settings; **Connect** starts a sync, not a promise that all its work has
+arrived. Use the version that has passed the combined release checks.
+
+1. In Apps Script, make a standalone **New project**, not one from a Sheet's **Extensions** menu. Give it a
+   recognizable name, paste `hub/Code.gs` over `Code.gs`, and save. `setupHub` creates the Sheet.
+2. In **Project Settings**, enable **Show "appsscript.json" manifest file in editor**. Replace that file with
+   `hub/appsscript.json` and save. It enables the advanced **Sheets v4** service, uses `America/New_York`, and
+   requests exactly `drive.file` (files this app creates or is granted access to) and `script.external_request`
+   (external requests). The manifest starts private: `MYSELF`, executing as `USER_DEPLOYING`.
+3. Select and run `setupHub`. The owner reviews Google's authorization screen against those two scopes and the
+   intended project before granting access. An unexpected scope or warning needs the owner's review, not an
+   automatic click-through. For the owner's own script Google shows **Google hasn't verified this app**: that is expected;
+   after checking the two scopes, choose **Advanced**, then **Go to <project name> (unsafe)**, then **Allow**. The **Execution log** prints newly created PM, crew and superintendent keys, plus the
+   Sheet link. Save the PM key privately now: only its fingerprint is kept, so a normal rerun does not show it
+   again. Invites carry the other roles' keys. A normal rerun reuses the Sheet and keys and prints the Sheet link;
+   `resetPmKey` creates a replacement PM key if needed.
+4. **Deploy → New deployment → Web app**: **Execute as: Me**, **Who has access: Only myself**, then **Deploy**.
+   Copy the deployed **Web app** link ending in `/exec`, not the editor's `/dev` test link. Open it as the owner:
+   it should return `{"ok":true,"service":"schwab-field-hub","version":"1.0.0"}`. This is only a reachability check;
+   it does not prove that the Sheet or permissions work. If account selection fails, try a browser profile signed
+   in only to the owner.
+5. After that private check, the owner separately reviews and approves anonymous phone access: **Deploy → Manage
+   deployments → Edit → Who has access: Anyone → Deploy**. This must be **Anyone**, not **Anyone with Google
+   account**, because crew phones do not sign in to Google. Keep the same deployment and `/exec` link. Verify the
+   health reply in a private browser window. If the account does not offer **Anyone**, resolve that account or
+   administrator restriction before connecting phones. Data operations still require a valid hub key.
+6. On the first PM phone, set **Your role → Project manager**, sign in, then open **Settings → Hub**. Paste the
+   `/exec` link into **Hub link**, the PM key into **Hub key**, and tap **Connect**. Wait for **Live** and check
+   **This phone: Project manager**. This phone refuses a crew or superintendent key with **That is not the PM
+   key.** A PM uses the PM key directly, not a crew or superintendent invite.
+7. Tap **Test the hub**. Require five checks and **Everything works**: **Write a record**, **Read it back**,
+   **Who may change what**, **Translate a sentence with a drawing number**, and **Delete the test record**.
+   These use a temporary test record. Use the failure guide below before inviting anyone if a check fails.
+8. On the PM phone, **Invite people → Invite superintendent** or **Invite crew** makes the appropriate link.
+   For a crew, pick its name or **Not sure: they pick**. Send each invite only to its intended person: it carries
+   a role key. Back up an existing recipient phone before joining. The recipient opens the link, chooses the
+   language on a new phone, confirms their name and, for a crew if needed, their crew, then taps **Join**.
+   An office-configured phone refuses a crew invite with **This phone is for the office, so it does not join as
+   a crew phone.** A PM phone already connected to this hub refuses either invite with **This is the PM phone.
+   Send the invite to the person it is for.** Another phone set to Project manager refuses a superintendent
+   invite with **That is a superintendent invite.** Connect a PM phone in Settings with the PM key instead.
+   A crew-role phone that is signed in can offer **Sign out and join**; replacing a different hub or key also
+   asks first. Review the intended role and destination before accepting.
+9. A second PM phone or tablet is a separate device: back up its own work, set its role to **Project manager**,
+   use the same office passcode, and connect to the same `/exec` link with the same PM key. Let it load the hub's shared project and
+   crew list and run **Test the hub** there too. Do not copy the first phone's backup just to enroll a second
+   device; a restore also copies the original phone's device identity.
+10. After changing `Code.gs`, save it, then **Deploy → Manage deployments → Edit → Version: New version → Deploy**.
+    Editing the existing deployment keeps the link; saving source alone does not update deployed phones.
+    Repeat **Test the hub**.
+
+**If connection or Test the hub fails**
+
+| What appears | What to check |
+| --- | --- |
+| **Use the hub link that ends in /exec** | Use the deployed Web app link, not `/dev` or the script editor address. |
+| **The hub key is 32 letters and numbers** or a refused key | Recopy the correct current key privately. A PM needs the PM key; an invite for another role cannot enroll a PM tablet. |
+| **That did not work. Check the signal and try again.** | Check signal, the `/exec` link and the deployment's **Who has access: Anyone** setting. Confirm the health reply in a private window. |
+| **Write a record** or **Read it back** fails | In the owner's script, check that `setupHub` completed, the supplied manifest and Sheets service are present, both scopes were granted, and the intended code version was deployed. |
+| **Who may change what** or **Delete the test record** fails | Stop setup and have the code/deployment checked before using live records. Keep the failed check's name and detail, without keys. |
+| Only **Translate a sentence with a drawing number** fails | Read the detail beside the failed check, such as `quota` or `server`, and check translation availability before retrying. The other checks do not make this one pass. |
+
+Do not treat a public health reply or a green status dot as a substitute for all five checks.
+
+**What stays where**
+
+- Every phone keeps working from its own copy: crew phones keep 14 days, office phones 60. Edits made with no signal
+  wait on the phone and go when it is back. The status dot in the header (on an office phone signed in, on the Live tab,
+  so both company names keep their size) shows Live, Syncing, Offline or Problem. A phone whose key was replaced also
+  says to ask the PM for a new invite.
+- The Sheet keeps everything. **Records → Load older records** shows what the phone no longer keeps, without storing it.
+- The hub key stays on the phone it was typed on. A backup leaves it out: after a restore, a crew or superintendent phone opens its invite;
+  a PM phone reconnects in Settings with the PM key. A backup made on a hub also notes what the hub had then, so restoring it does not roll back work that
+  reached the hub later. Invite links carry a crew or superintendent key, so send each only to its person.
+- Each role changes only its own part: crews their results, ticks and hours; the office the assignment, the review and
+  messages; only the PM edits hours, deletes records (from every phone at once: the delete can be undone for 6 seconds,
+  then it leaves the hub, even if the app was closed meanwhile; on another phone, Delete on a sheet or report the hub
+  has says to ask the PM), exports and manages the keys.
+
+**Keys and archive**
+
+- A lost phone, or someone who left: **Settings → Hub → Replace the crew key** (or the superintendent key). Every phone on
+  the old key stops syncing until it opens a new invite. A lost PM key: run `resetPmKey` in the script editor.
+- A worker moved to another crew in Settings, or put on another crew's sheet, gets those sheets on their phone by
+  themselves (the phone follows its person on the crew list).
+- A Sheet holds 10 million cells. Records shows how full it is and warns at 70%. **Archive older records** moves
+  everything before a date (at least 30 days back) into a new archive Sheet; it stays readable there.
+- If every phone keeps saying the hub had a problem after an archive or a run of hours changes, and the script's
+  Executions show a "hub error" on every request, open Project Settings > Script Properties in the script editor:
+  delete `WEEKLY_DIRTY` if it is there, else copy the value of `ARCHIVE_PENDING` and delete it. HUB.md (Protocol
+  details, Recovery) says what each leaves behind.
+
+**Honest limits**
+
+- It is not instant. A round trip through Apps Script takes a few seconds, and an open app checks every 20 seconds.
+- Google's free quotas apply. Translation stops at 1,500 requests a day (the original text shows after that).
+- Machine translation gets trade words wrong sometimes. The original is always one tap away.
+- A phone's clock decides which of two edits to the same part is newer; clocks a few minutes apart can order edits made
+  within those minutes the wrong way (the hub corrects bigger differences).
+- Two office phones that numbered sheets offline keep both numbers once both sheets are on the hub, and both show
+  **Same number as another sheet** until one is renamed.
+- A shift texted to the PM before that worker's phone joined the hub stays under its old phone id on the PM's copy.
+- One hub per phone. **Disconnect** keeps the phone's work on the phone, and joining the same hub again sends what it had
+  not sent yet. A phone moved to another hub (another job) does not copy what it already synced to the new one; what it
+  changes after the move goes up.
+
 ## Spanish mode (crew screens and the time clock)
 
 - Tap **ES** in the header, or Settings → Language. A new phone asks "English / Español" first thing (see First open); an older crew phone that never chose asks the first time it opens a new sheet.
@@ -144,14 +309,17 @@ Schwab Field Records/
 - Same goes for browsers: links open in the phone's default browser, so use the app in that browser.
 - `report.html` only forwards to the app now, so old report links and an old Daily Report home-screen icon still land in the right place.
 - The PM selects **Project manager** in Settings before opening a daily report. Report links do not select the phone's role.
-- After an app update, reopen online and reload once more after the new offline cache installs. Saved records remain on the phone.
-- There is no live sync. The PM sees crew detail when the superintendent sends the report or it reaches the review folder, not before.
+- After an app update, open online to download the complete offline copy, close every app tab/window, then reopen. The new version waits while an old tab is open; saved records remain on the phone.
+- When publishing app changes, bump the `CACHE` version in `sw.js` so all core files install together. Once the new worker is in use, a failed future install keeps the previous complete cache;
+  the older worker can still refresh individual files until that first migration finishes.
+- Without the hub there is no live sync. The PM sees crew detail when the superintendent sends the report or it reaches the review folder, not before.
 - PDFs use the standard Helvetica font, which covers English and Western European letters. Other characters print as "?".
 - Long reports make long links. iMessage, WhatsApp and email handle them; some plain SMS apps cut them off.
 - Storage is about 5 MB per phone, roughly a year of daily use. Settings shows how much is used.
 
 ## Check
 
-`node --test tests/schwab-field-apps.test.js tests/schwab-review-folder.test.js tests/app-display-regressions.test.js tests/schwab-es-lint.test.js` covers the link codec, merges, report roll-up, office passcode, time clock and timesheet, people and crew ids (moving older settings over, two people with one name, renames, sheets with the same number from two phones), every new field through reload and backup and restore, the device secret, PDF writer, upload queue, mocked receiver boundaries, and that every on-screen phrase has its Spanish. Receiver checks do not exercise Google authorization, folder access or a live deployment.
+`node --test tests/schwab-field-apps.test.js tests/schwab-review-folder.test.js tests/app-display-regressions.test.js tests/schwab-es-lint.test.js tests/schwab-sync.test.js tests/schwab-live.test.js tests/schwab-hub.test.js` covers the link codec, merges, report roll-up, office passcode, time clock and timesheet, people and crew ids (moving older settings over, two people with one name, renames, sheets with the same number from two phones), every new field through reload and backup and restore, the device secret, PDF writer, upload queue, mocked receiver boundaries, and that every on-screen phrase has its Spanish; the last three cover the hub sync, the hub screens and the hub itself on a stand-in for Google. Receiver and hub checks do not exercise Google authorization, folder access or a live deployment.
 
 The browser checks in `tests/browser/` drive the real app in Chromium (Playwright; pdftotext for the PDFs). Serve `docs/schwab` (`python3 -m http.server 8765 --bind 127.0.0.1`), then run each with `BASE=http://127.0.0.1:8765/ node tests/browser/<file>`: `schwab-field-app.e2e.js` (a whole job on five phones: first run, task sheets, results, time clock, daily report, crew hours, Undo, the tab bar, 320 px, Spanish), `schwab-first-run.e2e.js`, `schwab-clock-stale.e2e.js` (the 16-hour cutoff) and `schwab-spanish-audit.e2e.js` (every screen and state in Spanish; 0 untranslated to pass). Each exits 0 when everything passes.
+`schwab-hub.e2e.js` runs the same way: six phones (PM, superintendent, two crew phones, two workers) on the hub at 320 px, from joining to Live, Records, hours, translation, deletes, offline and a copied device id, against `hub/Code.gs` on the stand-in for Google (`tests/browser/hub-dev-server.js`, which it starts and stops itself on `HUBPORT`, default 8780).

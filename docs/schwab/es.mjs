@@ -3,12 +3,9 @@
 export default {
   // board and navigation
   'Task sheets': 'Hojas de tareas',
-  'Back to task sheets': 'Volver a las hojas de tareas',
   'Previous day': 'Día anterior',
   'Next day': 'Día siguiente',
   'Today': 'Hoy',
-  'Past day': 'Día pasado',
-  'Planning ahead': 'Planeación',
   'Pick a date': 'Escoger una fecha',
   'Complete': 'Terminado',
   'Partial': 'Parcial',
@@ -21,7 +18,6 @@ export default {
   'Draft': 'Borrador',
   'To do': 'Por hacer',
   'In progress': 'En progreso',
-  'Crew-hrs actual / est.': 'Horas-cuadrilla reales / est.',
   'Show crew': 'Ver cuadrilla',
   'All crews': 'Todas las cuadrillas',
   'Finished · ready for review': 'Terminadas · listas para revisar',
@@ -30,7 +26,7 @@ export default {
   'Your shift from {date} passed 16 hours and counts as a missed clock-out. Tap Clock in to start a new shift.': 'Su turno del {date} pasó de 16 horas y cuenta como salida no marcada. Toque Marcar entrada para empezar un turno nuevo.',
   'This screen was out of date. Check it and tap again.': 'Esta pantalla estaba desactualizada. Revísela y toque otra vez.',
   'No sheets for this crew on this day.': 'No hay hojas para esta cuadrilla en este día.',
-  'No task sheets for {date}': 'No hay hojas de tareas para el {date}',
+  'No task sheets yet': 'Aún no hay hojas de tareas',
   'Open the link your superintendent texted you, or paste it here.': 'Abra el enlace que le mandó su superintendente por mensaje, o péguelo aquí.',
   'Open a link someone sent you': 'Abrir un enlace que le enviaron',
   'Open a link': 'Abrir un enlace',
@@ -49,7 +45,6 @@ export default {
   'Assign': 'Asignar',
   'Crew results': 'Resultados',
   'Review': 'Revisión',
-  '{date} task sheets': 'Hojas de tareas del {date}',
   'Changes save on this phone as you type.': 'Los cambios se guardan en este teléfono mientras escribe.',
   'Send results': 'Enviar resultados',
   'Resend to crew': 'Reenviar',
@@ -176,8 +171,6 @@ export default {
   'Unfinished sheets copied: {n}': 'Hojas pendientes copiadas: {n}',
   'Carried to {date}': 'Pasada al {date}',
   'Duplicated. Change the crew or floor.': 'Duplicada. Cambie la cuadrilla o el piso.',
-  "Delete task {id}? This can't be undone.": '¿Borrar la tarea {id}? No se puede deshacer.',
-  'Delete': 'Borrar',
 
   // sending and pasting links
   'Close': 'Cerrar',
@@ -287,10 +280,10 @@ export default {
   'Wrong passcode. Try again.': 'Código incorrecto. Intente de nuevo.',
   'The passcode needs the secure https:// address of this app.': 'El código necesita la dirección segura https:// de esta app.',
   'Office passcode': 'Código de oficina',
-  "Opens task setup, the daily report, settings and the PM's crew hours. Crew sheets and the time clock stay open to everyone. Use the same code on the PM's and the superintendent's phones. Crew phones learn it from the first task sheet they open.": 'Abre la preparación de tareas, el reporte diario, los ajustes y las horas de las cuadrillas en el teléfono del gerente de proyecto. Las hojas de las cuadrillas y la asistencia quedan abiertas para todos. Use el mismo código en el teléfono del gerente de proyecto y en el del superintendente. Los teléfonos de las cuadrillas lo reciben con la primera hoja de tarea que abren.',
+  "Opens the office screens. Use the same code on the PM's and the superintendent's phones.": 'Abre las pantallas de oficina. Use el mismo código en el teléfono del gerente de proyecto y en el del superintendente.',
 
   // time clock
-  'Crew hours': 'Horas de las cuadrillas',
+  'Crew hours': 'Horas',
   "Hours links are logged on the PM's phone.": 'Los enlaces de horas se registran en el teléfono del gerente de proyecto.',
   'First and last name': 'Nombre y apellido',
   'Clock in': 'Marcar entrada',
@@ -396,6 +389,11 @@ export default {
   'Recommendation': 'Recomendación',
   'Past due': 'Vencida',
   'PM response': 'Respuesta del gerente',
+  'PM answers are read-only with this hub key. Use the PM phone to update them.': 'Las respuestas del gerente son de solo lectura con esta clave del sistema central. Use el teléfono del gerente para actualizarlas.',
+  'Crew hours are read-only with this hub key. Connect with the PM key to add or change shifts.': 'Las horas de las cuadrillas son de solo lectura con esta clave del sistema central. Conéctese con la clave del gerente de proyecto para agregar o cambiar turnos.',
+  'This phone is not connected with the PM key': 'Este teléfono no está conectado con la clave del gerente de proyecto',
+  'PM answers and crew hours are read-only. In Settings, disconnect and connect with the PM key to update them on the hub.': 'Las respuestas del gerente de proyecto y las horas de las cuadrillas son de solo lectura. En Ajustes, desconéctese y conéctese con la clave del gerente de proyecto para actualizarlas en el sistema central.',
+  'That is a superintendent invite. This phone is set to Project manager, so connect in Settings with the PM key from the Execution log of the hub script.': 'Esa es una invitación para el superintendente. Este teléfono está configurado como gerente de proyecto; conéctese en Ajustes con la clave del gerente de proyecto del registro de ejecución del script del sistema central.',
   'Approved': 'Aprobado',
   'Declined': 'Rechazado',
   'Discuss': 'Por hablar',
@@ -544,8 +542,6 @@ export default {
   'Not connected to a hub. This shows what is on this phone.': 'No está conectado a un sistema central. Esto muestra lo que hay en este teléfono.',
   'Updated {ago}': 'Actualizado {ago}',
   'Waiting for the first update': 'Esperando la primera actualización',
-  'On site': 'En la obra',
-  'Active': 'Activas',
   'To review': 'Por revisar',
   'No task sheets for today yet': 'Todavía no hay hojas de tareas para hoy',
   'Open the Tasks tab': 'Abrir la pestaña Tareas',
@@ -575,7 +571,6 @@ export default {
   'Save follow-up': 'Guardar el seguimiento',
   'Review saved': 'Revisión guardada',
   'Records are for the office': 'Los registros son para la oficina',
-  'By person': 'Por persona',
   'Reports': 'Reportes',
   'Records': 'Registros',
   'Search names': 'Buscar nombres',
@@ -620,10 +615,9 @@ export default {
   'Collecting records from the hub…': 'Reuniendo registros del sistema central…',
   'The hub did not answer. Download only what is on this phone?': 'El sistema central no respondió. ¿Descargar solo lo que hay en este teléfono?',
   'Download': 'Descargar',
-  "Delete the {date} report? This can't be undone.": '¿Borrar el reporte del {date}? No se puede deshacer.',
   'It is also removed from the hub.': 'También se quita del sistema central.',
+  'This phone is out of space: keep the app open until Undo is gone, or the hub keeps it.': 'Este teléfono no tiene espacio: mantenga la app abierta hasta que desaparezca Deshacer, o el sistema central lo conserva.',
   'The hub could not be reached, so nothing was deleted.': 'No se pudo conectar con el sistema central, así que no se borró nada.',
-  'Deleted': 'Borrado',
   'Hub': 'Sistema central',
   'Optional. One shared log of hours, task sheets and reports, a live board, and translation of what people type. Paste the hub link and your key.': 'Opcional. Un registro compartido de horas, hojas de tareas y reportes, un tablero en vivo y la traducción de lo que escribe la gente. Pegue el enlace del sistema central y su clave.',
   'Hub link': 'Enlace del sistema central',
@@ -656,6 +650,7 @@ export default {
   'Hub invite for the crew': 'Invitación al sistema central para la cuadrilla',
   'Hub invite for the superintendent': 'Invitación al sistema central para el superintendente',
   'Which crew is this invite for?': '¿Para qué cuadrilla es esta invitación?',
+  'This is the PM phone. Send the invite to the person it is for.': 'Este es el teléfono del gerente de proyecto. Mande la invitación a la persona a quien va dirigida.',
   'Not sure: they pick': 'No estoy seguro: ellos escogen',
   'Join the hub': 'Unirse al sistema central',
   'This link connects this phone to the project hub, so your task sheets arrive by themselves.': 'Este enlace conecta este teléfono con el sistema central del proyecto, para que sus hojas de tareas lleguen solas.',
@@ -663,7 +658,6 @@ export default {
   'Your crew': 'Su cuadrilla',
   'Join': 'Unirse',
   'Pick your crew': 'Escoja su cuadrilla',
-  'Connected to the hub': 'Conectado al sistema central',
   'Refreshing…': 'Actualizando…',
   'Disconnect this phone from the hub? Your work stays on this phone.': '¿Desconectar este teléfono del sistema central? Su trabajo se queda en este teléfono.',
   'Disconnect': 'Desconectar',
@@ -723,4 +717,126 @@ export default {
   'People and crews': 'Personas y cuadrillas',
   '{name} taken off the list': 'Se quitó a {name} de la lista',
   '{name} removed from the crew list': 'Se quitó {name} de la lista de cuadrillas',
+
+  // the activity feed: PM shift edits, deletes, keys, archive
+  'PM added a shift for {who} on {date}': 'El gerente de proyecto agregó un turno para {who} el {date}',
+  'PM added {n} shifts for {who}': 'El gerente de proyecto agregó {n} turnos para {who}',
+  'PM removed a shift for {who} on {date}': 'El gerente de proyecto quitó un turno de {who} del {date}',
+  'PM changed the hours of {who} on {date}': 'El gerente de proyecto cambió las horas de {who} del {date}',
+  'a worker': 'un trabajador',
+  'a task sheet': 'una hoja de tareas',
+  'A task sheet was deleted': 'Se borró una hoja de tareas',
+  'A shift was deleted': 'Se borró un turno',
+  'The {date} report was deleted': 'Se borró el reporte del {date}',
+  'The crew key was replaced': 'Se cambió la clave de la cuadrilla',
+  'The superintendent key was replaced': 'Se cambió la clave del superintendente',
+  '{n} rows older than {date} archived': 'Se archivaron {n} filas anteriores al {date}',
+
+  // the app on a hub: invites, the crew board, the time clock
+  'This phone is already connected to a hub. Use this invite instead?': 'Este teléfono ya está conectado a un sistema central. ¿Usar esta invitación en su lugar?',
+  'Use this invite': 'Usar esta invitación',
+  'Sheets for your crew show up here by themselves. A texted link still works too.': 'Las hojas de su cuadrilla aparecen aquí solas. Un enlace por mensaje también sigue funcionando.',
+  'Clock in and Clock out go to the PM through the hub. With no signal, a text to the PM opens instead. Only the PM can change hours.': 'Las entradas y salidas que marque le llegan al gerente de proyecto por el sistema central. Sin señal, se abre un mensaje para el gerente de proyecto. Solo el gerente de proyecto puede cambiar las horas.',
+  'Saved. Your hours go to the PM through the hub.': 'Guardado. Sus horas le llegan al gerente de proyecto por el sistema central.',
+
+  // Records: segments
+  'Sheets': 'Hojas',
+
+  // a texted copy on a hub phone (sync.mjs fromText)
+  'This phone already has the newest copy of this sheet from the hub.': 'Este teléfono ya tiene la copia más reciente de esta hoja desde el sistema central.',
+  'This phone already has the newest copy of this report from the hub.': 'Este teléfono ya tiene la copia más reciente de este reporte desde el sistema central.',
+
+  // Time clock: a tap the hub did not add (PHONE-UX-03)
+  'The PM has already set your hours for {date}, so this tap was not added. Tell the PM if they are wrong.': 'El gerente de proyecto ya fijó sus horas del {date}, así que este toque no se agregó. Avísele al gerente de proyecto si no son correctas.',
+
+  // Deletes on a hub, and the PM's Disconnect
+  'Only the PM can delete what is on the hub. Ask the PM to delete it.': 'Solo el gerente de proyecto puede borrar lo que está en el sistema central. Pídale al gerente de proyecto que lo borre.',
+  'Disconnect this phone from the hub? Your work stays on this phone. To connect again you need the PM key, which was shown only once. Copy it first. Without it, the hub owner must run resetPmKey in the hub script.': '¿Desconectar este teléfono del sistema central? Su trabajo se queda en este teléfono. Para conectarse otra vez necesita la clave del gerente de proyecto, que se mostró una sola vez. Cópiela primero. Sin ella, el dueño del sistema central tendrá que ejecutar resetPmKey en el script del sistema central.',
+  'Copy the PM key': 'Copiar la clave del gerente de proyecto',
+  'PM key copied. Keep it somewhere safe, not in a shared chat.': 'Clave del gerente de proyecto copiada. Guárdela en un lugar seguro, no en un chat compartido.',
+
+  // Joining the hub: the name as the roster spells it (PHONE-UX-11)
+  'This name is not on the crew list. Tap your name above, or tap Join again to use it as typed.': 'Este nombre no está en la lista de la cuadrilla. Toque su nombre arriba, o toque Unirse otra vez para usarlo tal como lo escribió.',
+
+  // Phone UX round 2: office messages on crew phones, messages only called sent once on the hub, a wrong PM key
+  'Message from the office on sheet {id}': 'Mensaje de la oficina en la hoja {id}',
+  'New message': 'Mensaje nuevo',
+  'Message goes out with the sheet': 'El mensaje sale con la hoja',
+  'Message not sent yet': 'Mensaje todavía no enviado',
+  'Message saved. It goes to {crew} with the sheet when you tap Send to crew.': 'Mensaje guardado. Le llega a {crew} con la hoja cuando toque Enviar a cuadrilla.',
+  'Sending…': 'Enviando…',
+  'Message saved on this phone. It goes to {crew} when the hub can be reached.': 'Mensaje guardado en este teléfono. Le llega a {crew} cuando haya conexión con el sistema central.',
+  'The hub did not accept this PM key. Copy it again from the Execution log of the hub script and paste all of it. If it is lost, run resetPmKey there.': 'El sistema central no aceptó esta clave del gerente de proyecto. Cópiela otra vez del registro de ejecución del script del sistema central y péguela completa. Si se perdió, ejecute resetPmKey ahí.',
+
+  // an office phone opening a crew invite
+  'This phone is for the office, so it does not join as a crew phone. Send the invite to the person it is for.': 'Este teléfono es para la oficina, así que no se une como teléfono de cuadrilla. Mande la invitación a la persona a quien va dirigida.',
+
+  // Crew hours: a day the PM added by hand and the worker's own taps for it (RECHECK3-02)
+  'You also entered this day by hand, and both count. If it is the same work, remove one.': 'Usted también agregó este día a mano, y los dos cuentan. Si es el mismo trabajo, quite uno.',
+  "1 shift from a worker's phone is on a day you also entered by hand, and both count. Remove one first if it is the same work, or send anyway?": '1 turno del teléfono de un trabajador cae en un día que usted también agregó a mano, y los dos cuentan. ¿Quiere quitar uno primero si es el mismo trabajo, o enviar así?',
+  "{n} shifts from workers' phones are on days you also entered by hand, and both count. Remove one first where it is the same work, or send anyway?": '{n} turnos de teléfonos de trabajadores caen en días que usted también agregó a mano, y los dos cuentan. ¿Quiere quitar uno primero donde sea el mismo trabajo, o enviar así?',
+
+  // Things board
+  '1 sheet': '1 hoja',
+  '{n} sheets': '{n} hojas',
+  '1 crew': '1 cuadrilla',
+  '{n} crews': '{n} cuadrillas',
+  '1 ready for review': '1 lista para revisar',
+  '{n} ready for review': '{n} listas para revisar',
+  '1 blocked': '1 bloqueada',
+  '{n} blocked': '{n} bloqueadas',
+  '1 working': '1 trabajando',
+  '{n} working': '{n} trabajando',
+  '{act} of {est} crew-hrs': '{act} de {est} horas-cuadrilla',
+  '{people} in {crews}': '{people} en {crews}',
+  'Upcoming': 'Próximo',
+  'Tomorrow': 'Mañana',
+  'No hours for {name} this week': 'No hay horas de {name} esta semana',
+  '{days} · nothing planned': '{days} · nada planeado',
+  'All sheets done': 'Todas las hojas terminadas',
+  'Nothing planned for the next 7 days': 'Nada planeado para los próximos 7 días',
+  'New sheet for tomorrow': 'Nueva hoja para mañana',
+  'New sheet for {date}': 'Nueva hoja para el {date}',
+
+  // Quick Find
+  'Search': 'Buscar',
+  'Quick Find': 'Búsqueda rápida',
+  'Search sheets, people and days': 'Buscar hojas, personas y días',
+  'Recent sheets': 'Hojas recientes',
+  'Days': 'Días',
+  'Show all': 'Mostrar todo',
+  'No matches for “{q}”': 'No hay resultados para “{q}”',
+  'Try a room, a name or a day, like “tomorrow”.': 'Pruebe con un cuarto, un nombre o un día, como “mañana”.',
+  'Yesterday': 'Ayer',
+  '1 result': '1 resultado',
+  '{n} results': '{n} resultados',
+
+  // Quick Find
+  'Sheets, people and days': 'Hojas, personas y días',
+
+  // a phone on the hub in the wrong role, and what joining says (OWNER3)
+  'That is the crew key: crew phones join with the crew invite. On this phone, paste the PM key from the Execution log of the hub script, or open the superintendent invite.': 'Esa es la clave de cuadrilla: los teléfonos de cuadrilla se unen con la invitación de cuadrilla. En este teléfono, pegue la clave del gerente de proyecto del registro de ejecución del script del sistema central, o abra la invitación del superintendente.',
+  'That is not the PM key. This phone is set to Project manager, so it connects only with the PM key from the Execution log of the hub script.': 'Esa no es la clave del gerente de proyecto. Este teléfono está configurado como gerente de proyecto, así que solo se conecta con la clave del gerente de proyecto del registro de ejecución del script del sistema central.',
+  'That did not work. Check the signal and try again. If it still fails, check that the hub deployment is set to Who has access: Anyone.': 'No funcionó. Revise la señal e intente de nuevo. Si sigue sin funcionar, revise que la implementación del sistema central tenga Quién tiene acceso: Cualquier usuario.',
+  'This phone is on the hub as a crew phone': 'Este teléfono está en el sistema central como teléfono de cuadrilla',
+  'Sheets, reports and settings made here stay on this phone. In Settings, disconnect and connect again with the PM key: then they go up.': 'Las hojas, los reportes y los ajustes hechos aquí se quedan en este teléfono. En Ajustes, desconéctelo y conéctelo otra vez con la clave del gerente de proyecto: entonces se envían.',
+  'Sheets, reports and settings made here stay on this phone. Ask the PM for the superintendent invite and open it on this phone: then they go up.': 'Las hojas, los reportes y los ajustes hechos aquí se quedan en este teléfono. Pida al gerente de proyecto la invitación del superintendente y ábrala en este teléfono: entonces se envían.',
+  'Not on the hub yet': 'Todavía no está en el sistema central',
+  'This phone is signed in to the office screens. Sign out and join the hub as a crew phone?': 'Este teléfono tiene abiertas las pantallas de oficina. ¿Cerrarlas y unirse al sistema central como teléfono de cuadrilla?',
+  'Sign out and join': 'Cerrar y unirse',
+  'Connected as the superintendent': 'Conectado como superintendente',
+  'Connected as a crew phone for {crew}': 'Conectado como teléfono de cuadrilla de {crew}',
+  'Connected as a crew phone': 'Conectado como teléfono de cuadrilla',
+  'This phone is set up for the superintendent. Sign in with the office passcode the PM gives you.': 'Este teléfono está configurado para el superintendente. Entre con el código de oficina que le dé el gerente de proyecto.',
+  // v8 upgrade compatibility: old cached screens can briefly load this newer dictionary.
+  'Back to task sheets': 'Volver a las hojas de tareas',
+  'Past day': 'Día pasado',
+  'Planning ahead': 'Planeación',
+  'No task sheets for {date}': 'No hay hojas de tareas para el {date}',
+  '{date} task sheets': 'Hojas de tareas del {date}',
+  "Opens task setup, the daily report, settings and the PM's crew hours. Crew sheets and the time clock stay open to everyone. Use the same code on the PM's and the superintendent's phones. Crew phones learn it from the first task sheet they open.": 'Abre la preparación de tareas, el reporte diario, los ajustes y las horas de las cuadrillas en el teléfono del gerente de proyecto. Las hojas de las cuadrillas y la asistencia quedan abiertas para todos. Use el mismo código en el teléfono del gerente de proyecto y en el del superintendente. Los teléfonos de las cuadrillas lo reciben con la primera hoja de tarea que abren.',
+  'On site now: {people}': 'En la obra ahora: {people}',
+  'On site now: {people} in {crews}': 'En la obra ahora: {people} en {crews}',
+  // v7 upgrade compatibility: the live v7 tasks screen can briefly load this dictionary.
+  'Crew-hrs actual / est.': 'Horas-cuadrilla reales / est.',
 };

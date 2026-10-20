@@ -5,6 +5,7 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const lib = import('../docs/schwab/shared.mjs');
+const P = s => Buffer.from('%PDF-' + s).toString('base64'); // a queued PDF, as fileAway makes it
 
 test('links round-trip a task sheet and reject junk', async () => {
   const { pack, unpack, codeFrom } = await lib;
@@ -174,15 +175,15 @@ test('a newer queued PDF survives completion of an older upload', async () => {
     return { status: 200, json: async () => ({ ok: true }) };
   };
   try {
-    queue({ date: '2026-10-04', name: 'Fictional test', pdf: 'older', v: 1 });
+    queue({ date: '2026-10-04', name: 'Fictional test', pdf: P('older'), v: 1 });
     const uploading = flush(s);
     await began;
-    queue({ date: '2026-10-04', name: 'Fictional test', pdf: 'newer', v: 2 });
+    queue({ date: '2026-10-04', name: 'Fictional test', pdf: P('newer'), v: 2 });
     release();
     assert.deepEqual(await uploading, { left: 1, error: '' });
     globalThis.fetch = async (url, o) => { sent.push(JSON.parse(o.body)); return { status: 200, json: async () => ({ ok: true }) }; };
     assert.equal((await flush(s)).left, 0);
-    assert.deepEqual(sent.map(x => x.pdf), ['older', 'newer']);
+    assert.deepEqual(sent.map(x => x.pdf), [P('older'), P('newer')]);
   } finally { globalThis.fetch = realFetch; delete globalThis.localStorage; }
 });
 
@@ -201,7 +202,23 @@ test('Spanish mode has a Spanish version of every on-screen phrase', async () =>
     assert.ok(Object.hasOwn(ES, en), `missing Spanish for: ${en}`);
     assert.equal(holes(ES[en]), holes(en), `placeholders differ in: ${en}`);
   }
-  for (const en of Object.keys(ES)) assert.ok(used.has(en), `Spanish entry no longer used: ${en}`);
+  // v8 refreshes individual cached files: keep these exact retired labels until those installs upgrade.
+  const v8Compatibility = new Set([
+    'Back to task sheets',
+    'Past day',
+    'Planning ahead',
+    'No task sheets for {date}',
+    '{date} task sheets',
+    "Opens task setup, the daily report, settings and the PM's crew hours. Crew sheets and the time clock stay open to everyone. Use the same code on the PM's and the superintendent's phones. Crew phones learn it from the first task sheet they open.",
+    'On site now: {people}',
+    'On site now: {people} in {crews}',
+    'Crew-hrs actual / est.', // v7 tasks screen
+  ]);
+  for (const en of v8Compatibility) {
+    assert.ok(typeof ES[en] === 'string' && ES[en].trim() && ES[en] !== en, `missing v8 Spanish for: ${en}`);
+    assert.equal(holes(ES[en]), holes(en), `v8 placeholders differ in: ${en}`);
+  }
+  for (const en of Object.keys(ES)) assert.ok(used.has(en) || v8Compatibility.has(en), `Spanish entry no longer used: ${en}`);
 });
 
 test('Spanish labels, safe placeholders, and notes printed as typed', async () => {
@@ -231,15 +248,16 @@ test('upload queue: newer edits survive, refusals cannot block or flood, dead re
   const s = { folderUrl: 'https://script.google.com/macros/s/x/exec', siteCode: 'sparky' };
   const answer = decide => async (url, o) => {
     const b = JSON.parse(o.body);
+    b.pdf = atob(b.pdf).slice(5); // the test's own name for the PDF
     sent.push(b.pdf);
     return { status: 200, json: async () => decide(b) };
   };
   try {
     // The superintendent edits a sheet while an earlier upload is running.
-    queue({ date: '2026-10-03', name: 'A', pdf: 'a' });
-    queue({ date: '2026-10-03', name: 'T1', pdf: 'old', v: 1 });
+    queue({ date: '2026-10-03', name: 'A', pdf: P('a') });
+    queue({ date: '2026-10-03', name: 'T1', pdf: P('old'), v: 1 });
     globalThis.fetch = answer(b => {
-      if (b.pdf === 'a') queue({ date: '2026-10-03', name: 'T1', pdf: 'new', v: 2 });
+      if (b.pdf === 'a') queue({ date: '2026-10-03', name: 'T1', pdf: P('new'), v: 2 });
       return { ok: true };
     });
     assert.equal((await flush(s)).left, 1, 'the newer copy is still waiting');
@@ -250,8 +268,8 @@ test('upload queue: newer edits survive, refusals cannot block or flood, dead re
 
     // A refused record goes to the back of the line: the next try sends what is behind it.
     sent.length = 0;
-    queue({ date: '2026-10-04', name: 'Bad', pdf: 'bad' });
-    queue({ date: '2026-10-04', name: 'Good', pdf: 'good' });
+    queue({ date: '2026-10-04', name: 'Bad', pdf: P('bad') });
+    queue({ date: '2026-10-04', name: 'Good', pdf: P('good') });
     globalThis.fetch = answer(b => (b.pdf === 'bad' ? { ok: false, error: 'Not a field app PDF' } : { ok: true }));
     assert.deepEqual(await flush(s), { left: 2, error: 'Not a field app PDF' }, 'one refused post per try, not one per record');
     assert.deepEqual(await flush(s), { left: 1, error: 'Not a field app PDF' });
@@ -338,9 +356,10 @@ test('office passcode: stored hashed, a 12-hour sign-in, a wait after 5 wrong co
   const store = new Map();
   Object.defineProperty(globalThis, 'localStorage', { configurable: true, value: { getItem: k => store.get(k) ?? null, setItem: (k, v) => store.set(k, String(v)) } });
   try {
-    const office = { pin: await pinHash('4821') };
+    // A valid hex salt may contain the PIN digits by chance; that is not plaintext storage.
+    const office = { pin: await pinHash('4821', '4821000000000000') };
     assert.match(office.pin, PIN_FORMAT);
-    assert.ok(!office.pin.includes('4821'), 'never kept as typed');
+    assert.notEqual(office.pin, '4821', 'the stored credential is the salted hash, not the plaintext code');
     assert.notEqual(await pinHash('4821'), office.pin, 'salted, so the same code hashes differently on each phone');
     const t0 = 1.8e12;
     assert.equal(await tryPin(office, '4821', t0), 'ok');
@@ -561,6 +580,19 @@ test('renaming a person or a crew keeps the id, so sheets and hours stay with th
   assert.deepEqual(shifts.map(s => s.who), ['Jose L', 'jose l'], 'each shift keeps the label it was made with');
 });
 
+test('DATA2-06: a name the PM fixed in Settings becomes the time clock name on the worker phone, by the person id', async () => {
+  const { normSettings, findPerson, renamePerson } = await lib;
+  const { attachShifts } = await import('../docs/schwab/report.mjs');
+  const S = normSettings({ crews: [{ name: 'Crew A', members: 'Ana R, Jose L' }] }), id = findPerson(S, 'Ana R').id;
+  Object.assign(S, { worker: 'Ana R', workerId: id });
+  renamePerson(S, id, 'Ana Ramirez'); // the renamed roster, as the hub delivers it
+  attachShifts(S); // the app loading the new settings
+  assert.deepEqual([S.worker, S.workerId], ['Ana Ramirez', id], 'the next tap goes up as Ana Ramirez with her id, not as a stray "Ana R"');
+  Object.assign(S, { worker: 'Luis M', workerId: '' }); // another name typed on the box lets go of the id (tasks.html), so it is never taken back
+  attachShifts(S);
+  assert.equal(S.worker, 'Luis M');
+});
+
 test('two office phones numbered sheets offline: every shift still points at its own sheet', async () => {
   const { normTask, normShift, assignmentFor, renumberClashes, sameNumber } = await lib;
   const { importShifts } = await import('../docs/schwab/report.mjs');
@@ -720,9 +752,12 @@ test("time clock: crew and task ids follow the worker's texts and never undo the
   log[0].gone = true;
   importShifts(log, [shift({ crew: 'Crew Z', tasks: ['T9'] })], 4);
   assert.deepEqual([log[0].crew, ids(log[0])], ['Crew A', ['T1', 'T2']], "another phone's link, or one for a shift the PM removed, changes nothing");
-  const byHand = [normShift({ id: 'pm1', who: 'Ana P', date: '2026-10-12', in: '07:00', edited: { who: true, in: true, out: true } })];
+  const byHand = [normShift({ id: 'pm1', who: 'Ana P', date: '2026-10-12', in: '07:00', out: '15:30', edited: { who: true, in: true, out: true } })];
   importShifts(byHand, [shift({ id: 'e', who: 'ána p', date: '2026-10-12', crew: 'Crew B' })], 5);
   assert.deepEqual(byHand.map(s => s.gone), [false, true], 'a day the PM added by hand matches the late text whatever its accents');
+  byHand[0].out = ''; // a day added with no clock-out waits for the phone's times: they are added for the PM to see
+  importShifts(byHand, [shift({ id: 'f', who: 'Ana P', date: '2026-10-12', out: '15:35' })], 6);
+  assert.deepEqual(byHand.map(s => [s.out, s.gone]), [['', false], ['', true], ['15:35', false]]);
 
   const S = (await lib).normSettings({ crews: [{ name: 'Crew B', lead: '', members: 'Ana P' }] });
   const ps = byPerson([shift({ id: 'p1', who: 'José L', date: '2026-10-12', crew: 'Crew A' }), shift({ id: 'p2', who: 'jose l', date: '2026-10-14', crew: 'Crew C' }), shift({ id: 'p3', who: 'Jose  L', date: '2026-10-15' }),
@@ -790,4 +825,102 @@ test('a tab still on the old version cannot wipe the passcode', async () => {
     store.set(KEYS.settings, JSON.stringify({ me: 'Dana', role: 'Superintendent' })); // the old version's save, without the code
     assert.match(loadSettings().pin, PIN_FORMAT, 'the passcode survives');
   } finally { delete globalThis.localStorage; }
+});
+
+// ---------- the app on a hub (the wiring in tasks.html, report.mjs and shared.mjs) ----------
+
+test('the hub link, key, role and crew have a key of their own: an old tab, a disconnect and a backup', async () => {
+  const { KEYS, HUB_FIELDS, loadSettings, save, backupData, restoreData, onSave } = await lib;
+  const store = new Map(), saves = [];
+  Object.defineProperty(globalThis, 'localStorage', { configurable: true, value: { getItem: k => store.get(k) ?? null, setItem: (k, v) => store.set(k, String(v)) } });
+  try {
+    const hub = { hubUrl: 'https://script.google.com/macros/s/x/exec', hubKey: 'K'.repeat(32), hubRole: 'crew', hubCrew: 'Crew A' };
+    save(KEYS.settings, { me: '', worker: 'Jose L', ...hub });
+    save(KEYS.hub, hub);
+    store.set(KEYS.settings, JSON.stringify({ worker: 'Jose L' })); // a tab on the old version saves settings without the hub fields
+    assert.deepEqual(HUB_FIELDS.map(k => loadSettings()[k]), HUB_FIELDS.map(k => hub[k]), 'still connected');
+    save(KEYS.hub, { hubUrl: '', hubKey: '', hubRole: '', hubCrew: '' }); // disconnected, with an older settings copy still holding them
+    store.set(KEYS.settings, JSON.stringify({ worker: 'Jose L', ...hub }));
+    assert.equal(loadSettings().hubUrl, '', 'the own key wins, a disconnect included');
+    save(KEYS.hub, hub);
+    const file = JSON.parse(JSON.stringify(backupData()));
+    assert.ok(!JSON.stringify(file).includes(hub.hubKey), 'no copy of the hub key in a backup');
+    assert.deepEqual(file[KEYS.hub], { ...hub, hubKey: '' });
+    store.clear();
+    assert.ok(restoreData(file));
+    assert.deepEqual([loadSettings().hubUrl, loadSettings().hubKey], [hub.hubUrl, ''], 'restored: the address, not the key');
+    onSave(k => saves.push(k));
+    save(KEYS.tasks, []);
+    Object.defineProperty(globalThis, 'localStorage', { configurable: true, value: { getItem: () => null, setItem: () => { throw new Error('full'); } } });
+    assert.equal(save(KEYS.tasks, [1]), false);
+    assert.deepEqual(saves, [KEYS.tasks], 'the save hook hears each save that happened, and only those');
+  } finally { (await lib).onSave(() => {}); delete globalThis.localStorage; }
+});
+
+test('two first calls for the device secret make one secret', async () => {
+  const { KEYS, ensureDevice, deviceSecret } = await lib;
+  const store = new Map(), writes = [];
+  Object.defineProperty(globalThis, 'localStorage', { configurable: true, value: { getItem: k => store.get(k) ?? null, setItem: (k, v) => { if (k === KEYS.device) writes.push(v); store.set(k, String(v)); } } });
+  try {
+    const [a, b] = await Promise.all([ensureDevice(), ensureDevice()]);
+    assert.match(a, /^[0-9a-f]{32}$/);
+    assert.equal(a, b);
+    assert.equal(writes.length, 1, 'one secret written');
+    assert.equal(await ensureDevice(), a, 'and later calls keep it');
+    assert.equal(JSON.parse(writes[0]).secret, deviceSecret());
+  } finally { delete globalThis.localStorage; }
+});
+
+test('a sheet on the hub keeps its number when a link with the same number arrives', async () => {
+  const { normTask, renumberClashes } = await lib;
+  const T = [normTask({ uid: 'mine1', origin: 'mine', id: 'T1019-02', date: '2026-10-19' }), normTask({ uid: 'mine2', origin: 'mine', id: 'T1019-02', date: '2026-10-19' })];
+  const inc = normTask({ uid: 'theirs', origin: 'mine', id: 'T1019-02', date: '2026-10-19', sentAt: 5 });
+  T.push(inc);
+  assert.deepEqual(renumberClashes(T, inc, uid => uid === 'mine1').map(([t, old]) => [t.uid, old, t.id]), [['mine2', 'T1019-02', 'T1019-01']], 'only the sheet the hub has never seen moves');
+  assert.equal(T[0].id, 'T1019-02');
+});
+
+test('the report language follows the superintendent part only', async () => {
+  const { PM_PART } = await import('../docs/schwab/report.mjs');
+  for (const k of ['r.decisions.0.pm', 'r.decisions.12.pmNote', 'r.pmReview']) assert.ok(PM_PART.test(k), k);
+  for (const k of ['r.results', 'r.decisions.0.q', 'r.decisions.0.rec', 'r.floors.0.crews.1.done', 'r.pmReviewer']) assert.ok(!PM_PART.test(k), k);
+});
+
+test('an older tab saving settings with no people keeps every person and id; a restore forgets what the hub had', async () => {
+  const { KEYS, loadSettings, save, normSettings, restoreData } = await lib;
+  const store = new Map();
+  Object.defineProperty(globalThis, 'localStorage', { configurable: true, value: { getItem: k => store.get(k) ?? null, setItem: (k, v) => store.set(k, String(v)), removeItem: k => store.delete(k) } });
+  try {
+    const crews = [{ id: 'cAlpha9', name: 'Crew A', lead: '', members: '' }, { id: 'cBeta5', name: 'Crew B', lead: '', members: '' }];
+    save(KEYS.settings, normSettings({ crews, people: [{ id: 'pJose77', name: 'Jose L', crewId: 'cAlpha9' }, { id: 'pMia88', name: 'Mia R', crewId: 'cAlpha9' }, { id: 'pJose99', name: 'Jose L', crewId: 'cBeta5' }] }));
+    store.set(KEYS.settings, JSON.stringify({ lang: 'es', crews: [{ name: 'Crew A', lead: '', members: 'Jose L, Mia R' }, { name: 'Crew B', lead: '', members: 'Jose L' }] })); // a tab before the roster: no people, no crew ids
+    const s = loadSettings();
+    assert.deepEqual([s.lang, s.crews.map(c => c.id), s.people.map(p => [p.id, p.crewId])], ['es', ['cAlpha9', 'cBeta5'], [['pJose77', 'cAlpha9'], ['pMia88', 'cAlpha9'], ['pJose99', 'cBeta5']]], 'the second Jose L included');
+    store.set('schwab.hubSync', '{"rev":9}');
+    assert.ok(restoreData({ [KEYS.tasks]: [] }));
+    assert.equal(store.get('schwab.hubSync'), undefined, 'the next round merges pull-first, so newer hub copies win');
+  } finally { delete globalThis.localStorage; }
+});
+
+test('a report text opened on the other phone: the PM copy decides the PM part, an answer the PM took back included', async () => {
+  const { normReport, mergeAnswers } = await lib;
+  const sup = normReport({ wins: 'newer words', decisions: [{ q: 'Saturday OT?', pm: 'Approved' }, { q: 'Lift Monday?', pm: 'Yes', pmNote: 'book it' }], pmReview: 'H · 5 PM' }); // the superintendent's text, sent before the PM took them back
+  const pm = normReport({ decisions: [{ q: 'Saturday OT?', pm: '' }, { q: 'Lift Monday?', pm: 'No', pmNote: '' }], pmReview: '' });
+  mergeAnswers(sup, pm, true); // on the PM phone, its own copy
+  assert.deepEqual([sup.wins, sup.decisions.map(d => [d.q, d.pm, d.pmNote]), sup.pmReview], ['newer words', [['Saturday OT?', '', ''], ['Lift Monday?', 'No', '']], '']);
+  // PHONE-ES-02: on the superintendent phone the text is the PM's copy of unknown age (no hub): an older one opened after a
+  // newer one keeps the later answers and the review, as the live app does
+  const mine = normReport({ decisions: [{ q: 'Wire order?', pm: 'Approved' }, { q: 'Overtime Saturday?', pm: 'Declined', pmNote: 'No overtime this week' }], pmReview: 'Reviewed. Order the wire, no Saturday.', pmLang: 'en' });
+  const older = normReport({ decisions: [{ q: 'Wire order?', pm: 'Approved' }, { q: 'Overtime Saturday?' }], pmReview: '' });
+  mergeAnswers(mine, older);
+  assert.deepEqual([mine.decisions.map(d => [d.pm, d.pmNote]), mine.pmReview, mine.pmLang], [[['Approved', ''], ['Declined', 'No overtime this week']], 'Reviewed. Order the wire, no Saturday.', 'en']);
+});
+
+test('the offline copy lists every file the app imports, so nothing is missing offline', () => {
+  const fs = require('node:fs'), path = require('node:path'), dir = path.join(__dirname, '..', 'docs', 'schwab');
+  const files = new Function(`return ${fs.readFileSync(path.join(dir, 'sw.js'), 'utf8').match(/const FILES = (\[[^\]]*\])/)[1]}`)();
+  const imported = new Set();
+  for (const f of fs.readdirSync(dir).filter(f => /\.(mjs|html)$/.test(f))) for (const m of fs.readFileSync(path.join(dir, f), 'utf8').matchAll(/from '\.\/([^']+)'/g)) imported.add(m[1]);
+  assert.ok(imported.size >= 5, 'the scan found the imports');
+  for (const f of imported) assert.ok(files.includes(f), `sw.js FILES is missing ${f}`);
 });
