@@ -215,7 +215,7 @@ async function complete(c, p, label) {
   check(['installed', 'already-waiting'].includes(await update(p)), label + ': complete target finishes installing');
   await snapshot(p, label + ' before close');
   await Promise.all(c.pages().map(p => p.close()));
-  await poll(async () => (await Promise.all(c.serviceWorkers().map(w => w.evaluate(() => typeof CACHE !== 'undefined' && CACHE === 'schwab-field-apps-v9' && !self.registration.waiting && self.registration.active?.state === 'activated').catch(() => false)))).some(Boolean), 'v9 activates after all copies close');
+  await poll(async () => (await Promise.all(c.serviceWorkers().map(w => w.evaluate(n => typeof CACHE !== 'undefined' && CACHE === n && !self.registration.waiting && self.registration.active?.state === 'activated', cacheName).catch(() => false)))).some(Boolean), 'v9 activates after all copies close');
   p = await page(c); const row = await open(p, label + ' reopened after all copies closed');
   check(row.controlling === 'v9' && row.controlled, label + ': v9 controls the reopened document (CDP client/version)');
   check(row.appStarted && row.title === 'Hoy' && row.errors.length === 0, label + ': completed v9 is running its Spanish board, not a fallback');
