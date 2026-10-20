@@ -183,7 +183,7 @@ async function openCode(code) {
     } else if (t.origin === 'link') mergeTask(t, inc, 'assign'); // re-sent sheet: new assignment, crew check-offs kept
     moved = renumberClashes(T, t, sync.onHub);
   } else if (!t || t.origin !== 'link') { // results reaching the superintendent (not the crew re-opening its own)
-    if (!t) { sync.fromText('t', inc.uid, 'assign', inc.assignAt || inc.sentAt); T.push(t = Object.assign(inc, { origin: 'mine' })); } // its office part goes up as old as the copy it is, never as the crew's last edit
+    if (!t) { sync.fromText('t', inc.uid, 'assign', inc.assignAt || inc.sentAt, 0, data.skew !== undefined && inc, ['assign']); T.push(t = Object.assign(inc, { origin: 'mine' })); } // its office part goes up as old as the copy it is, never as the crew's last edit; from a hub phone that copy is its base, so only an office edit made here goes up
     else mergeTask(t, inc, 'crew');
     t.gotAt = Date.now();
     moved = renumberClashes(T, t, sync.onHub);
@@ -224,7 +224,7 @@ async function importDay(data) {
   const inc = (Array.isArray(data.tasks) ? data.tasks : []).slice(0, 500).map(normTask).filter(t => t.uid);
   const fresh = inc.filter(t => !find(t.uid)), known = inc.filter(t => find(t.uid));
   if (inc.length && await ask(L('Load the task plan for {date}? New sheets: {fresh}. Updated: {known}. Check-offs already on this phone are kept.', { date: niceDate(date), fresh: fresh.length, known: known.length }), L('Load plan'))) {
-    for (const t of fresh) T.push(Object.assign(t, { origin: 'mine' }));
+    for (const t of fresh) { sync.fromText('t', t.uid, 'assign', t.assignAt || t.updatedAt, 0, data.skew !== undefined && t); T.push(Object.assign(t, { origin: 'mine' })); } // from a hub phone a sheet new here is a copy of the hub's: its base, so only what is changed here goes up (GATE2-DATA-01)
     for (const t of known) if (sync.fromText('t', t.uid, 'assign', t.assignAt || t.updatedAt)) mergeTask(find(t.uid), t, 'assign'); // on a hub, only an office part newer than the hub copy here (its own stamp, hub time: sync.mjs officeAt; a text from an older version has none)
     const moved = inc.flatMap(t => renumberClashes(T, find(t.uid), sync.onHub));
     persist();
@@ -778,7 +778,7 @@ function taskMsg(t, l) {
 
 async function send(kind, t) {
   if (kind === 'task') { t.sentAt = Date.now(); persist(); render(); }
-  const payload = { v: 1, kind, pin: S.pin, skew: sync.hubStatus().skew || 0, ...(kind === 'day' ? { date: day, tasks: dayTasks().map(x => ({ ...x, assignAt: sync.officeAt(x) })) } : { task: t }) }; // skew: this phone's hub time offset (sync.mjs fromText)
+  const payload = { v: 1, kind, pin: S.pin, skew: sync.hubStatus().skew, ...(kind === 'day' ? { date: day, tasks: dayTasks().map(x => ({ ...x, assignAt: sync.officeAt(x) })) } : { task: t }) }; // skew: this phone's hub time offset, only from a phone on a hub (sync.mjs fromText)
   const url = linkTo('tasks.html', await pack(payload));
   if (kind === 'task') {
     // A crew that has answered in Spanish before gets the message in both languages.

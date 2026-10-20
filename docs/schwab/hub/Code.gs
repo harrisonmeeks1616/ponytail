@@ -900,7 +900,7 @@ function mergeReport_(ctx, stored, inc) {
   // so a PM phone and a PM laptop answering different decisions both stand; one both changed goes to the newer pmAt.
   const pnew = inc.pmAt >= r.pmAt, pbase = stored && inc.pmAt > 0 && inc.pmBase !== undefined ? inc.pmBase || shape_(REPORT, { date: inc.date }) : null;
   if (pm && (inc.pmAt > 0 || !stored) && (pnew || pbase)) {
-    const none = { pm: '', pmNote: '' };
+    const none = { pm: '', pmNote: '' }, part = function () { return JSON.stringify([r.decisions, r.pmReview, r.pmLang]); }, before = part();
     inc.decisions.forEach(function (d) {
       const m = d.q ? r.decisions.find(function (x) { return x.q === d.q; }) : null, s = m || none;
       const b = pbase && ((d.q && pbase.decisions.find(function (x) { return x.q === d.q; })) || none);
@@ -908,7 +908,9 @@ function mergeReport_(ctx, stored, inc) {
       if (m) { m.pm = d.pm; m.pmNote = d.pmNote; } else if (d.pm || d.pmNote) r.decisions.push({ q: d.q, rec: d.rec, by: d.by, pm: d.pm, pmNote: d.pmNote });
     });
     ['pmReview', 'pmLang'].forEach(function (k) { if (takes_(pbase, pnew, inc[k], pbase && pbase[k], r[k])) r[k] = inc[k]; });
-    r.pmAt = Math.max(r.pmAt, inc.pmAt);
+    // pmAt is the PM part's version: it moves past the stored one whenever the PM part changes, also by an older-stamped
+    // answer from a second PM device, so a supBase.pmAt from before that merge reads as not having seen it (GATE2-DATA-02)
+    r.pmAt = Math.max(r.pmAt + (part() !== before ? 1 : 0), inc.pmAt);
   }
   const ev = r.submittedAt > (was ? was.submittedAt : 0) ? [['report.sent', r.super, 'Daily report for ' + r.date + ' sent' + (r.super ? ' by ' + r.super : ''), r.date]] : [];
   return { obj: r, events: ev };

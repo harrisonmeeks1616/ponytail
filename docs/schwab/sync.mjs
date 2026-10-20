@@ -173,6 +173,7 @@ export function makeSync(o = {}) {
       mismatch: L('This invite does not match the hub. Ask for a new one.'),
       already: L('This phone is already connected to a different hub. Disconnect it first to join this one.'),
       crew_key: L('That is the crew key: crew phones join with the crew invite. On this phone, paste the PM key from the Execution log of the hub script, or open the superintendent invite.'),
+      pm_key: L('That is not the PM key. This phone is set to Project manager, so it connects only with the PM key from the Execution log of the hub script.'),
       no_reach: L('That did not work. Check the signal and try again. If it still fails, check that the hub deployment is set to Who has access: Anyone.'),
       off: L('This phone is not connected to a hub'),
     })[code] || L('The hub had a problem. Trying again shortly.');
@@ -708,6 +709,7 @@ export function makeSync(o = {}) {
     const s = cfg();
     let rep;
     try { rep = await whoami(null, { cfg: { url, key, secret: device().secret, role: '' } }); } catch (e) { return e.code === 'offline' && extra.office ? bad('no_reach') : lost(e); } // a private deployment answers like no signal (OWNER3-07)
+    if (s.role === 'Project manager' && rep.role !== 'pm') return bad('pm_key'); // the PM's phone on another key: its review and timesheet would never reach the hub, and the first pull would blank them (GATE2-OWNER-01)
     if (extra.office && rep.role === 'crew') return bad('crew_key'); // the office's Connect: as a crew phone none of its office work would reach the hub (OWNER3-02)
     if (extra.role && extra.role !== rep.role) return bad('mismatch');
     epoch++; fails = 0; nextAllowed = 0;
@@ -775,13 +777,15 @@ export function makeSync(o = {}) {
   // copy: the text from a hub phone becomes this phone's copy (it had none). It is a copy of the hub's (its sender sends its
   // own work up), so it is every part's base: only what is changed here after goes up, and an old text brings back nothing
   // the hub has taken out since, nor a record the PM deleted. A text from a phone with no hub has no base: all of it is new.
-  function fromText(kind, key, part, at, skew = 0, copy = null) {
+  // parts: the parts the copy is the base of (all when not given). A results text's crew part is its sender's own work, so it
+  // goes up from here whole, by its stamp, as it did before: the office relays the results of a crew phone with no signal.
+  function fromText(kind, key, part, at, skew = 0, copy = null, parts = null) {
     if (!hub()) return true;
     at = num(at) && num(at) + num(skew);
     const st = loadState(), rec = ent(st[kind], key), pr = ent(rec, part);
     if ((pr.v !== undefined || pr.at !== undefined) && num(at) <= Math.max(num(pr.v), num(pr.at))) return false;
     pr.tx = num(at);
-    if (copy) for (const [p, , , base] of PARTS[kind]) if (base && ent(rec, p).s === undefined) rec[p].b = base(copy);
+    if (copy) for (const [p, , , base] of PARTS[kind]) if (base && (!parts || parts.includes(p)) && ent(rec, p).s === undefined) rec[p].b = base(copy);
     saveState(st);
     return true;
   }
@@ -963,5 +967,5 @@ export const selftest = () => get().selftest();
 export const liveData = () => get().liveData();
 export const onHub = (key, kind) => get().onHub(key, kind);
 export const replyOnHub = t => get().replyOnHub(t);
-export const fromText = (kind, key, part, at, skew, copy) => get().fromText(kind, key, part, at, skew, copy);
+export const fromText = (kind, key, part, at, skew, copy, parts) => get().fromText(kind, key, part, at, skew, copy, parts);
 export const officeAt = t => get().officeAt(t);
