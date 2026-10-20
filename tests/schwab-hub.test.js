@@ -712,6 +712,22 @@ test('shift, PM rules: edits, renames and removals stick; stored as sent; the cl
   assert.equal(r.shifts[0].shift.out, '16:30');
 });
 
+test('a PM can undo removing their own unedited shift; a stale clock stream or another role cannot', () => {
+  const env = setup(), pm = phone(env, 'pm', 'pm-dev');
+  const original = ok(pm.push({ shifts: [shift({ device: pm.dev })] })).shifts[0].shift;
+  const removed = ok(pm.push({ shifts: [{ ...original, gone: true, pmAt: T0 - 200, base: original }] })).shifts[0].shift;
+  assert.equal(removed.gone, true);
+  assert.equal(ok(pm.push({ shifts: [original] })).shifts[0].shift.gone, true, 'the old clock copy never revives it');
+  for (const role of ['crew', 'super']) {
+    const attempt = phone(env, role, 'pm-dev').push({ shifts: [{ ...removed, gone: false, pmAt: T0 - 100, base: removed }] });
+    assert.equal(ok(attempt).shifts[0].shift.gone, true, role + ' does not get PM rules from an edit stamp');
+  }
+  const restored = ok(pm.push({ shifts: [{ ...removed, gone: false, pmAt: T0 - 100, base: removed }] })).shifts[0].shift;
+  assert.equal(restored.gone, false);
+  assert.deepEqual([restored.device, restored.in, restored.out, restored.edited], [original.device, original.in, original.out, original.edited]);
+  assert.equal(rowsOf(env.hub, 'Weekly totals')[0].Shifts, 1, 'the restored shift counts again');
+});
+
 test('DATA2-03: a phone\'s real punches are kept when the PM already entered that day by hand, for the PM to see and settle', () => {
   const env = setup(), crew = phone(env, 'crew', 'crew-dev'), pm = phone(env, 'pm', 'pm-dev');
   ok(pm.push({ shifts: [shift({ id: 'pm1', device: '', who: 'ana p', date: '2026-10-12', in: '07:00', out: '15:30', edited: { who: true, in: true, out: true } })] }));
@@ -1105,6 +1121,26 @@ test('weekly totals: three 7h20m shifts are 21.99 hours, one row per person per 
   assert.deepEqual(w.map(r => [r['Week of'], r.Hours, r['Open shifts']]), [['2026-10-19', 8, 0], ['2026-10-12', 21.99, 0]], 'newest week first');
   ok(pm.push({ shifts: [{ ...env.hub.entities('Hours').find(s => s.id === 'a'), gone: true }] }));
   assert.deepEqual(rowsOf(env.hub, 'Weekly totals').map(r => [r['Week of'], r.Hours, r.Shifts]), [['2026-10-19', 8, 1], ['2026-10-12', 14.66, 2]], 'a removed shift leaves the totals');
+});
+
+test('weekly totals recover when a failed refresh is retried with an already-saved shift', () => {
+  const env = setup(), crew = phone(env, 'crew', 'crew-dev');
+  ok(crew.push({ shifts: [shift()] }));
+  const closed = shift({ out: '15:00', at: T0 - 100 });
+  const real = env.hub.maybeFail;
+  let appends = 0;
+  env.hub.maybeFail = m => {
+    if (m === 'sheets.spreadsheets.values.append' && ++appends === 2) throw new Error('Weekly write failed');
+    return real(m);
+  };
+  assert.equal(crew.push({ shifts: [closed] }).error, 'server');
+  env.hub.maybeFail = real;
+  assert.equal(stored(env.hub, 's1').out, '15:00', 'the underlying clock-out was saved');
+  assert.equal(rowsOf(env.hub, 'Weekly totals').length, 0, 'the refresh failed after clearing the derived rows');
+  const rev = Number(env.hub.props.REV);
+  ok(crew.push({ shifts: [closed] }));
+  assert.equal(Number(env.hub.props.REV), rev, 'the retry does not duplicate the saved shift');
+  assert.deepEqual(rowsOf(env.hub, 'Weekly totals').map(r => [r.Hours, r.Shifts, r['Open shifts']]), [[8, 1, 0]]);
 });
 
 // ---------- the field lists the server and the app share ----------
@@ -1812,6 +1848,45 @@ test('archive: a failure while deleting leaves the rows in both places, never in
   const [arch] = env.hub.archives();
   assert.equal(env.hub.table('Tasks', arch.id).length, 1, 'and already copied');
   assert.equal(env.hub.props.ARCHIVED_BEFORE, undefined, 'the horizon moves only after the delete');
+});
+
+test('archive: a failed completion resumes before another write, without recopying or reviving archived records', () => {
+  for (const point of ['after delete', 'delete']) {
+    const env = setup(), pm = phone(env, 'pm'), sup = office(env);
+    const oldTask = task({ uid: 'old', date: '2026-09-10' }), oldShift = shift({ id: 'old-hours', device: '', date: '2026-09-10', out: '15:00' });
+    ok(sup.push({ tasks: [oldTask] }));
+    ok(pm.push({ shifts: [oldShift] }));
+    let batches = 0, deleting = false, failed = false;
+    const real = env.hub.maybeFail;
+    env.hub.maybeFail = m => {
+      if (m === 'sheets.spreadsheets.batchUpdate' && ++batches === 2) {
+        deleting = true;
+        if (point === 'delete') { failed = true; throw new Error('Delete failed'); }
+      }
+      if (point === 'after delete' && deleting && m === 'sheets.spreadsheets.values.append' && !failed) {
+        failed = true; throw new Error('Activity write failed');
+      }
+      return real(m);
+    };
+    assert.equal(pm.call('archive', { before: '2026-10-01' }).error, 'server');
+    env.hub.maybeFail = real;
+    assert.equal(failed, true, point);
+    assert.equal(env.hub.props.ARCHIVED_BEFORE, undefined, 'no successful completion claimed yet');
+    assert.equal(env.hub.table('Tasks').length, point === 'delete' ? 1 : 0);
+    const archive = env.hub.archives()[0], url = 'https://docs.google.com/spreadsheets/d/' + archive.id + '/edit';
+    if (point === 'delete') {
+      assert.equal(ok(pm.call('archive', { before: '2026-10-01' })).sheetUrl, url, 'retry returns the existing archive');
+    }
+    const stale = ok(sup.push({ tasks: [oldTask] }));
+    assert.equal(stale.tasks[0].reason, 'archived', 'recovery completes before a stale phone writes');
+    assert.equal(ok(pm.push({ shifts: [oldShift] })).shifts[0].reason, 'archived');
+    assert.equal(env.hub.archives().length, 1, 'no duplicate archive');
+    assert.deepEqual(env.hub.entities('Tasks', archive.id).map(t => t.uid), ['old']);
+    assert.deepEqual(env.hub.entities('Hours', archive.id).map(s => s.id), ['old-hours']);
+    assert.deepEqual([env.hub.table('Tasks').length, env.hub.table('Hours').length, env.hub.table('Weekly totals').length], [0, 0, 0]);
+    assert.equal(JSON.parse(env.hub.props.ARCHIVES)[0].url, url);
+    assert.ok(!env.hub.props.ARCHIVE_PENDING && !env.hub.props.WEEKLY_DIRTY, 'the pending operation and derived totals are settled');
+  }
 });
 
 // ---------- abuse guards ----------

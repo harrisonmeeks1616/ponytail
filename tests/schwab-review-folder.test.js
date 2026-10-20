@@ -107,6 +107,14 @@ check('repeat identical receipt returns prior link without another PDF', () => {
   assert.equal(r.ok, true); assert.equal(r.duplicate, true);
   assert.equal(s.changes.filter(x => x.type === 'create').length, 0);
 });
+check('retry of the last allowed PDF still returns its receipt after the daily cap', () => {
+  const s = session({ duplicate: true, properties: {
+    RATE_UTC_DAY: new Date().toISOString().slice(0, 10), RATE_COUNT: '300' } });
+  const r = s.request(body());
+  assert.equal(r.ok, true); assert.equal(r.duplicate, true);
+  assert.equal(s.state.RATE_COUNT, '300', 'a retry uses no upload capacity');
+  assert.deepEqual(s.changes, [{ type: 'unlock' }], 'no folder or PDF created');
+});
 check('PDF creation failure preserves earlier files and releases lock', () => {
   const s = session({ failCreate: true }); const r = s.request(body());
   assert.equal(r.ok, false); assert.deepEqual(s.changes, [{ type: 'unlock' }]);

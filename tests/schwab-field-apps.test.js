@@ -201,7 +201,22 @@ test('Spanish mode has a Spanish version of every on-screen phrase', async () =>
     assert.ok(Object.hasOwn(ES, en), `missing Spanish for: ${en}`);
     assert.equal(holes(ES[en]), holes(en), `placeholders differ in: ${en}`);
   }
-  for (const en of Object.keys(ES)) assert.ok(used.has(en), `Spanish entry no longer used: ${en}`);
+  // v8 refreshes individual cached files: keep these exact retired labels until those installs upgrade.
+  const v8Compatibility = new Set([
+    'Back to task sheets',
+    'Past day',
+    'Planning ahead',
+    'No task sheets for {date}',
+    '{date} task sheets',
+    "Opens task setup, the daily report, settings and the PM's crew hours. Crew sheets and the time clock stay open to everyone. Use the same code on the PM's and the superintendent's phones. Crew phones learn it from the first task sheet they open.",
+    'On site now: {people}',
+    'On site now: {people} in {crews}',
+  ]);
+  for (const en of v8Compatibility) {
+    assert.ok(typeof ES[en] === 'string' && ES[en].trim() && ES[en] !== en, `missing v8 Spanish for: ${en}`);
+    assert.equal(holes(ES[en]), holes(en), `v8 placeholders differ in: ${en}`);
+  }
+  for (const en of Object.keys(ES)) assert.ok(used.has(en) || v8Compatibility.has(en), `Spanish entry no longer used: ${en}`);
 });
 
 test('Spanish labels, safe placeholders, and notes printed as typed', async () => {

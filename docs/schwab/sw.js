@@ -1,16 +1,15 @@
-// Offline copy of the apps: answer from cache, refresh it in the background.
-// Upper floors and electrical rooms often have no signal, and a reopened tab must still load.
-const CACHE = 'schwab-field-apps-v8';
+// Keep every core file from one release together, including the Spanish dictionary.
+// Bump CACHE for every app release. Existing tabs keep their build until all close.
+const CACHE = 'schwab-field-apps-v9';
 const FILES = ['./', 'index.html', 'tasks.html', 'report.html', 'report.mjs', 'shared.mjs', 'sync.mjs', 'live.mjs', 'es.mjs', 'shared.css']; // every file the app imports
+const CORE = new Set(FILES.map(f => new URL(f, self.location).href));
 
-self.addEventListener('install', e => e.waitUntil(caches.open(CACHE).then(c => c.addAll(FILES.map(f => new Request(f, { cache: 'reload' })))).then(() => self.skipWaiting())));
+self.addEventListener('install', e => e.waitUntil(caches.open(CACHE).then(c => c.addAll(FILES.map(f => new Request(f, { cache: 'reload' }))))));
+// Do not skipWaiting: switching workers under an open page could mix module versions.
 self.addEventListener('activate', e => e.waitUntil(caches.keys().then(keys => Promise.all(keys.filter(k => k === 'schwab-field-apps' || (k.startsWith('schwab-field-apps-') && k !== CACHE)).map(k => caches.delete(k)))).then(() => self.clients.claim())));
 self.addEventListener('fetch', e => {
-  if (e.request.method !== 'GET' || new URL(e.request.url).origin !== location.origin) return;
-  const fresh = fetch(e.request).then(async res => {
-    if (res.ok) await (await caches.open(CACHE)).put(e.request, res.clone());
-    return res;
-  });
-  e.waitUntil(fresh.catch(() => {}));
-  e.respondWith(caches.match(e.request, { ignoreSearch: true }).then(hit => hit || fresh));
+  const url = new URL(e.request.url); url.search = '';
+  if (e.request.method !== 'GET' || !CORE.has(url.href)) return;
+  // The complete cache was populated atomically at install; never refresh one core file alone.
+  e.respondWith(caches.open(CACHE).then(c => c.match(e.request, { ignoreSearch: true })).then(hit => hit || fetch(e.request)));
 });

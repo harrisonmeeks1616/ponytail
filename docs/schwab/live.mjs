@@ -312,6 +312,7 @@ export async function txApply(ctx, root = globalThis.document) {
     els.forEach((el, i) => {
       const trans = typeof out[i] === 'string' ? out[i] : texts[i];
       if (trans.trim() && trans !== texts[i]) memPut(from, to, texts[i], trans);
+      if (el.querySelector('.tx-o')?.textContent !== texts[i]) return; // a newer edit has its own pending request or debounce
       txSettle(ctx, el, texts[i], trans);
     });
   }));
@@ -351,10 +352,11 @@ export function liveView(ctx) {
     : `<div class="empty">${icon('today', 'empty-ic')}<h2>${L('No task sheets for today yet')}</h2><button class="btn" data-go="day/${day}">${L('Open the Tasks tab')}</button></div>`;
   // The PM's shift adds from one sync (a week typed in) fold into one line a person; ten lines, then Show all.
   const addedFor = e => { const s = shiftOf.get(e.ref); return s ? personNow(S, s).name : /^PM added a shift for (.*), /.exec(e.text || '')?.[1] || ''; };
+  const addedKey = e => { const s = shiftOf.get(e.ref); return s ? personById(S, personKey(S, s))?.id || s.pid || '' : ''; }; // a name alone cannot distinguish two people
   const folded = live.events.slice(0, 50).reduce((out, e) => {
-    const last = out.at(-1);
-    if (e.kind === 'pm.add' && last?.e.kind === 'pm.add' && addedFor(e) === addedFor(last.e) && Math.abs(last.e.ts - e.ts) < 5 * 6e4) last.n++;
-    else out.push({ e, n: 1 });
+    const last = out.at(-1), key = e.kind === 'pm.add' ? addedKey(e) : '';
+    if (key && last?.e.kind === 'pm.add' && key === last.key && Math.abs(last.e.ts - e.ts) < 5 * 6e4) last.n++;
+    else out.push({ e, n: 1, key });
     return out;
   }, []), feed = ui.feedAll ? folded : folded.slice(0, 10);
   // a clock line names the person as the roster has them now (by the shift it is about); a sheet line says the sheet's crew.
@@ -588,8 +590,8 @@ function olderCard(ctx, kind) {
   let body = '';
   if (kind === 'shifts' && items.length) body = peopleWeeks(items, S, nowOf(ctx)).map(p => `<details class="rec-old"><summary><b>${esc(p.who)}</b><span>${esc(L('{n} hrs', { n: h2(p.hours) }))}</span></summary>
       ${p.weeks.map(w => `<p class="hint">${esc(weekLabel(w.mon))} · ${esc(L('{n} hrs', { n: h2(w.hours) }))} · ${esc(L('{n} shifts', { n: w.shifts.length }))}</p>`).join('')}</details>`).join('');
-  if (kind === 'tasks') body = items.sort((a, b) => b.date.localeCompare(a.date)).slice(0, 200).map(t => oldTask(ctx, t)).join('');
-  if (kind === 'reports') body = items.sort((a, b) => b.date.localeCompare(a.date)).slice(0, 200).map(r => oldReport(ctx, r)).join('');
+  if (kind === 'tasks') body = items.sort((a, b) => b.date.localeCompare(a.date)).map(t => oldTask(ctx, t)).join('');
+  if (kind === 'reports') body = items.sort((a, b) => b.date.localeCompare(a.date)).map(r => oldReport(ctx, r)).join('');
   return `<section class="card"><h2>${L('Older records on the hub')}</h2>
     <p class="hint">${L('Records older than this phone keeps are on the hub. Loading them does not save them on this phone.')}</p>
     ${body}${o?.err ? `<p class="hint" role="alert">${esc(o.err)}</p>` : ''}${o && !o.busy && !o.cursor && !o.err ? `<p class="hint">${items.length ? L('That is everything the hub has.') : L('The hub has nothing older.')}</p>` : ''}

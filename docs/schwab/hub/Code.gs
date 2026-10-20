@@ -384,7 +384,14 @@ function locked_(ctx, key, run) {
     if (roleOf_(key, ctx.P) !== ctx.role) fail_('unauthorized'); // rotated while this request waited
     ctx.state.rev = Number(ctx.P.REV) || 0;
     const rev0 = ctx.state.rev;
-    try { return run(ctx); } finally { if (ctx.state.rev !== rev0) props.setProperty('REV', String(ctx.state.rev)); }
+    try {
+      if (ctx.P.ARCHIVE_PENDING) {
+        const pending = JSON.parse(ctx.P.ARCHIVE_PENDING), done = finishArchive_(ctx, pending);
+        if (ctx.req.action === 'archive' && ctx.req.before === pending.before) return done;
+      }
+      if (ctx.P.WEEKLY_DIRTY === '1') rewriteWeekly_(ctx); // repair a prior partial write before accepting another one
+      return run(ctx);
+    } finally { if (ctx.state.rev !== rev0) props.setProperty('REV', String(ctx.state.rev)); }
   });
 }
 function nextRev_(ctx) { return ++ctx.state.rev; } // one revision per row written, so paging by rev is exact
@@ -549,6 +556,8 @@ function prefetch_(ctx, wants) { // wants: {name: [index entries]}; fills ctx.me
 function newBatch_() { return { upd: [], add: {}, del: {}, hours: false }; }
 function rowRange_(name, row) { const t = TABS[name]; return a1_(t, 0, row, t.head.length - 1, row); }
 function flush_(ctx, b) {
+  // The source row can land before a later Sheets call fails. An identical retry must still rebuild its totals.
+  if (b.hours) PropertiesService.getScriptProperties().setProperty('WEEKLY_DIRTY', '1');
   for (let i = 0; i < b.upd.length; i += 100) apiValuesBatchUpdate_(ctx.id, b.upd.slice(i, i + 100));
   const names = Object.keys(b.del);
   if (names.length) { // one atomic request; each tab's runs go bottom up so the row numbers stay right
@@ -802,7 +811,8 @@ function mergeTask_(ctx, stored, inc) {
 const noEdits_ = { who: false, in: false, out: false };
 function edited_(s) { return s.edited.who || s.edited.in || s.edited.out; }
 function mergeShift_(ctx, stored, inc) {
-  const plain = ctx.dev !== '' && inc.device === ctx.dev && !inc.gone && !edited_(inc), base = stored && inc.base;
+  // Own clock taps carry no pmAt; a timesheet edit does, including Undo with every flag clear.
+  const plain = ctx.dev !== '' && inc.device === ctx.dev && !inc.pmAt && !inc.gone && !edited_(inc), base = stored && inc.base;
   delete inc.base; // read, never stored
   const ev = [], line = function (verb, s) { return verb + ' ' + (s.who || 'a worker') + ', ' + s.date; };
   let s;
@@ -1087,6 +1097,8 @@ function rewriteWeekly_(ctx) {
   const rows = weeklyRows_(vr[0].values || [], names_(ctx, vr[1].values || []));
   apiValuesClear_(ctx.id, a1_(TABS.weekly, 0, 2, 4));
   for (let i = 0; i < rows.length; i += 200) apiValuesAppend_(ctx.id, rowRange_('weekly', 1), rows.slice(i, i + 200));
+  PropertiesService.getScriptProperties().deleteProperty('WEEKLY_DIRTY');
+  delete ctx.P.WEEKLY_DIRTY;
 }
 
 // ---------- pull ----------
@@ -1364,19 +1376,34 @@ function archive_(ctx) {
   });
   const wk = weeklyRows_(hours, names_(ctx, apiValuesGet_(ctx.id, configCells_()).values || []));
   for (let i = 0; i < wk.length; i += 200) apiValuesAppend_(aid, rowRange_('weekly', 1), wk.slice(i, i + 200));
+  // Every row is copied. Retain this receipt until deletion and the archive horizons both finish; a later write
+  // completes it under the same lock before it can revive old records. A retry reuses the copy already made.
+  const pending = { before: before, hoursCut: hoursCut, url: sheetUrl_(aid), at: ctx.now, moved: moved };
+  PropertiesService.getScriptProperties().setProperty('ARCHIVE_PENDING', JSON.stringify(pending));
+  return finishArchive_(ctx, pending);
+}
+function finishArchive_(ctx, pending) {
+  const before = pending.before, moved = pending.moved, hoursCut = pending.hoursCut;
+  const cuts = { tasks: before, shifts: hoursCut, reports: before, events: before };
   const b = newBatch_();
-  Object.keys(plan).forEach(function (n) { plan[n].forEach(function (row) { delRow_(b, n, row); }); });
+  b.hours = moved.shifts > 0;
+  Object.keys(cuts).forEach(function (n) {
+    readIndex_(ctx, n).filter(function (x) { return x.date && x.date < cuts[n]; }).forEach(function (x) { delRow_(b, n, x.row); });
+  });
   pruneTombstones_(ctx, b);
-  addEvent_(ctx, b, 'archive', 'PM', 'Archived ' + (moved.tasks + moved.shifts + moved.reports + moved.events) + ' rows older than ' + before, before);
+  addEvent_(Object.assign({}, ctx, { role: 'pm' }), b, 'archive', 'PM', 'Archived ' + (moved.tasks + moved.shifts + moved.reports + moved.events) + ' rows older than ' + before, before);
   flush_(ctx, b);
   if (moved.shifts) rewriteWeekly_(ctx);
-  const props = PropertiesService.getScriptProperties(), url = sheetUrl_(aid), list = JSON.parse(ctx.P.ARCHIVES || '[]');
-  list.push({ url: url, before: before, at: ctx.now });
-  props.setProperties({
+  const props = PropertiesService.getScriptProperties(), url = pending.url, list = JSON.parse(ctx.P.ARCHIVES || '[]');
+  list.push({ url: url, before: before, at: pending.at });
+  const saved = {
     ARCHIVED_BEFORE: before > (ctx.P.ARCHIVED_BEFORE || '') ? before : ctx.P.ARCHIVED_BEFORE,
     ARCHIVED_HOURS: hoursCut > (ctx.P.ARCHIVED_HOURS || '') ? hoursCut : ctx.P.ARCHIVED_HOURS,
-    ARCHIVES: JSON.stringify(list.slice(-20)),
-  });
+    ARCHIVES: JSON.stringify(list.slice(-20)), ARCHIVE_PENDING: '',
+  };
+  props.setProperties(saved);
+  Object.assign(ctx.P, saved); // the write that resumed this archive uses the completed horizons
+  ctx.memo = {}; // deleted rows changed every later row number
   return { sheetUrl: url, moved: moved };
 }
 

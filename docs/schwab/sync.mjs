@@ -277,7 +277,7 @@ export function makeSync(o = {}) {
       for (const s of list) {
         const pr = ent(ent(st[k], s.id), 'v'), h = hs(shiftPart(s, full));
         seen[k].add(s.id);
-        if (!can(s)) pr.s = h;
+        if (!can(s, pr, h)) pr.s = h;
         else if (pr.s === h) delete pr.p;
         else if (pr.x !== h) {
           if (pr.p !== h) Object.assign(pr, { p: h, at: Math.max(skewed(st), num(pr.at) + 1) });
@@ -286,7 +286,7 @@ export function makeSync(o = {}) {
       }
     };
     shifts('h', lc.hours, s => c.dev && s.device === c.dev, false);
-    shifts('m', lc.crewH, s => !(c.dev && s.device === c.dev), true); // the PM's own clock-ins go up from their own clock, not the timesheet
+    shifts('m', lc.crewH, (s, pr, h) => !(c.dev && s.device === c.dev) || s.gone || Object.values(s.edited).some(Boolean) || (pr.b && hs(shiftPart(pr.b, true)) !== h), true); // own punches go from the clock; corrections made in Crew hours go from its hub base
     const pr = ent(ent(st.g, 'c'), 'v'), cp = cfgPart(cfg()), h = hs(cp);
     if (c.role === 'crew') { /* never sends settings: left as the hub last had them, as an office part is above */ } else if (pr.s === h) { delete pr.p; delete pr.at; } else if (pr.x !== h) {
       if (pr.p !== h) Object.assign(pr, { p: h, at: Math.max(skewed(st), num(pr.v) + 1, num(pr.at) + 1) }); // the hub orders two office phones' settings by this stamp
@@ -388,7 +388,7 @@ export function makeSync(o = {}) {
       delete pr.x; // the hub changed since this was refused: it may take it now
       if (loc && writes.includes(p)) {
         const mine = hs(fn(loc));
-        if (mine !== pr.s && mine !== vh && theirs <= num(pr.at)) { Object.assign(pr, { v: theirs, vh }); continue; }
+        if (mine !== pr.s && mine !== vh && (pr.b || theirs <= num(pr.at))) { Object.assign(pr, { v: theirs, vh }); continue; }
       }
       took[p] = 1;
     }
@@ -419,7 +419,7 @@ export function makeSync(o = {}) {
       delete pr.x;
       if (loc && writes.includes(p)) {
         const mine = hs(fn(loc));
-        if (mine !== pr.s && mine !== vh && theirs <= num(pr.at)) { Object.assign(pr, { v: theirs, vh }); continue; }
+        if (mine !== pr.s && mine !== vh && (pr.b || theirs <= num(pr.at))) { Object.assign(pr, { v: theirs, vh }); continue; }
       }
       took[p] = 1;
     }
@@ -561,7 +561,7 @@ export function makeSync(o = {}) {
       if (isObj(rep.config)) {
         const inc = inC(rep.config), s0 = cfg(), pr = ent(ent(st.g, 'c'), 'v'), vh = hs(cfgPart(inc)), mine = hs(cfgPart(s0));
         if (!(pr.v === inc.at && pr.vh === vh)) {
-          if (c.role !== 'crew' && pr.s !== undefined && mine !== pr.s && mine !== vh && inc.at <= num(pr.at)) Object.assign(pr, { v: inc.at, vh });
+          if (c.role !== 'crew' && pr.s !== undefined && mine !== pr.s && mine !== vh && (pr.b || inc.at <= num(pr.at))) Object.assign(pr, { v: inc.at, vh });
           else {
             // only fields that arrived with the right type: a damaged setting cannot blank a good one
             const patch = pick(cfgPart(rep.config), ['project', 'site', 'super', 'pm', 'floors', 'crews', 'people', 'checks'].filter(k => Array.isArray(rep.config[k]) === Array.isArray(CFG_TPL[k]) && typeof rep.config[k] === typeof CFG_TPL[k]));
@@ -715,9 +715,8 @@ export function makeSync(o = {}) {
     epoch++; fails = 0; nextAllowed = 0;
     // The same hub, also after a Disconnect: everything this phone knew of it stays (bases, stamps, where it was), so its unsynced
     // work goes up first and merges step by step, as if it had never left. A different hub: only what changed is new work there.
-    // ponytail: a round that starts pull-first (a new role, crew or person: sigOf; a crew invite that lets the person pick
-    // the crew starts with none) still lets a newer hub copy of a part take the whole part over work not sent yet. Letting
-    // mergeTask keep an unsynced part it has a base for, so its push merges step by step, would close that.
+    // A required pull keeps unsynced parts with a base until the push: the hub merges their changed fields, rather than
+    // a newer part replacing unrelated offline work. A part without a base still follows its edit stamp.
     const same = url === (s.hubUrl || loadState().url);
     if (!same) store.set(ST, keepHashes());
     patchSettings({ hubUrl: url, hubKey: key, hubRole: rep.role, hubCrew: typeof extra.crew === 'string' ? extra.crew : same ? String(s.hubCrew || '') : '' });

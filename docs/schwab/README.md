@@ -245,7 +245,8 @@ and live updates. It is one Google Apps Script web app plus one Google Sheet, bo
 - Same goes for browsers: links open in the phone's default browser, so use the app in that browser.
 - `report.html` only forwards to the app now, so old report links and an old Daily Report home-screen icon still land in the right place.
 - The PM selects **Project manager** in Settings before opening a daily report. Report links do not select the phone's role.
-- After an app update, reopen online and reload once more after the new offline cache installs. Saved records remain on the phone.
+- After an app update, open online to download the complete offline copy, close every app tab/window, then reopen. The new version waits while an old tab is open; saved records remain on the phone.
+- When publishing app changes, bump the `CACHE` version in `sw.js` so all core files install together. A failed download keeps the previous installed version.
 - Without the hub there is no live sync. The PM sees crew detail when the superintendent sends the report or it reaches the review folder, not before.
 - PDFs use the standard Helvetica font, which covers English and Western European letters. Other characters print as "?".
 - Long reports make long links. iMessage, WhatsApp and email handle them; some plain SMS apps cut them off.

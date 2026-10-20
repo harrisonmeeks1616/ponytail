@@ -38,6 +38,9 @@ const unsaved = () => toast(L("This phone wouldn't save. Open Settings and downl
 const persist = () => save(KEYS.reports, Object.fromEntries(Object.entries(R).filter(([, r]) => r.updatedAt))) || unsaved();
 const keep = (key, list) => save(key, list) || unsaved();
 const isPM = S => S.role === 'Project manager';
+// A connected hub owns PM answers by its authenticated role; text-link-only phones keep their local workflow.
+const canEditPM = () => { const h = hubStatus(); return h.state === 'off' || h.role === 'pm'; };
+const pmReadOnly = () => L('PM answers are read-only with this hub key. Use the PM phone to update them.');
 // Daily reports of its own make this an office phone.
 export const hasReports = () => Object.values(R).some(r => r.updatedAt);
 const rep = (S, day) => (R[day] ||= normReport({
@@ -538,9 +541,11 @@ function reportView(S, day) {
         ${remove('risks', i, L('Remove risk'))}</div>`).join('') + addTo('risks', L('+ Add a risk'))
       + `<p class="hint">${L('Escalate urgent issues when you find them, and note who you told in section 3.')}</p>`)}
     ${sec(st, 'sign', 9, L('Sign-off'), grp(field(L('Prepared by'), 'r.preparedBy', r.preparedBy), tf(L('PM review / time'), 'r.pmReview', r.pmReview, {}, r.pmLang))
-      + (isPM(S) ? `<button class="btn" data-act="stampPM">${L('Stamp my review now')}</button>` : ''))}
+      + (isPM(S) && canEditPM() ? `<button class="btn" data-act="stampPM">${L('Stamp my review now')}</button>` : ''))}
     </div>
+    ${!canEditPM() ? `<p class="hint">${pmReadOnly()}</p>` : ''}
     <p class="hint">${L('Changes save on this phone as you type.')}${S.folderUrl ? ` ${L('Sending the report also files a PDF in the review folder.')}` : ''}</p>`;
+  if (!canEditPM()) for (const el of $('app').querySelectorAll('[data-k]')) if (PM_PART.test(el.dataset.k)) el.disabled = true;
   $('bar').innerHTML = `<div class="bar-in"><button class="btn primary big" data-act="send">${isPM(S) ? L('Send back to Supt.') : L('Send to PM')}</button></div>`;
 }
 
@@ -594,7 +599,14 @@ const recordSecs = r => [
 ];
 
 const record = (S, r) => makePdf('Superintendent daily report', letterhead(S, dayEn(r.date)), recordSecs(r), `${COMPANIES} · Daily report ${r.date}`);
-const fileReport = (S, r) => { if (!S.folderUrl) return; r.filedAt = Date.now(); persist(); return fileAway(S, { date: r.date, name: `Daily Report ${r.date}`, bytes: record(S, r), v: r.updatedAt }); };
+const fileReport = async (S, r) => {
+  if (!S.folderUrl) return;
+  const v = r.updatedAt;
+  if (await fileAway(S, { date: r.date, name: `Daily Report ${r.date}`, bytes: record(S, r), v })) {
+    r.filedAt = Math.max(r.filedAt || 0, v);
+    persist();
+  }
+};
 // A sent report edited afterwards is filed again when you leave it.
 export const fileReportIfChanged = (S, day) => { const r = R[day]; return r?.submittedAt && r.updatedAt > r.filedAt && fileReport(S, r); };
 
@@ -657,6 +669,7 @@ const menu = items => sheet(`<h3>${L('More')}</h3><div class="menu">${items.filt
 const undoTo = (v, S, day, put) => () => { put(); const [hv, hd] = location.hash.slice(1).split('/'); if (hv === v && (!hd || hd === day)) renderOffice(v, S, day); };
 
 export async function reportAct(a, el, S, day, v) {
+  if (!canEditPM() && (a === 'stampPM' || (a === 'set' && PM_PART.test(el.dataset.k)))) return toast(pmReadOnly(), 'bad');
   const r = rep(S, day), val = el.dataset.v, i = +el.dataset.i;
   switch (a) {
     case 'set': { const ctx = { r, s: S }; setPath(ctx, el.dataset.k, getPath(ctx, el.dataset.k) === val ? '' : val); break; }
@@ -778,6 +791,7 @@ export function applyInput(r, k, val) {
   }
 }
 export function reportInput(el, S, day) {
+  if (PM_PART.test(el.dataset.k) && !canEditPM()) return toast(pmReadOnly(), 'bad');
   const r = rep(S, day);
   applyInput(r, el.dataset.k, readInput(el));
   r[PM_PART.test(el.dataset.k) ? 'pmLang' : 'lang'] = getLang(); // the language each part is typed in (the PM and the superintendent may use different ones), for the hub's translation

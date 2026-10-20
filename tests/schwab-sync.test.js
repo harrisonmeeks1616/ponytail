@@ -2408,3 +2408,131 @@ test('against the real hub/Code.gs: an answer one PM device made offline and sen
   assert.deepEqual([mock.entities('Reports').find(r => r.date === DAY), sp.reports()[DAY], ph.reports()[DAY], lap.reports()[DAY]].map(ans), [want, want, want, want], 'the answer stays, under its own question, everywhere');
   assert.deepEqual([sp.toasts, ph.toasts, lap.toasts], [[], [], []]);
 });
+
+test('the PM can correct and remove a shift made on the same phone through Crew hours', async () => {
+  const { mock, k, real } = realHub();
+  const pm = await makePhone(real, 'pm', { key: k.pm });
+  const step = async () => { mock.advance(5e3); await pm.cycle(); };
+  const id = pm.clockIn('Pat PM');
+  await step();
+  assert.ok(pm.crewHours().some(s => s.id === id), 'the PM own clock-in reaches Crew hours');
+  pm.editCrewHours(id, s => { s.in = '07:30'; s.edited.in = true; });
+  await step();
+  const view = () => [mock.entities('Hours').find(s => s.id === id), pm.crewHours().find(s => s.id === id), pm.hours().find(s => s.id === id)];
+  assert.deepEqual(view().map(s => [s.in, s.edited.in]), Array.from({ length: 3 }, () => ['07:30', true]), 'the correction reaches the hub, Crew hours, and this phone own clock');
+  pm.editHours(id, s => { s.out = '15:30'; });
+  await step();
+  assert.deepEqual(view().map(s => [s.in, s.out]), Array.from({ length: 3 }, () => ['07:30', '15:30']), 'a later clock-out keeps the correction');
+  pm.editCrewHours(id, s => { s.gone = true; });
+  await step();
+  assert.equal(mock.entities('Hours').find(s => s.id === id).gone, true, 'removing the PM own shift reaches the hub');
+  assert.ok(!pm.hours().some(s => s.id === id), 'the removed shift leaves the PM own clock');
+});
+test('the PM can undo removing their own otherwise unedited shift', async () => {
+  const { mock, k, real } = realHub();
+  const pm = await makePhone(real, 'pm', { key: k.pm });
+  const step = async () => { mock.advance(5e3); await pm.cycle(); };
+  const id = pm.clockIn('Pat PM');
+  await step();
+  pm.editCrewHours(id, s => { s.gone = true; });
+  await step();
+  assert.equal(mock.entities('Hours').find(s => s.id === id).gone, true);
+  pm.editCrewHours(id, s => { s.gone = false; });
+  await step();
+  assert.equal(mock.entities('Hours').find(s => s.id === id).gone, false, 'an explicit PM Undo revives their own shift');
+  assert.ok(pm.hours().some(s => s.id === id), 'the revived shift returns to the PM own clock');
+});
+test('a role-change pull keeps an offline crew edit until its base can merge on the hub', async () => {
+  const { mock, k, real } = realHub();
+  const sp = await makePhone(real, 'super', { key: k.super });
+  const a = await makePhone(real, 'crew', { key: k.crew, crew: 'Crew A' });
+  const b = await makePhone(real, 'crew', { key: k.crew, crew: 'Crew A' });
+  const step = async (...ps) => { for (const p of ps) { mock.advance(5e3); await p.cycle(); } };
+  const uid = sp.addTask({ sentAt: sp.now() });
+  await step(sp, a, b);
+  a.net.down = true;
+  a.tick(uid, 'i1'); await step(a);
+  b.tick(uid, 'i2'); await step(b);
+  a.net.down = false;
+  assert.equal((await a.sync.connect(URL_A, k.super)).ok, true);
+  await step(a, b, sp, a);
+  const view = t => t.items.map(i => i.done);
+  assert.deepEqual([mock.entities('Tasks').find(t => t.uid === uid), a.task(uid), b.task(uid)].map(view), [[true, true], [true, true], [true, true]], 'the pull-first role change preserves both phones different offline ticks');
+});
+test('a pull-first role change merges offline report and settings fields without reclaiming edits changed back to their base', async () => {
+  const { mock, k, real } = realHub();
+  const a = await makePhone(real, 'super', { key: k.super });
+  const b = await makePhone(real, 'pm', { key: k.pm });
+  const step = async (...ps) => { for (const p of ps) { mock.advance(5e3); await p.cycle(); } };
+  a.editReport(DAY, r => Object.assign(r, { status: 'On plan', results: 'Original results', issues: 'Original issue' }));
+  const changedBack = a.addTask({ scope: 'Original scope', sentAt: a.now() });
+  await step(a, b);
+  a.net.down = true;
+  a.editReport(DAY, r => { r.results = 'Offline results'; });
+  a.save('schwab.settings', { ...a.settings(), site: 'Offline site' });
+  a.editTask(changedBack, t => { t.scope = 'Temporary edit'; });
+  await step(a);
+  a.editTask(changedBack, t => { t.scope = 'Original scope'; });
+  await step(a);
+  b.editReport(DAY, r => { r.issues = 'Later inspection issue'; });
+  b.save('schwab.settings', { ...b.settings(), project: 'Later project title' });
+  b.editTask(changedBack, t => { t.scope = 'Later remote scope'; });
+  await step(b);
+  a.net.down = false;
+  assert.equal((await a.sync.connect(URL_A, k.pm)).ok, true);
+  await step(a, b, a);
+  const reports = [mock.entities('Reports').find(r => r.date === DAY), a.reports()[DAY], b.reports()[DAY]];
+  assert.deepEqual(reports.map(r => [r.results, r.issues]), Array.from({ length: 3 }, () => ['Offline results', 'Later inspection issue']));
+  assert.deepEqual([a.settings(), b.settings(), mock.entities('Config')[0]].map(s => [s.site, s.project]), Array.from({ length: 3 }, () => ['Offline site', 'Later project title']));
+  assert.deepEqual([a.task(changedBack), b.task(changedBack), mock.entities('Tasks').find(t => t.uid === changedBack)].map(t => t.scope), Array(3).fill('Later remote scope'), 'returning to the base is no edit; the other phone change stands');
+});
+test('report PM controls follow the connected key role after Settings changes, while PM and no-hub notes remain editable', async () => {
+  const shared = await lib, mod = await syncLib, storage = memStorage(), timers = manualTimers();
+  const report = await import('../docs/schwab/report.mjs');
+  const S = shared.normSettings({ role: 'Project manager', me: 'Pat', crews: [], people: [], floors: [], checks: [] });
+  const original = shared.normReport({ date: DAY, updatedAt: T0, status: 'On plan', decisions: [{ q: 'Approve lift?', pm: '', pmNote: '' }] });
+  storage.set('schwab.settings', { ...S, hubUrl: URL_A, hubKey: KEYS.super, hubRole: 'super' });
+  storage.set('schwab.reports', { [DAY]: original });
+  const app = { querySelectorAll: () => [] }, toast = { dataset: {}, classList: { add() {}, remove() {} } };
+  const g = globalThis, saved = Object.fromEntries(['document', 'addEventListener', 'removeEventListener'].map(k => [k, g[k]]));
+  g.document = { hidden: false, addEventListener() {}, removeEventListener() {}, querySelector: () => null, body: { append() {} }, getElementById: id => id === 'app' ? app : id === 'toast' ? toast : null };
+  g.addEventListener = g.removeEventListener = () => {};
+  try {
+    mod.initHub({ storage, timers, now: clock, ensureDevice: ensureIn(storage) });
+    await withLocal(storage, async () => {
+      for (const role of ['super', 'crew', '']) {
+        storage.set('schwab.hub', { hubUrl: URL_A, hubKey: KEYS.super, hubRole: role, hubCrew: '' });
+        report.reloadReports();
+        report.reportInput({ dataset: { k: 'r.decisions.0.pmNote' }, value: 'This would not sync', type: 'text' }, S, DAY);
+        report.reportInput({ dataset: { k: 'r.pmReview' }, value: 'This would disappear', type: 'text' }, S, DAY);
+        assert.deepEqual(storage.get('schwab.reports')[DAY], original, `${role || 'unknown'} key cannot save PM input even when Settings says Project manager`);
+        await report.reportAct('set', { dataset: { k: 'r.decisions.0.pm', v: 'Approved' } }, S, DAY, 'report');
+        await report.reportAct('stampPM', { dataset: {} }, S, DAY, 'report');
+        assert.deepEqual(storage.get('schwab.reports')[DAY], original, `${role || 'unknown'} key cannot save a PM answer or review even when Settings says Project manager`);
+      }
+      storage.set('schwab.hub', { hubUrl: URL_A, hubKey: KEYS.pm, hubRole: 'pm', hubCrew: '' });
+      report.reloadReports();
+      report.reportInput({ dataset: { k: 'r.pmReview' }, value: 'PM review retained', type: 'text' }, S, DAY);
+      assert.equal(storage.get('schwab.reports')[DAY].pmReview, 'PM review retained', 'the actual PM key can edit its review');
+      mod.disconnect();
+      report.reloadReports();
+      report.reportInput({ dataset: { k: 'r.decisions.0.pmNote' }, value: 'Offline text workflow', type: 'text' }, S, DAY);
+      assert.equal(storage.get('schwab.reports')[DAY].decisions[0].pmNote, 'Offline text workflow', 'the no-hub text workflow still allows PM notes');
+    });
+  } finally {
+    clearTimeout(toast.timer);
+    mod.disconnect();
+    for (const k of Object.keys(saved)) { if (saved[k] === undefined) delete g[k]; else g[k] = saved[k]; }
+  }
+});
+test('a PM own-hours correction made before the first hub round is not treated as an unchanged punch copy', async () => {
+  const { mock, k, real } = realHub();
+  const pm = await makePhone(real, 'pm', { key: k.pm });
+  const id = pm.clockIn('Pat PM');
+  const copy = clone(pm.hours()[0]);
+  Object.assign(copy, { in: '07:30', edited: { who: false, in: true, out: false } });
+  pm.save('schwab.crewHours', [copy]); // their own hours link was opened and corrected before connecting
+  mock.advance(5e3); await pm.cycle();
+  const rows = [mock.entities('Hours').find(s => s.id === id), pm.crewHours().find(s => s.id === id), pm.hours().find(s => s.id === id)];
+  assert.deepEqual(rows.map(s => [s.in, s.edited.in]), Array.from({ length: 3 }, () => ['07:30', true]));
+});

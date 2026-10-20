@@ -42,7 +42,7 @@ const check = (ok, what) => { log(ok ? '  ok  ' : '  FAIL', what); if (!ok) fail
     const [dl] = await Promise.all([p.waitForEvent('download'), click()]);
     const file = OUT + dl.suggestedFilename();
     await dl.saveAs(file);
-    return execFileSync('pdftotext', ['-layout', file, '-']).toString();
+    return execFileSync('pdftotext', ['-enc', 'UTF-8', '-layout', file, '-']).toString();
   };
   // The emulated phone's real width: under iPhone emulation innerWidth grows to fit wide content, so it can't be the yardstick.
   const noSideScroll = p => p.evaluate(w => document.documentElement.scrollWidth <= w, p.viewportSize().width);
@@ -403,7 +403,7 @@ const check = (ok, what) => { log(ok ? '  ok  ' : '  FAIL', what); if (!ok) fail
     await csvDl.saveAs(OUT + 'timesheet.csv'); await pdfDl.saveAs(OUT + 'timesheet.pdf');
     const csv = fs.readFileSync(OUT + 'timesheet.csv', 'utf8');
     check(csv.startsWith('\ufeffName,Crew,Date,Day,Clock in,Clock out,Hours,Tasks,Note\r\n') && csv.includes('Jose L,Crew A,2026-10-14,Wed,6:58 AM,3:31 PM,8.55,T1014-01,') && csv.includes('Ana P,Crew B,2026-10-13,Tue,7:00 AM,3:30 PM,8.50,,Edited by PM') && csv.includes('All crew,,,,,Week total,17.05,,'), 'CSV rows and totals, with crew and tasks');
-    const pdf = execFileSync('pdftotext', ['-layout', OUT + 'timesheet.pdf', '-']).toString();
+    const pdf = execFileSync('pdftotext', ['-enc', 'UTF-8', '-layout', OUT + 'timesheet.pdf', '-']).toString();
     check(/WEEKLY TIMESHEET/.test(pdf) && /H\.A\. Sack-Electrical · Sack Company-Electrical/.test(pdf) && /JOSE L · CREW A · 8\.55 HRS/.test(pdf) && /task T1014-01/.test(pdf) && /Pat PM/.test(pdf), 'PDF timesheet: company names, people with crews, tasks, totals, approved by');
   }
   await card('Ana P').locator('[data-act=hRename]').click();

@@ -498,7 +498,7 @@ function results(t, details = '') {
   // Start and Stop: a big button until tapped, then the time it took, which can be fixed by hand.
   const clock = (k, label, now, primary) => `<div class="clockslot"><span>${label}</span>${t[k]
     ? `<input type="time" data-k="t.${k}" value="${esc(t[k])}" aria-label="${label}">`
-    : `<button class="btn big${primary ? ' primary' : ''}" data-act="clock" data-v="${k}">${now}</button>`}</div>`;
+    : `<button class="btn big${primary ? ' primary' : ''}" data-act="clock" data-v="${k}"${k === 'aStop' && !t.aStart ? ' disabled' : ''}>${now}</button>`}</div>`;
   return `${n ? `<section class="steps"><h3 class="section-h">${L('Check off as you go')}<small>${L('{d} of {n} done', { d, n })}</small></h3>
       <div class="checklist">${t.items.map((it, i) => tick('items', it, i)).join('')}</div></section>` : ''}
     ${t.checks.length ? `<section class="steps"><h3 class="section-h">${L('Required finish checks')}<small>${L('{d} of {n} done', { d: c, n: t.checks.length })}</small></h3>
@@ -557,11 +557,13 @@ function recordRows(t) {
 
 const record = t => makePdf('Electrical task sheet', letterhead(S), recordRows(t), `${COMPANIES} · Task ${t.id}`);
 const fileName = t => `${t.id} ${t.crew} ${t.floor}`.trim();
-function fileTask(t) {
+async function fileTask(t) {
   if (!S.folderUrl) return;
-  t.filedAt = Date.now();
-  persist();
-  return fileAway(S, { date: t.date, name: fileName(t), bytes: record(t), v: t.updatedAt });
+  const v = t.updatedAt;
+  if (await fileAway(S, { date: t.date, name: fileName(t), bytes: record(t), v })) {
+    t.filedAt = Math.max(t.filedAt || 0, v);
+    persist();
+  }
 }
 // A finished sheet edited after it was filed (say, a follow-up note typed after tapping the review
 // button) is filed again when you leave it, so the folder always has the last word.
@@ -896,7 +898,7 @@ async function act(a, el) {
       if (it.done && [...t.items, ...t.checks].every(i => i.done) && !t.status) toast(L('Everything is checked off. Set the status and send results.'));
       break;
     }
-    case 'clock': t[v] = nowHM(); break;
+    case 'clock': if (v === 'aStop' && !t.aStart) return; t[v] = nowHM(); break;
     case 'delay': t.delay = Math.max(0, t.delay + +v); break;
     case 'sendTask':
       if (!t.crew || !(t.scope || t.items.length)) return toast(L('Pick a crew and describe the work first'), 'bad');

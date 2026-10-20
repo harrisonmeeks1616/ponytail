@@ -389,6 +389,7 @@ export default {
   'Recommendation': 'Recomendación',
   'Past due': 'Vencida',
   'PM response': 'Respuesta del gerente',
+  'PM answers are read-only with this hub key. Use the PM phone to update them.': 'Las respuestas del gerente son de solo lectura con esta clave del sistema central. Use el teléfono del gerente para actualizarlas.',
   'Approved': 'Aprobado',
   'Declined': 'Rechazado',
   'Discuss': 'Por hablar',
@@ -822,4 +823,13 @@ export default {
   'Connected as a crew phone for {crew}': 'Conectado como teléfono de cuadrilla de {crew}',
   'Connected as a crew phone': 'Conectado como teléfono de cuadrilla',
   'This phone is set up for the superintendent. Sign in with the office passcode the PM gives you.': 'Este teléfono está configurado para el superintendente. Entre con el código de oficina que le dé el gerente de proyecto.',
+  // v8 upgrade compatibility: old cached screens can briefly load this newer dictionary.
+  'Back to task sheets': 'Volver a las hojas de tareas',
+  'Past day': 'Día pasado',
+  'Planning ahead': 'Planeación',
+  'No task sheets for {date}': 'No hay hojas de tareas para el {date}',
+  '{date} task sheets': 'Hojas de tareas del {date}',
+  "Opens task setup, the daily report, settings and the PM's crew hours. Crew sheets and the time clock stay open to everyone. Use the same code on the PM's and the superintendent's phones. Crew phones learn it from the first task sheet they open.": 'Abre la preparación de tareas, el reporte diario, los ajustes y las horas de las cuadrillas en el teléfono del gerente de proyecto. Las hojas de las cuadrillas y la asistencia quedan abiertas para todos. Use el mismo código en el teléfono del gerente de proyecto y en el del superintendente. Los teléfonos de las cuadrillas lo reciben con la primera hoja de tarea que abren.',
+  'On site now: {people}': 'En la obra ahora: {people}',
+  'On site now: {people} in {crews}': 'En la obra ahora: {people} en {crews}',
 };

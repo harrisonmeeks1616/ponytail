@@ -971,7 +971,7 @@ export const flush = s => (flushing ||= (async () => {
     } catch (e) {
       if (!(e instanceof TypeError)) { // refused: back of the line, so it can't hold up the records behind it
         error = e.message;
-        save(OUTBOX, [...box().filter(x => !sameCopy(x, item)), item]);
+        if (box().some(x => sameCopy(x, item))) save(OUTBOX, [...box().filter(x => !sameCopy(x, item)), item]); // a newer edit already replaced this refused copy
       }
       break; // no signal or a refusal: one try per flush keeps a wrong site code from re-sending every PDF
     }
@@ -982,16 +982,17 @@ export const flush = s => (flushing ||= (async () => {
 // file: { date, name, bytes, v }. v is the record's last edit time, preserved in the receiver's
 // metadata so an older offline edit can be distinguished without deleting newer records.
 export async function fileAway(s, f) {
-  if (!s.folderUrl) return;
+  if (!s.folderUrl) return false;
   const item = { date: f.date, name: f.name, pdf: b64(f.bytes), v: f.v || 0 };
-  if (!isDay(item.date)) return; // the folder refuses an impossible day; never claim it was filed
-  if (!queue(item)) return toast(L("This phone is out of space, so the PDF wasn't queued. Use Save as PDF."), 'bad');
+  if (!isDay(item.date)) return false; // the folder refuses an impossible day; never claim it was filed
+  if (!queue(item)) { toast(L("This phone is out of space, so the PDF wasn't queued. Use Save as PDF."), 'bad'); return false; }
   const waiting = () => box().some(x => sameCopy(x, item));
   let r = await flush(s);
   if (waiting()) r = await flush(s); // another upload was mid-way, or a refused record went first; go again for this one
   // Report on this record only; another record's refusal is not this one's failure.
   toast(!waiting() ? L('Saved to the review folder') : r.error ? L('Review folder said: {error}. Kept on this phone; check Settings.', { error: folderSays(r.error) })
     : L('Saved on this phone. It goes to the review folder when there is signal.'), waiting() && r.error ? 'bad' : '');
+  return true; // queued durably, even if delivery must retry later
 }
 
 export function retryUploads(s) {
@@ -1139,11 +1140,11 @@ export async function settingsAct(act, s, el, change = f => { f(s); save(KEYS.se
   save(KEYS.settings, s);
 }
 
-// Everything this phone keeps, as stored, except the hub key: a backup file gets passed around, and the PM can send a
+// Everything this phone keeps, including pending PDFs, as stored, except the hub key: a backup file gets passed around, and the PM can send a
 // new invite. The device secret goes along, so a restored phone keeps its own hours.
 const SYNC = 'schwab.hubSync'; // sync.mjs keeps it, and restoreData below says why it travels with a backup
 export function backupData() {
-  const data = Object.fromEntries([...Object.values(KEYS), SYNC].map(k => [k, load(k, null)]));
+  const data = Object.fromEntries([...Object.values(KEYS), OUTBOX, SYNC].map(k => [k, load(k, null)]));
   for (const k of [KEYS.settings, KEYS.hub]) if (data[k] && typeof data[k] === 'object') data[k] = { ...data[k], hubKey: '' };
   return data;
 }
@@ -1155,7 +1156,7 @@ export const isBackup = data => !!data && typeof data === 'object' && Object.val
 // stores, so it goes first; with none in the backup (or a restore cut short) the next round merges pull-first.
 export const restoreData = data => {
   try { localStorage.removeItem(SYNC); } catch {}
-  return (data[KEYS.settings] == null || save(KEYS.roster, null)) && [...Object.values(KEYS), SYNC].every(k => data[k] == null || save(k, data[k]));
+  return (data[KEYS.settings] == null || save(KEYS.roster, null)) && [...Object.values(KEYS), OUTBOX, SYNC].every(k => data[k] == null || save(k, data[k]));
 };
 
 export async function restore(file) {

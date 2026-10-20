@@ -389,6 +389,35 @@ test('txApply: two calls at once do not translate the same text twice', async ()
   await Promise.all([live.txApply(ctx, root), live.txApply(ctx, root)]);
   assert.equal(sync.calls.filter(x => x[0] === 'translate').length, 1);
 });
+test('translated previews keep a newer edit when an older request finishes before or after its debounce', async () => {
+  for (const oldFirst of [true, false]) {
+    const pending = [], queries = [], original = { textContent: 'Hola' };
+    const ctx = ctxHub('live', mkSync({ translate(texts) { queries.push(texts); return new Promise(done => pending.push(done)); } }));
+    const pre = fakeEl('', 'es', 'en', 'pre', { for: 'reply' }), root = rootOf([pre]);
+    pre.querySelector = () => original;
+    pre.parentNode = root;
+    const prevDoc = globalThis.document, prevTimer = globalThis.setTimeout;
+    let debounce;
+    globalThis.document = { querySelectorAll: () => [pre] };
+    globalThis.setTimeout = fn => { debounce = fn; return 0; };
+    try {
+      const first = live.txApply(ctx, root);
+      live.onInput(ctx, { dataset: { k: 'reply' }, value: 'Adiós' });
+      if (oldFirst) {
+        pending[0](['Hello']); await first;
+        assert.equal(pre.dataset.state, 'pending', 'the edit is still waiting for its own translation');
+        assert.equal(pre.innerHTML, '', 'a response for the old text is not shown');
+      }
+      const second = debounce();
+      assert.deepEqual(queries, [['Hola'], ['Adiós']], 'the debounce translates what is in the field now');
+      pending[1](['Goodbye']); await second;
+      if (!oldFirst) { pending[0](['Hello']); await first; }
+      assert.match(pre.innerHTML, /class="tx-o" hidden>Adiós<\/span>/);
+      assert.match(pre.innerHTML, /class="tx-t">Goodbye<\/span>/);
+      assert.doesNotMatch(pre.innerHTML, /Hello|Hola/);
+    } finally { globalThis.document = prevDoc; globalThis.setTimeout = prevTimer; }
+  }
+});
 test('txApply: offline, an error or quota show the original and say so; it never throws', async () => {
   const sync = mkSync({ async translate(items) { return items; } }), ctx = ctxHub('offline', sync);
   const a = fakeEl('Hola', 'es', 'en');
@@ -954,6 +983,25 @@ test('older records: a hub error is shown, and the button stays so it can be tri
   assert.match(html, /role="alert">No signal\./);
   assert.match(html, /data-act="recOlder" data-kind="reports">Load more/);
 });
+test('older records keep every task and report visible after a full 200-record page', async () => {
+  for (const [kind, sub] of [['tasks', 'sheets'], ['reports', 'reports']]) {
+    live.resetUi();
+    const items = Array.from({ length: 201 }, (_, i) => {
+      const date = lib.addDays('2025-01-01', i), label = `OLDER-${i}`;
+      return kind === 'tasks' ? lib.normTask({ uid: label, id: label, date }) : lib.normReport({ date, super: label, updatedAt: 1 });
+    });
+    const pages = [{ ok: true, items: items.slice(0, 200), cursor: '202' }, { ok: true, items: items.slice(200), cursor: '' }];
+    const ctx = mkCtx({ sync: mkSync({ records: async () => pages.shift() }) });
+    live.recordsView(ctx, sub);
+    await live.act(ctx, 'recOlder', { dataset: { kind } });
+    await live.act(ctx, 'recOlder', { dataset: { kind } });
+    const html = live.recordsView(ctx, sub);
+    assert.equal((html.match(/class="rec-old"/g) || []).length, 201, kind);
+    for (let i = 0; i < 201; i++) assert.ok(html.includes(`OLDER-${i}<`), `${kind}: record ${i} is visible`);
+    assert.match(html, /That is everything the hub has\./);
+    assert.doesNotMatch(html, /data-act="recOlder"/);
+  }
+});
 test('exportData merges what the hub has with this phone, this phone winning, reports only if touched', () => {
   const mine = task({ uid: 'm1', scope: 'mine' }), theirs = task({ uid: 'm1', scope: 'hub copy' }), other = task({ uid: 'm2' });
   const ctx = mkCtx({ tasks: () => [mine], shifts: () => [shift({ id: 's1' })], reports: () => [report(), lib.normReport({ date: '2026-10-01' })] });
@@ -1063,6 +1111,17 @@ test('On site and the activity feed name people as the roster has them now, with
   assert.match(v, /Crew Bravo · <span class="nw">since 7:30 AM/, 'on site under the crew as it is called now');
   assert.match(v, /José Luis clocked in <span class="feed-crew">· Crew A<\/span>/, 'the feed line follows the roster through the shift it is about');
   assert.match(v, /Jose L clocked in <span class="feed-crew">· Crew Bravo<\/span>/);
+});
+test('activity folding keeps distinct people with the same name separate and folds only a known person', () => {
+  const { ctx } = twoJoses();
+  ctx.sync.data.events = ['j3', 'j2', 'j1', 'missing1', 'missing2'].map((ref, i) => ({
+    rev: 5 - i, ts: NOW - min(i + 1), role: 'pm', kind: 'pm.add', who: 'Harrison', ref, text: 'PM added a shift for Jose L, 2026-10-13',
+  }));
+  const feed = live.liveView(ctx).split('<ol class="feed">')[1].split('</ol>')[0];
+  assert.equal((feed.match(/<li>/g) || []).length, 4, 'only the two shifts belonging to p1 fold together');
+  assert.match(feed, /PM added 2 shifts for Jose L <span class="feed-crew">· Crew A<\/span>/);
+  assert.match(feed, /PM added a shift for Jose L on [^<]+ <span class="feed-crew">· Crew B<\/span>/);
+  assert.doesNotMatch(feed, /PM added [3-5] shifts/);
 });
 test('sheets go by uid: two sheets with one number both show, each opens itself, both say so; a shift opens the sheet it was on', () => {
   const a = task({ uid: 'ua', id: 'T1019-01', crew: 'Crew A' }), b = task({ uid: 'ub', id: 'T1019-01', crew: 'Crew B' }), c = task({ uid: 'uc', id: 'T1019-02' }), old = task({ uid: 'uo', id: 'T1019-03', date: '2026-10-12' });
