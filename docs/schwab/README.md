@@ -190,7 +190,8 @@ arrived. Use the version that has passed the combined release checks.
    (external requests). The manifest starts private: `MYSELF`, executing as `USER_DEPLOYING`.
 3. Select and run `setupHub`. The owner reviews Google's authorization screen against those two scopes and the
    intended project before granting access. An unexpected scope or warning needs the owner's review, not an
-   automatic click-through. The **Execution log** prints newly created PM, crew and superintendent keys, plus the
+   automatic click-through. For the owner's own script Google shows **Google hasn't verified this app**: that is expected;
+   after checking the two scopes, choose **Advanced**, then **Go to <project name> (unsafe)**, then **Allow**. The **Execution log** prints newly created PM, crew and superintendent keys, plus the
    Sheet link. Save the PM key privately now: only its fingerprint is kept, so a normal rerun does not show it
    again. Invites carry the other roles' keys. A normal rerun reuses the Sheet and keys and prints the Sheet link;
    `resetPmKey` creates a replacement PM key if needed.
