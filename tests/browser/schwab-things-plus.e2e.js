@@ -115,6 +115,9 @@ const TASKS = [
   got = await added(a, before);
   check(got.length === 1 && got[0].floor === '' && got[0].date === D, `dropped on "Floor not set": a sheet with no floor: ${JSON.stringify(got.map(t => [t.floor, t.date]))}`);
 
+  // End the custom CDP-drag scenario before native tap cases: Chromium can suppress their click across hash-only navigation.
+  // A real reload keeps the phone's records and gives these independent tap cases a fresh gesture state.
+  await a.reload(); await a.waitForSelector('.tsheet');
   console.log('3. A plain tap, a fast double tap, and a drag let go elsewhere are the + as before');
   const plain = async (p, how) => { await p.goto(BASE + `tasks.html#day/${D}`); await p.waitForSelector('.fab'); const b = await tasks(p); await how(); await opened(p); return added(p, b); };
   const tapAt = async (p, n) => { const c = await center(p, '.fab'); for (let i = 0; i < n; i++) { await p.touchscreen.tap(c.x, c.y); await p.waitForTimeout(150); } };

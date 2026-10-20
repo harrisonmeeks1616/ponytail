@@ -150,7 +150,7 @@ const synced = async p => { await p.evaluate(() => import('./sync.mjs').then(m =
   check((await sup.locator('.upcoming .tcard .tid').allTextContents()).join() === 'TU1,TU2,TU3,TU4', 'the sheets as board rows');
   check(await sup.locator('.bar .fab[data-act=new]').count() === 1, 'the + is here too (Magic Plus drops on the day headings)');
   check(await noSideScroll(sup), 'Upcoming fits at 390 px');
-  await sup.click('.upcoming .tcard:has-text("TU3")'); await sup.waitForURL(/#task\/U3\//); await sup.waitForSelector('#headBack button');
+  await sup.click('.upcoming .tcard:has-text("TU3")'); await sup.waitForURL(/#task\/U3\//); await sup.waitForSelector('[data-k="t.date"]'); // wait for the destination, not Upcoming's existing Back button
   check(await text(sup, '#headBack button') === 'Upcoming', `a sheet opened from Upcoming says "‹ Upcoming" (${await text(sup, '#headBack button')})`);
   await sup.click('#headBack button'); await sup.waitForTimeout(300);
   check(/#upcoming\/2026-10-14$/.test(sup.url()) && (await heads(sup, 'day')).map(d => d.key).join() === '2026-10-15,2026-10-19,2026-10-21', 'and Back returns to the same 7 days');
@@ -201,8 +201,16 @@ const synced = async p => { await p.evaluate(() => import('./sync.mjs').then(m =
   check(await text(pm, '.day-sum') === '4 people in 2 crews · 1 working · 2 ready for review · 1 blocked', `Live: "${await text(pm, '.day-sum')}"`);
   check(await pm.locator('.live-stats, #app .stat').count() === 0, 'the Live tiles are gone');
   check(await pm.locator('.live-head + .day-sum').count() === 1, 'the line sits at the top, under the hub status');
-  await pm.click('.day-sum [data-tone=bad]'); await pm.waitForTimeout(400);
+  await pm.click('.day-sum [data-tone=bad]');
+  await pm.waitForFunction(() => document.activeElement?.getAttribute('href') === '#task/B1/review');
+  await pm.evaluate(() => import('./sync.mjs').then(m => m.cycle())); // a real background status redraw must keep keyboard focus
+  await pm.waitForTimeout(400);
   check(/^#task\/B1\//.test(await pm.evaluate(() => document.activeElement?.getAttribute('href') || '')), 'tapping "1 blocked" on Live goes to that sheet');
+  await pm.keyboard.press('Enter');
+  await pm.waitForURL(/#task\/B1\/review$/);
+  await pm.waitForSelector('.tsheet [data-v=review][aria-current=page]');
+  check(await text(pm, '#headBack button') === 'Live', 'Enter after a background sync opens the focused sheet, with Back to Live');
+  await nav(pm, '#live');
   await pm.click('#langBtn'); await pm.waitForTimeout(250);
   check(await text(pm, '.day-sum') === '4 personas en 2 cuadrillas · 1 trabajando · 2 listas para revisar · 1 bloqueada', `Live in Spanish: "${await text(pm, '.day-sum')}"`);
   await pm.click('#langBtn'); await pm.waitForTimeout(150);

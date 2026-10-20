@@ -174,6 +174,7 @@ export function makeSync(o = {}) {
       already: L('This phone is already connected to a different hub. Disconnect it first to join this one.'),
       crew_key: L('That is the crew key: crew phones join with the crew invite. On this phone, paste the PM key from the Execution log of the hub script, or open the superintendent invite.'),
       pm_key: L('That is not the PM key. This phone is set to Project manager, so it connects only with the PM key from the Execution log of the hub script.'),
+      pm_invite: L('That is a superintendent invite. This phone is set to Project manager, so connect in Settings with the PM key from the Execution log of the hub script.'),
       no_reach: L('That did not work. Check the signal and try again. If it still fails, check that the hub deployment is set to Who has access: Anyone.'),
       off: L('This phone is not connected to a hub'),
     })[code] || L('The hub had a problem. Trying again shortly.');
@@ -732,6 +733,7 @@ export function makeSync(o = {}) {
     if (c0 && !opt.replace && c0.url !== h.url) return bad('already');
     const crew = typeof d.crew === 'string' && d.role === 'crew' ? d.crew.trim().slice(0, 60) : '';
     const r = await connect(h.url, h.key, { role: d.role, crew });
+    if (r.error === 'pm_key' && d.role === 'super') return bad('pm_invite');
     if (!r.ok) return r;
     return { ...r, crew, needsName: r.role === 'crew' && !String(cfg().worker || '').trim(), needsCrew: r.role === 'crew' && !crew };
   }

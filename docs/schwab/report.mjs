@@ -41,6 +41,7 @@ const isPM = S => S.role === 'Project manager';
 // A connected hub owns PM answers by its authenticated role; text-link-only phones keep their local workflow.
 const canEditPM = () => { const h = hubStatus(); return h.state === 'off' || h.role === 'pm'; };
 const pmReadOnly = () => L('PM answers are read-only with this hub key. Use the PM phone to update them.');
+const hoursReadOnly = () => L('Crew hours are read-only with this hub key. Connect with the PM key to add or change shifts.');
 // Daily reports of its own make this an office phone.
 export const hasReports = () => Object.values(R).some(r => r.updatedAt);
 const rep = (S, day) => (R[day] ||= normReport({
@@ -225,6 +226,7 @@ export function importShifts(log, shifts, at = 0, hub = false) {
 }
 // Returns the latest day in the link, to open that week.
 export function openHours(data, S) {
+  if (!canEditPM()) { toast(hoursReadOnly(), 'bad'); return ''; }
   const inc = (Array.isArray(data.shifts) ? data.shifts : []).slice(0, 200).map(normShift).filter(Boolean);
   if (!inc.length) { toast(L('That link has no hours in it'), 'bad'); return ''; }
   const { added, updated, skipped } = importShifts(CREW, inc, Number.isFinite(data.at) ? data.at : 0, hubStatus().state !== 'off');
@@ -289,12 +291,12 @@ const crewStats = (week, S) => `<div class="stat"><b>${byPerson(week, undefined,
   <div class="stat"><b class="${week.some(s => !s.out) ? 'warn' : ''}">${week.filter(s => !s.out).length}</b><span>${L('Open shifts')}</span></div>`;
 
 function crewView(S, day) {
-  const mon = monday(day), week = weekOf(day), people = byPerson(week, undefined, S);
-  const time = (s, f) => `<label class="field${s.edited[f] ? ' edited' : ''}"><span>${f === 'in' ? L('In') : L('Out')}</span><input type="time" data-k="h.${s.id}.${f}" value="${s[f]}"></label>`;
+  const mon = monday(day), week = weekOf(day), people = byPerson(week, undefined, S), editable = canEditPM();
+  const time = (s, f) => `<label class="field${s.edited[f] ? ' edited' : ''}"><span>${f === 'in' ? L('In') : L('Out')}</span><input type="time" data-k="h.${s.id}.${f}" value="${s[f]}"${editable ? '' : ' disabled'}></label>`;
   const shiftRow = s => `<div class="shift${s.out ? '' : ' open'}"><div class="shift-top"><span class="shift-day"><b>${esc(niceDate(s.date))}</b>
       ${taskIds(s).length ? `<span class="hint">${esc(taskIds(s).length === 1 ? L('Task {id}', { id: taskIds(s)[0] }) : L('Tasks {ids}', { ids: taskIds(s).join(', ') }))}</span>` : ''}</span>
       <span class="out" data-out="shift" data-id="${s.id}">${shiftLine(s)}</span>
-      <button class="x" data-act="hDel" data-id="${s.id}" aria-label="${esc(L('Remove the {date} shift', { date: niceDate(s.date) }))}">✕</button></div>
+      ${editable ? `<button class="x" data-act="hDel" data-id="${s.id}" aria-label="${esc(L('Remove the {date} shift', { date: niceDate(s.date) }))}">✕</button>` : ''}</div>
     <p class="clock-missed" data-out="twice" data-id="${s.id}"${byHand(week, s) ? '' : ' hidden'}>${L('You also entered this day by hand, and both count. If it is the same work, remove one.')}</p>
     <div class="grid two">${time(s, 'in')}${time(s, 'out')}</div></div>`;
   screenHead(L('Crew hours'), { more: 'hPmMenu',
@@ -304,11 +306,11 @@ function crewView(S, day) {
     ${people.map((p, i) => `<section class="card person"><div class="person-h"><div class="person-who"><h2>${esc(p.who)}</h2>${crewLine(S, p)}</div>
         <b class="total" data-out="who" data-i="${i}">${L('{n} hrs', { n: h2(p.hours) })}</b></div>
       <div class="shifts">${p.shifts.map(shiftRow).join('')}</div>
-      <div class="person-acts"><button class="link" data-act="hAdd" data-v="${esc(p.key)}">${esc(L('+ Add a shift for {name}', { name: p.who }))}</button>
-        <button class="link" data-act="hRename" data-v="${esc(p.key)}">${L('Rename')}</button></div></section>`).join('')
+      ${editable ? `<div class="person-acts"><button class="link" data-act="hAdd" data-v="${esc(p.key)}">${esc(L('+ Add a shift for {name}', { name: p.who }))}</button>
+        <button class="link" data-act="hRename" data-v="${esc(p.key)}">${L('Rename')}</button></div>` : ''}</section>`).join('')
     || `<div class="empty"><h2>${L('No hours logged this week')}</h2><p>${L("Each worker's Clock in and Clock out texts you a link. Tap it on this phone to log their hours here.")}</p>
-      <button class="btn primary" data-act="hAdd">${L('Add a shift')}</button></div>`}
-    <p class="hint">${L("Only this phone changes hours. Times you change are marked edited and stay as you set them when that worker's next text comes in.")}</p>`;
+      ${editable ? `<button class="btn primary" data-act="hAdd">${L('Add a shift')}</button>` : ''}</div>`}
+    <p class="hint">${editable ? L("Only this phone changes hours. Times you change are marked edited and stay as you set them when that worker's next text comes in.") : hoursReadOnly()}</p>`;
   $('bar').innerHTML = week.length ? `<div class="bar-in"><button class="btn primary big" data-act="hSend">${L('Send to accountant')}</button></div>` : '';
 }
 
@@ -317,7 +319,7 @@ function crewView(S, day) {
 function crewLine(S, p) {
   const lost = !personById(S, p.pid) && p.shifts[0].who && !findPerson(S, p.who), c = crewById(S, p.crewId) || S.crews.find(x => x.name && x.name === p.crew);
   return p.crew || lost ? `<div class="chips">${p.crew ? `<span class="hint" style="${crewVar(S, p.crew, p.crewId)}"><i class="dot"></i> ${esc(p.crew)}</span>` : ''}
-    ${lost ? `<span class="pill" data-tone="warn">${L('Not on a crew list')}</span>${c ? `<button class="link" data-act="hCrew" data-v="${esc(p.key)}" data-crew="${esc(c.id)}">${esc(L('Add to {crew}', { crew: c.name }))}</button>`
+    ${lost ? `<span class="pill" data-tone="warn">${L('Not on a crew list')}</span>${!canEditPM() ? '' : c ? `<button class="link" data-act="hCrew" data-v="${esc(p.key)}" data-crew="${esc(c.id)}">${esc(L('Add to {crew}', { crew: c.name }))}</button>`
       : S.crews.some(x => x.name) ? `<button class="link" data-act="hCrew" data-v="${esc(p.key)}">${L('Add to a crew')}</button>` : ''}` : ''}</div>` : '';
 }
 // Every logged shift of one timesheet (key from byPerson), in every week.
@@ -328,6 +330,7 @@ const shiftsOf = (S, key) => CREW.filter(s => !s.gone && personKey(S, s) === key
 // shifts take the person's id (one already on the shifts is kept). The page redraws in place, so a PM working down
 // the list keeps their place.
 function putOnCrew(S, day, key, crewId) {
+  if (!canEditPM()) return toast(hoursReadOnly(), 'bad');
   const g = group(S, key), c = crewById(S, crewId), ss = shiftsOf(S, key), p = g && c && addPerson(S, g.who, c.id, g.pid);
   if (p) {
     for (const s of ss) s.pid = p.id;
@@ -350,6 +353,7 @@ function joinCrew(S, day, key) {
 
 // Typing a time on the timesheet: data-k="h.<shift id>.in|out". A shift keeps its clock-in; remove it instead.
 export function hoursInput(el, S, day) {
+  if (!canEditPM()) return toast(hoursReadOnly(), 'bad');
   const [, id, f] = el.dataset.k.split('.'), s = CREW.find(x => x.id === id);
   if (!s || !['in', 'out'].includes(f) || (f === 'in' && !el.value)) return;
   s[f] = el.value;
@@ -376,6 +380,7 @@ function addShift(S, day, key = '') {
     ${datalist('crewNames', [...people(S).map(p => p.name), ...byPerson(CREW.filter(s => !s.gone), undefined, S).map(p => p.who)])}
     <div class="btns"><button class="btn primary" data-save>${L('Add the shift')}</button></div>`);
   d.querySelector('[data-save]').onclick = () => {
+    if (!canEditPM()) return toast(hoursReadOnly(), 'bad');
     const v = n => d.querySelector(`[name=${n}]`).value;
     // That timesheet's person while the name is unchanged; else a name on the roster takes its spelling and crew from there.
     const g2 = g && nameKey(v('who')) === nameKey(g.who) ? g : null, p = g2 ? personById(S, g2.pid) : findPerson(S, v('who'));
@@ -398,6 +403,7 @@ function renameWorker(S, day, key) {
   const d = sheet(`<h3>${esc(L('Rename {name}', { name: g.who }))}</h3><label class="field"><span>${L('Name on the timesheet')}</span><input name="who" value="${esc(g.who)}" autocomplete="off"></label>
     <div class="btns"><button class="btn primary" data-save>${L('Rename')}</button></div>`);
   d.querySelector('[data-save]').onclick = async () => {
+    if (!canEditPM()) return toast(hoursReadOnly(), 'bad');
     const name = cleanName(d.querySelector('[name=who]').value);
     if (!nameKey(name)) return toast(L('Type the name'), 'bad'); // punctuation alone is no name: it would drop them from their crew
     d.close();
@@ -407,6 +413,7 @@ function renameWorker(S, day, key) {
       const pick = await choose(L('{name} on {crew} already has that name. Is that the same person?', { name: other.name, crew: other.crew || L('the list') }),
         [['same', L('Same person: move these hours to {name}', { name: other.name }), 'primary'], ['two', L('Someone else: keep two people named {name}', { name })]]);
       if (!pick) return;
+      if (!canEditPM()) return toast(hoursReadOnly(), 'bad'); // the key may have changed while the choice was open
       if (pick === 'same') pid = other.id;
       else if (!mine) pid = addPerson(S, name, crewById(S, g.crewId) ? g.crewId : '')?.id || pid; // a name alone would land on the other person
     }
@@ -670,6 +677,7 @@ const undoTo = (v, S, day, put) => () => { put(); const [hv, hd] = location.hash
 
 export async function reportAct(a, el, S, day, v) {
   if (!canEditPM() && (a === 'stampPM' || (a === 'set' && PM_PART.test(el.dataset.k)))) return toast(pmReadOnly(), 'bad');
+  if (!canEditPM() && ['hAdd', 'hCrew', 'hRename', 'hDel'].includes(a)) return toast(hoursReadOnly(), 'bad');
   const r = rep(S, day), val = el.dataset.v, i = +el.dataset.i;
   switch (a) {
     case 'set': { const ctx = { r, s: S }; setPath(ctx, el.dataset.k, getPath(ctx, el.dataset.k) === val ? '' : val); break; }
@@ -770,9 +778,9 @@ export async function reportAct(a, el, S, day, v) {
       s.gone = true;
       keep(KEYS.crewHours, CREW);
       renderOffice(v, S, day);
-      return toast(L('Shift removed'), '', { undo: undoTo(v, S, day, () => { const x = CREW.find(y => y.id === s.id); if (x) { x.gone = false; keep(KEYS.crewHours, CREW); } }) });
+      return toast(L('Shift removed'), '', { undo: undoTo(v, S, day, () => { if (!canEditPM()) return toast(hoursReadOnly(), 'bad'); const x = CREW.find(y => y.id === s.id); if (x) { x.gone = false; keep(KEYS.crewHours, CREW); } }) });
     }
-    case 'hPmMenu': return menu([['hAdd', L('Add a shift')], ['paste', L('Open a link someone sent you')], ['settings', L('Settings, crews and backup')]]);
+    case 'hPmMenu': return menu([canEditPM() && ['hAdd', L('Add a shift')], ['paste', L('Open a link someone sent you')], ['settings', L('Settings, crews and backup')]]);
     default: return;
   }
   r.updatedAt = Date.now();

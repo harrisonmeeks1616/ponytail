@@ -291,6 +291,7 @@ function render() {
   else if (view.v === 'task') renderTask(current());
   else if (view.v === 'upcoming') renderUpcoming();
   else renderBoard();
+  if (office() && !['board', 'live'].includes(view.v)) { const note = crewKeyNote(ctx()); if (note) app.insertAdjacentHTML('afterbegin', note); }
 }
 
 function renderBoard() {
@@ -1172,7 +1173,11 @@ const typing = () => !!document.activeElement?.matches?.('textarea, select, inpu
 function drawSoon() {
   if (typing()) return void (drawLater = true);
   drawLater = false;
-  needsOffice(view) && !office() ? route() : render();
+  if (needsOffice(view) && !office()) return route();
+  // A background sync replaces rows: keep the focused task reachable by Enter after the redraw.
+  const focused = document.activeElement, href = app.contains(focused) && focused.matches('a.row[href^="#task/"], a.live-done[href^="#task/"]') ? focused.getAttribute('href') : '';
+  render();
+  if (href) app.querySelector(`a[href="${CSS.escape(href)}"]`)?.focus({ preventScroll: true });
 }
 document.addEventListener('focusout', () => { if (drawLater) setTimeout(() => drawLater && drawSoon(), 300); });
 const SYNCED = new Set([KEYS.tasks, KEYS.reports, KEYS.hours, KEYS.crewHours, KEYS.settings]);

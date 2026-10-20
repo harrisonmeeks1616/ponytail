@@ -2536,3 +2536,52 @@ test('a PM own-hours correction made before the first hub round is not treated a
   const rows = [mock.entities('Hours').find(s => s.id === id), pm.crewHours().find(s => s.id === id), pm.hours().find(s => s.id === id)];
   assert.deepEqual(rows.map(s => [s.in, s.edited.in]), Array.from({ length: 3 }, () => ['07:30', true]));
 });
+test('Crew hours imports, edits and actions follow the connected key role while PM and no-hub timesheets remain editable', async () => {
+  const shared = await lib, mod = await syncLib, storage = memStorage(), timers = manualTimers();
+  const report = await import('../docs/schwab/report.mjs');
+  const S = shared.normSettings({ role: 'Project manager', me: 'Pat', crews: [], people: [], floors: [], checks: [] });
+  const original = shared.normShift({ id: 'guard-shift', who: 'Fictional worker', date: DAY, in: '07:00', out: '15:00' });
+  storage.set('schwab.settings', S); storage.set('schwab.crewHours', [original]);
+  const app = { querySelectorAll: () => [] }, stats = {}, toast = { dataset: {}, classList: { add() {}, remove() {} } };
+  const g = globalThis, saved = Object.fromEntries(['document', 'addEventListener', 'removeEventListener'].map(k => [k, g[k]]));
+  g.document = { hidden: false, addEventListener() {}, removeEventListener() {}, querySelector: () => null, body: { append() {} }, getElementById: id => id === 'app' ? app : id === 'hoursStats' ? stats : id === 'toast' ? toast : null };
+  g.addEventListener = g.removeEventListener = () => {};
+  const input = { dataset: { k: 'h.guard-shift.in' }, value: '08:00', closest: () => null };
+  try {
+    mod.initHub({ storage, timers, now: clock, ensureDevice: ensureIn(storage) });
+    await withLocal(storage, async () => {
+      for (const role of ['super', 'crew', '']) {
+        storage.set('schwab.hub', { hubUrl: URL_A, hubKey: KEYS.super, hubRole: role, hubCrew: '' });
+        report.reloadReports();
+        report.hoursInput(input, S, DAY);
+        assert.deepEqual(storage.get('schwab.crewHours'), [original], (role || 'unknown') + ' key cannot save PM timesheet input');
+        assert.equal(report.openHours({ at: T0, shifts: [{ ...original, id: 'imported-guard-shift', device: 'fictional-device', who: 'Second fictional worker' }] }, S), '', 'hours-link import refuses before writing');
+        for (const action of ['hAdd', 'hCrew', 'hRename', 'hDel']) await report.reportAct(action, { dataset: { id: original.id, v: 'name:fictional worker' } }, S, DAY, 'clock');
+        assert.deepEqual(storage.get('schwab.crewHours'), [original], 'import and all mutation actions leave the timesheet unchanged');
+      }
+      storage.set('schwab.hub', { hubUrl: URL_A, hubKey: KEYS.pm, hubRole: 'pm', hubCrew: '' });
+      report.reloadReports(); report.hoursInput(input, S, DAY);
+      assert.equal(storage.get('schwab.crewHours')[0].in, '08:00', 'the actual PM key can correct a shift');
+      assert.equal(report.openHours({ at: T0, shifts: [{ ...original, id: 'imported-guard-shift', device: 'fictional-device', who: 'Second fictional worker' }] }, S), DAY, 'the actual PM key can open hours links');
+      assert.equal(storage.get('schwab.crewHours').length, 2);
+      mod.disconnect(); report.reloadReports(); input.value = '08:30'; report.hoursInput(input, S, DAY);
+      assert.equal(storage.get('schwab.crewHours')[0].in, '08:30', 'no-hub timesheet editing still works');
+      assert.equal(report.openHours({ at: T0, shifts: [{ ...original, id: 'local-guard-shift', device: 'fictional-device', who: 'Third fictional worker' }] }, S), DAY, 'no-hub hours links still work');
+      assert.equal(storage.get('schwab.crewHours').length, 3);
+    });
+  } finally {
+    clearTimeout(toast.timer); mod.disconnect();
+    for (const k of Object.keys(saved)) { if (saved[k] === undefined) delete g[k]; else g[k] = saved[k]; }
+  }
+});
+
+test('a PM tablet rejecting a superintendent invite describes the invite without calling it a pasted key', async () => {
+  const hub = fresh(), p = await makePhone(hub, 'pm', { url: '', key: '', noRole: true });
+  const result = await p.sync.joinFrom({ v: 1, kind: 'join', role: 'super', hub: { url: URL_A, key: KEYS.super } });
+  assert.equal(result.ok, false);
+  assert.equal(result.error, 'pm_invite');
+  assert.match(result.message, /superintendent invite/i);
+  assert.doesNotMatch(result.message, /That is not the PM key/);
+  assert.equal(p.sync.hubStatus().state, 'off');
+  assert.equal(p.settings().hubUrl, '', 'a refused invite changes no connection');
+});

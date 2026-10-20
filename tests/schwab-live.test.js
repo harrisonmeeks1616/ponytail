@@ -1158,3 +1158,17 @@ test('live.mjs imports where there is no DOM and writes no em dashes', () => {
   assert.equal(r.stdout.trim(), 'function');
   for (const f of [path.join(ROOT, 'live.mjs'), __filename]) assert.ok(!fs.readFileSync(f, 'utf8').includes(String.fromCharCode(0x2014)), `${path.basename(f)} has an em dash`);
 });
+
+test('Settings PM on a superintendent key shows a localized read-only warning even though nothing is queued', () => {
+  const sync = mkSync(); sync.status.role = 'super'; sync.status.pending = 0;
+  const ctx = mkCtx({ role: 'super', sync }); ctx.S.role = 'Project manager';
+  assert.match(live.crewKeyNote(ctx), /not connected with the PM key/);
+  assert.match(live.crewKeyNote(ctx), /PM answers and crew hours are read-only/);
+  lib.setLang('es');
+  assert.match(live.crewKeyNote(ctx), /solo lectura/);
+  lib.setLang('en');
+  sync.status.role = 'crew'; ctx.role = 'pm';
+  assert.match(live.crewKeyNote(ctx), /Sheets, reports and settings made here stay on this phone/, 'a crew key keeps the broader local-only office-work warning');
+  sync.status.role = 'pm'; assert.equal(live.crewKeyNote(ctx), '', 'actual PM key needs no warning');
+  sync.status.state = 'off'; sync.status.role = ''; assert.equal(live.crewKeyNote(ctx), '', 'no-hub workflow needs no warning');
+});

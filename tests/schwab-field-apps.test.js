@@ -353,9 +353,10 @@ test('office passcode: stored hashed, a 12-hour sign-in, a wait after 5 wrong co
   const store = new Map();
   Object.defineProperty(globalThis, 'localStorage', { configurable: true, value: { getItem: k => store.get(k) ?? null, setItem: (k, v) => store.set(k, String(v)) } });
   try {
-    const office = { pin: await pinHash('4821') };
+    // A valid hex salt may contain the PIN digits by chance; that is not plaintext storage.
+    const office = { pin: await pinHash('4821', '4821000000000000') };
     assert.match(office.pin, PIN_FORMAT);
-    assert.ok(!office.pin.includes('4821'), 'never kept as typed');
+    assert.notEqual(office.pin, '4821', 'the stored credential is the salted hash, not the plaintext code');
     assert.notEqual(await pinHash('4821'), office.pin, 'salted, so the same code hashes differently on each phone');
     const t0 = 1.8e12;
     assert.equal(await tryPin(office, '4821', t0), 'ok');
