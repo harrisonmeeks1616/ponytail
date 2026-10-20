@@ -958,3 +958,87 @@ dialog.share .linkbox { min-height: 0 !important; height: calc(2.6em + 22px); re
 dialog.paste .linkbox.paste { min-height: 112px !important; max-height: 40vh; font: 1.0625rem/1.4 var(--font) !important; color: var(--ink); word-break: normal; overflow-wrap: anywhere; resize: none; }
 dialog.paste .btns > .btn { flex-basis: 100%; }
 /* <<< section: sharesheet */
+
+/* >>> section: magicplus */
+/* Magic Plus (tasks.html): drag the + onto a floor or an Upcoming day heading. A drag from the + moves the +, never the
+   page. Lifted, it grows a little and floats higher; the heading under the finger takes the accent (a thin line, its
+   words). Reduced motion: no grow, no fly back (the transitions are off already). */
+.fab { touch-action: none; -webkit-touch-callout: none; }
+.fab.lift {
+  z-index: 11; cursor: grabbing; transform: none; scale: 1.1; box-shadow: var(--shadow-fab), 0 14px 28px rgba(0, 0, 0, .2);
+  transition: transform .18s var(--ease), scale .18s var(--ease), box-shadow .18s var(--ease);
+}
+.fab.fly { transition: translate .18s var(--ease), scale .18s var(--ease), box-shadow .18s var(--ease); }
+body:has(.fab.lift) { -webkit-user-select: none; user-select: none; cursor: grabbing; }
+body:has(.fab.lift) :is(h3[data-floor], h3[data-day]) { transition: color .18s var(--ease), border-color .18s var(--ease), box-shadow .18s var(--ease); }
+:is(h3[data-floor], h3[data-day]).plus-on { color: var(--tint); border-bottom-color: var(--tint); box-shadow: 0 1px var(--tint); }
+:is(h3[data-floor], h3[data-day]).plus-on small { color: var(--tint); }
+@media (prefers-reduced-motion: reduce) { .fab.lift { scale: none; } }
+/* <<< section: magicplus */
+
+/* >>> section: things-board */
+/* Things board: the day in one quiet line (board and Live), a progress pie on each floor and Upcoming day heading, and
+   Upcoming. Pies on headings sit over the rows' pies, so heading names line up with the row text (38px). */
+.day-sum { margin: -2px 0 4px; color: var(--muted); font-size: .9375rem; line-height: 1.6; font-variant-numeric: tabular-nums; }
+.live-head + .day-sum { margin-top: 4px; }
+.day-sum > span { white-space: nowrap; } /* a part moves to the next line whole, its dot with it */
+.day-sum > span:first-child { white-space: normal; } /* Live's "On site now: ..." may be longer than a 320 px line */
+.sum-go { position: relative; padding: 0; border: 0; background: none; color: inherit; font: inherit; font-weight: 600; cursor: pointer; }
+.sum-go[data-tone=warn] { color: var(--warn); }
+.sum-go[data-tone=bad] { color: var(--bad); }
+.sum-go::after { content: ''; position: absolute; inset: -11px -6px; } /* 44px to tap, while the line stays one quiet line */
+.sum-go:active { opacity: .55; }
+/* where a summary tap lands: the sheets glow a moment, then fade (reduced motion: none; focus still moves there) */
+@keyframes glow { 0%, 40% { background-color: var(--fill-2); } }
+.row.glow { animation: glow 1.2s var(--ease); }
+
+.datebar-chips { margin-left: auto; display: flex; gap: 8px; }
+.datebar .datebar-chips .today-btn { margin-left: 0; }
+.datebar .up-btn { color: var(--tint); }
+
+.section-h[data-floor], .day-h { align-items: center; }
+.section-h[data-floor] > .pie, .day-h .pie { width: 18px; height: 18px; margin: 0 8px 0 4px; }
+.section-h .pie.full svg { width: 11px; height: 11px; stroke-width: 3.4; }
+.head-name { flex: 1; min-width: 0; overflow-wrap: anywhere; }
+
+.upcoming .day-h { padding-bottom: 0; }
+.day-h > a { flex: 1; display: flex; align-items: center; gap: 8px; min-width: 0; min-height: 44px; margin-top: -10px; color: inherit; text-decoration: none; border-radius: 8px; }
+.day-h > a:active { background: var(--fill); }
+.day-h .chev { width: 18px; height: 18px; color: var(--box); margin-right: -4px; }
+.day-none { margin: 18px 0 0; padding-left: 38px; color: var(--muted); font-size: .9375rem; }
+.upcoming .empty .btn { margin-top: 4px; }
+/* <<< section: things-board */
+
+/* >>> section: quickfind */
+/* Quick Find (Things 3): the search button in the title row of a main screen, a pull down past the top, "/" on a
+   computer. The sheet keeps one height while you type, so nothing jumps under the box; the box and its ✕ stay put while
+   the results scroll. Results are rows like the board's, under small headings, with the matched letters in bold. */
+html { overscroll-behavior-y: contain; } /* the page still bounces at the top; a pull there is Quick Find, not the browser's reload */
+.title-row .find-btn:has(+ #titleMore:not(:empty)) { margin-right: -8px; } /* next to the ⋯: the two buttons touch, 20 px between the icons */
+dialog.sheet.find { height: 92vh; height: 92dvh; }
+@media (min-width: 600px) { dialog.sheet.find { height: min(640px, 84dvh); } }
+dialog.find .sheet-in { gap: 0; min-height: 100%; } /* a tap on the empty part of the sheet is not a tap outside it */
+.find-top { position: sticky; top: 0; z-index: 1; margin: 0 -16px; padding: 4px 56px 8px 16px; background: var(--surface); }
+.find-top .sheet-x { top: 4px; right: 6px; }
+.find-box { position: relative; display: block; }
+.find-box svg.i { position: absolute; left: 11px; top: 12px; width: 20px; height: 20px; color: var(--muted); pointer-events: none; }
+dialog.find .find-box input[type=search] { min-height: 44px; padding: 9px 12px 9px 38px; border-color: transparent; border-radius: 10px; background: var(--fill); }
+dialog.find .find-box input:focus-visible { outline-width: 2px; outline-offset: 0; } /* the system's ring, hugging the box */
+.find-box input::-webkit-search-cancel-button { -webkit-appearance: none; appearance: none; display: none; } /* one ✕ only: the sheet's, which closes */
+.find-out { display: flex; flex-direction: column; padding-bottom: 16px; }
+.find-h { margin: 16px 0 2px; }
+.find-out .list { --inset: 42px; }
+.find-out .row-lead { min-width: 30px; }
+.find-out .row-lead svg.i { width: 22px; height: 22px; color: var(--tint); }
+.find-out b { font-weight: 700; color: var(--ink); }
+.find-out .row-sub .dot { width: 9px; height: 9px; margin-right: 2px; }
+.find-more { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; overflow-wrap: normal; }
+.find-ini { display: grid; place-items: center; width: 30px; height: 30px; border-radius: 50%; box-shadow: inset 0 0 0 2px var(--crew, var(--box)); font: 600 .75rem/1 var(--font); letter-spacing: .02em; }
+.find-all { align-self: flex-start; }
+.find-none { margin: 44px 16px 0; text-align: center; color: var(--muted); overflow-wrap: anywhere; }
+.find-tag { color: var(--muted); font-size: .9375rem; font-variant-numeric: tabular-nums; white-space: nowrap; }
+/* the pull: the search button grows a little with the finger, and fills in once letting go opens Quick Find */
+.title-row .find-btn { transform: scale(calc(1 + var(--pull, 0) * .14)); }
+.title-row .find-btn.armed { background: var(--accent); color: var(--on-accent); }
+@media (prefers-reduced-motion: reduce) { .title-row .find-btn { transform: none; } }
+/* <<< section: quickfind */

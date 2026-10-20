@@ -165,7 +165,7 @@ const liveCards = p => p.evaluate(() => [...document.querySelectorAll('.live-car
   review: !!c.querySelector('[data-act=liveReview]'), uid: c.querySelector('[data-u]')?.dataset.u || '',
 })));
 const card = async (p, id) => (await liveCards(p)).find(c => c.id === id);
-const stat = (p, i) => p.evaluate(n => document.querySelectorAll('.stats .stat b')[n]?.textContent.trim(), i);
+const daySum = p => p.evaluate(() => document.querySelector('.day-sum')?.textContent.replace(/\s+/g, ' ').trim() || ''); // Live's quiet line (shared.mjs daySummary)
 const taskOf = async (p, uid) => (await local(p, 'schwab.tasks') || []).find(t => t.uid === uid);
 const sinceMark = p => p.evaluate(() => window.__mark === 1); // set once; a reload would clear it
 
@@ -368,14 +368,14 @@ async function join(p, link, o = {}) {
     const working = await until(async () => { const c = await card(pm, S.s1.id); return c && c.pills.includes('Working') && /1 of 2 steps done/.test(c.meta) && c; }, 40000);
     check(working, `PM Live: ${S.s1.id} shows Working and 1 of 2 steps done (${JSON.stringify(await card(pm, S.s1.id))})`);
     check(await sinceMark(pm), 'the Live board was redrawn in place (no reload)');
-    check(await stat(pm, 1) === '2' || await stat(pm, 1) === '1', `Active count moves (${await stat(pm, 1)})`);
+    check(/\b[12] working\b/.test(await daySum(pm)), `the working count moves (${await daySum(pm)})`);
     await ca.click('[data-act=clock][data-v=aStop]');
     await ca.click('[data-act=set][data-k="t.status"][data-v=Partial]');
     await ca.fill('[data-k="t.remain"]', 'Install box tomorrow');
     await blur(ca);
     const partial = await until(async () => { const c = await card(pm, S.s1.id); return c && c.pills.includes('Partial') && c.review && c; }, 40000);
     check(partial, `PM Live: ${S.s1.id} shows Partial with a Review button (${JSON.stringify(await card(pm, S.s1.id))})`);
-    check(await stat(pm, 2) === '1', `To review shows 1 (${await stat(pm, 2)})`);
+    check(/\b1 ready for review\b/.test(await daySum(pm)), `ready for review shows 1 (${await daySum(pm)})`);
     const t = await taskOf(pm, S.s1.uid);
     check(t && t.aStart && t.aStop && t.items[0].done && t.status === 'Partial' && t.remain === 'Install box tomorrow', 'the PM phone holds the crew part: start, stop, tick, status, remaining');
     const feed = await until(async () => { const f = await pm.locator('.feed li').allTextContents(); return f.some(x => x.includes(S.s1.id) && /started/.test(x)) && f.some(x => x.includes(S.s1.id) && /Partial/.test(x)) && f; }, 30000);

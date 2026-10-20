@@ -466,7 +466,7 @@ test('liveView: 12 crews, 60 events and 40 people stay fast and small', () => {
   assert.equal((html.match(/data-act="liveMsg"/g) || []).length, 48, 'one Message button per sheet that is not accepted');
   assert.equal((html.match(/class="live-done"/g) || []).length, 12, 'accepted sheets are one quiet line');
   assert.equal((html.match(/data-act="liveReview"/g) || []).length, 24, 'Review only where the crew has sent results and nobody has reviewed');
-  assert.match(html, /<div class="stat"><b>41<\/b><span>On site<\/span>/, '40 on the timesheet and a visitor the hub lists');
+  assert.match(html, /<p class="day-sum"><span>On site now: 41 people in 12 crews ·<\/span>/, '40 on the timesheet and a visitor the hub lists');
   assert.match(html, /data-act="liveRefresh"/);
   assert.match(html, /Updated just now/);
   assert.ok(html.indexOf('T1019-3') > -1);

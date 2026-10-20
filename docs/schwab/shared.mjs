@@ -516,6 +516,7 @@ export const iso = d => `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.get
 export const today = () => iso(new Date());
 export const addDays = (day, n) => { const [y, m, d] = day.split('-').map(Number); return iso(new Date(y, m - 1, d + n)); };
 export const niceDate = (day, l = lang) => new Date(day + 'T12:00').toLocaleDateString(locale(l), { weekday: 'short', month: 'short', day: 'numeric' });
+export const weekday = (day, l = lang) => new Date(day + 'T12:00').toLocaleDateString(locale(l), { weekday: 'short' }); // "Thu" ("jue")
 const hm = d => `${pad(d.getHours())}:${pad(d.getMinutes())}`;
 export const nowHM = () => hm(new Date());
 export const toMin = t => { const m = /^(\d{1,2}):(\d{2})/.exec(t || ''); return m ? +m[1] * 60 + +m[2] : null; };
@@ -536,12 +537,36 @@ export const crewVar = (s, name, id = '') => { let i = id ? s.crews.findIndex(c 
 
 // < date >: the arrows move a day (a week: day is its Monday, here this week's), the date opens the calendar, and once
 // you have moved off it a chip leads back. v: the screen the arrows and the picker stay on (day, report, clock).
-export const dateBar = (day, v = 'day', { week = false, here = today() } = {}) => `<div class="datebar daynav">
+// upcoming: the office board's chip to the next 7 days. The chips keep together, on their own line when the date needs it.
+export const dateBar = (day, v = 'day', { week = false, here = today(), upcoming = false } = {}) => `<div class="datebar daynav">
   <button class="nav-btn" data-go="${v}/${addDays(day, week ? -7 : -1)}" aria-label="${week ? L('Previous week') : L('Previous day')}">${icon('back')}</button>
   <label class="day">${icon('cal')}<span>${niceDate(day)}</span>
     <input type="date" value="${day}" data-pick="${v}" aria-label="${week ? L('Pick a week') : L('Pick a date')}"></label>
   <button class="nav-btn" data-go="${v}/${addDays(day, week ? 7 : 1)}" aria-label="${week ? L('Next week') : L('Next day')}">${icon('chev')}</button>
-  ${day === here ? '' : `<button class="chip today-btn" data-go="${v}/${today()}">${week ? L('This week') : L('Today')}</button>`}</div>`;
+  ${day === here && !upcoming ? '' : `<span class="datebar-chips">${day === here ? '' : `<button class="chip today-btn" data-go="${v}/${today()}">${week ? L('This week') : L('Today')}</button>`}${upcoming ? `<button class="chip up-btn" data-go="upcoming/${day}">${L('Upcoming')}</button>` : ''}</span>`}</div>`;
+
+// The day in one quiet line, as Things' Today has no stat tiles: only the parts that are not zero. The board: "6 sheets ·
+// 3 crews · 2 ready for review · 1 blocked · 14.5 of 18 crew-hrs"; Live, given here (who is on site): "On site now: 6 people
+// in 3 crews · 2 working · 2 ready for review · 1 blocked". Ready for review and blocked are taps in their status color
+// (data-act="sum"; data-uids: the sheets the app scrolls to). '' when there is nothing to say.
+export function daySummary(sheets, here = null) {
+  const n1 = (n, one, many) => (!n ? '' : n === 1 ? one : many); // the words for n things, nothing for none
+  const crews = xs => new Set(xs.map(x => x.crew).filter(Boolean)).size, c = here ? crews(here) : crews(sheets);
+  const ofCrews = n1(c, L('1 crew'), L('{n} crews', { n: c }));
+  const tap = (ts, tone, words) => (ts.length ? `<button type="button" class="sum-go" data-act="sum" data-tone="${tone}" data-uids="${esc(ts.map(t => t.uid).join(' '))}">${esc(words)}</button>` : '');
+  const per = f => sheets.reduce((n, t) => n + f(t) * (t.size || 1), 0), est = per(t => t.est), act = per(t => worked(t) / 60);
+  const review = sheets.filter(t => t.origin !== 'link' && t.status && !t.review), blocked = sheets.filter(t => t.status === 'Blocked'), working = sheets.filter(t => t.aStart && !t.status).length;
+  let parts;
+  if (here) {
+    const people = n1(here.length, L('1 person'), L('{n} people', { n: here.length }));
+    parts = [people && (ofCrews ? L('On site now: {people} in {crews}', { people, crews: ofCrews }) : L('On site now: {people}', { people })), n1(working, L('1 working'), L('{n} working', { n: working }))];
+  } else parts = [n1(sheets.length, L('1 sheet'), L('{n} sheets', { n: sheets.length })), ofCrews];
+  parts = parts.map(esc);
+  parts.push(tap(review, 'warn', n1(review.length, L('1 ready for review'), L('{n} ready for review', { n: review.length }))), tap(blocked, 'bad', n1(blocked.length, L('1 blocked'), L('{n} blocked', { n: blocked.length }))));
+  if (!here && (est || act)) parts.push(esc(est ? L('{act} of {est} crew-hrs', { act: hrs(act), est: hrs(est) }) : L('{n} crew-hrs', { n: hrs(act) })));
+  const shown = parts.filter(Boolean);
+  return shown.length ? `<p class="day-sum">${shown.map((p, i) => `<span>${p}${i < shown.length - 1 ? ' ·' : ''}</span>`).join(' ')}</p>` : ''; // a line breaks between parts, never before a dot
+}
 
 export const attr = (k, v) => v ? ` ${k}="${esc(v)}"` : '';
 
@@ -598,6 +623,7 @@ const ICONS = {
   message: '<path d="M12 4c4.97 0 9 3.36 9 7.5S16.97 19 12 19c-1.1 0-2.15-.16-3.12-.46L4 20.5l1.4-3.7C3.9 15.5 3 13.6 3 11.5 3 7.36 7.03 4 12 4z"/>',
   mail: '<rect x="3" y="5" width="18" height="14" rx="2.5"/><path d="m3.5 7.5 8.5 6 8.5-6"/>',
   link: '<path d="M10 14a4.5 4.5 0 0 0 6.4 0l3.1-3.1a4.5 4.5 0 0 0-6.4-6.4l-1.1 1.1"/><path d="M14 10a4.5 4.5 0 0 0-6.4 0l-3.1 3.1a4.5 4.5 0 0 0 6.4 6.4l1.1-1.1"/>',
+  search: '<circle cx="10.5" cy="10.5" r="6.5"/><path d="m20 20-4.9-4.9"/>',
 };
 export const icon = (name, cls = '') => `<svg class="i${cls ? ' ' + cls : ''}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${ICONS[name] || ''}</svg>`;
 
@@ -1141,4 +1167,120 @@ export async function restore(file) {
 
 export function registerSW() {
   if ('serviceWorker' in navigator && isSecureContext) navigator.serviceWorker.register('sw.js').catch(() => {});
+}
+
+// ---------- Quick Find (Things 3): search everything on this phone ----------
+// The search sheet, the days a search names, the matches in bold and the pull down that opens it. What there is to find
+// is the app's (tasks.html quickFind): only what this phone shows, so a crew phone never finds the office's records.
+
+// Every typed word must be found (AND); case, accents and punctuation don't count, as in nameKey ('jose l3' finds 'José, L3-14').
+export const findWords = q => [...new Set(nameKey(q).split(' ').filter(Boolean))];
+// Each character folded on its own the way nameKey folds, with where it came from, so a match maps back to what was typed.
+function fold(text) {
+  const cs = Array.from(String(text ?? '')), at = [];
+  let f = '';
+  cs.forEach((c, i) => { const k = c.normalize('NFD').replace(/[̀-ͯ]/g, '').replace(/[^\p{L}\p{N}]/gu, ' ').toLowerCase(); for (let j = 0; j < k.length; j++) at.push(i); f += k; });
+  return { cs, at, f };
+}
+// The text, escaped, with every match of a word in bold (an accent typed as its own mark stays with its letter).
+export function marked(text, words) {
+  const { cs, at, f } = fold(text), on = cs.map(() => false), has = new Set(at);
+  for (const w of words) for (let p = f.indexOf(w); p >= 0; p = f.indexOf(w, p + 1)) for (let i = at[p]; i <= at[p + w.length - 1]; i++) on[i] = true;
+  for (let i = 1; i < cs.length; i++) if (!has.has(i)) on[i] = on[i - 1];
+  return cs.map((c, i) => (on[i] && !on[i - 1] ? '<b>' : '') + esc(c) + (on[i] && !on[i + 1] ? '</b>' : '')).join('');
+}
+// A long text from a little before its first match, on one line (the end is cut by CSS).
+function around(text, words) {
+  const { cs, at, f } = fold(text), p = Math.min(...words.map(w => f.indexOf(w)).filter(x => x >= 0)), i = at[p] ?? 0;
+  const sp = i > 24 ? cs.indexOf(' ', i - 18) : -1, start = sp >= 0 && sp < i ? sp + 1 : i > 24 ? i - 18 : 0;
+  return (start ? '…' : '') + cs.slice(start).join('').replace(/\s+/g, ' ');
+}
+
+// Quick Find's days: those a search names ('tomorrow', 'oct 21', 'mié 21', '10/21', '2026-10-21'), nearest to here first
+// (a year either way, at most 31). A word with a letter starts a word of the day's name in English or Spanish (weekday,
+// month, today, tomorrow, yesterday); a number is one of its numbers. A lone number names no day: '3' is not a date.
+let dayWords = null; // [day, its words] for the year either side of here, made once a day
+export function daysNamed(words, here = today()) {
+  if (!words.length || (words.length === 1 && !/\D/.test(words[0]))) return [];
+  if (dayWords?.here !== here) {
+    const names = (k, d) => ['en', 'es'].flatMap(l => ['long', 'short'].map(w => new Intl.DateTimeFormat(locale(l), { [k]: w }).format(d)));
+    const wd = Array.from({ length: 7 }, (_, i) => names('weekday', new Date(2026, 0, 4 + i, 12))), mo = Array.from({ length: 12 }, (_, i) => names('month', new Date(2026, i, 15, 12))); // 2026-01-04 is a Sunday
+    const rel = { [here]: 'Today', [addDays(here, 1)]: 'Tomorrow', [addDays(here, -1)]: 'Yesterday' };
+    dayWords = { here, list: Array.from({ length: 731 }, (_, i) => addDays(here, i % 2 ? (i + 1) / 2 : -i / 2)).map(d => {
+      const dt = new Date(d + 'T12:00'), [y, m, n] = d.split('-');
+      return [d, nameKey([...wd[dt.getDay()], ...mo[dt.getMonth()], y, m, n, +m, +n, ...(rel[d] ? ['en', 'es'].map(l => L(rel[d], {}, l)) : [])].join(' ')).split(' ')];
+    }) };
+  }
+  return dayWords.list.filter(([, ks]) => words.every(w => (/\D/.test(w) ? ks.some(k => k.startsWith(w)) : ks.includes(w)))).slice(0, 31).map(([d]) => d);
+}
+
+// The Quick Find sheet: a search box, focused at once so the phone's keyboard opens, and the results as you type under
+// small headings, 8 a group until Show all. search(words) returns [[heading, items]] of matches (no words: the recent
+// sheets). An item is { lead (markup), title, tag (quiet, after the title), sub (plain text), dot (a crew dot before sub),
+// style, texts (everything it was found in) } and whatever pick needs; a word the title, tag and sub lack shows in a line
+// of the text it was found in.
+// A tap on a result, or Enter for the first, closes the sheet and calls pick(item). Esc, the ✕ or a swipe down closes it.
+const FIND_MAX = 8;
+export function findSheet(search, pick) {
+  const d = sheet(`<h3 class="sr">${L('Quick Find')}</h3><div class="find-top"><label class="find-box">${icon('search')}<input type="search" enterkeyhint="search" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false" aria-label="${L('Search sheets, people and days')}" placeholder="${L('Sheets, people and days')}"></label></div>
+    <p class="sr" role="status"></p><div class="find-out"></div>`);
+  d.classList.add('find');
+  d.querySelector('.find-top').append(d.querySelector('.sheet-in > form')); // the ✕ stays beside the box while the results scroll
+  const box = d.querySelector('.find-box input'), out = d.querySelector('.find-out'), say = d.querySelector('[role=status]'), all = new Set();
+  let shown = [], timer = 0;
+  const row = (it, words) => {
+    const seen = nameKey(`${it.title} ${it.tag} ${it.sub}`), miss = words.filter(w => !seen.includes(w)), more = miss.length ? (it.texts || []).find(s => miss.some(w => nameKey(s).includes(w))) : '';
+    shown.push(it);
+    return `<button type="button" class="row" data-find="${shown.length - 1}"${it.style ? ` style="${it.style}"` : ''}><span class="row-lead">${it.lead}</span><span class="row-main"><span class="row-title">${marked(it.title, words)}${it.tag ? ` <span class="find-tag">${marked(it.tag, words)}</span>` : ''}</span>`
+      + `${it.sub ? `<span class="row-sub">${it.dot ? '<i class="dot"></i> ' : ''}${marked(it.sub, words)}</span>` : ''}${more ? `<span class="row-sub find-more">${marked(around(more, words), words)}</span>` : ''}</span>${icon('chev', 'chev')}</button>`;
+  };
+  const draw = () => {
+    const q = box.value.trim(), words = findWords(q), groups = search(words).filter(([, items]) => items.length), n = groups.reduce((s, [, items]) => s + items.length, 0);
+    shown = [];
+    out.innerHTML = groups.map(([head, items]) => {
+      const some = all.has(head) ? items : items.slice(0, FIND_MAX);
+      return `<h4 class="caption find-h">${esc(head)}</h4><div class="list lead" data-g="${esc(head)}">${some.map(it => row(it, words)).join('')}</div>`
+        + (some.length < items.length ? `<button type="button" class="link find-all" data-all="${esc(head)}">${L('Show all')} (${items.length})</button>` : '');
+    }).join('') || `<p class="find-none">${esc(words.length ? L('No matches for “{q}”', { q }) : L('Try a room, a name or a day, like “tomorrow”.'))}</p>`;
+    say.textContent = !words.length ? '' : n === 1 ? L('1 result') : n ? L('{n} results', { n }) : L('No matches for “{q}”', { q });
+  };
+  d.addEventListener('click', e => {
+    const a = e.target.closest('[data-all]'), r = e.target.closest('[data-find]');
+    if (a) { all.add(a.dataset.all); draw(); out.querySelector(`[data-g="${CSS.escape(a.dataset.all)}"]`)?.children[FIND_MAX]?.focus(); } // focus goes on to the first row it showed
+    if (r) { d.close(); pick(shown[+r.dataset.find]); }
+  });
+  box.addEventListener('input', () => { clearTimeout(timer); timer = setTimeout(draw, 80); });
+  box.addEventListener('keydown', e => {
+    if (e.key === 'Escape') { e.preventDefault(); d.close(); }
+    if (e.key !== 'Enter') return;
+    e.preventDefault();
+    clearTimeout(timer);
+    draw();
+    if (shown[0]) { d.close(); pick(shown[0]); }
+  });
+  draw();
+  box.focus();
+  return d;
+}
+
+// Pull down past the top of the page by about 64 px and let go: open(), as in Things. Touch only, only while can() says so,
+// and never from the + (it drags). The page's own bounce is left alone. mark() is the element that shows the pull (the
+// search button): it grows a little as the finger pulls, and fills in once letting go will open it.
+export function pullDown(can, open, mark) {
+  let y0 = null, x0 = 0, el = null;
+  const show = p => {
+    el ||= mark();
+    el?.style.setProperty('--pull', p.toFixed(2));
+    el?.classList.toggle('armed', p >= 1);
+  };
+  const stop = () => { y0 = null; if (el) { show(0); el = null; } };
+  addEventListener('touchstart', e => { x0 = e.touches[0].clientX; y0 = e.touches.length === 1 && scrollY <= 0 && !e.target.closest?.('.fab') && can() ? e.touches[0].clientY : null; }, { passive: true });
+  addEventListener('touchmove', e => {
+    if (y0 == null) return;
+    const dy = e.touches[0].clientY - y0;
+    if (dy < -8 || scrollY > 0 || e.touches.length > 1 || Math.abs(e.touches[0].clientX - x0) > Math.max(24, dy)) return stop(); // a scroll, a pinch or a sideways swipe
+    show(Math.min(1, Math.max(0, dy) / 64));
+  }, { passive: true });
+  addEventListener('touchend', () => { const go = y0 != null && !!el?.classList.contains('armed'); stop(); if (go && can()) open(); });
+  addEventListener('touchcancel', stop);
 }

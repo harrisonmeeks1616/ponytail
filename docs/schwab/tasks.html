@@ -20,7 +20,7 @@
 </div></header>
 <main>
   <div class="screen-head" id="head"><span id="headBack"></span><p class="proj" id="proj"></p>
-    <div class="title-row"><h2 class="large-title" id="title"></h2><span id="titleMore"></span></div><p class="subtitle" id="subtitle"></p></div>
+    <div class="title-row"><h2 class="large-title" id="title"></h2><button class="icon-btn find-btn" id="findBtn" data-act="find" hidden></button><span id="titleMore"></span></div><p class="subtitle" id="subtitle"></p></div>
   <div id="app"></div>
   <div class="bar" id="bar"></div>
 </main>
@@ -30,15 +30,16 @@
 import {
   KEYS, DEFAULT_SETTINGS, esc, uid, load, save, loadSettings, nameKey, cleanName, people, findPerson, personById, crewById, addPerson, normTask, newItem, mergeTask, cloneTask, pack, unpack, linkTo, langOf, typedIn,
   nextId, renumberClashes, sameNumber, ensureDevice,
-  today, addDays, niceDate, nowHM, span, fmtMin, t12, stamp, hrs, timeOf, field, datalist, seg, setPath, getPath, readInput, dateBar,
+  today, addDays, niceDate, weekday, nowHM, span, fmtMin, t12, stamp, hrs, timeOf, field, datalist, seg, setPath, getPath, readInput, dateBar, daySummary,
   toast, sheet, ask, sendSheet, pasteSheet, makePdf, savePdf, fileAway, retryUploads, settingsView, settingsAct, restore,
   registerSW, crewVar as cv, L, setLang, getLang, COMPANY, COMPANY_ALT, COMPANIES, letterhead, icon, screenHead, busy,
   UNLOCK, PIN_FORMAT, hasPin, adoptPin, setPin, pinHash, tryPin, unlocked, signIn, signOut, onSave,
+  findSheet, pullDown, daysNamed, initials,
 } from './shared.mjs';
 import { renderOffice, reportAct, reportInput, openReport, openHours, hoursInput, workerChange, fileReportIfChanged, reloadReports, sectionToggle, hasReports, attachShifts,
   reportsNow, crewNow, dropReport, setTextField } from './report.mjs';
 import * as sync from './sync.mjs';
-import { liveView, recordsView, hubSettingsView, statusDot, joinSheet, txView, txField, after as liveAfter, owns as liveOwns, act as liveAct, onInput as liveInput, deleteRecord } from './live.mjs';
+import { liveView, recordsView, hubSettingsView, statusDot, joinSheet, txView, txField, after as liveAfter, owns as liveOwns, act as liveAct, onInput as liveInput, deleteRecord, txCached } from './live.mjs';
 
 window.appStarted = true; // every file loaded (see the fallback above)
 registerSW();
@@ -57,6 +58,7 @@ const current = () => (view.v === 'task' ? find(view.uid) : null);
 const go = h => (location.hash === '#' + h ? route() : (location.hash = h));
 const crewVar = (name, id) => cv(S, name, id);
 const floorRank = f => { const i = S.floors.indexOf(f); return i < 0 ? 999 : i; };
+const byFloor = (a, b) => floorRank(a.floor) - floorRank(b.floor) || a.floor.localeCompare(b.floor) || a.pStart.localeCompare(b.pStart); // the board's order
 const doneCount = t => t.items.filter(i => i.done).length;
 const worked = t => (t.aStart && t.aStop ? Math.max(0, span(t.aStart, t.aStop) - t.delay) : 0); // same as shared.mjs; kept here so a stale cached shared.mjs can't break this page
 const isOpen = t => t.status !== 'Complete' && t.review !== 'Accepted';
@@ -114,10 +116,10 @@ function enlist(t) {
 // assignments (any sheet this phone didn't receive). On the PM's phone the time clock is the crew
 // timesheet, so it is guarded too. Crew sheets and everyone else's time clock are open.
 // #live, #records/<people|sheets|reports> and #hub (the hub's status, open to a crew phone) are the hub screens of live.mjs.
-const VIEWS = ['clock', 'report', 'settings', 'live', 'records', 'hub'];
+const VIEWS = ['clock', 'report', 'settings', 'live', 'records', 'hub', 'upcoming']; // #upcoming/<day>: the 7 days after the board's day
 const isPM = () => S.role === 'Project manager';
 const crewPhone = () => S.role === 'Crew member'; // set on the first run: no office words on this phone unless Settings changes it
-const needsOffice = vw => ['report', 'settings', 'live', 'records'].includes(vw.v) || (vw.v === 'clock' && isPM()) || (vw.v === 'task' && find(vw.uid)?.origin !== 'link');
+const needsOffice = vw => ['report', 'settings', 'live', 'records', 'upcoming'].includes(vw.v) || (vw.v === 'clock' && isPM()) || (vw.v === 'task' && find(vw.uid)?.origin !== 'link');
 
 function route() {
   if (setup) return; // the first run is still asking; it routes when it's done
@@ -130,10 +132,11 @@ function route() {
   const h = location.hash.slice(1);
   if (h.startsWith('p=')) return openCode(h.slice(2));
   const [v, a, b] = h.split('/'), was = view;
-  if (['day', 'clock', 'report'].includes(v) && /^\d{4}-\d{2}-\d{2}$/.test(a) && addDays(a, 0) === a) day = a; // a real day, not 2026-02-30
+  if (['day', 'clock', 'report', 'upcoming'].includes(v) && /^\d{4}-\d{2}-\d{2}$/.test(a) && addDays(a, 0) === a) day = a; // a real day, not 2026-02-30
   view = v === 'task' && find(a) ? { v: 'task', uid: a, tab: b || 'assign' } : { v: VIEWS.includes(v) ? v : 'board', sub: a };
-  if (view.v === 'task' && was?.uid !== view.uid) openedFrom = ['live', 'records'].includes(was?.v) ? was : null; // its Back goes there (a tab of the sheet keeps it)
+  if (view.v === 'task' && was?.uid !== view.uid) openedFrom = ['live', 'records', 'upcoming'].includes(was?.v) ? was : null; // its Back goes there (a tab of the sheet keeps it)
   if (view.v === 'task') day = find(a).date;
+  if (view.v === 'task') sawSheet(a); // Quick Find's recent sheets
   if (needsOffice(view) && !office()) { // the crew board stays behind the passcode pad
     view = { v: 'board' };
     render();
@@ -256,6 +259,7 @@ function header() {
     return `<a href="#${v}${v === 'live' || v === 'records' ? '' : '/' + day}"${v === here ? ' aria-current="page"' : ''}${locked ? ` aria-label="${esc(`${label}, ${L('needs the office passcode')}`)}"` : ''}>${icon(TAB_ICON[v])}<span>${label}${locked ? icon('lock', 'lock') : ''}</span>${v === 'live' ? dot(true) : ''}</a>`;
   }).join('');
   document.getElementById('hubDot').innerHTML = list.some(([v]) => v === 'live') ? '' : dot(); // signed in, the dot rides on the Live tab: with the gear, a fourth button here would shrink both company names
+  Object.assign(document.getElementById('findBtn'), { hidden: !FIND_ON.includes(view.v), innerHTML: icon('search') }).setAttribute('aria-label', L('Search')); // Quick Find, in the title row of the main screens
 }
 
 let drawnOn = today(); // the day the screen was last drawn, to notice midnight
@@ -274,40 +278,32 @@ function render() {
   else if (view.v === 'records') app.innerHTML = recordsView(ctx(), view.sub);
   else if (view.v === 'clock' || view.v === 'report') renderOffice(view.v, S, day);
   else if (view.v === 'task') renderTask(current());
+  else if (view.v === 'upcoming') renderUpcoming();
   else renderBoard();
 }
 
 function renderBoard() {
   const all = dayTasks();
-  const list = all.filter(t => !crewFilter || t.crew === crewFilter)
-    .sort((a, b) => floorRank(a.floor) - floorRank(b.floor) || a.floor.localeCompare(b.floor) || a.pStart.localeCompare(b.pStart));
+  const list = all.filter(t => !crewFilter || t.crew === crewFilter).sort(byFloor);
   // Finished sheets wait in their own group for review; accepted ones fold away at the bottom, like Things' Logbook.
   const toReview = list.filter(t => t.origin !== 'link' && t.status && !t.review);
   const accepted = list.filter(t => t.review === 'Accepted');
   const active = list.filter(t => !toReview.includes(t) && !accepted.includes(t));
   const floors = [...new Set(active.map(t => t.floor))];
-  const est = all.reduce((n, t) => n + t.est * (t.size || 1), 0);
-  const act = all.reduce((n, t) => n + worked(t) / 60 * (t.size || 1), 0);
-  const done = all.filter(t => !isOpen(t)).length, blocked = all.filter(t => t.status === 'Blocked').length;
   // The office can pick any crew (the + then starts a sheet for it); a crew phone only the crews it has sheets from.
   const crews = [...new Set([...(office() ? S.crews.map(c => c.name) : []), ...all.map(t => t.crew)].filter(Boolean))];
   const prev = prevDay();
   const rows = ts => `<div class="list lead">${ts.map(row).join('')}</div>`;
   const head = (text, n, cls = '') => `<h3 class="section-h${cls}">${text}<small>${n}</small></h3>`;
   screenHead(day === today() ? L('Today') : niceDate(day), { sub: day === today() ? '' : day < today() ? L('Past day') : L('Planning ahead'), more: 'boardMenu' });
-  app.innerHTML = `<div class="board">${dateBar(day)}${all.length ? `
-    ${office() ? `<div class="stats board-stats">
-      <div class="stat"><b>${all.length}</b><span>${L('Task sheets')}</span></div>
-      <div class="stat"><b>${done}</b><span>${L('Complete')}</span></div>
-      <div class="stat"><b class="${blocked ? 'bad' : ''}">${blocked}</b><span>${L('Blocked')}</span></div>
-      <div class="stat"><b>${hrs(act)}<small> / ${hrs(est)}</small></b><span>${L('Crew-hrs actual / est.')}</span></div>
-    </div>` : ''}
+  app.innerHTML = `<div class="board">${dateBar(day, 'day', { upcoming: office() })}${all.length ? `
+    ${office() ? daySummary(list) : ''}
     ${crews.length > 1 || crewFilter ? `<div class="chips scroll crew-filter" role="group" aria-label="${L('Show crew')}">
       <button class="chip" data-act="filter" data-v="" aria-pressed="${!crewFilter}">${L('All crews')}</button>
       ${crews.map(c => `<button class="chip" data-act="filter" data-v="${esc(c)}" aria-pressed="${crewFilter === c}" style="${crewVar(c)}"><i class="dot"></i>${esc(c)}</button>`).join('')}
     </div>` : ''}
     ${toReview.length ? head(L('Finished · ready for review'), toReview.length, ' review-h') + rows(toReview) : ''}
-    ${floors.map(f => { const ts = active.filter(t => t.floor === f); return head(esc(f || L('Floor not set')), ts.length) + rows(ts); }).join('')}
+    ${floors.map(f => { const ts = active.filter(t => t.floor === f); return pieHead(esc(f || L('Floor not set')), list.filter(t => t.floor === f), ts.length, `data-floor="${esc(f)}"`) + rows(ts); }).join('')}
     ${accepted.length ? `<details class="done-group logbook"><summary>${icon('check', 'logbook-ic')}<span>${L('Accepted')}</span><small>${accepted.length}</small>${icon('chev', 'chev')}</summary>${rows(accepted)}</details>` : ''}
     ${list.length ? '' : `<p class="hint board-none">${L('No sheets for this crew on this day.')}</p>`}
     ${office() ? '' : `<button class="btn wide open-link" data-act="paste">${L('Open a link')}</button>`}
@@ -320,17 +316,50 @@ function renderBoard() {
       : `<div class="empty">${icon('today', 'empty-ic')}<h2>${L('No task sheets for {date}', { date: niceDate(day) })}</h2>
         <p>${L('Tap + to make one sheet for each crew, then send it to their phones.')}</p>
         ${prev ? `<button class="link" data-act="carryDay">${L('Copy unfinished from {date}', { date: niceDate(prev) })}</button>` : ''}</div>`}</div>`;
-  bar.innerHTML = office() ? `<button class="fab" data-act="new" aria-label="${L('New task')}">${icon('plus')}</button>` : ''; // the + floats over the list
+  bar.innerHTML = fab();
   if (crewFilter) app.querySelector('.crew-filter [aria-pressed=true]')?.scrollIntoView({ inline: 'nearest', block: 'nearest' }); // the chosen crew stays in sight
+}
+const fab = () => (office() ? `<button class="fab" data-act="new" aria-label="${L('New task')}">${icon('plus')}</button>` : ''); // the + floats over the list
+
+// A heading over sheets (a floor on the board, a day on Upcoming) with Things' project pie: their done steps over all their
+// steps, a check once every sheet is done, an empty ring when they have no steps. A screen reader hears "Level 3: 4 of 9
+// steps done". attr: the hook Magic Plus drops onto (data-floor, data-day); href: the heading opens that (a day's board).
+function pieHead(name, ts, n, attr, href = '') {
+  const steps = ts.flatMap(t => t.items), d = steps.filter(i => i.done).length, all = ts.every(t => !isOpen(t));
+  const pie = all ? `<span class="pie full" aria-hidden="true">${icon('check')}</span>` : `<span class="pie${steps.length ? '' : ' none'}" style="--p:${steps.length ? (d / steps.length).toFixed(3) : 0}" aria-hidden="true"></span>`;
+  const words = all ? L('All sheets done') : steps.length ? L('{d} of {n} steps done', { d, n: steps.length }) : '';
+  const inner = `${pie}<span class="head-name">${name}${words ? `<span class="sr">: ${esc(words)}</span>` : ''}</span><small>${n}</small>`;
+  return `<h3 class="section-h${href ? ' day-h' : ''}" ${attr}>${href ? `<a href="${href}">${inner}${icon('chev', 'chev')}</a>` : inner}</h3>`;
+}
+
+// Upcoming (office phones), as in Things: the 7 days after the board's day, each a heading with its pie (a tap opens that
+// day's board) over its sheets as board rows. Days with nothing fold into one quiet line between the headings.
+function renderUpcoming() {
+  const days = Array.from({ length: 7 }, (_, i) => addDays(day, i + 1)), tomorrow = addDays(today(), 1);
+  const quiet = ds => (ds.length ? `<p class="day-none">${esc(L('{days} · nothing planned', { days: ds.length > 1 ? L('{start} to {stop}', { start: weekday(ds[0]), stop: weekday(ds.at(-1)) }) : weekday(ds[0]) }))}</p>` : '');
+  let html = '', gap = [];
+  for (const d of days) {
+    const ts = visible().filter(t => t.date === d).sort(byFloor);
+    if (!ts.length) { gap.push(d); continue; }
+    html += quiet(gap) + pieHead(esc(d === tomorrow ? L('Tomorrow') : d === today() ? L('Today') : niceDate(d)), ts, ts.length, `data-day="${d}"`, `#day/${d}`) + `<div class="list lead">${ts.map(row).join('')}</div>`;
+    gap = [];
+  }
+  screenHead(L('Upcoming'), { sub: L('{start} to {stop}', { start: niceDate(days[0]), stop: niceDate(days[6]) }), back: { go: `day/${day}`, label: day === today() ? L('Today') : niceDate(day) } });
+  app.innerHTML = `<div class="board upcoming">${html ? html + quiet(gap) : `<div class="empty">${icon('cal', 'empty-ic')}<h2>${L('Nothing planned for the next 7 days')}</h2>
+    <button class="btn primary" data-act="new" data-day="${days[0]}">${days[0] === tomorrow ? L('New sheet for tomorrow') : L('New sheet for {date}', { date: niceDate(days[0]) })}</button></div>`}</div>`;
+  bar.innerHTML = fab();
 }
 
 // One sheet on the board: a progress pie (a check once it is done), the area and number, then a quiet line with the
 // crew, the time and the status word in its color. .tcard and .tid are what the browser checks read.
-function row(t) {
-  const [label, tone] = stage(t), n = t.items.length, d = doneCount(t);
-  const lead = !isOpen(t) ? `<span class="pie full" role="img" aria-label="${esc(label)}">${icon('check')}</span>`
+const pieOf = t => {
+  const n = t.items.length, d = doneCount(t);
+  return !isOpen(t) ? `<span class="pie full" role="img" aria-label="${esc(stage(t)[0])}">${icon('check')}</span>`
     : n ? `<span class="pie" style="--p:${(d / n).toFixed(3)}" role="img" aria-label="${esc(L('{d} of {n} steps done', { d, n }))}"></span>`
       : '<span class="pie none" aria-hidden="true"></span>';
+};
+function row(t) {
+  const [label, tone] = stage(t), lead = pieOf(t);
   const when = t12(t.pStart);
   return `<a class="row tcard${!isOpen(t) ? ' is-done' : ''}" href="#task/${esc(t.uid)}/${t.status && !t.review ? 'review' : 'assign'}" style="${crewVar(t.crew, t.crewId)}">
     <span class="row-lead">${lead}</span>
@@ -353,7 +382,7 @@ function renderTask(t) {
   const tabs = [['assign', L('Assign')], ['results', L('Crew results')], ['review', L('Review')]];
   screenHead(t.area || (t.id ? L('Task {id}', { id: t.id }) : L('New task')), {
     sub: [t.floor, t.area && t.id && L('Task {id}', { id: t.id })].filter(Boolean).join(' · '), more: crewSide ? 'crewMenu' : 'taskMenu',
-    back: openedFrom ? { go: openedFrom.v + (openedFrom.sub ? '/' + openedFrom.sub : ''), label: openedFrom.v === 'live' ? L('Live') : L('Records') } : { go: `day/${t.date}`, label: L('{date} task sheets', { date: niceDate(t.date) }) },
+    back: openedFrom ? { go: openedFrom.v + (openedFrom.sub ? '/' + openedFrom.sub : ''), label: { live: L('Live'), upcoming: L('Upcoming') }[openedFrom.v] || L('Records') } : { go: `day/${t.date}`, label: L('{date} task sheets', { date: niceDate(t.date) }) },
   });
   app.innerHTML = `<div class="tsheet">${crewSide
     ? banner(t, true) + clash(t) + brief(t) + results(t)
@@ -677,6 +706,53 @@ async function firstRun() {
   });
 }
 
+// ---------- Quick Find (shared.mjs findSheet): the search button, a pull down past the top, or "/" on a computer ----------
+// It finds only what this phone shows: on a crew phone its own sheets and its own name, never the office's records.
+// Sheets match their number, area, floor, crew, people, date, scope, drawings, steps and notes, as typed and as this
+// session has them translated; people their name and crew; days their name (shared.mjs daysNamed) or a report's text.
+const FIND_ON = ['board', 'upcoming', 'live', 'records', 'clock']; // the main screens
+const RECENT = 'schwab.recent'; // the last 5 sheets opened on this phone, newest first; a convenience, so not in backups
+const sawSheet = u => save(RECENT, [u, ...load(RECENT, []).filter(x => typeof x === 'string' && x !== u)].slice(0, 5));
+const canFind = () => FIND_ON.includes(view.v) && !setup && !document.querySelector('dialog[open]') && !document.activeElement?.matches?.('input, textarea, select');
+const strings = x => (typeof x === 'string' ? [x] : x && typeof x === 'object' ? Object.entries(x).flatMap(([k, v]) => (['date', 'lang', 'pmLang', 'status'].includes(k) ? [] : strings(v))) : []);
+function quickFind() {
+  if (stale()) return;
+  const here = today(), far = d => Math.abs(Date.parse(d) - Date.parse(here)) * 2 + (d < here); // nearest day first, a later one before an earlier
+  const has = words => x => words.every(w => x.hay.includes(w));
+  const sheets = visible().map(t => {
+    const typed = [['area', t.area], ['scope', t.scope], ['refs', t.refs], ...[...t.items, ...t.checks].map(i => [i.id, i.text]), ...['doneText', 'remain', 'comments', 'followUp', 'reply'].map(k => [k, t[k]])];
+    const texts = [t.id, t.floor || L('Floor not set'), t.crew, t.lead, ...t.members, niceDate(t.date), ...typed.flatMap(([k, s]) => [s, txCached(s, langOf(t, k))])].filter(Boolean);
+    return { t, texts, hay: nameKey(texts.join(' ')), lead: pieOf(t), title: t.area || t.id || L('New task'), tag: t.area && (t.id || L('New task')), sub: [t.crew || L('No crew yet'), t.floor, niceDate(t.date).replace(/ /g, '\u00a0')].filter(Boolean).join(' · '), // the date wraps whole
+      dot: true, style: crewVar(t.crew, t.crewId), go: `task/${t.uid}/${t.status && !t.review ? 'review' : 'assign'}` };
+  }).sort((a, b) => far(a.t.date) - far(b.t.date) || a.t.id.localeCompare(b.t.id));
+  // People: the PM opens their hours; this phone's own person, their time clock; the superintendent, their crew's sheets today.
+  const pm = isPM() && office(), mine = p => (S.workerId ? p.id === S.workerId : nameKey(p.name) === nameKey(S.worker));
+  const who = (office() ? people(S) : [personById(S, S.workerId) || { id: '', name: S.worker, crew: '', crewId: '' }]).filter(p => nameKey(p.name)).map(p => ({
+    hay: nameKey(`${p.name} ${p.crew}`), lead: `<span class="find-ini" aria-hidden="true">${esc(initials(p.name))}</span>`, style: crewVar(p.crew, p.crewId),
+    title: p.name, sub: [p.crew, pm ? L('Crew hours') : mine(p) ? L('Time clock') : ''].filter(Boolean).join(' · '),
+    go: pm || mine(p) ? `clock/${here}` : `day/${here}`, crew: pm || mine(p) ? undefined : p.crew, name: pm ? p.name : '' }));
+  const reps = (office() ? Object.values(reportsNow()) : []).filter(r => r.updatedAt).sort((a, b) => b.date.localeCompare(a.date)).map(r => {
+    const texts = [r.status && L(r.status), ...strings(r).flatMap(s => [s, txCached(s, r.lang)])].filter(Boolean);
+    return { r, texts, hay: nameKey(texts.join(' ')), lead: icon('report'), title: L('Daily report'), sub: [niceDate(r.date), r.status && L(r.status)].filter(Boolean).join(' · '), go: `report/${r.date}` };
+  });
+  const count = d => { const n = sheets.filter(x => x.t.date === d).length; return n === 1 ? L('1 task sheet') : n ? L('{n} task sheets', { n }) : ''; };
+  const rel = d => (d === here ? L('Today') : d === addDays(here, 1) ? L('Tomorrow') : d === addDays(here, -1) ? L('Yesterday') : '');
+  const days = words => {
+    const named = daysNamed(words, here);
+    return [...named.flatMap(d => [{ lead: icon('cal'), title: niceDate(d), sub: [rel(d), count(d)].filter(Boolean).join(' · '), go: `day/${d}` }, ...reps.filter(x => x.r.date === d)]),
+      ...reps.filter(x => !named.includes(x.r.date) && has(words)(x))];
+  };
+  const recent = load(RECENT, []).map(u => sheets.find(x => x.t.uid === u)).filter(Boolean);
+  findSheet(words => (!words.length ? [[L('Recent sheets'), recent]]
+    : [[L('Task sheets'), sheets.filter(has(words))], [L('People'), who.filter(has(words))], [L('Days'), days(words)]]), it => {
+    if (it.crew !== undefined) crewFilter = it.crew;
+    const was = location.hash, to = () => it.name && [...app.querySelectorAll('.card.person h2')].find(h => h.textContent === it.name)?.closest('.card').scrollIntoView({ block: 'start' }); // the PM lands on that person's hours
+    if (was !== '#' + it.go) addEventListener('hashchange', to, { once: true }); // after route() has drawn the screen
+    go(it.go);
+    if (was === '#' + it.go) to();
+  });
+}
+
 // ---------- actions ----------
 
 function menu(items) {
@@ -717,13 +793,15 @@ async function send(kind, t) {
 async function act(a, el) {
   const t = current(), v = el.dataset.v;
   switch (a) {
-    case 'new': {
-      const nt = normTask({ uid: uid(), origin: 'mine', id: nextId(T, day), date: day, by: S.me, updatedAt: Date.now() });
-      if (crewFilter) pickCrew(nt, S.crews.find(c => c.name === crewFilter));
+    case 'new': { // Magic Plus (below) puts the floor or the Upcoming day it was dropped on in data-floor / data-day
+      const date = /^\d{4}-\d{2}-\d{2}$/.test(el.dataset.day) ? el.dataset.day : day;
+      const nt = normTask({ uid: uid(), origin: 'mine', id: nextId(T, date), date, floor: el.dataset.floor, by: S.me, updatedAt: Date.now() });
+      if (crewFilter && view.v === 'board') pickCrew(nt, S.crews.find(c => c.name === crewFilter)); // the board's chosen crew (Upcoming shows every crew)
       T.push(nt);
       persist();
       return go(`task/${nt.uid}/assign`);
     }
+    case 'find': return quickFind();
     case 'toggleLang': return act('lang', { dataset: { v: getLang() === 'es' ? 'en' : 'es' } });
     case 'lockBtn':
       if (office()) { signOut(); toast(L('Office screens locked')); return needsOffice(view) ? go('day/' + day) : render(); } // a worker's time clock stays open
@@ -821,7 +899,7 @@ async function act(a, el) {
     case 'boardMenu': {
       const prev = prevDay();
       return menu(office()
-        ? [dayTasks().length && ['sendDay', L('Send day plan')], prev && ['carryDay', L('Copy unfinished work from {date}', { date: niceDate(prev) })], ['paste', L('Open a link someone sent you')],
+        ? [['upcoming', L('Upcoming')], dayTasks().length && ['sendDay', L('Send day plan')], prev &&['carryDay', L('Copy unfinished work from {date}', { date: niceDate(prev) })], ['paste', L('Open a link someone sent you')],
           dayTasks().length && ['pdfDay', L("Save this day's sheets as one PDF")], ['settings', L('Settings, crews and backup')]]
         : [['paste', L('Open a link someone sent you')], dayTasks().length && ['pdfDay', L("Save this day's sheets as one PDF")], !crewPhone() && ['lockBtn', L('Office sign-in')]]);
     }
@@ -856,6 +934,14 @@ async function act(a, el) {
     case 'fileNow': return fileTask(t);
     case 'paste': return pasteSheet(code => go('p=' + code));
     case 'settings': return go('settings');
+    case 'upcoming': return go('upcoming/' + day);
+    case 'sum': { // the day summary's ready for review and blocked (shared.mjs daySummary): to those sheets, which glow a moment
+      const ids = el.dataset.uids.split(' '), rows = [...app.querySelectorAll('a[href^="#task/"]')].filter(r => ids.includes(r.getAttribute('href').split('/')[1]));
+      rows[0]?.scrollIntoView({ block: 'center', behavior: matchMedia('(prefers-reduced-motion: reduce)').matches ? 'auto' : 'smooth' });
+      rows[0]?.focus({ preventScroll: true });
+      for (const r of rows) { r.classList.remove('glow'); void r.offsetWidth; r.classList.add('glow'); }
+      return;
+    }
     case 'addCrew': case 'delCrew': case 'backup': case 'testFolder': case 'pEdit': case 'pDel': await settingsAct(a, S, el, f => { f(S); save(KEYS.settings, S); render(); }); break; // f: a removal's Undo, on the settings as they are by then
     case 'pAdd': { // keep the keyboard up in that crew's box for the next name
       const crew = el.dataset.crew;
@@ -887,7 +973,75 @@ document.addEventListener('click', e => {
 });
 // The control as drawn again after a tap (a checkbox, a segment), found by its data attributes.
 const twin = el => (el.isConnected ? el : app.querySelector(['act', 'v', 'i', 'list', 'k'].filter(k => el.dataset[k] != null).map(k => `[data-${k}="${CSS.escape(el.dataset[k])}"]`).join('')));
-const SHELL = new Set(['toggleLang', 'lang', 'lockBtn']); // header buttons work on every screen
+const SHELL = new Set(['toggleLang', 'lang', 'lockBtn', 'find']); // header buttons work on every screen
+
+// ---------- Magic Plus (Things 3): drag the + to where the new sheet goes ----------
+// Pressed and moved past 8 px, the + lifts and follows the finger or the mouse (touch-action: none on it, so the page
+// stays still). Each floor heading on the board (data-floor) and day heading on Upcoming (data-day) is a drop target: the
+// one under the finger lights up, and near the top or bottom edge the list scrolls slowly. Let go and the + flies back to
+// its corner, then taps itself with that floor or day on it, so the sheet comes from the same tap as ever (the
+// dispatcher, busy(), act('new')); let go anywhere else and it is the plain +. A press that never lifts is a plain tap.
+const DROPS = 'h3[data-floor], h3[data-day]';
+let plus = null, plusHold = 0; // the press on the + under way; until when the browser's click after a drop is no tap
+const buzz = () => navigator.userActivation?.hasBeenActive && navigator.vibrate?.(8); // nothing on an iPhone
+const band = () => { const tb = document.getElementById('officeTabs').getBoundingClientRect(); return [document.querySelector('.top').getBoundingClientRect().bottom, tb.height ? tb.top : innerHeight]; }; // the list's part of the screen
+function plusFollow() {
+  const p = plus, [top, bottom] = band();
+  if (!p.fab.isConnected) p.fab = bar.querySelector('.fab[data-act=new]') || p.fab; // drawn again under the finger (a hub pull): carry on with the new one
+  p.fab.classList.add('lift');
+  p.fab.style.translate = `${p.x - p.x0}px ${p.y - p.y0}px`;
+  const on = (p.y > top && p.y < bottom && [...document.querySelectorAll(DROPS)].find(h => { const r = h.getBoundingClientRect(); return r.height && p.y > r.top - 14 && p.y < r.bottom + 10 && p.x > r.left - 16 && p.x < r.right + 16; })) || null;
+  if (on !== p.on) { p.on?.classList.remove('plus-on'); on?.classList.add('plus-on'); p.on = on; }
+}
+function plusEdge(p) { // once the finger has been away from both edges (the + starts by the bottom one); at most 7 px a frame
+  if (p !== plus) return; // that drag is over
+  const [top, bottom] = band(), Z = 56, v = p.y < top + Z ? p.y - top - Z : p.y > bottom - Z ? p.y - bottom + Z : 0;
+  p.armed ||= !v;
+  if (p.armed && v) { scrollBy(0, Math.sign(v) * Math.ceil(Math.min(Math.abs(v), Z) / 8)); plusFollow(); }
+  requestAnimationFrame(() => plusEdge(p));
+}
+function plusDrop(e) {
+  if (e.pointerId !== plus?.id) return;
+  const p = plus, ms = matchMedia('(prefers-reduced-motion: reduce)').matches ? 0 : 180;
+  plus = null;
+  if (!p.lifted) return; // a plain tap: its own click is the + as before
+  p.on?.classList.remove('plus-on');
+  const where = e.type === 'pointerup' && (!p.on ? {} : 'day' in p.on.dataset ? { day: p.on.dataset.day } : { floor: p.on.dataset.floor }); // a cancel makes nothing
+  plusHold = performance.now() + ms + 100;
+  p.fab.classList.replace('lift', 'fly');
+  p.fab.style.translate = '';
+  if (where) buzz();
+  setTimeout(() => {
+    p.fab.classList.remove('fly');
+    const fab = bar.querySelector('.fab[data-act=new]'); // gone: something else was tapped meanwhile
+    if (!where || !fab) return;
+    Object.assign(fab.dataset, where);
+    fab.click();
+    delete fab.dataset.day; delete fab.dataset.floor;
+  }, ms);
+}
+document.addEventListener('pointerdown', e => {
+  if (!e.isPrimary) return;
+  if (plus?.lifted) plusDrop({ pointerId: plus.id, type: 'pointercancel' }); // a drag whose end never came
+  const fab = !e.button && e.target.closest?.('.fab[data-act=new]');
+  plus = fab ? { fab, id: e.pointerId, x0: e.clientX, y0: e.clientY, x: e.clientX, y: e.clientY } : null;
+});
+document.addEventListener('pointermove', e => {
+  if (e.pointerId !== plus?.id) return;
+  Object.assign(plus, { x: e.clientX, y: e.clientY });
+  if (!plus.lifted) {
+    if (Math.hypot(plus.x - plus.x0, plus.y - plus.y0) < 8) return;
+    plus.lifted = true;
+    try { plus.fab.setPointerCapture(plus.id); } catch {} // a mouse keeps coming here off the button too
+    buzz();
+    plusEdge(plus);
+  }
+  plusFollow();
+});
+document.addEventListener('pointerup', plusDrop);
+document.addEventListener('pointercancel', plusDrop);
+// The browser's own click after a drag (a mouse, or a finger that moved only a little) is not a second +.
+document.addEventListener('click', e => { if (e.isTrusted && e.detail && (plus?.lifted || performance.now() < plusHold)) { e.preventDefault(); e.stopImmediatePropagation(); } }, true);
 
 // The sign-in ran out (or another tab locked) while this screen was up: office screens and the office board
 // go back behind the passcode before anything is saved; a worker's time clock and crew sheets stay and carry on.
@@ -1014,6 +1168,8 @@ addEventListener('visibilitychange', () => {
 });
 addEventListener('pagehide', () => { fileIfChanged(current()); fileReportIfChanged(S, day); }); // queued even if the upload can't finish; retried on next open
 app.addEventListener('toggle', sectionToggle, true);
+pullDown(canFind, quickFind, () => document.getElementById('findBtn')); // Quick Find: pull down past the top of a main screen, or "/" on a computer
+addEventListener('keydown', e => { if (e.key === '/' && !e.ctrlKey && !e.metaKey && !e.altKey && canFind()) { e.preventDefault(); quickFind(); } });
 if (isNewPhone()) firstRun().then(route); else route();
 retryUploads(S);
 </script>

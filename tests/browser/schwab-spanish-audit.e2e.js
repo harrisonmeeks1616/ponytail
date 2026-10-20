@@ -496,6 +496,17 @@ async function officeBoardNothingOpen(h) {
   await h.step('new task: send without a crew', async () => { await click(p, '[data-act=sendTask]'); await h.after(p, 'Task sheet, new and empty (Assign)'); });
 }
 
+async function upcomingScreens(h) {
+  // The 7 days after the board's day: tomorrow and next Wednesday have sheets, the days between fold into quiet lines.
+  const ahead = [task({ uid: 'zqup1', id: 'T1015-01', date: TOMO, status: '', aStart: '', aStop: '', delay: 0 }), task({ uid: 'zqup2', id: 'T1021-01', date: NEXTWK, crew: 'Crew B', status: 'Complete', review: 'Accepted' })];
+  const p = await h.open({ role: 'super', tasks: [...boardTasks('mine'), ...ahead], hash: `#upcoming/${TODAY}` });
+  await h.snap(p, 'Upcoming, with sheets');
+  await nav(p, '#upcoming/2026-10-25'); await h.snap(p, 'Upcoming, empty week'); // the button names the day
+  await nav(p, `#day/${TODAY}`); await click(p, '#titleMore [data-act=boardMenu]'); await click(p, 'dialog [data-act=upcoming]'); await h.after(p, 'Upcoming, with sheets'); // from the board's menu
+  const q = await h.open({ role: 'super', tasks: [task({ date: TODAY })], hash: `#upcoming/${TODAY}` });
+  await h.snap(q, 'Upcoming, empty week'); // from today: "for tomorrow"
+}
+
 async function officeTask(h) {
   const full = task({ uid: 'zqfull', id: 'T1014-21', review: 'Follow-up needed', reviewer: 'ZQDana', followUp: 'ZQfollowup' });
   const working = task({ uid: 'zqwork', id: 'T1014-23', status: '', aStop: '', delay: 0, resultAt: 0 });
@@ -1133,6 +1144,7 @@ const SCREENS = [
   ['Crew task sheets', crewTaskScreens],
   ['Office board', officeBoard],
   ['Office board, nothing open, new task', officeBoardNothingOpen],
+  ['Upcoming, full and empty', upcomingScreens],
   ['Task sheet tabs, menus, asks, share', officeTask],
   ['Share sheet, long link', longLink],
   ['Task sheet with the review folder', officeTaskWithFolder],

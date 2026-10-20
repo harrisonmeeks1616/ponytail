@@ -776,4 +776,42 @@ export default {
   'You also entered this day by hand, and both count. If it is the same work, remove one.': 'Usted también agregó este día a mano, y los dos cuentan. Si es el mismo trabajo, quite uno.',
   "1 shift from a worker's phone is on a day you also entered by hand, and both count. Remove one first if it is the same work, or send anyway?": '1 turno del teléfono de un trabajador cae en un día que usted también agregó a mano, y los dos cuentan. ¿Quiere quitar uno primero si es el mismo trabajo, o enviar así?',
   "{n} shifts from workers' phones are on days you also entered by hand, and both count. Remove one first where it is the same work, or send anyway?": '{n} turnos de teléfonos de trabajadores caen en días que usted también agregó a mano, y los dos cuentan. ¿Quiere quitar uno primero donde sea el mismo trabajo, o enviar así?',
+
+  // Things board
+  '1 sheet': '1 hoja',
+  '{n} sheets': '{n} hojas',
+  '1 crew': '1 cuadrilla',
+  '{n} crews': '{n} cuadrillas',
+  '1 ready for review': '1 lista para revisar',
+  '{n} ready for review': '{n} listas para revisar',
+  '1 blocked': '1 bloqueada',
+  '{n} blocked': '{n} bloqueadas',
+  '1 working': '1 trabajando',
+  '{n} working': '{n} trabajando',
+  '{act} of {est} crew-hrs': '{act} de {est} horas-cuadrilla',
+  'On site now: {people}': 'En la obra ahora: {people}',
+  'On site now: {people} in {crews}': 'En la obra ahora: {people} en {crews}',
+  'Upcoming': 'Próximos días',
+  'Tomorrow': 'Mañana',
+  '{days} · nothing planned': '{days} · nada planeado',
+  'All sheets done': 'Todas las hojas terminadas',
+  'Nothing planned for the next 7 days': 'Nada planeado para los próximos 7 días',
+  'New sheet for tomorrow': 'Nueva hoja para mañana',
+  'New sheet for {date}': 'Nueva hoja para el {date}',
+
+  // Quick Find
+  'Search': 'Buscar',
+  'Quick Find': 'Búsqueda rápida',
+  'Search sheets, people and days': 'Buscar hojas, personas y días',
+  'Recent sheets': 'Hojas recientes',
+  'Days': 'Días',
+  'Show all': 'Mostrar todo',
+  'No matches for “{q}”': 'No hay resultados para “{q}”',
+  'Try a room, a name or a day, like “tomorrow”.': 'Pruebe con un cuarto, un nombre o un día, como “mañana”.',
+  'Yesterday': 'Ayer',
+  '1 result': '1 resultado',
+  '{n} results': '{n} resultados',
+
+  // Quick Find
+  'Sheets, people and days': 'Hojas, personas y días',
 };

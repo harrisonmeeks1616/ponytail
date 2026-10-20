@@ -33,7 +33,7 @@
 //   paste      hubSettingsView on a phone with no hub offers the app's own data-act="paste" (Open a link someone sent you)
 
 import { KEYS, COMPANY, L, getLang, esc, iso, addDays, niceDate, t12, fmtMin, worked, nameKey, crewVar, field, sheet, ask, choose, sendSheet, download, load, save, personById, crewById,
-  screenHead, icon, initials, setSec, actRow, UNDO_MS, people, langOf } from './shared.mjs';
+  screenHead, icon, initials, setSec, actRow, UNDO_MS, people, langOf, daySummary } from './shared.mjs';
 import { monday, shiftMin, byPerson, personKey, timesheetCsv } from './report.mjs';
 import { duplicateShortIds } from './sync.mjs';
 
@@ -251,6 +251,8 @@ export function statusDot(status, l = getLang(), go = 'settings', badge = false)
 const mem = new Map(), MEM_MAX = 400;
 const memGet = (f, t, s) => mem.get(`${f}>${t}|${s}`);
 const memPut = (f, t, s, v) => { mem.set(`${f}>${t}|${s}`, v); if (mem.size > MEM_MAX) mem.delete(mem.keys().next().value); };
+// The translation this session already has of a text, '' if none (Quick Find searches what the reader sees).
+export const txCached = (text, from, viewer = getLang()) => (lg(from) === lg(viewer) ? '' : memGet(lg(from), lg(viewer), String(text ?? '')) || '');
 
 function txInner(mode, state, orig, trans, toggle = true) { // every piece of text is escaped here
   const o = esc(orig), t = esc(trans);
@@ -331,10 +333,7 @@ export function liveView(ctx) {
         <span>${esc(updated ? L('Updated {ago}', { ago: ago(updated, now) }) : L('Waiting for the first update'))}</span></p><button class="link" data-act="liveRefresh">${L('Refresh')}</button></div>
       ${st.pending ? `<p class="hint">${esc(L('{n} not sent yet', { n: st.pending }))}</p>` : ''}
       ${(st.state === 'offline' || st.state === 'error') && st.message ? `<p class="hint">${esc(st.message)}</p>` : ''}`;
-  const review = sheets.filter(t => t.status && !t.review).length, working = sheets.filter(t => t.aStart && !t.status).length;
-  const stats = `<div class="stats three live-stats"><div class="stat"><b>${here.length}</b><span>${L('On site')}</span></div>
-    <div class="stat"><b>${working}</b><span>${L('Active')}</span></div>
-    <div class="stat"><b class="${review ? 'warn' : ''}">${review}</b><span>${L('To review')}</span></div></div>`;
+  const stats = daySummary(sheets, here); // the board's quiet line, with who is on site
   const site = siteCard(S, here);
   const groups = groupByCrew(sheets, S.crews.map(c => c.name));
   const board = sheets.length ? groups.map(g => `<h4 class="live-crew" style="${crewVar(S, g.crew)}"><span><i class="dot"></i> ${esc(g.crew || L('No crew yet'))}</span>
