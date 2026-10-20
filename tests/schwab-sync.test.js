@@ -1078,7 +1078,7 @@ test('the app hears about every change after it is saved, and a first-time role 
 
 test('every phrase sync.mjs shows has Spanish with the same placeholders, and no Spanish entry is left over', async () => {
   const dir = path.join(__dirname, '..', 'docs', 'schwab'), src = fs.readFileSync(path.join(dir, 'sync.mjs'), 'utf8');
-  const file = process.env.ES_SYNC_JSON || '/tmp/claude-0/-home-user-ponytail/a49885c6-54fd-5839-a3da-110b17505f82/scratchpad/es/es-sync.json'; // until integration folds it into es.mjs
+  const file = process.env.ES_SYNC_JSON || ''; // optional extra entries not yet in es.mjs
   const idFile = file.replace(/es-sync\.json$/, 'es-identity-client.json'); // this round's new phrases, the same way
   const read = f => (fs.existsSync(f) ? JSON.parse(fs.readFileSync(f, 'utf8')) : {}), extra = read(file);
   const ES = { ...(await import('../docs/schwab/es.mjs')).default, ...read(idFile), ...extra };

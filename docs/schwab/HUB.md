@@ -167,7 +167,7 @@ Settings gain `hubUrl`, `hubKey`, `hubRole` (set after `whoami`), `hubCrew` (cre
 
 ## Security checklist (the review will check each)
 
-- Keys never in URLs, logs, errors or the Sheet; PM key hash only; constant-time compare; bad-key throttle.
+- Keys never in URLs, logs, errors or the Sheet; PM key hash only; constant-time compare; a wrong key only ever gets 'unauthorized' (no global breaker, so one bad caller cannot lock out every phone); pushes are capped per role and per device.
 - Role checks on every action server side; entity fields filtered by owner; crews cannot read other people's hours or any reports.
 - Every inbound entity validated (types, caps, uid / date / time formats, strings clipped) before it is stored; Sheet writes RAW.
 - Responses never include other roles' secrets; errors never echo submitted data; no stack traces.
