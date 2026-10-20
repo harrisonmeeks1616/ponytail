@@ -100,11 +100,12 @@ async function importHours(p) {
         check(await q.locator('[data-k="r.pmReview"]').isEnabled(), `${lang}: ${role || 'no-hub'} PM report review remains editable`);
         if (!role) {
           const invite = await code(q, { v: 1, kind: 'join', role: 'super', hub: { url: HUBURL, key: keys.super } });
-          await nav(q, '#p=' + invite, 'dialog [data-join]');
-          await q.click('dialog [data-join]');
-          await q.waitForFunction(() => document.querySelector('dialog [data-err]')?.textContent);
-          const message = await q.locator('dialog [data-err]').textContent();
+          await nav(q, '#p=' + invite); // refused at once, with no Join sheet first (GATE4-01)
+          await q.waitForFunction(() => document.getElementById('toast')?.textContent?.trim());
+          const message = await q.locator('#toast').textContent();
+          check(!(await q.locator('dialog [data-join]').count()), lang + ': a PM tablet gets no Join sheet for a superintendent invite');
           check(lang === 'en' ? /superintendent invite/i.test(message) && !/not the PM key/.test(message) : /invitación para el superintendente/i.test(message), lang + ': a PM tablet identifies the refused superintendent invite correctly: ' + message.trim());
+          check(!(await local(q, 'schwab.settings'))?.hubKey, lang + ': no key is stored from the refused invite');
           check(await q.evaluate(() => import('./sync.mjs').then(m => m.hubStatus().state)) === 'off', lang + ': refusing the wrong invite leaves the tablet disconnected');
         }
         await q.context().close();
