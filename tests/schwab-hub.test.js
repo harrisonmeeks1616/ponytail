@@ -698,6 +698,11 @@ test('shift, PM rules: edits, renames and removals stick; stored as sent; the cl
   assert.equal(rowsOf(env.hub, 'Hours').find(x => x.Date === '2026-10-17')['Clock out'], '16:00');
   r = ok(pm.push({ shifts: [{ ...bc, out: '16:30', edited: { who: false, in: false, out: true }, pmAt: T0 + 6, base: bc }] }));
   assert.equal(r.shifts[0].shift.out, '16:30', 'a time the PM typed still lands');
+  // A shift the PM added (no device) is the PM's alone: its Out box cleared with a base stands, as Crew hours allows.
+  ok(pm.push({ shifts: [shift({ id: 'hand2', device: '', who: 'Ana P', date: '2026-10-16', in: '07:00', out: '16:00', edited: { who: true, in: true, out: true }, pmAt: T0 + 7 })] }));
+  const bh = stored(env.hub, 'hand2');
+  r = ok(pm.push({ shifts: [{ ...bh, out: '', edited: { ...bh.edited, out: false }, pmAt: T0 + 8, base: bh }] }));
+  assert.deepEqual([r.shifts[0].shift.out, r.shifts[0].shift.device], ['', ''], 'a PM-added shift can be cleared');
   // The device never changes after the shift exists.
   r = ok(pm.push({ shifts: [{ ...stored(env.hub, 'b'), device: 'someone-else', who: 'Renamed', edited: { who: true, in: true, out: false } }] }));
   assert.equal(r.shifts[0].shift.device, crew.dev);
