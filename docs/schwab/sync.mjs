@@ -351,7 +351,11 @@ export function makeSync(o = {}) {
   function ack(st, it, res, back) { // back: the hub's merged copies that differ from what went up (pushPhase merges them)
     const rec = ent(st[it.k], it.key);
     if (!res) return 0;
-    if (res.status === 'rejected' && res.reason !== 'archived') { // reported once per version of the sheet; left alone until it changes
+    // archived: the hub keeps it in its archive sheet, as good as synced for a copy; a part changed since the hub's copy (its base) is a
+    // real edit that will never land, so it is refused like any other: kept here, said once, never pruned. A copy with no base (a
+    // restored phone) is not an edit the hub lost.
+    const edit = res.reason === 'archived' && Object.keys(it.sent).some(p => { const s = it.sent[p], fn = PARTS[it.k]?.find(x => x[0] === p)?.[1], b = s.b ?? (it.k === 'm' ? it.wire.base : undefined); return isObj(b) && hs(fn ? fn(b) : shiftPart(b, true)) !== s.h; });
+    if (res.status === 'rejected' && (res.reason !== 'archived' || edit)) { // reported once per version of the sheet; left alone until it changes
       let fresh = 0; // a record the PM deleted is refused too, and leaves this phone as its tombstone would (pushPhase): no notice
       for (const p in it.sent) { ent(rec, p).x = it.sent[p].h; const tk = `${it.k}:${it.key}:${p}`; if (st.told[tk] !== it.sent[p].h && res.reason !== 'deleted') { st.told[tk] = it.sent[p].h; fresh = 1; } }
       for (const k of Object.keys(st.told).slice(0, -200)) delete st.told[k];

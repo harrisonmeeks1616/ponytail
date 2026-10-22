@@ -2277,6 +2277,30 @@ test('against the real hub/Code.gs: after the PM clears a day\'s report the real
   assert.deepEqual([sp.toasts, pm.toasts], [[], []]);
 });
 
+test('against the real hub/Code.gs: an edit to a record the PM archived is refused and kept here, said once; an unchanged copy with no base is not', async () => {
+  const { mock, k, real } = realHub();
+  const sp = await makePhone(real, 'super', { key: k.super }), pm = await makePhone(real, 'pm', { key: k.pm });
+  const step = async (...ps) => { for (const p of ps) { mock.advance(5e3); await p.cycle(); } };
+  const date = ago(40);
+  sp.editReport(date, r => Object.assign(r, { status: 'On plan', results: 'Old day', decisions: [{ q: 'Lift?', rec: '', by: '', pm: '', pmNote: '' }] }));
+  await step(sp, pm, sp, pm);
+  assert.equal(pm.reports()[date].decisions[0].q, 'Lift?', 'the PM phone holds the report, with its base');
+  assert.equal((await pm.sync.archive(ago(35))).ok, true);
+  pm.editReport(date, r => { r.decisions[0].pm = 'Approved'; });
+  await step(pm, pm);
+  assert.equal(pm.reports()[date].decisions[0].pm, 'Approved', 'the answer stays on the phone');
+  assert.ok(pm.hubSync().r[date].pm.x, 'refused, so it is never pruned as a clean copy');
+  assert.equal(pm.toasts.filter(t => t.includes('did not accept')).length, 1, 'said once');
+  assert.ok(!mock.entities('Reports').some(r => r.date === date), 'the archived report is not revived on the live sheet');
+  // A phone restored without its sync record pushes an unchanged copy of the archived report: as good as synced, no notice.
+  const pm2 = await makePhone(real, 'pm', { key: k.pm });
+  pm2.save('schwab.reports', { [date]: clone(sp.reports()[date]) });
+  await step(pm2, pm2);
+  assert.deepEqual(pm2.toasts, []);
+  assert.equal(pm2.hubSync().r[date]?.sup?.x, undefined, 'not refused');
+  assert.ok(!mock.entities('Reports').some(r => r.date === date), 'still not revived');
+});
+
 test('against the real hub/Code.gs: a crew phone that opened its sheet from the text keeps its base, so its taps and another phone\'s both survive', async () => {
   const { mock, k, real } = realHub();
   const sp = await makePhone(real, 'super', { key: k.super }), x = await makePhone(real, 'crew', { key: k.crew, crew: 'Crew A' }), y = await makePhone(real, 'crew', { key: k.crew, crew: 'Crew A' });
