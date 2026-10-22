@@ -855,8 +855,12 @@ function mergeShift_(ctx, stored, inc) {
       }
     } else s = clone_(stored);
     if (stored) { s.at = Math.max(stored.at, inc.at); s.pmAt = Math.max(stored.pmAt, inc.pmAt); }
-    ev.push([stored ? (s.gone && !stored.gone ? 'pm.remove' : 'pm.edit') : 'pm.add', 'PM',
-      line(!stored ? 'PM added a shift for' : s.gone && !stored.gone ? 'PM removed a shift for' : 'PM edited', s), s.id]);
+    if (!stored && inc.device !== '' && !edited_(inc) && !inc.gone) { // a worker's own punch relayed by the PM phone (an hours text opened there): the worker's event, as from their phone
+      ev.push([s.out ? 'clock.out' : 'clock.in', s.who, s.who + (s.out ? ' clocked out at ' + t12_(s.out) : ' clocked in at ' + t12_(s.in)) + ', ' + s.date, s.id]);
+    } else {
+      ev.push([stored ? (s.gone && !stored.gone ? 'pm.remove' : 'pm.edit') : 'pm.add', 'PM',
+        line(!stored ? 'PM added a shift for' : s.gone && !stored.gone ? 'PM removed a shift for' : 'PM edited', s), s.id]);
+    }
   }
   return { obj: s, events: ev };
 }

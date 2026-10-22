@@ -754,6 +754,18 @@ test('a PM can undo removing their own unedited shift; a stale clock stream or a
   assert.equal(rowsOf(env.hub, 'Weekly totals')[0].Shifts, 1, 'the restored shift counts again');
 });
 
+test('a worker\'s punch relayed by the PM phone (an hours text opened there) is logged as the worker\'s clock event, not as a PM add', () => {
+  const env = setup(), pm = phone(env, 'pm', 'pm-dev');
+  ok(pm.push({ shifts: [shift({ id: 'relayed', device: ID('crew-dev'), who: 'Luis M', date: '2026-10-19', in: '06:30', out: '', edited: { who: false, in: false, out: false }, pmAt: T0 - 50 })] }));
+  ok(pm.push({ shifts: [shift({ id: 'relayed2', device: ID('crew-dev'), who: 'Luis M', date: '2026-10-18', in: '06:30', out: '15:45', edited: { who: false, in: false, out: false }, pmAt: T0 - 40 })] }));
+  ok(pm.push({ shifts: [shift({ id: 'byhand', device: '', who: 'Ana P', date: '2026-10-19', in: '07:00', out: '15:30', edited: { who: true, in: true, out: true }, pmAt: T0 - 30 })] }));
+  const what = rowsOf(env.hub, 'Activity').map(x => x.What);
+  assert.ok(what.includes('Luis M clocked in at 6:30 AM, 2026-10-19'), 'a clock-in relayed by the PM phone reads as the worker\'s');
+  assert.ok(what.includes('Luis M clocked out at 3:45 PM, 2026-10-18'), 'a relayed clock-out too');
+  assert.ok(!what.some(w => /PM added a shift for Luis M/.test(w)), 'never as a PM add');
+  assert.ok(what.includes('PM added a shift for Ana P, 2026-10-19'), 'a shift the PM entered by hand still is one');
+});
+
 test('DATA2-03: a phone\'s real punches are kept when the PM already entered that day by hand, for the PM to see and settle', () => {
   const env = setup(), crew = phone(env, 'crew', 'crew-dev'), pm = phone(env, 'pm', 'pm-dev');
   ok(pm.push({ shifts: [shift({ id: 'pm1', device: '', who: 'ana p', date: '2026-10-12', in: '07:00', out: '15:30', edited: { who: true, in: true, out: true } })] }));
