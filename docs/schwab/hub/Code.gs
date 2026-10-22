@@ -744,7 +744,9 @@ function takes_(base, newer, mine, was, cur) { const j = JSON.stringify; return 
 function key_(x) { return isObj_(x) ? x.id || '#' + nameKey_(x.name) : String(x); } // an id; a crew from an older phone by name; a floor or check as itself
 function changedSince_(s, b) { // a stored entry's office fields differ from the base's (a step's done and at are the crew's ticks, not an edit)
   if (!isObj_(s) || !isObj_(b)) return JSON.stringify(s) !== JSON.stringify(b);
-  return Object.keys(b).some(function (f) { return f !== 'done' && f !== 'at' && JSON.stringify(s[f]) !== JSON.stringify(b[f]); });
+  // a crew's members text is rewritten from the roster by every phone (shared.mjs syncMembers), so it differs from phone to phone
+  // with nobody editing the crew: it never keeps a crew a phone took out
+  return Object.keys(b).some(function (f) { return f !== 'done' && f !== 'at' && f !== 'members' && JSON.stringify(s[f]) !== JSON.stringify(b[f]); });
 }
 function list3_(stored, mine, base, newer) {
   if (!base) return mine;

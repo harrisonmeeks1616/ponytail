@@ -2930,3 +2930,29 @@ test('a sheet or report deleted here waits out its Undo hidden: another phone\'s
   assert.equal(s2.task(u3)?.scope, 'B on third', 'the hub said no: the sheet is back, as the hub has it');
   assert.deepEqual([s2.hubSync().del, s2.hubSync().held], [{}, {}]);
 });
+
+test('a crew one office phone takes out stays out after people were added to it from two phones: its members text is the roster\'s, not an edit', async () => {
+  const { mock, k, real } = realHub();
+  const sp = await makePhone(real, 'super', { key: k.super }), pm = await makePhone(real, 'pm', { key: k.pm });
+  const step = async (...ps) => { for (const p of ps) { mock.advance(5e3); await p.cycle(); } };
+  sp.save('schwab.settings', { ...sp.settings(), crews: [{ id: 'cA', name: 'Crew A', lead: '', members: '' }, { id: 'cT', name: 'Hub Test A', lead: '', members: '' }], people: [{ id: 'p1', name: 'Ana R', crewId: 'cA' }] });
+  await step(sp, pm, sp);
+  assert.deepEqual(pm.settings().crews.map(c => c.name), ['Crew A', 'Hub Test A']);
+  // from the same base, each phone puts a person on the test crew; both go up, and every phone rewrites the crew's members text from its own roster
+  const add = (p, id, name, crewId) => p.save('schwab.settings', { ...p.settings(), people: [...p.settings().people, { id, name, crewId }] });
+  add(sp, 'p2', 'Beto L', 'cT'); add(pm, 'p3', 'Cris M', 'cT');
+  await step(sp, pm, sp, pm);
+  assert.deepEqual([sp.settings().people.map(x => x.name).sort(), pm.settings().people.map(x => x.name).sort()], [['Ana R', 'Beto L', 'Cris M'], ['Ana R', 'Beto L', 'Cris M']]);
+  // the superintendent takes the test crew out: it stays out on the hub and on both phones, and its people wait under no crew
+  sp.save('schwab.settings', { ...sp.settings(), crews: sp.settings().crews.filter(c => c.id !== 'cT') });
+  await step(sp, pm, sp, pm);
+  assert.deepEqual([sp.settings().crews.map(c => c.name), pm.settings().crews.map(c => c.name)], [['Crew A'], ['Crew A']], 'removed stays removed on both phones');
+  assert.deepEqual(pm.settings().people.filter(x => x.name !== 'Ana R').map(x => x.crewId), ['', ''], 'its people are kept, on no crew');
+  // a crew the other phone changed since (a lead typed on it) still stays, changed, as before
+  pm.save('schwab.settings', { ...pm.settings(), crews: [...pm.settings().crews, { id: 'cU', name: 'Crew U', lead: '', members: '' }] });
+  await step(pm, sp, pm);
+  pm.save('schwab.settings', { ...pm.settings(), crews: pm.settings().crews.map(c => (c.id === 'cU' ? { ...c, lead: 'Lead U' } : c)) });
+  sp.save('schwab.settings', { ...sp.settings(), crews: sp.settings().crews.filter(c => c.id !== 'cU') });
+  await step(pm, sp, pm, sp);
+  assert.deepEqual([sp.settings().crews.map(c => [c.name, c.lead]), pm.settings().crews.map(c => [c.name, c.lead])], [[['Crew A', ''], ['Crew U', 'Lead U']], [['Crew A', ''], ['Crew U', 'Lead U']]], 'a crew the other phone edited meanwhile stays, with the edit');
+});
