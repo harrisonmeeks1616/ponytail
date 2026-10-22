@@ -21,7 +21,7 @@ const DAY = dayOf(T0);
 const ago = days => { const d = new Date(T0); d.setDate(d.getDate() - days); return dayOf(d.getTime()); };
 const settle = async (n = 4) => { for (let i = 0; i < n; i++) await new Promise(r => setImmediate(r)); };
 const clone = x => JSON.parse(JSON.stringify(x));
-const O_KEYS = ['id', 'date', 'by', 'floor', 'area', 'crew', 'crewId', 'members', 'memberIds', 'size', 'scope', 'refs', 'allot', 'allotNote', 'est', 'estNote', 'pStart', 'pStop', 'checkIn', 'review', 'reviewer', 'followUp', 'reply', 'replyAt', 'replyBy', 'aLang', 'aLangs', 'sentAt'];
+const O_KEYS = ['from', 'id', 'date', 'by', 'floor', 'area', 'crew', 'crewId', 'members', 'memberIds', 'size', 'scope', 'refs', 'allot', 'allotNote', 'est', 'estNote', 'pStart', 'pStop', 'checkIn', 'review', 'reviewer', 'followUp', 'reply', 'replyAt', 'replyBy', 'aLang', 'aLangs', 'sentAt'];
 const C_KEYS = ['lead', 'aStart', 'aStop', 'delay', 'status', 'doneText', 'remain', 'comments', 'cLang', 'cLangs', 'resultAt'];
 // A phone is its device secret; the device id is the first 32 hex characters of its SHA-256 (HUB.md, Identity).
 const devOf = secret => (typeof secret === 'string' && /^[A-Za-z0-9]{32}$/.test(secret) ? nodeCrypto.createHash('sha256').update(secret).digest('hex').slice(0, 32) : '');
@@ -2275,6 +2275,27 @@ test('against the real hub/Code.gs: after the PM clears a day\'s report the real
   await step(pm, pm);
   assert.deepEqual([pm.task(uid), mock.entities('Tasks').some(t => t.uid === uid), pm.sync.hubStatus().pending], [undefined, false, 0]);
   assert.deepEqual([sp.toasts, pm.toasts], [[], []]);
+});
+
+test('against the real hub/Code.gs: a crew phone that opened its sheet from the text keeps its base, so its taps and another phone\'s both survive', async () => {
+  const { mock, k, real } = realHub();
+  const sp = await makePhone(real, 'super', { key: k.super }), x = await makePhone(real, 'crew', { key: k.crew, crew: 'Crew A' }), y = await makePhone(real, 'crew', { key: k.crew, crew: 'Crew A' });
+  const step = async (...ps) => { for (const p of ps) { mock.advance(5e3); await p.cycle(); } };
+  const uid = sp.addTask({ sentAt: sp.now(), items: [{ id: 'i1', text: 'Pull wire' }, { id: 'i2', text: 'Install box' }, { id: 'i3', text: 'Label' }] });
+  await step(sp, x); // X pulled the sheet from the hub
+  // Y had no signal and opened the Send-to-crew text: tasks.html stores the copy and records it as the base, as the office branch does
+  const copy = clone(sp.task(uid));
+  assert.equal(await y.sync.fromText('t', uid, 'assign', copy.assignAt || copy.sentAt, 0, copy), true);
+  y.save('schwab.tasks', [{ ...copy, origin: 'link', gotAt: y.now() }]);
+  y.net.down = true;
+  x.tick(uid, 'i1'); await step(x); // X's tap reaches the hub first
+  y.tick(uid, 'i2'); await step(y); // Y's tap, stamped later, waits for signal
+  y.net.down = false;
+  await step(y, x, y);
+  const done = t => t.items.map(i => i.done);
+  assert.deepEqual(done(mock.entities('Tasks').find(t => t.uid === uid)), [true, true, false], 'the hub has both taps: Y sent its crew part with a base, so only its own change went in');
+  assert.deepEqual([done(x.task(uid)), done(y.task(uid))], [[true, true, false], [true, true, false]], 'both phones agree');
+  assert.deepEqual(y.toasts, []);
 });
 
 test('against the real hub/Code.gs: a crew phone keeps a sheet texted to it for another crew, and work on a sheet that left its crew until that work went up', async () => {

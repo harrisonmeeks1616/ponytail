@@ -34,7 +34,7 @@ const SHEET_OK = /^https:\/\/docs\.google\.com\/spreadsheets\/[\w\-/.?=&#%]{0,25
 const sheetUrl = u => (typeof u === 'string' && SHEET_OK.test(u) ? u : '');
 const CFG_TPL = { project: '', site: '', super: '', pm: '', floors: [''], crews: [{ id: '', name: '', lead: '', members: '' }], people: [{ id: '', name: '', crewId: '' }], checks: [''], pin: '' };
 
-export const A_KEYS = ['id', 'date', 'by', 'floor', 'area', 'crew', 'crewId', 'members', 'memberIds', 'size', 'scope', 'refs', 'allot', 'allotNote', 'est', 'estNote', 'pStart', 'pStop', 'checkIn',
+export const A_KEYS = ['from', 'id', 'date', 'by', 'floor', 'area', 'crew', 'crewId', 'members', 'memberIds', 'size', 'scope', 'refs', 'allot', 'allotNote', 'est', 'estNote', 'pStart', 'pStop', 'checkIn',
   'review', 'reviewer', 'followUp', 'reply', 'replyAt', 'replyBy', 'aLang', 'aLangs', 'sentAt'];
 export const C_KEYS = ['lead', 'aStart', 'aStop', 'delay', 'status', 'doneText', 'remain', 'comments', 'cLang', 'cLangs', 'resultAt'];
 const ticks = l => l.filter(i => i.done || i.at).map(i => [i.id, i.done, i.at]); // unticked steps are left out, so a new step is not an edit
@@ -415,7 +415,7 @@ export function makeSync(o = {}) {
       took[p] = 1;
     }
     if (!Object.keys(took).length) return loc;
-    const out = loc ? structuredClone(loc) : { ...inc, origin: role === 'crew' ? 'link' : 'mine', from: '', gotAt: ts, filedAt: 0, updatedAt: 0 };
+    const out = loc ? structuredClone(loc) : { ...inc, origin: role === 'crew' ? 'link' : 'mine', gotAt: ts, filedAt: 0, updatedAt: 0 }; // from (the sheet this one carried) comes with the office part, so a second office phone does not carry it again
     if (loc) {
       for (const k of took.assign ? A_KEYS : []) out[k] = inc[k];
       for (const k of took.crew ? C_KEYS : []) out[k] = inc[k];

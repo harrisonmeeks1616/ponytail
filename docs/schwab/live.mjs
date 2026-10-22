@@ -615,7 +615,7 @@ function oldReport(ctx, r) {
 // ---------- Records: export, week CSV, hub storage ----------
 
 export const meter = s => { const pct = s.cellLimit > 0 ? Math.min(100, Math.round(s.cells / s.cellLimit * 100)) || 0 : 0; return { pct, warn: pct >= 70 }; };
-const MIN_ARCHIVE_DAYS = 30; // never archive what crews and the office are still working with
+const MIN_ARCHIVE_DAYS = 60; // never archive what crews and the office are still working with: the office phones hold 60 days (sync.mjs winDays), and an edit to an archived record is refused
 
 function toolsCard(ctx) {
   if (ctx.role !== 'pm') return '';
@@ -870,7 +870,7 @@ async function rotate(ctx, role) {
 async function archive(ctx) {
   const before = $('recArch')?.value || '', limit = addDays(dayOf(nowOf(ctx)), -MIN_ARCHIVE_DAYS);
   if (!/^\d{4}-\d{2}-\d{2}$/.test(before) || addDays(before, 0) !== before) return ctx.toast(L('Pick a date'), 'bad');
-  if (before > limit) return ctx.toast(L('Pick a date at least 30 days back.'), 'bad');
+  if (before > limit) return ctx.toast(L('Pick a date at least 60 days back.'), 'bad');
   if (!await (ctx.ask || ask)(L('Move everything before {date} from the hub into an archive Sheet? It leaves the live Sheet and stops syncing to phones.', { date: niceDate(before) }), L('Archive'), 'danger')) return;
   ui.busy = 'archive';
   ctx.render();

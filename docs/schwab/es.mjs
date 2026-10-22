@@ -678,7 +678,7 @@ export default {
   'superintendent': 'superintendente',
   'Replace key': 'Cambiar clave',
   'New key made. Send new invite links.': 'Clave nueva creada. Envíe enlaces de invitación nuevos.',
-  'Pick a date at least 30 days back.': 'Escoja una fecha de al menos 30 días atrás.',
+  'Pick a date at least 60 days back.': 'Escoja una fecha de al menos 60 días atrás.',
   'Move everything before {date} from the hub into an archive Sheet? It leaves the live Sheet and stops syncing to phones.': '¿Pasar todo lo anterior al {date} del sistema central a una hoja de archivo? Sale de la hoja principal y deja de sincronizarse con los teléfonos.',
   'Archive': 'Archivar',
   'Archived': 'Archivado',

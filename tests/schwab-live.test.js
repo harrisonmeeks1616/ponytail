@@ -648,7 +648,7 @@ test('recordsView: older records and storage appear only with a hub the role may
   assert.match(hubPm, /data-act="recOlder" data-kind="tasks"/);
   assert.match(hubPm, /Hub storage/);
   assert.match(hubPm, /Open the Google Sheet/);
-  assert.match(hubPm, /id="recArch" value="2026-07-21" max="2026-09-19"/, 'archive defaults to 90 days back and cannot pick the last 30');
+  assert.match(hubPm, /id="recArch" value="2026-07-21" max="2026-08-20"/, 'archive defaults to 90 days back and cannot pick the last 60 (what the office phones still hold)');
   const sync = mkSync();
   sync.status.role = 'super';
   const sup = live.recordsView(mkCtx({ sync, role: 'super' }), 'sheets');
@@ -925,20 +925,20 @@ test('PHONE-UX-16: the PM\'s Disconnect says the PM key was shown only once, off
     assert.deepEqual([said, sup.calls], [['Disconnect this phone from the hub? Your work stays on this phone.'], []]);
   } finally { delete globalThis.navigator.clipboard; }
 });
-test('archive: a real date, at least 30 days back, asked first', () => withDoc({ recArch: { value: '' } }, async () => {
+test('archive: a real date, at least 60 days back, asked first', () => withDoc({ recArch: { value: '' } }, async () => {
   const box = globalThis.document.getElementById('recArch'), ctx = mkCtx(), el = { dataset: {} };
-  for (const bad of ['', 'soon', '2026-02-30', '2026-09-20', '2026-10-19']) {
+  for (const bad of ['', 'soon', '2026-02-30', '2026-09-19', '2026-10-19']) {
     box.value = bad;
     await live.act(ctx, 'recArchive', el);
   }
   assert.equal(ctx.sync.calls.length, 0);
   assert.equal(toasts(ctx).length, 5);
-  box.value = '2026-09-19';
+  box.value = '2026-08-20';
   const no = mkCtx({ ask: async () => false });
   await live.act(no, 'recArchive', el);
   assert.equal(no.sync.calls.length, 0);
   await live.act(ctx, 'recArchive', el);
-  assert.deepEqual(ctx.sync.calls, [['archive', '2026-09-19']]);
+  assert.deepEqual(ctx.sync.calls, [['archive', '2026-08-20']]);
   assert.match(live.recordsView(ctx, 'sheets'), /Rows archived: 3/);
 }));
 test('refresh and sync now run a cycle and redraw; a failure turns the button back on', async () => {

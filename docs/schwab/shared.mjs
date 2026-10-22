@@ -253,7 +253,7 @@ export function typedIn(t, k, l) {
   return t;
 }
 
-const ASSIGN = ['id', 'date', 'by', 'floor', 'area', 'crew', 'crewId', 'members', 'memberIds', 'size', 'scope', 'refs', 'aLang', 'aLangs', 'allot', 'allotNote', 'est', 'estNote', 'pStart', 'pStop', 'checkIn', 'reply', 'replyAt', 'replyBy'];
+const ASSIGN = ['from', 'id', 'date', 'by', 'floor', 'area', 'crew', 'crewId', 'members', 'memberIds', 'size', 'scope', 'refs', 'aLang', 'aLangs', 'allot', 'allotNote', 'est', 'estNote', 'pStart', 'pStop', 'checkIn', 'reply', 'replyAt', 'replyBy']; // from: the sheet this one carried, so every office phone knows it was carried
 const CREW = ['lead', 'aStart', 'aStop', 'delay', 'status', 'doneText', 'remain', 'comments', 'cLang', 'cLangs', 'resultAt'];
 
 // part 'crew': take the crew's results and check-offs, keep my assignment.

@@ -188,6 +188,7 @@ async function openCode(code) {
       sync.fromText('t', inc.uid, 'assign', inc.assignAt || inc.sentAt, 0, inc); // the text is its base: only what is changed here goes up, and an unchanged copy waits for the hub's (GATE4-SEC-01)
       T.push(t = Object.assign(inc, { origin: 'mine', gotAt: Date.now() }));
     } else if (!t) {
+      sync.fromText('t', inc.uid, 'assign', inc.assignAt || inc.sentAt, 0, inc); // the text is this copy's base too: the crew part goes up with a crewBase, so a phone that worked the text never wipes another phone's taps, nor loses its own to them
       T.push(t = Object.assign(inc, { origin: 'link', gotAt: Date.now() })); // a crew phone opening its sheet
       firstSheet = !S.lang && !S.me && !T.some(x => x.origin === 'mine'); // a phone with a name in Settings is an office phone
     } else if (t.origin === 'link') mergeTask(t, inc, 'assign'); // re-sent sheet: new assignment, crew check-offs kept
