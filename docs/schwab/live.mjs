@@ -889,7 +889,7 @@ async function older(ctx, kind) {
   o.err = '';
   ctx.render();
   const local = { tasks: ctx.tasks(), shifts: shiftsOf(ctx), reports: reportsOf(ctx) }[kind].map(x => x.date).sort()[0];
-  const who = kind === 'shifts' && ui.person ? peopleWeeks(shiftsOf(ctx), ctx.S).find(p => p.key === ui.person)?.who || '' : ''; // the hub looks a person up by name
+  const p = kind === 'shifts' && ui.person ? peopleWeeks(shiftsOf(ctx), ctx.S).find(p => p.key === ui.person) : null, who = p ? p.pid || p.who : ''; // the hub looks a person up by roster id (a rename keeps it; old rows keep the old name), else by name
   const r = await ctx.sync.records({ kind, from: '2000-01-01', to: local ? addDays(local, -1) : dayOf(nowOf(ctx)), q: ui.q, who, cursor: o.cursor });
   o.busy = false;
   if (r.ok) { o.items.push(...r.items); o.cursor = r.cursor; } else o.err = r.message || L('The hub could not be reached.');

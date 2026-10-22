@@ -973,6 +973,15 @@ test('older records: paged from the hub, before what this phone has, never store
   await live.act(ctx, 'recOlder', { dataset: { kind: 'shifts' } }); // a kind the page does not have a card for still stays inside the allowed list
   await live.act(ctx, 'recOlder', { dataset: { kind: 'events' } });
   assert.ok(sync.calls.every(c => ['tasks', 'shifts'].includes(c[1].kind)), 'only tasks, shifts or reports are ever asked for');
+  // A person picked on the People card: the hub is asked by roster id (a rename in Settings keeps it), by name only when there is none.
+  const ctx2 = mkCtx({ sync: mkSync(), shifts: () => [shift({ who: 'Ana Ramirez', pid: 'p1r7xksmiz1n' }), shift({ who: 'Typed Name', pid: '', device: 'dev2' })] });
+  await live.act(ctx2, 'recPerson', { dataset: { v: 'p1r7xksmiz1n' } });
+  await live.act(ctx2, 'recOlder', { dataset: { kind: 'shifts' } });
+  assert.equal(ctx2.sync.calls.at(-1)[1].who, 'p1r7xksmiz1n', 'by id');
+  await live.act(ctx2, 'recPerson', { dataset: { v: 'n:typed name' } });
+  await live.act(ctx2, 'recOlder', { dataset: { kind: 'shifts' } });
+  assert.equal(ctx2.sync.calls.at(-1)[1].who, 'Typed Name', 'by name when the person has no id');
+  await live.act(ctx2, 'recPerson', { dataset: { v: '' } });
 });
 test('older records: a hub error is shown, and the button stays so it can be tried again', async () => {
   const sync = mkSync({ async records() { return { ok: false, error: 'offline', message: 'No signal.' }; } });

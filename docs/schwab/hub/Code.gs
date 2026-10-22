@@ -1301,7 +1301,7 @@ const RECORD_KINDS = { task: 'tasks', tasks: 'tasks', shift: 'shifts', shifts: '
 function normEvent_(raw) { return shape_({ rev: 0, ts: 0, who: 's', role: 's', kind: 's', text: 't', ref: 's' }, raw); }
 const RECORD_FIELDS = {
   tasks: { norm: normTask_, key: function (o) { return o.uid; }, who: function (o) { return [o.crew, o.lead, o.by, o.members.join(' ')].join(' '); } },
-  shifts: { norm: normShift_, key: function (o) { return o.id; }, who: function (o) { return o.who; } },
+  shifts: { norm: normShift_, key: function (o) { return o.id; }, who: function (o) { return o.who + ' ' + o.pid; } }, // by name, or by the person's roster id (a rename keeps the id; old rows keep the old name)
   reports: { norm: normReport_, key: function (o) { return o.date; }, who: function (o) { return o.super + ' ' + o.preparedBy; } },
   events: { norm: normEvent_, key: function (o) { return String(o.rev); }, who: function (o) { return o.who; } },
 };

@@ -1546,6 +1546,13 @@ test('translate: a refused or failing request leaves the counter and the cache a
 });
 
 // ---------- records ----------
+test('records: a person\'s hours are found by roster id as well as by name, so a rename in Settings still finds the older shifts', () => {
+  const env = setup(), crew = phone(env, 'crew', 'crew-dev'), pm = phone(env, 'pm', 'pm-dev');
+  ok(crew.push({ shifts: [shift({ id: 'old', who: 'Ana R', pid: 'p1', date: '2026-08-03', in: '07:00', out: '15:00' }), shift({ id: 'other', who: 'Jose L', pid: 'p2', date: '2026-08-03', in: '07:00', out: '15:00' })] }));
+  const ids = who => ok(pm.call('records', { kind: 'shifts', from: '2026-08-01', to: '2026-08-31', who })).items.map(s => s.id);
+  assert.deepEqual([ids('p1'), ids('ana r'), ids('p9')], [['old'], ['old'], []]);
+});
+
 test('records: paging by cursor returns every row once, 200 at a time, with who, q and date filters', () => {
   const env = setup(), pm = phone(env, 'pm', 'pm-dev'), sup = office(env);
   const days = ['2026-08-03', '2026-08-04', '2026-08-05', '2026-08-06', '2026-08-07'];
