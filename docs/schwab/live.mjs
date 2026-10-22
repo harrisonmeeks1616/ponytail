@@ -32,7 +32,7 @@
 //   bar        these screens use no bottom bar: hide it, as Settings does
 //   paste      hubSettingsView on a phone with no hub offers the app's own data-act="paste" (Open a link someone sent you)
 
-import { KEYS, COMPANY, L, getLang, esc, iso, addDays, niceDate, t12, fmtMin, worked, nameKey, crewVar, field, sheet, ask, choose, sendSheet, download, load, save, personById, crewById,
+import { KEYS, COMPANY, L, getLang, esc, attr, iso, addDays, niceDate, t12, fmtMin, worked, nameKey, crewVar, field, sheet, ask, choose, sendSheet, download, load, save, personById, crewById,
   screenHead, icon, initials, setSec, actRow, UNDO_MS, people, langOf, daySummary } from './shared.mjs';
 import { monday, shiftMin, byPerson, personKey, timesheetCsv } from './report.mjs';
 import { duplicateShortIds } from './sync.mjs';
@@ -254,19 +254,19 @@ const memPut = (f, t, s, v) => { mem.set(`${f}>${t}|${s}`, v); if (mem.size > ME
 // The translation this session already has of a text, '' if none (Quick Find searches what the reader sees).
 export const txCached = (text, from, viewer = getLang()) => (lg(from) === lg(viewer) ? '' : memGet(lg(from), lg(viewer), String(text ?? '')) || '');
 
-function txInner(mode, state, orig, trans, toggle = true) { // every piece of text is escaped here
-  const o = esc(orig), t = esc(trans);
+function txInner(mode, state, orig, trans, toggle = true, from = '', to = '') { // every piece of text is escaped here; from and to (en|es) name each text's language for a screen reader
+  const o = esc(orig), t = esc(trans), lo = attr('lang', from), lt = attr('lang', to);
   if (mode === 'pre') {
-    const src = `<span class="tx-o" hidden>${o}</span>`;
-    return state === 'done' ? `${src}<b>${L('Auto-translated')}:</b> <span class="tx-t">${t}</span>` : state === 'na' ? `${src}${L('A translated preview is not available right now.')}` : src;
+    const src = `<span class="tx-o"${lo} hidden>${o}</span>`;
+    return state === 'done' ? `${src}<b>${L('Auto-translated')}:</b> <span class="tx-t"${lt}>${t}</span>` : state === 'na' ? `${src}${L('A translated preview is not available right now.')}` : src;
   }
   if (state === 'done') { // toggle off (inside a dialog, where a tap would close it): the translation and its caption only
-    return `<span class="tx-o">${o}</span><span class="tx-t">${t}</span>` + (toggle
+    return `<span class="tx-o"${lo}>${o}</span><span class="tx-t"${lt}>${t}</span>` + (toggle
       ? `<small class="tx-cap"><span class="tx-c-t">${L('Auto-translated')} · <button type="button" class="link" data-act="txToggle">${L('See original')}</button></span>`
         + `<span class="tx-c-o">${L('Original text')} · <button type="button" class="link" data-act="txToggle">${L('See translation')}</button></span></small>`
       : `<small class="tx-cap">${L('Auto-translated')}</small>`);
   }
-  return `<span class="tx-o">${o}</span>` + (state === 'na' ? `<small class="tx-cap">${L('Original text. Translation is not available right now.')}</small>` : '');
+  return `<span class="tx-o"${lo}>${o}</span>` + (state === 'na' ? `<small class="tx-cap">${L('Original text. Translation is not available right now.')}</small>` : '');
 }
 const txHost = (mode, state, from, to, attrs = '') => `<${mode === 'pre' ? 'p' : 'span'} class="tx${mode === 'pre' ? ' tx-pre hint' : ''}" data-mode="${mode}" data-state="${state}" data-view="t" data-from="${from}" data-to="${to}"${attrs}`;
 
@@ -277,7 +277,7 @@ export function txView(ctx, text, from, viewer = getLang(), o = {}) {
   const f = lg(from), v = lg(viewer), toggle = o.toggle !== false;
   if (!text.trim() || f === v || hub(ctx).state === 'off') return esc(text);
   const hit = memGet(f, v, text), state = hit === undefined ? 'pending' : hit !== text ? 'done' : 'same';
-  return `${txHost('view', state, f, v, toggle ? '' : ' data-toggle="0"')}>${txInner('view', state, text, state === 'done' ? hit : '', toggle)}</span>`;
+  return `${txHost('view', state, f, v, toggle ? '' : ' data-toggle="0"')}>${txInner('view', state, text, state === 'done' ? hit : '', toggle, f, v)}</span>`;
 }
 // An editable field keeps its own text; under it, a translated preview when the text is not in the reader's language.
 export function txField(ctx, label, k, value, o = {}, from = 'en', viewer = getLang()) {
@@ -285,14 +285,14 @@ export function txField(ctx, label, k, value, o = {}, from = 'en', viewer = getL
   const base = field(label, k, text, o);
   if (!text.trim() || f === v || hub(ctx).state === 'off') return base;
   const hit = memGet(f, v, text), state = hit === undefined ? 'pending' : hit !== text ? 'done' : 'same';
-  return base + `${txHost('pre', state, f, v, ` data-for="${esc(k)}"${state === 'same' || state === 'pending' ? ' hidden' : ''}`)}>${txInner('pre', state, text, state === 'done' ? hit : '')}</p>`;
+  return base + `${txHost('pre', state, f, v, ` data-for="${esc(k)}"${state === 'same' || state === 'pending' ? ' hidden' : ''}`)}>${txInner('pre', state, text, state === 'done' ? hit : '', true, f, v)}</p>`;
 }
 function txSettle(ctx, el, orig, trans) {
   const unreachable = ['off', 'offline', 'error'].includes(hub(ctx).state);
   const state = typeof trans === 'string' && trans.trim() && trans !== orig ? 'done' : unreachable ? 'na' : 'same'; // 'same': names, numbers, or the hub's limit (it says so itself, once)
   el.dataset.state = state;
   el.removeAttribute?.('aria-busy');
-  el.innerHTML = txInner(el.dataset.mode, state, orig, state === 'done' ? trans : '', el.dataset.toggle !== '0');
+  el.innerHTML = txInner(el.dataset.mode, state, orig, state === 'done' ? trans : '', el.dataset.toggle !== '0', el.dataset.from, el.dataset.to);
   if (el.dataset.mode === 'pre') el.hidden = state === 'same';
 }
 // Translate whatever is still waiting inside root, one request per language pair. Safe to call again at any time.
@@ -590,7 +590,7 @@ function olderCard(ctx, kind) {
   const o = ui.old?.kind === kind ? ui.old : null, S = ctx.S, items = o ? o.items : [];
   let body = '';
   if (kind === 'shifts' && items.length) body = peopleWeeks(items, S, nowOf(ctx)).map(p => `<details class="rec-old"><summary><b>${esc(p.who)}</b><span>${esc(L('{n} hrs', { n: h2(p.hours) }))}</span></summary>
-      ${p.weeks.map(w => `<p class="hint">${esc(weekLabel(w.mon))} · ${esc(L('{n} hrs', { n: h2(w.hours) }))} · ${esc(L('{n} shifts', { n: w.shifts.length }))}</p>`).join('')}</details>`).join('');
+      ${p.weeks.map(w => `<p class="hint">${esc(weekLabel(w.mon))} · ${esc(L('{n} hrs', { n: h2(w.hours) }))} · ${esc(w.shifts.length === 1 ? L('1 shift') : L('{n} shifts', { n: w.shifts.length }))}</p>`).join('')}</details>`).join('');
   if (kind === 'tasks') body = items.sort((a, b) => b.date.localeCompare(a.date)).map(t => oldTask(ctx, t)).join('');
   if (kind === 'reports') body = items.sort((a, b) => b.date.localeCompare(a.date)).map(r => oldReport(ctx, r)).join('');
   return `<section class="card"><h2>${L('Older records on the hub')}</h2>
@@ -807,7 +807,7 @@ export async function act(ctx, a, el) {
   const v = el.dataset.v ?? '';
   try {
     switch (a) {
-      case 'txToggle': { const box = el.closest('.tx'); if (box) box.dataset.view = box.dataset.view === 't' ? 'o' : 't'; break; }
+      case 'txToggle': { const box = el.closest('.tx'); if (box) { box.dataset.view = box.dataset.view === 't' ? 'o' : 't'; box.querySelector(box.dataset.view === 'o' ? '.tx-c-o .link' : '.tx-c-t .link')?.focus({ preventScroll: true }); } break; } // the tapped link hides; its twin takes the focus
       case 'liveSite': ui.siteOpen = !ui.siteOpen; ctx.render(); break;
       case 'liveFeedAll': ui.feedAll = true; ctx.render(); break;
       case 'liveRefresh': el.disabled = true; el.textContent = L('Refreshing…'); await ctx.sync.cycle(); ctx.render(); break;

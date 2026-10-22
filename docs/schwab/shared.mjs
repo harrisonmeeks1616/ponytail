@@ -585,8 +585,8 @@ export function field(label, k, v, o = {}) {
 
 export const datalist = (id, values) => `<datalist id="${id}">${[...new Set(values.filter(Boolean))].map(v => `<option value="${esc(v)}">`).join('')}</datalist>`;
 
-// Segmented control: one tap sets k to the option, tapping the active one clears it.
-export const seg = (k, v, opts) => `<div class="seg" role="group">${opts.map(([val, tone, label]) =>
+// Segmented control: one tap sets k to the option, tapping the active one clears it. name: what the group is, for a screen reader.
+export const seg = (k, v, opts, name = '') => `<div class="seg" role="group"${attr('aria-label', name)}>${opts.map(([val, tone, label]) =>
   `<button type="button" data-act="set" data-k="${k}" data-v="${esc(val)}" data-tone="${tone}" aria-pressed="${v === val}">${esc(label || val)}</button>`).join('')}</div>`;
 
 // Delegated typing handler: inputs carry data-k="root.path.to.field".
@@ -674,7 +674,7 @@ export function toast(msg, tone = '', { undo, done } = {}) {
   el.classList.add('show');
   el.at = Date.now(); // tasks.html route(): a toast older than the move to another screen goes
   clearTimeout(el.timer);
-  el.timer = setTimeout(() => el.classList.remove('show'), undo ? UNDO_MS : TOAST_MS);
+  el.timer = setTimeout(() => el.classList.remove('show'), undo ? UNDO_MS : Math.max(TOAST_MS, 45 * String(msg).length)); // a long message stays long enough to read
 }
 
 // A double tap is one tap. When a finger taps the same spot again within 350 ms, the second tap does nothing: the first
@@ -723,6 +723,8 @@ export function sheet(html) {
   d.className = 'sheet';
   d.dataset.at = location.hash; // the screen it was opened on: leaving that screen (the Back button) closes it
   d.innerHTML = `<div class="sheet-in"><div class="grabber" aria-hidden="true"></div><form method="dialog"><button class="sheet-x" aria-label="${L('Close')}">${icon('close')}</button></form>${html}</div>`;
+  const h = d.querySelector('h3, h2, .ask'); // the sheet is named by its heading or question, so a screen reader says what opened
+  if (h?.textContent?.trim()) d.setAttribute('aria-label', h.textContent.trim());
   d.addEventListener('close', () => { const t = d.querySelector('#toast'); if (t) document.body.append(t); d.remove(); }); // a toast shown in the sheet outlives it
   const opened = Date.now(); // the second tap of a double tap that opened it isn't a tap outside
   d.addEventListener('click', e => { if (e.target === d && Date.now() - opened > 350) d.close(); }); // tap outside

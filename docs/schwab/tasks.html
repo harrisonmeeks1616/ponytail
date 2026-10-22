@@ -20,7 +20,7 @@
 </div></header>
 <main>
   <div class="screen-head" id="head"><span id="headBack"></span><p class="proj" id="proj"></p>
-    <div class="title-row"><h2 class="large-title" id="title"></h2><button class="icon-btn find-btn" id="findBtn" data-act="find" hidden></button><span id="titleMore"></span></div><p class="subtitle" id="subtitle"></p></div>
+    <div class="title-row"><h2 class="large-title" id="title" tabindex="-1"></h2><button class="icon-btn find-btn" id="findBtn" data-act="find" hidden></button><span id="titleMore"></span></div><p class="subtitle" id="subtitle"></p></div>
   <div id="app"></div>
   <div class="bar" id="bar"></div>
 </main>
@@ -151,6 +151,7 @@ function route() {
   }
   render();
   scrollTo(0, 0);
+  if ((was?.v !== view.v || was?.sub !== view.sub || was?.uid !== view.uid) && !document.querySelector('dialog[open]')) document.getElementById('title').focus({ preventScroll: true }); // a new screen: its title is read out and Tab starts from it, as the first run does
 }
 
 async function openCode(code) {
@@ -479,7 +480,7 @@ function info(t) {
   const c = ctx(), tx = k => txView(c, t[k], langOf(t, k));
   const row = (k, html, cls = '') => (html ? `<dt${cls}>${esc(k)}</dt><dd${cls}>${html}</dd>` : ''); // html: already escaped
   const note = k => (t[k] ? ' · ' + tx(k) : '');
-  return `<dl class="kv info">${row(L('Drawings'), tx('refs'))}${row(L('Planned'), t.pStart && esc(fromTo(t.pStart, t.pStop)))}${row(L('Check in at'), esc(t12(t.checkIn)))}
+  return `<dl class="kv info">${row(L('Drawings'), tx('refs'))}${row(L('Planned'), t.pStart && esc(fromTo(t.pStart, t.pStop)))}${row(L('Check-in at'), esc(t12(t.checkIn)))}
       ${row(L('Allotted'), t.allot && esc(L('{n} hrs', { n: t.allot })) + note('allotNote'))}${row(L('Estimate'), t.est && esc(L('{n} hrs', { n: t.est })) + note('estNote'))}
       ${row(L('Crew'), t.members.map(m => esc(m) + (nameKey(m) && nameKey(m) === nameKey(S.worker) ? ` (${esc(L('you'))})` : '')).join(', '), ' class="long"')}${row(L('Assigned'), esc(niceDate(t.date) + (t.by ? ' · ' + L('by {name}', { name: t.by }) : '')))}</dl>`;
 }
@@ -513,13 +514,13 @@ function results(t, details = '') {
       <button class="x" data-act="delay" data-v="-15" aria-label="${L('15 minutes less')}">−</button>
       <input type="number" inputmode="numeric" min="0" step="any" data-k="t.delay" value="${t.delay || ''}" placeholder="0" aria-label="${L('Delay minutes')}">
       <button class="x" data-act="delay" data-v="15" aria-label="${L('15 minutes more')}">+</button></div></div>
-    <div class="field"><span>${L('Status')}</span>${seg('t.status', t.status, [['Complete', 'good', L('Complete')], ['Partial', 'warn', L('Partial')], ['Blocked', 'bad', L('Blocked')]])}</div>
+    <div class="field"><span>${L('Status')}</span>${seg('t.status', t.status, [['Complete', 'good', L('Complete')], ['Partial', 'warn', L('Partial')], ['Blocked', 'bad', L('Blocked')]], L('Status'))}</div>
   </section>
   <section class="card notes"><h2>${L('Notes')}</h2>
     ${txField(cx, L('Work / quantity completed (locations and details)'), 't.doneText', t.doneText, { rows: 3 }, langOf(t, 'doneText'))}
     ${txField(cx, L('Work remaining'), 't.remain', t.remain, { rows: 2 }, langOf(t, 'remain'))}
     ${txField(cx, L('Crew comments / concerns'), 't.comments', t.comments, { rows: 3, ph: L('What helped or slowed the work? Quality, rework, support needed') }, langOf(t, 'comments'))}
-    ${field(L('Crew / lead'), 't.lead', t.lead)}
+    ${field(L('Crew lead'), 't.lead', t.lead)}
   </section>`;
 }
 
@@ -534,7 +535,7 @@ function review(t) {
       ${row(L('Received'), esc(stamp(t.gotAt)))}</dl>`
     : `<p class="hint">${L("No results from the crew yet. They'll show here when the crew sends them, or fill them in yourself on the Crew results tab.")}</p>`}</section>`
   + group(L('Lead / superintendent review'), `
-    <div class="field wide">${seg('t.review', t.review, [['Accepted', 'good', L('Accepted')], ['Follow-up needed', 'warn', L('Follow-up needed')]])}</div>
+    <div class="field wide">${seg('t.review', t.review, [['Accepted', 'good', L('Accepted')], ['Follow-up needed', 'warn', L('Follow-up needed')]], L('Review'))}</div>
     ${field(L('Reviewed by'), 't.reviewer', t.reviewer)}
     ${txField(cx, L('Follow-up / next step'), 't.followUp', t.followUp, { rows: 3 }, langOf(t, 'followUp'))}
     <div class="form-foot"><button class="btn wide" data-act="carry">${L('Carry open work to {date}', { date: niceDate(addDays(t.date, 1)) })}</button></div>`);
@@ -994,7 +995,7 @@ document.addEventListener('click', e => {
   busy(el, () => (liveOwns(a) ? liveAct(ctx(), a, el) // the hub screens' own taps
     : a === 'clear' && hubOn() ? deleteRecord(ctx(), 'report', day) // on a hub, Clear this report deletes it the way a sheet is deleted
     : (view.v === 'clock' || view.v === 'report') && !SHELL.has(a) ? reportAct(a, el, S, day, view.v) : act(a, el)))
-    .then(() => twin(el)?.classList.add('just'));
+    .then(() => { const tw = twin(el); tw?.classList.add('just'); if (e.detail === 0 && tw && document.activeElement === document.body) tw.focus({ preventScroll: true }); }); // a keyboard tap (detail 0) keeps its place through the redraw
 });
 // The control as drawn again after a tap (a checkbox, a segment), found by its data attributes.
 const twin = el => (el.isConnected ? el : app.querySelector(['act', 'v', 'i', 'list', 'k'].filter(k => el.dataset[k] != null).map(k => `[data-${k}="${CSS.escape(el.dataset[k])}"]`).join('')));
