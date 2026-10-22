@@ -841,7 +841,10 @@ function mergeShift_(ctx, stored, inc) {
     const newer = !stored || inc.pmAt >= stored.pmAt;
     if (base) {
       s = clone_(stored);
-      ['who', 'in', 'out'].forEach(function (f) { if (takes_(base, newer, [inc[f], inc.edited[f]], [base[f], base.edited[f]], [s[f], s.edited[f]])) { s[f] = inc[f]; s.edited[f] = inc.edited[f]; } });
+      ['who', 'in', 'out'].forEach(function (f) {
+        if (f === 'out' && !inc.out && !inc.edited.out && s.out) return; // a blank unflagged out is never a change: a PM phone must not erase a clock-out (as without a base, below)
+        if (takes_(base, newer, [inc[f], inc.edited[f]], [base[f], base.edited[f]], [s[f], s.edited[f]])) { s[f] = inc[f]; s.edited[f] = inc.edited[f]; }
+      });
       ['pid', 'crew', 'crewId', 'tasks', 'date', 'gone'].forEach(function (k) { if (takes_(base, newer, inc[k], base[k], s[k])) s[k] = inc[k]; });
     } else if (newer) {
       s = clone_(inc);

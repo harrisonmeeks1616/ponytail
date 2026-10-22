@@ -689,6 +689,15 @@ test('shift, PM rules: edits, renames and removals stick; stored as sent; the cl
   ok(crew.push({ shifts: [shift({ id: 'b', date: '2026-10-18', out: '14:00', at: T0 - 100 })] }));
   r = ok(pm.push({ shifts: [{ ...shift({ id: 'b', date: '2026-10-18' }), in: '06:45', edited: { who: false, in: true, out: false }, out: '' }] }));
   assert.deepEqual([r.shifts[0].shift.in, r.shifts[0].shift.out], ['06:45', '14:00']);
+  // Nor one that has (its base is the hub's copy, as between two PM devices) and sends a blank unflagged out: the Out box cleared on Crew hours.
+  ok(crew.push({ shifts: [shift({ id: 'c', date: '2026-10-17' })] }));
+  ok(crew.push({ shifts: [shift({ id: 'c', date: '2026-10-17', out: '16:00', at: T0 - 90 })] }));
+  const bc = stored(env.hub, 'c');
+  r = ok(pm.push({ shifts: [{ ...bc, out: '', edited: { who: false, in: false, out: false }, pmAt: T0 + 5, base: bc }] }));
+  assert.deepEqual([r.shifts[0].shift.out, r.shifts[0].shift.edited.out], ['16:00', false], 'with a base, a blank unflagged out never erases the clock-out');
+  assert.equal(rowsOf(env.hub, 'Hours').find(x => x.Date === '2026-10-17')['Clock out'], '16:00');
+  r = ok(pm.push({ shifts: [{ ...bc, out: '16:30', edited: { who: false, in: false, out: true }, pmAt: T0 + 6, base: bc }] }));
+  assert.equal(r.shifts[0].shift.out, '16:30', 'a time the PM typed still lands');
   // The device never changes after the shift exists.
   r = ok(pm.push({ shifts: [{ ...stored(env.hub, 'b'), device: 'someone-else', who: 'Renamed', edited: { who: true, in: true, out: false } }] }));
   assert.equal(r.shifts[0].shift.device, crew.dev);
