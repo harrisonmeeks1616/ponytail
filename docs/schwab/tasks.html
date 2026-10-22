@@ -28,7 +28,7 @@
 <script>setTimeout(() => { const app = document.getElementById('app'); if (window.appStarted) return; let es = false; try { es = JSON.parse(localStorage.getItem('schwab.settings')).lang === 'es'; } catch {} app.innerHTML = es ? '<div class="empty"><h2>La app no termin\u00f3 de cargar</h2><p>Con se\u00f1al, vuelva a cargar.</p><button class="btn primary" onclick="location.reload()">Recargar</button></div>' : '<div class="empty"><h2>The app didn\u2019t finish loading</h2><p>Get signal, then reload. · La app no termin\u00f3 de cargar. Con se\u00f1al, vuelva a cargar.</p><button class="btn primary" onclick="location.reload()">Reload · Recargar</button></div>'; }, 6000); // a dropped file on the first open after an update; a Spanish phone gets Spanish only</script>
 <script type="module">
 import {
-  KEYS, DEFAULT_SETTINGS, esc, uid, load, save, loadSettings, nameKey, cleanName, people, findPerson, personById, crewById, addPerson, normTask, newItem, mergeTask, cloneTask, pack, unpack, linkTo, langOf, typedIn,
+  KEYS, DEFAULT_SETTINGS, checkLabel, esc, uid, load, save, loadSettings, nameKey, cleanName, people, findPerson, personById, crewById, addPerson, normTask, newItem, mergeTask, cloneTask, pack, unpack, linkTo, langOf, typedIn,
   nextId, renumberClashes, sameNumber, ensureDevice,
   today, addDays, niceDate, weekday, nowHM, span, fmtMin, t12, stamp, hrs, timeOf, field, datalist, seg, setPath, getPath, readInput, dateBar, daySummary,
   toast, sheet, ask, sendSheet, pasteSheet, makePdf, savePdf, fileAway, retryUploads, settingsView, settingsAct, restore,
@@ -453,10 +453,10 @@ function assign(t) {
     ${tf(L('Work, quantities and limits of scope'), 'scope', { rows: 4, ph: L('e.g. Pull and terminate 12 AWG for lighting circuits L3-14 to L3-18, east corridor. Stop at grid line 7.') })}
     ${tf(L('Drawing / detail references'), 'refs', { wide: true, ph: L('e.g. E-301, detail 4/E-502') })}
     <div class="field wide"><span>${L('Steps the crew checks off')}</span><div class="checklist steps-edit">
-      ${t.items.map((it, i) => `<div class="edit-row"><input data-k="t.items.${i}.text" value="${esc(it.text)}" aria-label="${esc(L('Step {n}', { n: i + 1 }))}"><button class="x" data-act="delItem" data-i="${i}" aria-label="${esc(L('Remove step {n}', { n: i + 1 }))}">✕</button></div>`).join('')}
+      ${t.items.map((it, i) => `<div class="edit-row"><input data-k="t.items.${i}.text" data-id="${esc(it.id)}" value="${esc(it.text)}" aria-label="${esc(L('Step {n}', { n: i + 1 }))}"><button class="x" data-act="delItem" data-i="${i}" aria-label="${esc(L('Remove step {n}', { n: i + 1 }))}">✕</button></div>`).join('')}
       ${addRow('newItem', L('Add a step'), 'addItem')}</div></div>
     <div class="field wide"><span>${L('Required finish / accuracy checks')}</span>
-      <div class="chips">${checks.map(p => `<button class="chip" data-act="check" data-v="${esc(p)}" aria-pressed="${t.checks.some(c => c.text === p)}">${esc(p)}</button>`).join('')}</div>
+      <div class="chips">${checks.map(p => `<button class="chip" data-act="check" data-v="${esc(p)}" aria-pressed="${t.checks.some(c => c.text === p)}">${esc(checkLabel(p))}</button>`).join('')}</div>
       ${addRow('newCheck', L('Add another check'), 'addCheck')}</div>`)
   + group(L('Assigned work time & estimate'), `
       ${field(L('Allotted time (hrs)'), 't.allot', t.allot, { type: 'number', mode: 'decimal' })}
@@ -496,7 +496,7 @@ function workedLine(t) {
 function results(t, details = '') {
   const d = doneCount(t), n = t.items.length, c = t.checks.filter(x => x.done).length, cx = ctx();
   // a step's words in the reader's language; no tap to the original inside the tick button (that tap ticks)
-  const tick = (list, it, i) => `<button class="tick" data-act="tick" data-list="${list}" data-i="${i}" aria-pressed="${it.done}"><span class="box">✓</span><span class="txt">${txView(cx, it.text, langOf(t, it.id), getLang(), { toggle: false })}</span>${it.at ? `<small>${timeOf(it.at)}</small>` : ''}</button>`;
+  const tick = (list, it, i) => `<button class="tick" data-act="tick" data-list="${list}" data-i="${i}" aria-pressed="${it.done}"><span class="box">✓</span><span class="txt">${checkLabel(it.text) !== it.text ? esc(checkLabel(it.text)) : txView(cx, it.text, langOf(t, it.id), getLang(), { toggle: false })}</span>${it.at ? `<small>${timeOf(it.at)}</small>` : ''}</button>`;
   // Start and Stop: a big button until tapped, then the time it took, which can be fixed by hand.
   const clock = (k, label, now, primary) => `<div class="clockslot"><span>${label}</span>${t[k]
     ? `<input type="time" data-k="t.${k}" value="${esc(t[k])}" aria-label="${label}">`
@@ -1082,8 +1082,10 @@ document.addEventListener('input', e => {
   if (!k) { if (el.dataset.lv && !stale()) liveInput(ctx(), el); return; } // the Records search box
   if (stale()) return;
   const t = current();
-  // A pull deleted the sheet being typed in, or may have moved a list this field points into by position: redraw, write nothing.
-  if ((!t && k.startsWith('t.')) || (drawLater && /\.\d+\./.test(k))) { drawLater = false; return render(); }
+  // A pull deleted the sheet being typed in, or may have moved a list this field points into by position: redraw, write nothing,
+  // unless the entry at that position is still the one drawn (its id is on the input): then the typing lands where it was meant to.
+  const li = /^(s\.crews|t\.items|t\.checks)\.(\d+)\./.exec(k), same = li && getPath({ t, s: S }, li[1])?.[+li[2]]?.id === el.dataset.id;
+  if ((!t && k.startsWith('t.')) || (drawLater && /\.\d+\./.test(k) && !same)) { drawLater = false; return render(); }
   if (k.startsWith('r.')) { reportInput(el, S, day); return liveInput(ctx(), el); } // and its translated preview, if it has one
   if (k.startsWith('h.')) return hoursInput(el, S, day);
   if (k === 't.date' && !/^\d{4}-\d{2}-\d{2}$/.test(el.value)) return; // every sheet needs a real day; a cleared or half-typed date would hide it

@@ -85,6 +85,9 @@ export const DEFAULT_SETTINGS = {
   crews: ['A', 'B', 'C', 'D'].map(x => ({ id: '', name: 'Crew ' + x, lead: '', members: '' })), people: [],
   checks: ['Supports / strapping', 'Labeling', 'Terminations / torque', 'Testing', 'Covers / plates', 'Cleanup'],
 };
+// A required check as the reader sees it: a default is stored in English and shown in the reader's language; a check
+// someone typed shows as typed (the stored text stays the identity a tap or a tick matches on).
+export const checkLabel = (text, l) => (DEFAULT_SETTINGS.checks.includes(text) ? L(text, undefined, l) : text);
 // Settings from storage, a backup or the hub: known fields only, every crew and person with an id, the roster checked.
 // Settings with no people (a tab on a version before the roster saved them, see below) take this phone's roster back.
 export function normSettings(raw) {
@@ -572,7 +575,7 @@ export function daySummary(sheets, here = null) {
 export const attr = (k, v) => v ? ` ${k}="${esc(v)}"` : '';
 
 export function field(label, k, v, o = {}) {
-  const common = `data-k="${k}"${attr('placeholder', o.ph)}${attr('list', o.list)}${attr('inputmode', o.mode)}`;
+  const common = `data-k="${k}"${attr('placeholder', o.ph)}${attr('list', o.list)}${attr('inputmode', o.mode)}${attr('data-id', o.id)}`; // id: the list entry this field belongs to, so typing survives a pull that redraws the list
   const ctl = o.rows
     ? `<textarea ${common} rows="${o.rows}">${esc(v)}</textarea>`
     : `<input ${common} type="${o.type || 'text'}"${o.type === 'number' ? ' min="0" step="any"' : ''} value="${esc(o.type === 'number' ? v || '' : v)}">`;
@@ -1054,7 +1057,7 @@ const pickRow = (label, k, v, opts) => {
 function crewEditor(s, c, i, ph) {
   const crew = c.name || L('crew');
   return `<div class="crew-edit" style="--crew:var(--c${i % 6})"><div class="fgroup">
-      ${field(L('Crew name'), `s.crews.${i}.name`, c.name)}${field(L('Lead'), `s.crews.${i}.lead`, c.lead)}
+      ${field(L('Crew name'), `s.crews.${i}.name`, c.name, { id: c.id })}${field(L('Lead'), `s.crews.${i}.lead`, c.lead, { id: c.id })}
       ${whoRows(s, c.id) || `<p class="hint">${L('No one on this crew yet.')}</p>`}
       <div class="edit-row"><label class="field"><span>${L('Add people')}</span><input placeholder="${esc(ph)}" aria-label="${esc(L('Add people to {crew}', { crew }))}" enterkeyhint="done" autocomplete="off" data-enter="pAdd" data-crew="${esc(c.id)}"></label>
         <button class="x add" data-act="pAdd" data-crew="${esc(c.id)}" aria-label="${esc(L('Add to {crew}', { crew }))}">+</button></div>

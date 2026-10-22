@@ -192,7 +192,8 @@ test('Spanish mode has a Spanish version of every on-screen phrase', async () =>
   const path = require('path');
   const ES = (await import('../docs/schwab/es.mjs')).default;
   const dir = path.join(__dirname, '..', 'docs', 'schwab');
-  const used = new Set(['Complete', 'Partial', 'Blocked', 'Accepted', 'Follow-up needed', 'Superintendent', 'Project manager', 'Crew lead', '1 person', '{n} people']); // looked up from data, not literals
+  const { DEFAULT_SETTINGS } = await lib;
+  const used = new Set(['Complete', 'Partial', 'Blocked', 'Accepted', 'Follow-up needed', 'Superintendent', 'Project manager', 'Crew lead', '1 person', '{n} people', ...DEFAULT_SETTINGS.checks]); // looked up from data, not literals (the default checks through checkLabel)
   for (const f of ['tasks.html', 'shared.mjs', 'report.mjs', 'sync.mjs', 'live.mjs']) {
     const src = fs.readFileSync(path.join(dir, f), 'utf8');
     for (const m of src.matchAll(/\b(?:L|x)\(\s*(['"])((?:\\.|(?!\1)[^\\])*)\1/g)) used.add(m[2].replace(/\\(.)/g, '$1'));
@@ -219,6 +220,20 @@ test('Spanish mode has a Spanish version of every on-screen phrase', async () =>
     assert.equal(holes(ES[en]), holes(en), `v8 placeholders differ in: ${en}`);
   }
   for (const en of Object.keys(ES)) assert.ok(used.has(en) || v8Compatibility.has(en), `Spanish entry no longer used: ${en}`);
+});
+
+test('every default required check has Spanish, shown through checkLabel; a typed check shows as typed', async () => {
+  const { DEFAULT_SETTINGS, checkLabel, setLang } = await lib;
+  const ES = (await import('../docs/schwab/es.mjs')).default;
+  for (const en of DEFAULT_SETTINGS.checks) {
+    assert.ok(typeof ES[en] === 'string' && ES[en].trim() && ES[en] !== en, `missing Spanish for default check: ${en}`);
+    assert.equal(checkLabel(en, 'es'), ES[en]);
+    assert.equal(checkLabel(en, 'en'), en);
+  }
+  setLang('es');
+  assert.equal(checkLabel('Testing'), 'Pruebas', 'the reader\'s language by default');
+  assert.equal(checkLabel('Megger the feeders'), 'Megger the feeders', 'a check someone typed is never changed');
+  setLang('en');
 });
 
 test('Spanish labels, safe placeholders, and notes printed as typed', async () => {

@@ -66,6 +66,13 @@ export default {
   '{names} added to {crew}': '{names} se agregaron a {crew}',
   'you': 'usted',
   'Crew lead': 'Líder de cuadrilla',
+  // the default required checks (shared.mjs DEFAULT_SETTINGS.checks): stored in English, shown through checkLabel
+  'Supports / strapping': 'Soportes / flejes',
+  'Labeling': 'Etiquetado',
+  'Terminations / torque': 'Terminaciones / torque',
+  'Testing': 'Pruebas',
+  'Covers / plates': 'Tapas / placas',
+  'Cleanup': 'Limpieza',
   'Crew size': 'Tamaño de la cuadrilla',
   'Crew of {size}: {allot} crew-hrs allotted, {est} estimated.': 'Cuadrilla de {size}: {allot} horas-cuadrilla asignadas, {est} estimadas.',
   'Planned window {time}.': 'Horario planeado: {time}.',
