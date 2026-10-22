@@ -21,9 +21,12 @@ export const letterhead = (s, more = '') => `${COMPANIES}\n${[s.project, s.site,
 // Spanish mode: every phrase on screen has a Spanish twin in es.mjs, looked up by its English text.
 // What people type is never translated; it shows and prints exactly as written.
 
-let lang = 'en';
+let lang = 'en', langPick = ''; // langPick: a language tapped on this visit that the phone could not save (full): the screen keeps it, where loadSettings would take the stored one back
 export const setLang = l => { lang = l === 'es' ? 'es' : 'en'; if (globalThis.document) document.documentElement.lang = lang; };
 export const getLang = () => lang;
+// The language tapped: on screen now and in the settings. False on a full phone (the caller says so); the screen keeps the
+// choice for this visit all the same, so a reload from storage (a hub pull, another tab) cannot flip it back by itself.
+export function chooseLang(s, l) { s.lang = l === 'es' ? 'es' : 'en'; setLang(s.lang); const ok = save(KEYS.settings, s); langPick = ok ? '' : s.lang; return ok; }
 export function L(en, vars, l = lang) {
   let s = l === 'es' && Object.hasOwn(ES, en) ? ES[en] : en;
   for (const k in vars) s = s.replaceAll(`{${k}}`, () => vars[k]); // a function, so "$&" in typed text stays literal
@@ -86,8 +89,12 @@ export const DEFAULT_SETTINGS = {
   checks: ['Supports / strapping', 'Labeling', 'Terminations / torque', 'Testing', 'Covers / plates', 'Cleanup'],
 };
 // A required check as the reader sees it: a default is stored in English and shown in the reader's language; a check
-// someone typed shows as typed (the stored text stays the identity a tap or a tick matches on).
-export const checkLabel = (text, l) => (DEFAULT_SETTINGS.checks.includes(text) ? L(text, undefined, l) : text);
+// someone typed shows as typed (the stored text stays the identity a tap or a tick matches on). A default is one however
+// its list spells it (nameKey): "Covers/Plates" typed into the Settings list, or carried from an older phone or the hub,
+// is still the default and shows in Spanish; in English it shows as typed.
+let defaultChecks; // by nameKey, made on first use (nameKey is defined below)
+export const defaultCheck = text => (defaultChecks ||= new Map(DEFAULT_SETTINGS.checks.map(c => [nameKey(c), c]))).get(nameKey(text)) || ''; // the default a check text is, or ''
+export const checkLabel = (text, l) => { const d = defaultCheck(text), s = d && L(d, undefined, l); return s && s !== d ? s : text; };
 // Settings from storage, a backup or the hub: known fields only, every crew and person with an id, the roster checked.
 // Settings with no people (a tab on a version before the roster saved them, see below) take this phone's roster back.
 export function normSettings(raw) {
@@ -110,6 +117,7 @@ export function loadSettings() {
   if (raw && Array.isArray(raw.people)) save(KEYS.roster, rosterOf(s)); // kept current from the first open of this version
   if (PIN_FORMAT.test(pin)) s.pin = pin;
   if (hub && typeof hub === 'object') for (const k of HUB_FIELDS) s[k] = typeof hub[k] === 'string' ? hub[k] : ''; // its own key wins over an old tab's settings, a disconnect included
+  if (langPick) s.lang = langPick; // a language tapped on this visit that never saved (full phone) stays on screen (chooseLang)
   return s;
 }
 const ROSTER_TPL = { crews: [{ id: '', name: '' }], people: [{ id: '', name: '', crewId: '' }] };

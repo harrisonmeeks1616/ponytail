@@ -971,3 +971,37 @@ test('the offline copy lists every file the app imports, so nothing is missing o
   assert.ok(imported.size >= 5, 'the scan found the imports');
   for (const f of imported) assert.ok(files.includes(f), `sw.js FILES is missing ${f}`);
 });
+
+test('a near-default required check is the default: Spanish through checkLabel, as typed in English', async () => {
+  const { checkLabel, defaultCheck, setLang } = await lib;
+  assert.equal(defaultCheck('Supports/Strapping'), 'Supports / strapping', 'spacing and capitals do not make a new check');
+  assert.equal(defaultCheck('covers / PLATES '), 'Covers / plates');
+  assert.equal(defaultCheck('Megger the feeders'), '', 'a typed check is its own');
+  assert.equal(checkLabel('Supports/Strapping', 'es'), 'Soportes / flejes');
+  assert.equal(checkLabel('Supports/Strapping', 'en'), 'Supports/Strapping', 'in English, as typed');
+  setLang('es');
+  assert.equal(checkLabel('testing'), 'Pruebas');
+  assert.equal(checkLabel('Megger the feeders'), 'Megger the feeders');
+  setLang('en');
+});
+
+test('the language tapped stays on screen when the phone could not save it; once saved, the stored one is followed', async () => {
+  const { chooseLang, loadSettings, getLang, setLang, normSettings, KEYS } = await lib;
+  const store = new Map();
+  let full = false;
+  Object.defineProperty(globalThis, 'localStorage', { configurable: true, value: { getItem: k => store.get(k) ?? null, setItem: (k, v) => { if (full && k === KEYS.settings) throw new Error('QuotaExceededError'); store.set(k, String(v)); } } });
+  try {
+    const s = normSettings({ lang: 'es', me: 'Sam' });
+    store.set(KEYS.settings, JSON.stringify(s));
+    full = true;
+    assert.equal(chooseLang(s, 'en'), false, 'a full phone says so');
+    assert.equal(getLang(), 'en', 'on screen at once');
+    assert.equal(JSON.parse(store.get(KEYS.settings)).lang, 'es', 'storage still has the old language');
+    assert.equal(loadSettings().lang, 'en', 'a reload from storage (a hub pull, another tab) keeps the tapped language');
+    full = false;
+    assert.equal(chooseLang(s, 'es'), true);
+    assert.equal(JSON.parse(store.get(KEYS.settings)).lang, 'es');
+    store.set(KEYS.settings, JSON.stringify({ ...s, lang: 'en' })); // another tab picked English
+    assert.equal(loadSettings().lang, 'en', 'once saved, the stored language is followed again');
+  } finally { delete globalThis.localStorage; setLang('en'); }
+});
