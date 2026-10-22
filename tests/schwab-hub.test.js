@@ -766,6 +766,24 @@ test('a worker\'s punch relayed by the PM phone (an hours text opened there) is 
   assert.ok(what.includes('PM added a shift for Ana P, 2026-10-19'), 'a shift the PM entered by hand still is one');
 });
 
+test('two office phones: a step one phone took out stays when the other reworded it since the base; a plain removal still leaves', () => {
+  const env = setup(), sup = office(env), pm = phone(env, 'pm', 'pm-dev');
+  ok(sup.push({ tasks: [task()] }));
+  const base0 = env.hub.entities('Tasks').find(t => t.uid === 'u1');
+  ok(pm.push({ tasks: [{ ...base0, items: [{ id: 'i1', text: 'Pull' }, { id: 'i2', text: 'Terminate and torque' }], assignAt: T0 - 4000, assignBase: base0 }] }));
+  let r = ok(sup.push({ tasks: [{ ...base0, items: [{ id: 'i1', text: 'Pull' }], assignAt: T0 - 3000, assignBase: base0 }] })); // offline since base0: took i2 out without seeing the rewording
+  assert.deepEqual(r.tasks[0].task.items.map(i => i.text), ['Pull', 'Terminate and torque'], 'the reworded step stays, reworded');
+  const base1 = env.hub.entities('Tasks').find(t => t.uid === 'u1');
+  r = ok(sup.push({ tasks: [{ ...base1, items: [{ id: 'i1', text: 'Pull' }], assignAt: T0 - 2000, assignBase: base1 }] })); // seen the rewording, took it out anyway
+  assert.deepEqual(r.tasks[0].task.items.map(i => i.text), ['Pull'], 'a removal of what this phone has seen leaves');
+  // The shared roster merges the same way: a person renamed on one phone and removed on the other, offline, stays with the new name.
+  ok(sup.push({ config: { project: 'P', floors: ['L1'], crews: [{ id: 'c1', name: 'Crew A', lead: '', members: '' }], people: [{ id: 'p1', name: 'Ana R', crewId: 'c1' }, { id: 'p2', name: 'Jose L', crewId: 'c1' }], checks: [], at: T0 - 9000 } }));
+  const cfg0 = env.hub.entities('Config')[0];
+  ok(pm.push({ config: { ...cfg0, people: [{ id: 'p1', name: 'Ana Ramirez', crewId: 'c1' }, { id: 'p2', name: 'Jose L', crewId: 'c1' }], at: T0 - 8000, base: cfg0 } }));
+  r = ok(sup.push({ config: { ...cfg0, people: [{ id: 'p2', name: 'Jose L', crewId: 'c1' }], at: T0 - 7000, base: cfg0 } }));
+  assert.deepEqual(r.config.people.map(p => p.name).sort(), ['Ana Ramirez', 'Jose L'], 'the rename stays');
+});
+
 test('DATA2-03: a phone\'s real punches are kept when the PM already entered that day by hand, for the PM to see and settle', () => {
   const env = setup(), crew = phone(env, 'crew', 'crew-dev'), pm = phone(env, 'pm', 'pm-dev');
   ok(pm.push({ shifts: [shift({ id: 'pm1', device: '', who: 'ana p', date: '2026-10-12', in: '07:00', out: '15:30', edited: { who: true, in: true, out: true } })] }));

@@ -738,8 +738,14 @@ function structure_(incoming, stored) { // the office decides which items exist;
 function takes_(base, newer, mine, was, cur) { const j = JSON.stringify; return !base || (j(mine) !== j(was) && (newer || j(cur) === j(was))); }
 // A list the same way (a sheet's steps, the roster, floors): entries the phone added, removed or changed since its base go
 // in, field by field as above; the stored list's other entries (another phone's adds and edits) stay, and one another phone
-// removed stays removed. Entries match by key_. Without a base the phone's list is taken whole.
+// removed stays removed. An entry this phone took out that the other phone changed since the base stays, changed (as a
+// report entry does, merge3_): nothing typed is lost to a removal made without seeing it. Entries match by key_. Without a
+// base the phone's list is taken whole.
 function key_(x) { return isObj_(x) ? x.id || '#' + nameKey_(x.name) : String(x); } // an id; a crew from an older phone by name; a floor or check as itself
+function changedSince_(s, b) { // a stored entry's office fields differ from the base's (a step's done and at are the crew's ticks, not an edit)
+  if (!isObj_(s) || !isObj_(b)) return JSON.stringify(s) !== JSON.stringify(b);
+  return Object.keys(b).some(function (f) { return f !== 'done' && f !== 'at' && JSON.stringify(s[f]) !== JSON.stringify(b[f]); });
+}
 function list3_(stored, mine, base, newer) {
   if (!base) return mine;
   const by = function (l) { const m = dict_(); l.forEach(function (x) { m[key_(x)] = x; }); return m; }, S = by(stored), B = by(base);
@@ -750,9 +756,9 @@ function list3_(stored, mine, base, newer) {
   });
   const placed = by(out);
   let at = 0;
-  stored.forEach(function (x) { // another phone's additions, each after the entry it followed
+  stored.forEach(function (x) { // another phone's additions, each after the entry it followed; one this phone took out stays only if the other changed it since
     const k = key_(x);
-    if (placed[k] !== undefined) at = out.indexOf(placed[k]) + 1; else if (B[k] === undefined) out.splice(at++, 0, x);
+    if (placed[k] !== undefined) at = out.indexOf(placed[k]) + 1; else if (B[k] === undefined || changedSince_(x, B[k])) out.splice(at++, 0, x);
   });
   return out;
 }
