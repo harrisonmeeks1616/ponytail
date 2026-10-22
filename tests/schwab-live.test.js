@@ -264,9 +264,9 @@ test('eventLine rebuilds the hub English into a sentence', () => {
 });
 es('eventLine in Spanish keeps names and ids', () => {
   const E = (kind, who, text, ref) => ({ kind, who, text, ref });
-  assert.equal(live.eventLine(E('task.status', 'Mike R', 'T1019-02 marked Blocked', 'T1019-02'), 'es'), 'T1019-02: estado Bloqueado');
+  assert.equal(live.eventLine(E('task.status', 'Mike R', 'T1019-02 marked Blocked', 'T1019-02'), 'es'), 'T1019-02: estado Bloqueada');
   assert.equal(live.eventLine(E('clock.in', 'Jose L', '', ''), 'es'), 'Jose L marcó entrada');
-  assert.equal(live.eventLine(E('task.reviewed', 'H', 'T1 reviewed: Accepted', 'T1'), 'es'), 'T1 revisada: Aceptado');
+  assert.equal(live.eventLine(E('task.reviewed', 'H', 'T1 reviewed: Accepted', 'T1'), 'es'), 'T1 revisada: Aceptada');
   // a phone with no name: the hub writes its role code as who ('pm creó T1' on the Spanish feed); it reads as the role
   assert.equal(live.eventLine({ ...E('task.created', 'pm', 'New task T1', 'T1'), role: 'pm' }, 'es'), 'Gerente de proyecto creó T1');
   assert.equal(live.eventLine({ ...E('task.created', 'super', 'New task T1', 'T1'), role: 'super' }, 'en'), 'Superintendent created T1');
@@ -291,8 +291,8 @@ test('a message, a review and each typed text keep the language they were typed 
 
 test('Records shows the typed scope and results in the reader\'s language (PHONE-UX-10)', () => {
   const ctx = mkCtx({ tasks: () => [task({ scope: 'Jale cable al tablero', aLangs: { scope: 'es' } })], reports: () => [report({ results: 'Todo bien hoy', lang: 'es' })] });
-  assert.match(live.recordsView(ctx, 'sheets'), /class="clamp"><span class="tx"[^>]*data-from="es" data-to="en"[^>]*><span class="tx-o">Jale cable al tablero/);
-  assert.match(live.recordsView(ctx, 'reports'), /class="clamp"><span class="tx"[^>]*data-from="es" data-to="en"[^>]*><span class="tx-o">Todo bien hoy/);
+  assert.match(live.recordsView(ctx, 'sheets'), /class="clamp"><span class="tx"[^>]*data-from="es" data-to="en"[^>]*><span class="tx-o"[^>]*>Jale cable al tablero/);
+  assert.match(live.recordsView(ctx, 'reports'), /class="clamp"><span class="tx"[^>]*data-from="es" data-to="en"[^>]*><span class="tx-o"[^>]*>Todo bien hoy/);
 });
 
 test('the daily report: every typed box goes through the translated-preview field, with the language of the part that typed it (PHONE-UX-10)', () => {
@@ -373,7 +373,7 @@ test('txApply: one request per language pair, answers escaped, caption and toggl
   assert.ok(a.innerHTML.includes('&lt;b&gt;Hola&lt;/b&gt; &quot;es-&gt;en&quot;') && !a.innerHTML.includes('<b>Hola'), 'the translation is escaped like everything else');
   assert.match(a.innerHTML, /Auto-translated/);
   assert.match(a.innerHTML, /data-act="txToggle"/);
-  assert.ok(a.innerHTML.includes('class="tx-o">Hola<'), 'the original stays one tap away');
+  assert.match(a.innerHTML, /class="tx-o"[^>]*>Hola</, 'the original stays one tap away');
   assert.equal(d.dataset.state, 'same', 'a name or number that comes back unchanged is not captioned');
   assert.doesNotMatch(d.innerHTML, /Auto-translated/);
   assert.equal(a.attrs['aria-busy'], undefined);
@@ -412,8 +412,8 @@ test('translated previews keep a newer edit when an older request finishes befor
       assert.deepEqual(queries, [['Hola'], ['Adiós']], 'the debounce translates what is in the field now');
       pending[1](['Goodbye']); await second;
       if (!oldFirst) { pending[0](['Hello']); await first; }
-      assert.match(pre.innerHTML, /class="tx-o" hidden>Adiós<\/span>/);
-      assert.match(pre.innerHTML, /class="tx-t">Goodbye<\/span>/);
+      assert.match(pre.innerHTML, /class="tx-o"[^>]*hidden>Adiós<\/span>/);
+      assert.match(pre.innerHTML, /class="tx-t"[^>]*>Goodbye<\/span>/);
       assert.doesNotMatch(pre.innerHTML, /Hello|Hola/);
     } finally { globalThis.document = prevDoc; globalThis.setTimeout = prevTimer; }
   }
@@ -424,7 +424,7 @@ test('txApply: offline, an error or quota show the original and say so; it never
   await live.txApply(ctx, rootOf([a]));
   assert.equal(a.dataset.state, 'na');
   assert.match(a.innerHTML, /Translation is not available right now/);
-  assert.ok(a.innerHTML.includes('class="tx-o">Hola<'));
+  assert.match(a.innerHTML, /class="tx-o"[^>]*>Hola</);
   const boom = mkSync({ async translate() { throw new Error('network'); } }), b = fakeEl('Hola', 'es', 'en');
   await live.txApply(ctxHub('live', boom), rootOf([b]));
   assert.equal(b.dataset.state, 'same', 'a live hub that gave nothing back (its daily limit, said once by the hub itself): just the original');
@@ -454,7 +454,7 @@ test('txField: the field keeps its text; a translated preview waits under it, hi
   pre.hidden = true;
   await live.txApply(ctx, rootOf([pre]));
   assert.equal(pre.hidden, false);
-  assert.match(pre.innerHTML, /Auto-translated:<\/b> <span class="tx-t">T:Hola<\/span>/);
+  assert.match(pre.innerHTML, /Auto-translated:<\/b> <span class="tx-t"[^>]*>T:Hola<\/span>/);
   const keep = fakeEl('Name 12', 'es', 'en', 'pre');
   await live.txApply(ctxHub('live', mkSync({ async translate(i) { return i; } })), rootOf([keep]));
   assert.equal(keep.hidden, true, 'nothing to show when the translation is the same');
@@ -648,7 +648,7 @@ test('recordsView: older records and storage appear only with a hub the role may
   assert.match(hubPm, /data-act="recOlder" data-kind="tasks"/);
   assert.match(hubPm, /Hub storage/);
   assert.match(hubPm, /Open the Google Sheet/);
-  assert.match(hubPm, /id="recArch" value="2026-07-21" max="2026-09-19"/, 'archive defaults to 90 days back and cannot pick the last 30');
+  assert.match(hubPm, /id="recArch" value="2026-07-21" max="2026-08-20"/, 'archive defaults to 90 days back and cannot pick the last 60 (what the office phones still hold)');
   const sync = mkSync();
   sync.status.role = 'super';
   const sup = live.recordsView(mkCtx({ sync, role: 'super' }), 'sheets');
@@ -925,20 +925,20 @@ test('PHONE-UX-16: the PM\'s Disconnect says the PM key was shown only once, off
     assert.deepEqual([said, sup.calls], [['Disconnect this phone from the hub? Your work stays on this phone.'], []]);
   } finally { delete globalThis.navigator.clipboard; }
 });
-test('archive: a real date, at least 30 days back, asked first', () => withDoc({ recArch: { value: '' } }, async () => {
+test('archive: a real date, at least 60 days back, asked first', () => withDoc({ recArch: { value: '' } }, async () => {
   const box = globalThis.document.getElementById('recArch'), ctx = mkCtx(), el = { dataset: {} };
-  for (const bad of ['', 'soon', '2026-02-30', '2026-09-20', '2026-10-19']) {
+  for (const bad of ['', 'soon', '2026-02-30', '2026-09-19', '2026-10-19']) {
     box.value = bad;
     await live.act(ctx, 'recArchive', el);
   }
   assert.equal(ctx.sync.calls.length, 0);
   assert.equal(toasts(ctx).length, 5);
-  box.value = '2026-09-19';
+  box.value = '2026-08-20';
   const no = mkCtx({ ask: async () => false });
   await live.act(no, 'recArchive', el);
   assert.equal(no.sync.calls.length, 0);
   await live.act(ctx, 'recArchive', el);
-  assert.deepEqual(ctx.sync.calls, [['archive', '2026-09-19']]);
+  assert.deepEqual(ctx.sync.calls, [['archive', '2026-08-20']]);
   assert.match(live.recordsView(ctx, 'sheets'), /Rows archived: 3/);
 }));
 test('refresh and sync now run a cycle and redraw; a failure turns the button back on', async () => {
@@ -973,6 +973,15 @@ test('older records: paged from the hub, before what this phone has, never store
   await live.act(ctx, 'recOlder', { dataset: { kind: 'shifts' } }); // a kind the page does not have a card for still stays inside the allowed list
   await live.act(ctx, 'recOlder', { dataset: { kind: 'events' } });
   assert.ok(sync.calls.every(c => ['tasks', 'shifts'].includes(c[1].kind)), 'only tasks, shifts or reports are ever asked for');
+  // A person picked on the People card: the hub is asked by roster id (a rename in Settings keeps it), by name only when there is none.
+  const ctx2 = mkCtx({ sync: mkSync(), shifts: () => [shift({ who: 'Ana Ramirez', pid: 'p1r7xksmiz1n' }), shift({ who: 'Typed Name', pid: '', device: 'dev2' })] });
+  await live.act(ctx2, 'recPerson', { dataset: { v: 'p1r7xksmiz1n' } });
+  await live.act(ctx2, 'recOlder', { dataset: { kind: 'shifts' } });
+  assert.equal(ctx2.sync.calls.at(-1)[1].who, 'p1r7xksmiz1n', 'by id');
+  await live.act(ctx2, 'recPerson', { dataset: { v: 'n:typed name' } });
+  await live.act(ctx2, 'recOlder', { dataset: { kind: 'shifts' } });
+  assert.equal(ctx2.sync.calls.at(-1)[1].who, 'Typed Name', 'by name when the person has no id');
+  await live.act(ctx2, 'recPerson', { dataset: { v: '' } });
 });
 test('older records: a hub error is shown, and the button stays so it can be tried again', async () => {
   const sync = mkSync({ async records() { return { ok: false, error: 'offline', message: 'No signal.' }; } });

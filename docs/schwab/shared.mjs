@@ -85,6 +85,9 @@ export const DEFAULT_SETTINGS = {
   crews: ['A', 'B', 'C', 'D'].map(x => ({ id: '', name: 'Crew ' + x, lead: '', members: '' })), people: [],
   checks: ['Supports / strapping', 'Labeling', 'Terminations / torque', 'Testing', 'Covers / plates', 'Cleanup'],
 };
+// A required check as the reader sees it: a default is stored in English and shown in the reader's language; a check
+// someone typed shows as typed (the stored text stays the identity a tap or a tick matches on).
+export const checkLabel = (text, l) => (DEFAULT_SETTINGS.checks.includes(text) ? L(text, undefined, l) : text);
 // Settings from storage, a backup or the hub: known fields only, every crew and person with an id, the roster checked.
 // Settings with no people (a tab on a version before the roster saved them, see below) take this phone's roster back.
 export function normSettings(raw) {
@@ -250,7 +253,7 @@ export function typedIn(t, k, l) {
   return t;
 }
 
-const ASSIGN = ['id', 'date', 'by', 'floor', 'area', 'crew', 'crewId', 'members', 'memberIds', 'size', 'scope', 'refs', 'aLang', 'aLangs', 'allot', 'allotNote', 'est', 'estNote', 'pStart', 'pStop', 'checkIn', 'reply', 'replyAt', 'replyBy'];
+const ASSIGN = ['from', 'id', 'date', 'by', 'floor', 'area', 'crew', 'crewId', 'members', 'memberIds', 'size', 'scope', 'refs', 'aLang', 'aLangs', 'allot', 'allotNote', 'est', 'estNote', 'pStart', 'pStop', 'checkIn', 'reply', 'replyAt', 'replyBy']; // from: the sheet this one carried, so every office phone knows it was carried
 const CREW = ['lead', 'aStart', 'aStop', 'delay', 'status', 'doneText', 'remain', 'comments', 'cLang', 'cLangs', 'resultAt'];
 
 // part 'crew': take the crew's results and check-offs, keep my assignment.
@@ -470,11 +473,12 @@ export const unlocked = (now = Date.now()) => lockState().until > now;
 export const signIn = (now = Date.now()) => save(UNLOCK, { until: now + OPEN_MS, fails: 0, wait: 0 });
 export const signOut = () => save(UNLOCK, { until: 0, fails: 0, wait: 0 });
 export const waitLeft = (now = Date.now()) => Math.max(0, lockState().wait - now);
-// 'ok' (signed in), 'wrong', or 'wait' (too many wrong codes; waitLeft() says how long).
+// 'ok' (signed in), 'wrong', 'wait' (too many wrong codes; waitLeft() says how long), or 'unsaved' (the right code, but a full
+// phone could not record the sign-in: never reported as a wrong code).
 export async function tryPin(s, pin, now = Date.now()) {
   const st = lockState();
   if (st.wait > now) return 'wait';
-  if (hasPin(s) && await pinHash(pin, s.pin.slice(0, 16)) === s.pin) return signIn(now) ? 'ok' : 'wrong';
+  if (hasPin(s) && await pinHash(pin, s.pin.slice(0, 16)) === s.pin) return signIn(now) ? 'ok' : 'unsaved';
   const fails = st.fails + 1, out = fails >= TRIES;
   save(UNLOCK, { until: st.until, fails: out ? 0 : fails, wait: out ? now + WAIT_MS : 0 }); // a wrong code never signs anyone out
   return out ? 'wait' : 'wrong';
@@ -572,7 +576,7 @@ export function daySummary(sheets, here = null) {
 export const attr = (k, v) => v ? ` ${k}="${esc(v)}"` : '';
 
 export function field(label, k, v, o = {}) {
-  const common = `data-k="${k}"${attr('placeholder', o.ph)}${attr('list', o.list)}${attr('inputmode', o.mode)}`;
+  const common = `data-k="${k}"${attr('placeholder', o.ph)}${attr('list', o.list)}${attr('inputmode', o.mode)}${attr('data-id', o.id)}`; // id: the list entry this field belongs to, so typing survives a pull that redraws the list
   const ctl = o.rows
     ? `<textarea ${common} rows="${o.rows}">${esc(v)}</textarea>`
     : `<input ${common} type="${o.type || 'text'}"${o.type === 'number' ? ' min="0" step="any"' : ''} value="${esc(o.type === 'number' ? v || '' : v)}">`;
@@ -581,8 +585,8 @@ export function field(label, k, v, o = {}) {
 
 export const datalist = (id, values) => `<datalist id="${id}">${[...new Set(values.filter(Boolean))].map(v => `<option value="${esc(v)}">`).join('')}</datalist>`;
 
-// Segmented control: one tap sets k to the option, tapping the active one clears it.
-export const seg = (k, v, opts) => `<div class="seg" role="group">${opts.map(([val, tone, label]) =>
+// Segmented control: one tap sets k to the option, tapping the active one clears it. name: what the group is, for a screen reader.
+export const seg = (k, v, opts, name = '') => `<div class="seg" role="group"${attr('aria-label', name)}>${opts.map(([val, tone, label]) =>
   `<button type="button" data-act="set" data-k="${k}" data-v="${esc(val)}" data-tone="${tone}" aria-pressed="${v === val}">${esc(label || val)}</button>`).join('')}</div>`;
 
 // Delegated typing handler: inputs carry data-k="root.path.to.field".
@@ -670,7 +674,7 @@ export function toast(msg, tone = '', { undo, done } = {}) {
   el.classList.add('show');
   el.at = Date.now(); // tasks.html route(): a toast older than the move to another screen goes
   clearTimeout(el.timer);
-  el.timer = setTimeout(() => el.classList.remove('show'), undo ? UNDO_MS : TOAST_MS);
+  el.timer = setTimeout(() => el.classList.remove('show'), undo ? UNDO_MS : Math.max(TOAST_MS, 45 * String(msg).length)); // a long message stays long enough to read
 }
 
 // A double tap is one tap. When a finger taps the same spot again within 350 ms, the second tap does nothing: the first
@@ -719,6 +723,8 @@ export function sheet(html) {
   d.className = 'sheet';
   d.dataset.at = location.hash; // the screen it was opened on: leaving that screen (the Back button) closes it
   d.innerHTML = `<div class="sheet-in"><div class="grabber" aria-hidden="true"></div><form method="dialog"><button class="sheet-x" aria-label="${L('Close')}">${icon('close')}</button></form>${html}</div>`;
+  const h = d.querySelector('h3, h2, .ask'); // the sheet is named by its heading or question, so a screen reader says what opened
+  if (h?.textContent?.trim()) d.setAttribute('aria-label', h.textContent.trim());
   d.addEventListener('close', () => { const t = d.querySelector('#toast'); if (t) document.body.append(t); d.remove(); }); // a toast shown in the sheet outlives it
   const opened = Date.now(); // the second tap of a double tap that opened it isn't a tap outside
   d.addEventListener('click', e => { if (e.target === d && Date.now() - opened > 350) d.close(); }); // tap outside
@@ -1008,6 +1014,8 @@ export function retryUploads(s) {
 
 // ---------- settings (office only: behind the passcode) ----------
 
+// Everything this app keeps on the phone, the hub sync's record and the translation cache included (they are as large as the records they describe).
+const storedChars = () => { let n = 0; try { for (let i = 0; i < localStorage.length; i++) { const k = localStorage.key(i); if (k.startsWith('schwab.')) n += (localStorage.getItem(k) || '').length; } } catch {} return n; };
 // hub: the Settings > Hub group (live.mjs hubSettingsView), between the checks and the review folder.
 export function settingsView(s, hub = '') {
   const roles = ['Crew member', 'Superintendent', 'Project manager']; // a crew phone (set on its first run) shows no office words
@@ -1034,7 +1042,7 @@ export function settingsView(s, hub = '') {
     ${setSec(L('Backup'), `<div class="fgroup">${actRow('backup', L('Download backup'))}
       <label class="row set-act">${L('Restore from backup')}<input type="file" accept="application/json,.json" data-restore class="sr"></label></div>`,
       [L('Everything is stored on this phone only. Download a backup weekly, or before clearing browser data or switching phones.'),
-        L('Using about {kb} KB of roughly 5,000 KB.', { kb: Math.ceil([...Object.values(KEYS), OUTBOX].reduce((n, k) => n + JSON.stringify(load(k, '')).length, 0) / 1024) })])}
+        L('Using about {kb} KB of roughly 5,000 KB.', { kb: Math.ceil(storedChars() / 1024) })])}
   </div>`;
 }
 // iOS Settings: a caption over each grouped list and quiet notes under it. Fields are .fgroup rows (the Daily
@@ -1054,7 +1062,7 @@ const pickRow = (label, k, v, opts) => {
 function crewEditor(s, c, i, ph) {
   const crew = c.name || L('crew');
   return `<div class="crew-edit" style="--crew:var(--c${i % 6})"><div class="fgroup">
-      ${field(L('Crew name'), `s.crews.${i}.name`, c.name)}${field(L('Lead'), `s.crews.${i}.lead`, c.lead)}
+      ${field(L('Crew name'), `s.crews.${i}.name`, c.name, { id: c.id })}${field(L('Lead'), `s.crews.${i}.lead`, c.lead, { id: c.id })}
       ${whoRows(s, c.id) || `<p class="hint">${L('No one on this crew yet.')}</p>`}
       <div class="edit-row"><label class="field"><span>${L('Add people')}</span><input placeholder="${esc(ph)}" aria-label="${esc(L('Add people to {crew}', { crew }))}" enterkeyhint="done" autocomplete="off" data-enter="pAdd" data-crew="${esc(c.id)}"></label>
         <button class="x add" data-act="pAdd" data-crew="${esc(c.id)}" aria-label="${esc(L('Add to {crew}', { crew }))}">+</button></div>
@@ -1143,7 +1151,7 @@ export async function settingsAct(act, s, el, change = f => { f(s); save(KEYS.se
       toast(e instanceof TypeError ? L("Couldn't reach the review folder. Check the link and your signal.") : L('Review folder said: {error}', { error: folderSays(e.message) }), 'bad');
     }
   }
-  save(KEYS.settings, s);
+  save(KEYS.settings, s) || toast(L("This phone wouldn't save. Open Settings and download a backup."), 'bad'); // a full phone says so, as a sheet does
 }
 
 // Everything this phone keeps, including pending PDFs, as stored, except the hub key: a backup file gets passed around, and the PM can send a
@@ -1160,7 +1168,12 @@ export const isBackup = data => !!data && typeof data === 'object' && Object.val
 // each record (sync.mjs schwab.hubSync) comes along and is written last: it describes the restored records, so only what
 // was unsynced at backup time goes up and what the hub got since comes back. This phone's own record described the old
 // stores, so it goes first; with none in the backup (or a restore cut short) the next round merges pull-first.
+// This phone's own hub key, when the backup names the hub and role this phone is on: the key never comes from a file (backupData
+// leaves it out; README, Backups), but a phone restoring its own backup stays connected. '' for another hub, another role, or none.
+const ownKeyFor = data => { const own = load(KEYS.hub, null), h = data[KEYS.hub]; return own?.hubKey && h && typeof h === 'object' && h.hubUrl === own.hubUrl && h.hubRole === own.hubRole ? own.hubKey : ''; };
 export const restoreData = data => {
+  const hubKey = ownKeyFor(data);
+  for (const k of [KEYS.settings, KEYS.hub]) if (data[k] && typeof data[k] === 'object') data[k] = { ...data[k], hubKey }; // a file never connects a phone to a hub
   try { localStorage.removeItem(SYNC); } catch {}
   return (data[KEYS.settings] == null || save(KEYS.roster, null)) && [...Object.values(KEYS), OUTBOX, SYNC].every(k => data[k] == null || save(k, k === OUTBOX ? clean(data[k]) : data[k]));
 };
@@ -1169,8 +1182,9 @@ export async function restore(file) {
   let data;
   try { data = JSON.parse(await file.text()); } catch { return toast(L("That file isn't a field app backup"), 'bad'); }
   if (!isBackup(data)) return toast(L("That file isn't a field app backup"), 'bad');
-  if (!await ask(L('Replace everything on this phone with this backup?'), L('Replace'), 'danger')) return;
-  if (!restoreData(data)) return toast(L('Restore stopped: this phone is out of space. Free space and restore again.'), 'bad');
+  const leaves = load(KEYS.hub, null)?.hubKey && data[KEYS.hub] && !ownKeyFor(data); // on a hub, and the file names another hub or role (or none): say what that costs, as Disconnect does
+  if (!await ask(leaves ? L('Replace everything on this phone with this backup? It is from another hub or role, so this phone leaves its hub: to connect again you need the PM key or a new invite.') : L('Replace everything on this phone with this backup?'), L('Replace'), 'danger')) return;
+  if (!restoreData(data)) { toast(L('Restore stopped: this phone is out of space. Free space and restore again.'), 'bad'); return 'partial'; } // the keys before the full one are written: the page reloads what it shows from storage
   location.reload();
 }
 

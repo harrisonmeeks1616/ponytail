@@ -20,7 +20,7 @@
 </div></header>
 <main>
   <div class="screen-head" id="head"><span id="headBack"></span><p class="proj" id="proj"></p>
-    <div class="title-row"><h2 class="large-title" id="title"></h2><button class="icon-btn find-btn" id="findBtn" data-act="find" hidden></button><span id="titleMore"></span></div><p class="subtitle" id="subtitle"></p></div>
+    <div class="title-row"><h2 class="large-title" id="title" tabindex="-1"></h2><button class="icon-btn find-btn" id="findBtn" data-act="find" hidden></button><span id="titleMore"></span></div><p class="subtitle" id="subtitle"></p></div>
   <div id="app"></div>
   <div class="bar" id="bar"></div>
 </main>
@@ -28,7 +28,7 @@
 <script>setTimeout(() => { const app = document.getElementById('app'); if (window.appStarted) return; let es = false; try { es = JSON.parse(localStorage.getItem('schwab.settings')).lang === 'es'; } catch {} app.innerHTML = es ? '<div class="empty"><h2>La app no termin\u00f3 de cargar</h2><p>Con se\u00f1al, vuelva a cargar.</p><button class="btn primary" onclick="location.reload()">Recargar</button></div>' : '<div class="empty"><h2>The app didn\u2019t finish loading</h2><p>Get signal, then reload. · La app no termin\u00f3 de cargar. Con se\u00f1al, vuelva a cargar.</p><button class="btn primary" onclick="location.reload()">Reload · Recargar</button></div>'; }, 6000); // a dropped file on the first open after an update; a Spanish phone gets Spanish only</script>
 <script type="module">
 import {
-  KEYS, DEFAULT_SETTINGS, esc, uid, load, save, loadSettings, nameKey, cleanName, people, findPerson, personById, crewById, addPerson, normTask, newItem, mergeTask, cloneTask, pack, unpack, linkTo, langOf, typedIn,
+  KEYS, DEFAULT_SETTINGS, checkLabel, esc, uid, load, save, loadSettings, nameKey, cleanName, people, findPerson, personById, crewById, addPerson, normTask, newItem, mergeTask, cloneTask, pack, unpack, linkTo, langOf, typedIn,
   nextId, renumberClashes, sameNumber, ensureDevice,
   today, addDays, niceDate, weekday, nowHM, span, fmtMin, t12, stamp, hrs, timeOf, field, datalist, seg, setPath, getPath, readInput, dateBar, daySummary,
   toast, sheet, ask, sendSheet, pasteSheet, makePdf, savePdf, fileAway, retryUploads, settingsView, settingsAct, restore,
@@ -53,6 +53,7 @@ let T = loadTasks();
 let day = today(), crewFilter = '', view = { v: 'board' }, openedFrom = null; // openedFrom: the Live or Records screen a sheet was opened from
 
 const persist = () => save(KEYS.tasks, T) || toast(L("This phone wouldn't save. Open Settings and download a backup."), 'bad');
+const keepSettings = () => save(KEYS.settings, S) || toast(L("This phone wouldn't save. Open Settings and download a backup."), 'bad'); // Settings and roster edits say so too, not only sheets
 const find = u => T.find(t => t.uid === u);
 const current = () => (view.v === 'task' ? find(view.uid) : null);
 const go = h => (location.hash === '#' + h ? route() : (location.hash = h));
@@ -106,7 +107,7 @@ function enlist(t) {
     return p?.id || '';
   });
   if (!added.length) return;
-  save(KEYS.settings, S);
+  keepSettings();
   toast(added.length === 1 ? L('{name} added to {crew}', { name: added[0], crew: t.crew }) : L('{names} added to {crew}', { names: added.join(', '), crew: t.crew }));
 }
 
@@ -150,6 +151,7 @@ function route() {
   }
   render();
   scrollTo(0, 0);
+  if ((was?.v !== view.v || was?.sub !== view.sub || was?.uid !== view.uid) && !document.querySelector('dialog[open]')) document.getElementById('title').focus({ preventScroll: true }); // a new screen: its title is read out and Tab starts from it, as the first run does
 }
 
 async function openCode(code) {
@@ -186,6 +188,7 @@ async function openCode(code) {
       sync.fromText('t', inc.uid, 'assign', inc.assignAt || inc.sentAt, 0, inc); // the text is its base: only what is changed here goes up, and an unchanged copy waits for the hub's (GATE4-SEC-01)
       T.push(t = Object.assign(inc, { origin: 'mine', gotAt: Date.now() }));
     } else if (!t) {
+      sync.fromText('t', inc.uid, 'assign', inc.assignAt || inc.sentAt, 0, inc); // the text is this copy's base too: the crew part goes up with a crewBase, so a phone that worked the text never wipes another phone's taps, nor loses its own to them
       T.push(t = Object.assign(inc, { origin: 'link', gotAt: Date.now() })); // a crew phone opening its sheet
       firstSheet = !S.lang && !S.me && !T.some(x => x.origin === 'mine'); // a phone with a name in Settings is an office phone
     } else if (t.origin === 'link') mergeTask(t, inc, 'assign'); // re-sent sheet: new assignment, crew check-offs kept
@@ -453,10 +456,10 @@ function assign(t) {
     ${tf(L('Work, quantities and limits of scope'), 'scope', { rows: 4, ph: L('e.g. Pull and terminate 12 AWG for lighting circuits L3-14 to L3-18, east corridor. Stop at grid line 7.') })}
     ${tf(L('Drawing / detail references'), 'refs', { wide: true, ph: L('e.g. E-301, detail 4/E-502') })}
     <div class="field wide"><span>${L('Steps the crew checks off')}</span><div class="checklist steps-edit">
-      ${t.items.map((it, i) => `<div class="edit-row"><input data-k="t.items.${i}.text" value="${esc(it.text)}" aria-label="${esc(L('Step {n}', { n: i + 1 }))}"><button class="x" data-act="delItem" data-i="${i}" aria-label="${esc(L('Remove step {n}', { n: i + 1 }))}">✕</button></div>`).join('')}
+      ${t.items.map((it, i) => `<div class="edit-row"><input data-k="t.items.${i}.text" data-id="${esc(it.id)}" value="${esc(it.text)}" aria-label="${esc(L('Step {n}', { n: i + 1 }))}"><button class="x" data-act="delItem" data-i="${i}" aria-label="${esc(L('Remove step {n}', { n: i + 1 }))}">✕</button></div>`).join('')}
       ${addRow('newItem', L('Add a step'), 'addItem')}</div></div>
     <div class="field wide"><span>${L('Required finish / accuracy checks')}</span>
-      <div class="chips">${checks.map(p => `<button class="chip" data-act="check" data-v="${esc(p)}" aria-pressed="${t.checks.some(c => c.text === p)}">${esc(p)}</button>`).join('')}</div>
+      <div class="chips">${checks.map(p => `<button class="chip" data-act="check" data-v="${esc(p)}" aria-pressed="${t.checks.some(c => c.text === p)}">${esc(checkLabel(p))}</button>`).join('')}</div>
       ${addRow('newCheck', L('Add another check'), 'addCheck')}</div>`)
   + group(L('Assigned work time & estimate'), `
       ${field(L('Allotted time (hrs)'), 't.allot', t.allot, { type: 'number', mode: 'decimal' })}
@@ -478,7 +481,7 @@ function info(t) {
   const c = ctx(), tx = k => txView(c, t[k], langOf(t, k));
   const row = (k, html, cls = '') => (html ? `<dt${cls}>${esc(k)}</dt><dd${cls}>${html}</dd>` : ''); // html: already escaped
   const note = k => (t[k] ? ' · ' + tx(k) : '');
-  return `<dl class="kv info">${row(L('Drawings'), tx('refs'))}${row(L('Planned'), t.pStart && esc(fromTo(t.pStart, t.pStop)))}${row(L('Check in at'), esc(t12(t.checkIn)))}
+  return `<dl class="kv info">${row(L('Drawings'), tx('refs'))}${row(L('Planned'), t.pStart && esc(fromTo(t.pStart, t.pStop)))}${row(L('Check-in at'), esc(t12(t.checkIn)))}
       ${row(L('Allotted'), t.allot && esc(L('{n} hrs', { n: t.allot })) + note('allotNote'))}${row(L('Estimate'), t.est && esc(L('{n} hrs', { n: t.est })) + note('estNote'))}
       ${row(L('Crew'), t.members.map(m => esc(m) + (nameKey(m) && nameKey(m) === nameKey(S.worker) ? ` (${esc(L('you'))})` : '')).join(', '), ' class="long"')}${row(L('Assigned'), esc(niceDate(t.date) + (t.by ? ' · ' + L('by {name}', { name: t.by }) : '')))}</dl>`;
 }
@@ -496,7 +499,7 @@ function workedLine(t) {
 function results(t, details = '') {
   const d = doneCount(t), n = t.items.length, c = t.checks.filter(x => x.done).length, cx = ctx();
   // a step's words in the reader's language; no tap to the original inside the tick button (that tap ticks)
-  const tick = (list, it, i) => `<button class="tick" data-act="tick" data-list="${list}" data-i="${i}" aria-pressed="${it.done}"><span class="box">✓</span><span class="txt">${txView(cx, it.text, langOf(t, it.id), getLang(), { toggle: false })}</span>${it.at ? `<small>${timeOf(it.at)}</small>` : ''}</button>`;
+  const tick = (list, it, i) => `<button class="tick" data-act="tick" data-list="${list}" data-i="${i}" aria-pressed="${it.done}"><span class="box">✓</span><span class="txt">${checkLabel(it.text) !== it.text ? esc(checkLabel(it.text)) : txView(cx, it.text, langOf(t, it.id), getLang(), { toggle: false })}</span>${it.at ? `<small>${timeOf(it.at)}</small>` : ''}</button>`;
   // Start and Stop: a big button until tapped, then the time it took, which can be fixed by hand.
   const clock = (k, label, now, primary) => `<div class="clockslot"><span>${label}</span>${t[k]
     ? `<input type="time" data-k="t.${k}" value="${esc(t[k])}" aria-label="${label}">`
@@ -512,13 +515,13 @@ function results(t, details = '') {
       <button class="x" data-act="delay" data-v="-15" aria-label="${L('15 minutes less')}">−</button>
       <input type="number" inputmode="numeric" min="0" step="any" data-k="t.delay" value="${t.delay || ''}" placeholder="0" aria-label="${L('Delay minutes')}">
       <button class="x" data-act="delay" data-v="15" aria-label="${L('15 minutes more')}">+</button></div></div>
-    <div class="field"><span>${L('Status')}</span>${seg('t.status', t.status, [['Complete', 'good', L('Complete')], ['Partial', 'warn', L('Partial')], ['Blocked', 'bad', L('Blocked')]])}</div>
+    <div class="field"><span>${L('Status')}</span>${seg('t.status', t.status, [['Complete', 'good', L('Complete')], ['Partial', 'warn', L('Partial')], ['Blocked', 'bad', L('Blocked')]], L('Status'))}</div>
   </section>
   <section class="card notes"><h2>${L('Notes')}</h2>
     ${txField(cx, L('Work / quantity completed (locations and details)'), 't.doneText', t.doneText, { rows: 3 }, langOf(t, 'doneText'))}
     ${txField(cx, L('Work remaining'), 't.remain', t.remain, { rows: 2 }, langOf(t, 'remain'))}
     ${txField(cx, L('Crew comments / concerns'), 't.comments', t.comments, { rows: 3, ph: L('What helped or slowed the work? Quality, rework, support needed') }, langOf(t, 'comments'))}
-    ${field(L('Crew / lead'), 't.lead', t.lead)}
+    ${field(L('Crew lead'), 't.lead', t.lead)}
   </section>`;
 }
 
@@ -533,7 +536,7 @@ function review(t) {
       ${row(L('Received'), esc(stamp(t.gotAt)))}</dl>`
     : `<p class="hint">${L("No results from the crew yet. They'll show here when the crew sends them, or fill them in yourself on the Crew results tab.")}</p>`}</section>`
   + group(L('Lead / superintendent review'), `
-    <div class="field wide">${seg('t.review', t.review, [['Accepted', 'good', L('Accepted')], ['Follow-up needed', 'warn', L('Follow-up needed')]])}</div>
+    <div class="field wide">${seg('t.review', t.review, [['Accepted', 'good', L('Accepted')], ['Follow-up needed', 'warn', L('Follow-up needed')]], L('Review'))}</div>
     ${field(L('Reviewed by'), 't.reviewer', t.reviewer)}
     ${txField(cx, L('Follow-up / next step'), 't.followUp', t.followUp, { rows: 3 }, langOf(t, 'followUp'))}
     <div class="form-foot"><button class="btn wide" data-act="carry">${L('Carry open work to {date}', { date: niceDate(addDays(t.date, 1)) })}</button></div>`);
@@ -572,7 +575,9 @@ const fileIfChanged = t => t && (t.status || t.review) && t.updatedAt > t.filedA
 // ---------- office passcode pad: big keys for gloved hands; a keyboard's number keys work too ----------
 
 // Resolves true once signed in (or the code is changed), false if closed.
-function passcode(mode = hasPin(S) ? 'enter' : 'create') {
+async function passcode(mode) {
+  if (!mode && !hasPin(S) && hubOn()) { try { await sync.cycle(); } catch { /* no signal: the pad decides as before */ } } // an office phone that just joined gets the office code from the hub on its first round: not asked to make its own
+  mode ||= hasPin(S) ? 'enter' : 'create';
   return new Promise(done => {
     let first = '', code = '', busy = false, checked = mode !== 'change'; // changing the code takes the current one first
     const d = sheet(`<h3>${{ enter: L('Office sign-in'), create: L('Create the office passcode'), change: L('Change the passcode') }[mode]}</h3>
@@ -594,7 +599,7 @@ function passcode(mode = hasPin(S) ? 'enter' : 'create') {
     async function full() {
       if (!checked) {
         const r = await tryPin(S, code);
-        if (r !== 'ok') return fail(r === 'wait' ? L('Too many wrong codes. Try again in a minute.') : L('Wrong passcode. Try again.'));
+        if (r !== 'ok') return fail(r === 'wait' ? L('Too many wrong codes. Try again in a minute.') : r === 'wrong' ? L('Wrong passcode. Try again.') : L("This phone wouldn't save. Open Settings and download a backup."));
         checked = true; code = ''; draw(); return ask4();
       }
       if (mode !== 'enter' && !first) { first = code; code = ''; draw(); return ask4(); }
@@ -682,7 +687,7 @@ async function firstRun() {
       if (a.role === crew) { S.worker = names().find(n => nameKey(n) === nameKey(name)) || name; S.workerId = match?.id || ''; }
       if (a.role === 'Superintendent') { S.worker = match?.name || name; S.workerId = match?.id || ''; } // their own time clock, without asking again
       S.me = a.role === crew ? '' : name; // a name typed for an office role, then backed out of, doesn't stay
-      save(KEYS.settings, S) || toast(L("This phone wouldn't save. Open Settings and download a backup."), 'bad');
+      keepSettings();
       if (hasPin(S)) save(KEYS.pin, S.pin);
       setup = false;
       d.close();
@@ -964,7 +969,7 @@ async function act(a, el) {
       for (const r of rows) { r.classList.remove('glow'); void r.offsetWidth; r.classList.add('glow'); }
       return;
     }
-    case 'addCrew': case 'delCrew': case 'backup': case 'testFolder': case 'pEdit': case 'pDel': await settingsAct(a, S, el, f => { f(S); save(KEYS.settings, S); render(); }); break; // f: a removal's Undo, on the settings as they are by then
+    case 'addCrew': case 'delCrew': case 'backup': case 'testFolder': case 'pEdit': case 'pDel': await settingsAct(a, S, el, f => { f(S); keepSettings(); render(); }); break; // f: a removal's Undo, on the settings as they are by then
     case 'pAdd': { // keep the keyboard up in that crew's box for the next name
       const crew = el.dataset.crew;
       await settingsAct(a, S, el);
@@ -991,7 +996,7 @@ document.addEventListener('click', e => {
   busy(el, () => (liveOwns(a) ? liveAct(ctx(), a, el) // the hub screens' own taps
     : a === 'clear' && hubOn() ? deleteRecord(ctx(), 'report', day) // on a hub, Clear this report deletes it the way a sheet is deleted
     : (view.v === 'clock' || view.v === 'report') && !SHELL.has(a) ? reportAct(a, el, S, day, view.v) : act(a, el)))
-    .then(() => twin(el)?.classList.add('just'));
+    .then(() => { const tw = twin(el); tw?.classList.add('just'); if (e.detail === 0 && tw && document.activeElement === document.body) tw.focus({ preventScroll: true }); }); // a keyboard tap (detail 0) keeps its place through the redraw
 });
 // The control as drawn again after a tap (a checkbox, a segment), found by its data attributes.
 const twin = el => (el.isConnected ? el : app.querySelector(['act', 'v', 'i', 'list', 'k'].filter(k => el.dataset[k] != null).map(k => `[data-${k}="${CSS.escape(el.dataset[k])}"]`).join('')));
@@ -1082,15 +1087,18 @@ document.addEventListener('input', e => {
   if (!k) { if (el.dataset.lv && !stale()) liveInput(ctx(), el); return; } // the Records search box
   if (stale()) return;
   const t = current();
-  // A pull deleted the sheet being typed in, or may have moved a list this field points into by position: redraw, write nothing.
-  if ((!t && k.startsWith('t.')) || (drawLater && /\.\d+\./.test(k))) { drawLater = false; return render(); }
+  // A pull deleted the sheet being typed in, or may have moved a list this field points into by position: redraw, write nothing,
+  // unless the entry at that position is still the one drawn (its id is on the input; a report list, as stored, the same before
+  // and after the pull, drawSoon): then the typing lands where it was meant to.
+  const li = /^(s\.crews|t\.items|t\.checks)\.(\d+)\./.exec(k), same = li ? getPath({ t, s: S }, li[1])?.[+li[2]]?.id === el.dataset.id : k.startsWith('r.') && !drawLater.moved;
+  if ((!t && k.startsWith('t.')) || (drawLater && /\.\d+\./.test(k) && !same)) { drawLater = false; return render(); }
   if (k.startsWith('r.')) { reportInput(el, S, day); return liveInput(ctx(), el); } // and its translated preview, if it has one
   if (k.startsWith('h.')) return hoursInput(el, S, day);
   if (k === 't.date' && !/^\d{4}-\d{2}-\d{2}$/.test(el.value)) return; // every sheet needs a real day; a cleared or half-typed date would hide it
   setPath({ t, s: S }, k, readInput(el));
   if (k.startsWith('s.')) {
     if (k === 's.worker' && nameKey(personById(S, S.workerId)?.name) !== nameKey(S.worker)) S.workerId = ''; // another name typed: no longer that person (report.mjs attachShifts)
-    save(KEYS.settings, S);
+    keepSettings();
     if (k === 's.lang' || k === 's.role') { setLang(S.lang); render(); }
     return;
   }
@@ -1106,7 +1114,7 @@ document.addEventListener('input', e => {
 document.addEventListener('change', e => {
   if (stale()) return;
   if (e.target.matches('[data-pick]') && e.target.value) go(`${e.target.dataset.pick || 'day'}/${e.target.value}`);
-  if (e.target.matches('[data-restore]') && e.target.files[0]) { const f = e.target.files[0]; e.target.value = ''; busy(e.target.closest('label'), () => restore(f)); } // cleared, so the same file can be picked again after a Cancel
+  if (e.target.matches('[data-restore]') && e.target.files[0]) { const f = e.target.files[0]; e.target.value = ''; busy(e.target.closest('label'), () => restore(f).then(r => { if (r === 'partial') reload(); })); } // cleared, so the same file can be picked again after a Cancel; a restore cut short wrote some keys: show storage as it is
   if (e.target.dataset.k === 't.date' && /^\d{4}-\d{2}-\d{2}$/.test(e.target.value)) day = e.target.value; // moved to another day
   if (e.target.dataset.k === 's.worker') workerChange(S);
 });
@@ -1167,10 +1175,13 @@ function remove(kind, key) {
 }
 // The sync saved what it pulled: every in-memory copy reloads now, before any further tap. The screen redraws too, but
 // never under a field someone is typing in: then it waits until the field is left, and until the tap that left it lands.
-let drawLater = false;
+let drawLater = false; // while someone types: { moved }, whether a pull replaced the report list the field points into (the input handler)
 const typing = () => !!document.activeElement?.matches?.('textarea, select, input:not([type=checkbox]):not([type=radio]):not([type=button]):not([type=file])') && app.contains(document.activeElement);
-function drawSoon() {
-  if (typing()) return void (drawLater = true);
+// The report list this page holds that a focused report field points into by position (r.floors.0.crews for r.floors.0.crews.0.lead):
+// taken before and after reloadData, so a pull that replaced it is told from one that did not (the sync saved to storage before either).
+const listSnap = k => { const m = /^(r\..*)\.\d+\.[^.]+$/.exec(k || ''); return m ? JSON.stringify(getPath({ r: reportsNow()[day] }, m[1])) : ''; };
+function drawSoon(sameList = false) { // sameList: the caller knows the pull left the focused field's report list as it was
+  if (typing()) return void (drawLater = { moved: !!drawLater.moved || !sameList });
   drawLater = false;
   if (needsOffice(view) && !office()) return route();
   // A background sync replaces rows: keep the focused task reachable by Enter after the redraw.
@@ -1181,7 +1192,7 @@ function drawSoon() {
 document.addEventListener('focusout', () => { if (drawLater) setTimeout(() => drawLater && drawSoon(), 300); });
 const SYNCED = new Set([KEYS.tasks, KEYS.reports, KEYS.hours, KEYS.crewHours, KEYS.settings]);
 // A status change redraws the header dot, and the two screens that are about the hub; Settings redraws after its own taps.
-sync.initHub({ S, toast, onChange: () => { reloadData(); drawSoon(); }, onStatus: () => { if (!stale()) header(); if (view.v === 'live' || view.v === 'hub') drawSoon(); } }); // stale(): a sign-in that ran out goes behind the passcode
+sync.initHub({ S, toast, onChange: () => { const k = typing() ? document.activeElement.dataset.k : '', was = listSnap(k); reloadData(); drawSoon(!!k && was === listSnap(k)); }, onStatus: () => { if (!stale()) header(); if (view.v === 'live' || view.v === 'hub') drawSoon(); } }); // stale(): a sign-in that ran out goes behind the passcode
 onSave(k => SYNCED.has(k) && sync.poke()); // after every save; the sync's own timer and wake-ups catch anything else
 setTextField((label, k, v, o, lang) => txField(ctx(), label, k, v, o, lang)); // the daily report's typed text
 new MutationObserver(() => liveAfter(ctx(), app)).observe(app, { childList: true }); // after every draw: translate the typed text on screen

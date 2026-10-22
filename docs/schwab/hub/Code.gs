@@ -74,12 +74,12 @@ const KINDS = { task: 'tasks', tasks: 'tasks', shift: 'shifts', shifts: 'shifts'
 // ---------- entity templates (what a stored entity looks like) ----------
 // 's' = short text (200 chars), 't' = long text (8000), 0 = number >= 0, false/true = boolean (the default is kept).
 // Local-only task fields (origin, from, gotAt, filedAt, updatedAt) are not here: they never leave a phone.
-const ASSIGN = ['id', 'date', 'by', 'floor', 'area', 'crew', 'crewId', 'members', 'memberIds', 'size', 'scope', 'refs', 'allot', 'allotNote', 'est', 'estNote', 'pStart', 'pStop', 'checkIn'];
+const ASSIGN = ['from', 'id', 'date', 'by', 'floor', 'area', 'crew', 'crewId', 'members', 'memberIds', 'size', 'scope', 'refs', 'allot', 'allotNote', 'est', 'estNote', 'pStart', 'pStop', 'checkIn'];
 const CREW = ['lead', 'aStart', 'aStop', 'delay', 'status', 'doneText', 'remain', 'comments', 'cLang', 'cLangs', 'resultAt'];
 const OFFICE_EXTRA = ['review', 'reviewer', 'followUp', 'reply', 'replyAt', 'replyBy', 'aLang', 'aLangs', 'sentAt'];
 const ITEM = { id: 's', text: 's', done: false, at: 0 };
 const TASK = {
-  uid: 's', id: 's', date: 's', by: 's', floor: 's', area: 's', crew: 's', crewId: 's', members: ['s'], memberIds: ['s'], size: 0, scope: 't', refs: 't',
+  uid: 's', from: 's', id: 's', date: 's', by: 's', floor: 's', area: 't', crew: 's', crewId: 's', members: ['s'], memberIds: ['s'], size: 0, scope: 't', refs: 't', // from: the sheet this one carried (uid), so a second office phone does not carry it again; area: a room list can run long
   allot: 0, allotNote: 't', est: 0, estNote: 't', pStart: 's', pStop: 's', checkIn: 's',
   items: [ITEM], checks: [ITEM],
   review: 's', reviewer: 's', followUp: 't', reply: 't', replyAt: 0, replyBy: 's', aLang: 's', aLangs: {}, sentAt: 0, assignAt: 0,
@@ -96,10 +96,10 @@ function langs_(m) {
 // A shift names the person (pid), the crew (crewId) and the task sheets (uid) by id; who, crew and tasks[].id are the labels
 // they had then, for reading.
 const SHIFT = { id: 's', device: 's', who: 's', pid: 's', date: 's', in: 's', out: 's', crew: 's', crewId: 's', tasks: [{ uid: 's', id: 's' }], edited: { who: false, in: false, out: false }, gone: false, at: 0 };
-const CREW_BLOCK = { name: 's', na: true, lead: 's', workers: 0, labor: 0, laborFromTasks: false, members: 't', area: 's', ref: 's', start: 's', stop: 's', done: 't', quality: 't', holdups: 't', good: 't' };
+const CREW_BLOCK = { name: 's', na: true, lead: 's', workers: 0, labor: 0, laborFromTasks: false, members: 't', area: 't', ref: 't', start: 's', stop: 's', done: 't', quality: 't', holdups: 't', good: 't' }; // area and ref are filled from the day's sheets: long text, never clipped at 200
 const REPORT = {
   date: 's', super: 's', shiftStart: 's', shiftEnd: 's', submittedAt: 0, status: 's', results: 't', wins: 't', issues: 't', notified: 't',
-  needs: [{ item: 's', qty: 's', where: 's', confirmed: false, by: 's' }],
+  needs: [{ item: 't', qty: 's', where: 's', confirmed: false, by: 's' }],
   decisions: [{ q: 't', rec: 't', by: 's', pm: 't', pmNote: 't' }],
   floors: [{ floor: 's', crews: [CREW_BLOCK] }],
   next: [{ step: 't', prereq: 't', start: 's', dur: 's', finish: 's', deadline: 's', lead: 's', checkin: 's' }],
@@ -738,8 +738,14 @@ function structure_(incoming, stored) { // the office decides which items exist;
 function takes_(base, newer, mine, was, cur) { const j = JSON.stringify; return !base || (j(mine) !== j(was) && (newer || j(cur) === j(was))); }
 // A list the same way (a sheet's steps, the roster, floors): entries the phone added, removed or changed since its base go
 // in, field by field as above; the stored list's other entries (another phone's adds and edits) stay, and one another phone
-// removed stays removed. Entries match by key_. Without a base the phone's list is taken whole.
+// removed stays removed. An entry this phone took out that the other phone changed since the base stays, changed (as a
+// report entry does, merge3_): nothing typed is lost to a removal made without seeing it. Entries match by key_. Without a
+// base the phone's list is taken whole.
 function key_(x) { return isObj_(x) ? x.id || '#' + nameKey_(x.name) : String(x); } // an id; a crew from an older phone by name; a floor or check as itself
+function changedSince_(s, b) { // a stored entry's office fields differ from the base's (a step's done and at are the crew's ticks, not an edit)
+  if (!isObj_(s) || !isObj_(b)) return JSON.stringify(s) !== JSON.stringify(b);
+  return Object.keys(b).some(function (f) { return f !== 'done' && f !== 'at' && JSON.stringify(s[f]) !== JSON.stringify(b[f]); });
+}
 function list3_(stored, mine, base, newer) {
   if (!base) return mine;
   const by = function (l) { const m = dict_(); l.forEach(function (x) { m[key_(x)] = x; }); return m; }, S = by(stored), B = by(base);
@@ -750,9 +756,9 @@ function list3_(stored, mine, base, newer) {
   });
   const placed = by(out);
   let at = 0;
-  stored.forEach(function (x) { // another phone's additions, each after the entry it followed
+  stored.forEach(function (x) { // another phone's additions, each after the entry it followed; one this phone took out stays only if the other changed it since
     const k = key_(x);
-    if (placed[k] !== undefined) at = out.indexOf(placed[k]) + 1; else if (B[k] === undefined) out.splice(at++, 0, x);
+    if (placed[k] !== undefined) at = out.indexOf(placed[k]) + 1; else if (B[k] === undefined || changedSince_(x, B[k])) out.splice(at++, 0, x);
   });
   return out;
 }
@@ -841,7 +847,10 @@ function mergeShift_(ctx, stored, inc) {
     const newer = !stored || inc.pmAt >= stored.pmAt;
     if (base) {
       s = clone_(stored);
-      ['who', 'in', 'out'].forEach(function (f) { if (takes_(base, newer, [inc[f], inc.edited[f]], [base[f], base.edited[f]], [s[f], s.edited[f]])) { s[f] = inc[f]; s.edited[f] = inc.edited[f]; } });
+      ['who', 'in', 'out'].forEach(function (f) {
+        if (f === 'out' && !inc.out && !inc.edited.out && s.out && s.device) return; // a blank unflagged out is never a change to a worker's punch: a PM phone must not erase a clock-out (as without a base, below); a shift the PM added (no device) is the PM's to clear
+        if (takes_(base, newer, [inc[f], inc.edited[f]], [base[f], base.edited[f]], [s[f], s.edited[f]])) { s[f] = inc[f]; s.edited[f] = inc.edited[f]; }
+      });
       ['pid', 'crew', 'crewId', 'tasks', 'date', 'gone'].forEach(function (k) { if (takes_(base, newer, inc[k], base[k], s[k])) s[k] = inc[k]; });
     } else if (newer) {
       s = clone_(inc);
@@ -852,8 +861,12 @@ function mergeShift_(ctx, stored, inc) {
       }
     } else s = clone_(stored);
     if (stored) { s.at = Math.max(stored.at, inc.at); s.pmAt = Math.max(stored.pmAt, inc.pmAt); }
-    ev.push([stored ? (s.gone && !stored.gone ? 'pm.remove' : 'pm.edit') : 'pm.add', 'PM',
-      line(!stored ? 'PM added a shift for' : s.gone && !stored.gone ? 'PM removed a shift for' : 'PM edited', s), s.id]);
+    if (!stored && inc.device !== '' && !edited_(inc) && !inc.gone) { // a worker's own punch relayed by the PM phone (an hours text opened there): the worker's event, as from their phone
+      ev.push([s.out ? 'clock.out' : 'clock.in', s.who, s.who + (s.out ? ' clocked out at ' + t12_(s.out) : ' clocked in at ' + t12_(s.in)) + ', ' + s.date, s.id]);
+    } else {
+      ev.push([stored ? (s.gone && !stored.gone ? 'pm.remove' : 'pm.edit') : 'pm.add', 'PM',
+        line(!stored ? 'PM added a shift for' : s.gone && !stored.gone ? 'PM removed a shift for' : 'PM edited', s), s.id]);
+    }
   }
   return { obj: s, events: ev };
 }
@@ -1288,7 +1301,7 @@ const RECORD_KINDS = { task: 'tasks', tasks: 'tasks', shift: 'shifts', shifts: '
 function normEvent_(raw) { return shape_({ rev: 0, ts: 0, who: 's', role: 's', kind: 's', text: 't', ref: 's' }, raw); }
 const RECORD_FIELDS = {
   tasks: { norm: normTask_, key: function (o) { return o.uid; }, who: function (o) { return [o.crew, o.lead, o.by, o.members.join(' ')].join(' '); } },
-  shifts: { norm: normShift_, key: function (o) { return o.id; }, who: function (o) { return o.who; } },
+  shifts: { norm: normShift_, key: function (o) { return o.id; }, who: function (o) { return o.who + ' ' + o.pid; } }, // by name, or by the person's roster id (a rename keeps the id; old rows keep the old name)
   reports: { norm: normReport_, key: function (o) { return o.date; }, who: function (o) { return o.super + ' ' + o.preparedBy; } },
   events: { norm: normEvent_, key: function (o) { return String(o.rev); }, who: function (o) { return o.who; } },
 };

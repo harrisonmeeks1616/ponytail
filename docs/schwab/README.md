@@ -265,7 +265,7 @@ Do not treat a public health reply or a green status dot as a substitute for all
 - A worker moved to another crew in Settings, or put on another crew's sheet, gets those sheets on their phone by
   themselves (the phone follows its person on the crew list).
 - A Sheet holds 10 million cells. Records shows how full it is and warns at 70%. **Archive older records** moves
-  everything before a date (at least 30 days back) into a new archive Sheet; it stays readable there.
+  everything before a date (at least 60 days back, so no phone still holds what moves) into a new archive Sheet; it stays readable there.
 - If every phone keeps saying the hub had a problem after an archive or a run of hours changes, and the script's
   Executions show a "hub error" on every request, open Project Settings > Script Properties in the script editor:
   delete `WEEKLY_DIRTY` if it is there, else copy the value of `ARCHIVE_PENDING` and delete it. HUB.md (Protocol

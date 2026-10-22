@@ -240,7 +240,7 @@ button.row:active, a.row:active { background: var(--fill); }
 .field.wide { grid-column: 1 / -1; }
 .field > span { font: 600 .9375rem/1.3 var(--font); color: var(--muted); }
 input:not([type=checkbox]):not([type=file]):not([type=radio]), select, textarea {
-  width: 100%; min-height: 48px; padding: 11px 12px; border: 1px solid var(--line-strong); border-radius: 10px;
+  width: 100%; min-height: 48px; padding: 11px 12px; border: 1px solid var(--box); border-radius: 10px; /* --box: the 3:1 edge a text box needs on a white page (grouped lists override it) */
   background: var(--field); font-size: 1.0625rem; /* 16px or more stops iPhones zooming into a field */
 }
 input[type=search] { -webkit-appearance: none; appearance: none; }
@@ -250,7 +250,7 @@ input:is([type=date], [type=time]) { -webkit-appearance: none; appearance: none;
 input::-webkit-date-and-time-value { text-align: left; }
 input::-webkit-datetime-edit-fields-wrapper { padding: 0; } /* Android adds 1 px above and below: the box stood 2 px taller than its neighbors */
 textarea { resize: vertical; min-height: 88px; field-sizing: content; max-height: 50vh; line-height: 1.4; }
-::placeholder { color: var(--muted); opacity: .8; }
+::placeholder { color: var(--muted); opacity: 1; } /* muted alone is AA on every field; at .8 it was 3.7:1 */
 .kv { display: grid; grid-template-columns: auto 1fr; gap: 6px 16px; margin: 0; font-variant-numeric: tabular-nums; }
 .kv dt { color: var(--muted); font-size: .9375rem; }
 .kv dd { margin: 0; min-width: 0; overflow-wrap: anywhere; }
@@ -503,7 +503,7 @@ input[type=search] { -webkit-appearance: none; appearance: none; }
 /* The hub dot in the brand strip: a ring when offline, filled when live, so it never depends on color alone. */
 .icon-btn.hubdot { padding: 0; }
 .hubdot i { display: block; width: 14px; height: 14px; border-radius: 50%; border: 2px solid var(--tint); background: var(--done); }
-.hubdot[data-state=syncing] i { background: var(--c2); }
+.hubdot[data-state=syncing] i { background: var(--info); } /* one color for syncing, as the Settings hub dot below */
 .hubdot[data-state=offline] i { background: transparent; }
 .hubdot[data-state=error] i { background: var(--bad); }
 /* Signed in, the dot rides on the Live tab's icon: a fourth button in the brand strip would shrink both company names. */
