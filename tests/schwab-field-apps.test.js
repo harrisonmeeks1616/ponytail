@@ -872,6 +872,31 @@ test('the hub link, key, role and crew have a key of their own: an old tab, a di
   } finally { (await lib).onSave(() => {}); delete globalThis.localStorage; }
 });
 
+test('a full phone: the right passcode is never called wrong, a restore never brings a hub key, and a restore cut short leaves the keys it wrote', async () => {
+  const { KEYS, pinHash, tryPin, unlocked, loadSettings, load, restoreData } = await lib;
+  const store = new Map();
+  let full = false, failOn = null;
+  Object.defineProperty(globalThis, 'localStorage', { configurable: true, value: { getItem: k => store.get(k) ?? null, setItem: (k, v) => { if (full || k === failOn) throw new Error('QuotaExceededError'); store.set(k, String(v)); }, removeItem: k => store.delete(k) } });
+  try {
+    const office = { pin: await pinHash('4821', '4821000000000000') }, t0 = 1.8e12;
+    full = true;
+    assert.equal(await tryPin(office, '4821', t0), 'unsaved', 'the right code on a phone that cannot write is reported as unsaved, not wrong');
+    assert.equal(unlocked(t0), false);
+    assert.equal(await tryPin(office, '0000', t0), 'wrong', 'a wrong code is still wrong');
+    full = false;
+    // A crafted or hand-edited file carrying a hub key and role never connects this phone: as backupData, the key is left out.
+    const hub = { hubUrl: 'https://script.google.com/macros/s/other/exec', hubKey: 'K'.repeat(32), hubRole: 'pm', hubCrew: '' };
+    assert.ok(restoreData({ [KEYS.settings]: { me: 'Pat', ...hub }, [KEYS.hub]: hub }));
+    assert.deepEqual([load(KEYS.hub, {}).hubKey, loadSettings().hubKey, loadSettings().hubUrl], ['', '', hub.hubUrl], 'the address stays, the key is asked for again');
+    // A restore that stops for lack of space has written the keys before the full one: the caller shows storage as it is (restore() answers partial).
+    store.clear();
+    failOn = KEYS.tasks;
+    assert.equal(restoreData({ [KEYS.settings]: { me: 'Restored' }, [KEYS.tasks]: [], [KEYS.reports]: { x: 1 } }), false);
+    assert.equal(loadSettings().me, 'Restored', 'settings were written before the full key');
+    assert.equal(store.has(KEYS.reports), false, 'nothing after it');
+  } finally { delete globalThis.localStorage; }
+});
+
 test('two first calls for the device secret make one secret', async () => {
   const { KEYS, ensureDevice, deviceSecret } = await lib;
   const store = new Map(), writes = [];

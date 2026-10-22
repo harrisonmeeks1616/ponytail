@@ -53,6 +53,7 @@ let T = loadTasks();
 let day = today(), crewFilter = '', view = { v: 'board' }, openedFrom = null; // openedFrom: the Live or Records screen a sheet was opened from
 
 const persist = () => save(KEYS.tasks, T) || toast(L("This phone wouldn't save. Open Settings and download a backup."), 'bad');
+const keepSettings = () => save(KEYS.settings, S) || toast(L("This phone wouldn't save. Open Settings and download a backup."), 'bad'); // Settings and roster edits say so too, not only sheets
 const find = u => T.find(t => t.uid === u);
 const current = () => (view.v === 'task' ? find(view.uid) : null);
 const go = h => (location.hash === '#' + h ? route() : (location.hash = h));
@@ -106,7 +107,7 @@ function enlist(t) {
     return p?.id || '';
   });
   if (!added.length) return;
-  save(KEYS.settings, S);
+  keepSettings();
   toast(added.length === 1 ? L('{name} added to {crew}', { name: added[0], crew: t.crew }) : L('{names} added to {crew}', { names: added.join(', '), crew: t.crew }));
 }
 
@@ -594,7 +595,7 @@ function passcode(mode = hasPin(S) ? 'enter' : 'create') {
     async function full() {
       if (!checked) {
         const r = await tryPin(S, code);
-        if (r !== 'ok') return fail(r === 'wait' ? L('Too many wrong codes. Try again in a minute.') : L('Wrong passcode. Try again.'));
+        if (r !== 'ok') return fail(r === 'wait' ? L('Too many wrong codes. Try again in a minute.') : r === 'wrong' ? L('Wrong passcode. Try again.') : L("This phone wouldn't save. Open Settings and download a backup."));
         checked = true; code = ''; draw(); return ask4();
       }
       if (mode !== 'enter' && !first) { first = code; code = ''; draw(); return ask4(); }
@@ -682,7 +683,7 @@ async function firstRun() {
       if (a.role === crew) { S.worker = names().find(n => nameKey(n) === nameKey(name)) || name; S.workerId = match?.id || ''; }
       if (a.role === 'Superintendent') { S.worker = match?.name || name; S.workerId = match?.id || ''; } // their own time clock, without asking again
       S.me = a.role === crew ? '' : name; // a name typed for an office role, then backed out of, doesn't stay
-      save(KEYS.settings, S) || toast(L("This phone wouldn't save. Open Settings and download a backup."), 'bad');
+      keepSettings();
       if (hasPin(S)) save(KEYS.pin, S.pin);
       setup = false;
       d.close();
@@ -964,7 +965,7 @@ async function act(a, el) {
       for (const r of rows) { r.classList.remove('glow'); void r.offsetWidth; r.classList.add('glow'); }
       return;
     }
-    case 'addCrew': case 'delCrew': case 'backup': case 'testFolder': case 'pEdit': case 'pDel': await settingsAct(a, S, el, f => { f(S); save(KEYS.settings, S); render(); }); break; // f: a removal's Undo, on the settings as they are by then
+    case 'addCrew': case 'delCrew': case 'backup': case 'testFolder': case 'pEdit': case 'pDel': await settingsAct(a, S, el, f => { f(S); keepSettings(); render(); }); break; // f: a removal's Undo, on the settings as they are by then
     case 'pAdd': { // keep the keyboard up in that crew's box for the next name
       const crew = el.dataset.crew;
       await settingsAct(a, S, el);
@@ -1092,7 +1093,7 @@ document.addEventListener('input', e => {
   setPath({ t, s: S }, k, readInput(el));
   if (k.startsWith('s.')) {
     if (k === 's.worker' && nameKey(personById(S, S.workerId)?.name) !== nameKey(S.worker)) S.workerId = ''; // another name typed: no longer that person (report.mjs attachShifts)
-    save(KEYS.settings, S);
+    keepSettings();
     if (k === 's.lang' || k === 's.role') { setLang(S.lang); render(); }
     return;
   }
@@ -1108,7 +1109,7 @@ document.addEventListener('input', e => {
 document.addEventListener('change', e => {
   if (stale()) return;
   if (e.target.matches('[data-pick]') && e.target.value) go(`${e.target.dataset.pick || 'day'}/${e.target.value}`);
-  if (e.target.matches('[data-restore]') && e.target.files[0]) { const f = e.target.files[0]; e.target.value = ''; busy(e.target.closest('label'), () => restore(f)); } // cleared, so the same file can be picked again after a Cancel
+  if (e.target.matches('[data-restore]') && e.target.files[0]) { const f = e.target.files[0]; e.target.value = ''; busy(e.target.closest('label'), () => restore(f).then(r => { if (r === 'partial') reload(); })); } // cleared, so the same file can be picked again after a Cancel; a restore cut short wrote some keys: show storage as it is
   if (e.target.dataset.k === 't.date' && /^\d{4}-\d{2}-\d{2}$/.test(e.target.value)) day = e.target.value; // moved to another day
   if (e.target.dataset.k === 's.worker') workerChange(S);
 });

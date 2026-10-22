@@ -793,7 +793,7 @@ export function joinSheet(ctx, data) {
 }
 function patchSettings(ctx, p) { // the stored settings keep the hub fields the sync engine wrote, so this merges rather than replaces
   Object.assign(ctx.S, p);
-  save(KEYS.settings, { ...load(KEYS.settings, {}), ...p });
+  save(KEYS.settings, { ...load(KEYS.settings, {}), ...p }) || ctx.toast(L("This phone wouldn't save. Open Settings and download a backup."), 'bad');
 }
 
 // ---------- taps and typing ----------

@@ -359,6 +359,7 @@ export default {
   'Name': 'Nombre',
   'Add the shift': 'Agregar el turno',
   'Add the name, the date and the clock-in time': 'Escriba el nombre, la fecha y la hora de entrada',
+  'Type a time, or remove the shift': 'Escriba una hora, o quite el turno',
   'Rename {name}': 'Cambiar el nombre de {name}',
   'Name on the timesheet': 'Nombre en la hoja de horas',
   'Type the name': 'Escriba el nombre',

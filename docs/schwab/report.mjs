@@ -132,7 +132,7 @@ export function workerChange(S) {
   if (match && match !== S.worker) { S.worker = match; $('app').querySelector('[data-k="s.worker"]').value = match; }
   const ts = twins(S);
   S.workerId = ts.length ? (ts.some(p => p.id === S.workerId) ? S.workerId : '') : findPerson(S, S.worker)?.id || '';
-  save(KEYS.settings, S);
+  keep(KEYS.settings, S);
   $('nameHint').innerHTML = nameHint(S, known);
   const who = `${nameKey(S.worker)}|${S.workerId}`;
   if (card.dataset.name !== who) { card.dataset.name = who; card.innerHTML = todayCard(S); }
@@ -264,7 +264,7 @@ export function attachPeople(S, shifts) {
 // Typing another name in the box lets go of the id first (tasks.html), so this never takes a typed name back.
 export const attachShifts = S => {
   const me = personById(S, S.workerId);
-  if (me && me.name !== S.worker) { S.worker = me.name; save(KEYS.settings, S); }
+  if (me && me.name !== S.worker) { S.worker = me.name; save(KEYS.settings, S); } // at load, not a typed edit: the next typed one says so if the phone is full
   if (attachPeople(S, CREW)) keep(KEYS.crewHours, CREW); if (attachPeople(S, MY)) keep(KEYS.hours, MY);
 };
 // One timesheet per person, in name order, each with key (for the buttons) and pid. A person on S's roster shows under
@@ -355,7 +355,10 @@ function joinCrew(S, day, key) {
 export function hoursInput(el, S, day) {
   if (!canEditPM()) return toast(hoursReadOnly(), 'bad');
   const [, id, f] = el.dataset.k.split('.'), s = CREW.find(x => x.id === id);
-  if (!s || !['in', 'out'].includes(f) || (f === 'in' && !el.value)) return;
+  if (!s || !['in', 'out'].includes(f)) return;
+  // A worker's punch is never blanked from here: the hub would store the blank over their clock-out (its two-PM-device merge
+  // takes a changed field as sent), and their phone would pull it. The box goes back to the time; remove the shift instead.
+  if (!el.value && (f === 'in' || s.device)) { el.value = s[f]; return toast(L('Type a time, or remove the shift'), 'bad'); }
   s[f] = el.value;
   s.edited[f] = !!el.value; // a clock-out box cleared again is the worker's clock-out to fill, not the PM's
   el.closest('.field')?.classList.toggle('edited', s.edited[f]); // the dot on the box the PM changed

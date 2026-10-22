@@ -473,11 +473,12 @@ export const unlocked = (now = Date.now()) => lockState().until > now;
 export const signIn = (now = Date.now()) => save(UNLOCK, { until: now + OPEN_MS, fails: 0, wait: 0 });
 export const signOut = () => save(UNLOCK, { until: 0, fails: 0, wait: 0 });
 export const waitLeft = (now = Date.now()) => Math.max(0, lockState().wait - now);
-// 'ok' (signed in), 'wrong', or 'wait' (too many wrong codes; waitLeft() says how long).
+// 'ok' (signed in), 'wrong', 'wait' (too many wrong codes; waitLeft() says how long), or 'unsaved' (the right code, but a full
+// phone could not record the sign-in: never reported as a wrong code).
 export async function tryPin(s, pin, now = Date.now()) {
   const st = lockState();
   if (st.wait > now) return 'wait';
-  if (hasPin(s) && await pinHash(pin, s.pin.slice(0, 16)) === s.pin) return signIn(now) ? 'ok' : 'wrong';
+  if (hasPin(s) && await pinHash(pin, s.pin.slice(0, 16)) === s.pin) return signIn(now) ? 'ok' : 'unsaved';
   const fails = st.fails + 1, out = fails >= TRIES;
   save(UNLOCK, { until: st.until, fails: out ? 0 : fails, wait: out ? now + WAIT_MS : 0 }); // a wrong code never signs anyone out
   return out ? 'wait' : 'wrong';
@@ -1146,7 +1147,7 @@ export async function settingsAct(act, s, el, change = f => { f(s); save(KEYS.se
       toast(e instanceof TypeError ? L("Couldn't reach the review folder. Check the link and your signal.") : L('Review folder said: {error}', { error: folderSays(e.message) }), 'bad');
     }
   }
-  save(KEYS.settings, s);
+  save(KEYS.settings, s) || toast(L("This phone wouldn't save. Open Settings and download a backup."), 'bad'); // a full phone says so, as a sheet does
 }
 
 // Everything this phone keeps, including pending PDFs, as stored, except the hub key: a backup file gets passed around, and the PM can send a
@@ -1164,6 +1165,7 @@ export const isBackup = data => !!data && typeof data === 'object' && Object.val
 // was unsynced at backup time goes up and what the hub got since comes back. This phone's own record described the old
 // stores, so it goes first; with none in the backup (or a restore cut short) the next round merges pull-first.
 export const restoreData = data => {
+  for (const k of [KEYS.settings, KEYS.hub]) if (data[k] && typeof data[k] === 'object') data[k] = { ...data[k], hubKey: '' }; // as backupData leaves it out: a file never connects a phone to a hub (README, Backups)
   try { localStorage.removeItem(SYNC); } catch {}
   return (data[KEYS.settings] == null || save(KEYS.roster, null)) && [...Object.values(KEYS), OUTBOX, SYNC].every(k => data[k] == null || save(k, k === OUTBOX ? clean(data[k]) : data[k]));
 };
@@ -1173,7 +1175,7 @@ export async function restore(file) {
   try { data = JSON.parse(await file.text()); } catch { return toast(L("That file isn't a field app backup"), 'bad'); }
   if (!isBackup(data)) return toast(L("That file isn't a field app backup"), 'bad');
   if (!await ask(L('Replace everything on this phone with this backup?'), L('Replace'), 'danger')) return;
-  if (!restoreData(data)) return toast(L('Restore stopped: this phone is out of space. Free space and restore again.'), 'bad');
+  if (!restoreData(data)) { toast(L('Restore stopped: this phone is out of space. Free space and restore again.'), 'bad'); return 'partial'; } // the keys before the full one are written: the page reloads what it shows from storage
   location.reload();
 }
 

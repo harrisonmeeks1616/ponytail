@@ -2564,6 +2564,12 @@ test('Crew hours imports, edits and actions follow the connected key role while 
       assert.equal(storage.get('schwab.crewHours')[0].in, '08:00', 'the actual PM key can correct a shift');
       assert.equal(report.openHours({ at: T0, shifts: [{ ...original, id: 'imported-guard-shift', device: 'fictional-device', who: 'Second fictional worker' }] }, S), DAY, 'the actual PM key can open hours links');
       assert.equal(storage.get('schwab.crewHours').length, 2);
+      // Clearing the Out box on a worker's punch is refused (the hub would store the blank over their clock-out); the box goes back to the time.
+      const punched = storage.get('schwab.crewHours').find(s => s.id === 'imported-guard-shift'), blank = { dataset: { k: 'h.imported-guard-shift.out' }, value: '', closest: () => null };
+      assert.equal(punched.device, 'fictional-device');
+      report.hoursInput(blank, S, DAY);
+      assert.deepEqual([storage.get('schwab.crewHours').find(s => s.id === 'imported-guard-shift').out, blank.value], ['15:00', '15:00'], 'the clock-out stays, on the shift and in the box');
+      assert.match(toast.innerHTML, /Type a time, or remove the shift/);
       mod.disconnect(); report.reloadReports(); input.value = '08:30'; report.hoursInput(input, S, DAY);
       assert.equal(storage.get('schwab.crewHours')[0].in, '08:30', 'no-hub timesheet editing still works');
       assert.equal(report.openHours({ at: T0, shifts: [{ ...original, id: 'local-guard-shift', device: 'fictional-device', who: 'Third fictional worker' }] }, S), DAY, 'no-hub hours links still work');
