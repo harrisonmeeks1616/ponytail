@@ -2105,6 +2105,8 @@ test('against the real hub/Code.gs: a phone that changes role on one hub keeps e
   const u2 = pm.addTask({ id: 'T1019-02', scope: 'Install conduit', sentAt: pm.now() });
   await step(pm, pm);
   pm.sync.disconnect();
+  assert.equal((await pm.sync.connect(URL_A, k.pm, { office: true })).error, 'pm_role', 'the PM key on a phone whose role is Superintendent is refused: its PM hours screens would never open');
+  assert.equal(pm.sync.hubStatus().state, 'off');
   pm.save('schwab.settings', { ...pm.settings(), role: 'Project manager' });
   assert.equal((await pm.sync.connect(URL_A, k.crew)).error, 'pm_key', 'now refused');
   assert.equal((await pm.sync.connect(URL_A, k.pm)).role, 'pm');

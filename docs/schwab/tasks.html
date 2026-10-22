@@ -573,7 +573,9 @@ const fileIfChanged = t => t && (t.status || t.review) && t.updatedAt > t.filedA
 // ---------- office passcode pad: big keys for gloved hands; a keyboard's number keys work too ----------
 
 // Resolves true once signed in (or the code is changed), false if closed.
-function passcode(mode = hasPin(S) ? 'enter' : 'create') {
+async function passcode(mode) {
+  if (!mode && !hasPin(S) && hubOn()) { try { await sync.cycle(); } catch { /* no signal: the pad decides as before */ } } // an office phone that just joined gets the office code from the hub on its first round: not asked to make its own
+  mode ||= hasPin(S) ? 'enter' : 'create';
   return new Promise(done => {
     let first = '', code = '', busy = false, checked = mode !== 'change'; // changing the code takes the current one first
     const d = sheet(`<h3>${{ enter: L('Office sign-in'), create: L('Create the office passcode'), change: L('Change the passcode') }[mode]}</h3>

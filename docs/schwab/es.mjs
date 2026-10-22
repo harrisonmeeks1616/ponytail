@@ -302,6 +302,9 @@ export default {
   'No hours yet this week.': 'Todavía no hay horas esta semana.',
   'On the clock': 'En turno',
   'No clock-out': 'Sin salida',
+  'Over 16 hours: check the times': 'Más de 16 horas: revise las horas',
+  'This shift was clocked in as {name}. Type that name to clock out, or ask the PM to fix it.': 'Este turno se marcó como {name}. Escriba ese nombre para marcar la salida, o pida al gerente de proyecto que lo corrija.',
+  'Replace everything on this phone with this backup? It is from another hub or role, so this phone leaves its hub: to connect again you need the PM key or a new invite.': '¿Reemplazar todo en este teléfono con esta copia de seguridad? Es de otro sistema central u otro rol, así que este teléfono sale de su sistema central: para conectarse otra vez necesita la clave del gerente de proyecto o una invitación nueva.',
   'Week total: {n} hrs': 'Total de la semana: {n} h',
   'Last week: {n} hrs': 'Semana pasada: {n} h',
   'Each Clock in and Clock out opens a text to the PM. Send it every time: it carries your last two weeks, so a missed text catches up. Only the PM can change hours.': 'Cada entrada y salida que marque abre un mensaje para el gerente de proyecto. Envíelo siempre: lleva sus últimas dos semanas, así que un mensaje que no salió se pone al día. Solo el gerente de proyecto puede cambiar las horas.',
@@ -824,6 +827,7 @@ export default {
 
   // a phone on the hub in the wrong role, and what joining says (OWNER3)
   'That is the crew key: crew phones join with the crew invite. On this phone, paste the PM key from the Execution log of the hub script, or open the superintendent invite.': 'Esa es la clave de cuadrilla: los teléfonos de cuadrilla se unen con la invitación de cuadrilla. En este teléfono, pegue la clave del gerente de proyecto del registro de ejecución del script del sistema central, o abra la invitación del superintendente.',
+  'That is the PM key. In Settings, under This phone, set Your role to Project manager, then connect again.': 'Esa es la clave del gerente de proyecto. En Ajustes, bajo Este teléfono, ponga Su rol en Gerente de proyecto y vuelva a conectar.',
   'That is not the PM key. This phone is set to Project manager, so it connects only with the PM key from the Execution log of the hub script.': 'Esa no es la clave del gerente de proyecto. Este teléfono está configurado como gerente de proyecto, así que solo se conecta con la clave del gerente de proyecto del registro de ejecución del script del sistema central.',
   'That did not work. Check the signal and try again. If it still fails, check that the hub deployment is set to Who has access: Anyone.': 'No funcionó. Revise la señal e intente de nuevo. Si sigue sin funcionar, revise que la implementación del sistema central tenga Quién tiene acceso: Cualquier usuario.',
   'This phone is on the hub as a crew phone': 'Este teléfono está en el sistema central como teléfono de cuadrilla',

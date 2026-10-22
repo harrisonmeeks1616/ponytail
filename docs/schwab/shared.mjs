@@ -1012,6 +1012,8 @@ export function retryUploads(s) {
 
 // ---------- settings (office only: behind the passcode) ----------
 
+// Everything this app keeps on the phone, the hub sync's record and the translation cache included (they are as large as the records they describe).
+const storedChars = () => { let n = 0; try { for (let i = 0; i < localStorage.length; i++) { const k = localStorage.key(i); if (k.startsWith('schwab.')) n += (localStorage.getItem(k) || '').length; } } catch {} return n; };
 // hub: the Settings > Hub group (live.mjs hubSettingsView), between the checks and the review folder.
 export function settingsView(s, hub = '') {
   const roles = ['Crew member', 'Superintendent', 'Project manager']; // a crew phone (set on its first run) shows no office words
@@ -1038,7 +1040,7 @@ export function settingsView(s, hub = '') {
     ${setSec(L('Backup'), `<div class="fgroup">${actRow('backup', L('Download backup'))}
       <label class="row set-act">${L('Restore from backup')}<input type="file" accept="application/json,.json" data-restore class="sr"></label></div>`,
       [L('Everything is stored on this phone only. Download a backup weekly, or before clearing browser data or switching phones.'),
-        L('Using about {kb} KB of roughly 5,000 KB.', { kb: Math.ceil([...Object.values(KEYS), OUTBOX].reduce((n, k) => n + JSON.stringify(load(k, '')).length, 0) / 1024) })])}
+        L('Using about {kb} KB of roughly 5,000 KB.', { kb: Math.ceil(storedChars() / 1024) })])}
   </div>`;
 }
 // iOS Settings: a caption over each grouped list and quiet notes under it. Fields are .fgroup rows (the Daily
@@ -1164,8 +1166,12 @@ export const isBackup = data => !!data && typeof data === 'object' && Object.val
 // each record (sync.mjs schwab.hubSync) comes along and is written last: it describes the restored records, so only what
 // was unsynced at backup time goes up and what the hub got since comes back. This phone's own record described the old
 // stores, so it goes first; with none in the backup (or a restore cut short) the next round merges pull-first.
+// This phone's own hub key, when the backup names the hub and role this phone is on: the key never comes from a file (backupData
+// leaves it out; README, Backups), but a phone restoring its own backup stays connected. '' for another hub, another role, or none.
+const ownKeyFor = data => { const own = load(KEYS.hub, null), h = data[KEYS.hub]; return own?.hubKey && h && typeof h === 'object' && h.hubUrl === own.hubUrl && h.hubRole === own.hubRole ? own.hubKey : ''; };
 export const restoreData = data => {
-  for (const k of [KEYS.settings, KEYS.hub]) if (data[k] && typeof data[k] === 'object') data[k] = { ...data[k], hubKey: '' }; // as backupData leaves it out: a file never connects a phone to a hub (README, Backups)
+  const hubKey = ownKeyFor(data);
+  for (const k of [KEYS.settings, KEYS.hub]) if (data[k] && typeof data[k] === 'object') data[k] = { ...data[k], hubKey }; // a file never connects a phone to a hub
   try { localStorage.removeItem(SYNC); } catch {}
   return (data[KEYS.settings] == null || save(KEYS.roster, null)) && [...Object.values(KEYS), OUTBOX, SYNC].every(k => data[k] == null || save(k, k === OUTBOX ? clean(data[k]) : data[k]));
 };
@@ -1174,7 +1180,8 @@ export async function restore(file) {
   let data;
   try { data = JSON.parse(await file.text()); } catch { return toast(L("That file isn't a field app backup"), 'bad'); }
   if (!isBackup(data)) return toast(L("That file isn't a field app backup"), 'bad');
-  if (!await ask(L('Replace everything on this phone with this backup?'), L('Replace'), 'danger')) return;
+  const leaves = load(KEYS.hub, null)?.hubKey && data[KEYS.hub] && !ownKeyFor(data); // on a hub, and the file names another hub or role (or none): say what that costs, as Disconnect does
+  if (!await ask(leaves ? L('Replace everything on this phone with this backup? It is from another hub or role, so this phone leaves its hub: to connect again you need the PM key or a new invite.') : L('Replace everything on this phone with this backup?'), L('Replace'), 'danger')) return;
   if (!restoreData(data)) { toast(L('Restore stopped: this phone is out of space. Free space and restore again.'), 'bad'); return 'partial'; } // the keys before the full one are written: the page reloads what it shows from storage
   location.reload();
 }

@@ -873,7 +873,7 @@ test('the hub link, key, role and crew have a key of their own: an old tab, a di
 });
 
 test('a full phone: the right passcode is never called wrong, a restore never brings a hub key, and a restore cut short leaves the keys it wrote', async () => {
-  const { KEYS, pinHash, tryPin, unlocked, loadSettings, load, restoreData } = await lib;
+  const { KEYS, pinHash, tryPin, unlocked, loadSettings, load, save, restoreData } = await lib;
   const store = new Map();
   let full = false, failOn = null;
   Object.defineProperty(globalThis, 'localStorage', { configurable: true, value: { getItem: k => store.get(k) ?? null, setItem: (k, v) => { if (full || k === failOn) throw new Error('QuotaExceededError'); store.set(k, String(v)); }, removeItem: k => store.delete(k) } });
@@ -888,6 +888,13 @@ test('a full phone: the right passcode is never called wrong, a restore never br
     const hub = { hubUrl: 'https://script.google.com/macros/s/other/exec', hubKey: 'K'.repeat(32), hubRole: 'pm', hubCrew: '' };
     assert.ok(restoreData({ [KEYS.settings]: { me: 'Pat', ...hub }, [KEYS.hub]: hub }));
     assert.deepEqual([load(KEYS.hub, {}).hubKey, loadSettings().hubKey, loadSettings().hubUrl], ['', '', hub.hubUrl], 'the address stays, the key is asked for again');
+    // A phone restoring its own backup (the same hub and role) keeps the key it has; a backup from another hub or role still clears it.
+    const mine = { hubUrl: 'https://script.google.com/macros/s/mine/exec', hubKey: 'M'.repeat(32), hubRole: 'pm', hubCrew: '' };
+    save(KEYS.hub, mine);
+    assert.ok(restoreData({ [KEYS.settings]: { me: 'Pat', ...mine, hubKey: '' }, [KEYS.hub]: { ...mine, hubKey: '' } }));
+    assert.deepEqual([load(KEYS.hub, {}).hubKey, loadSettings().hubKey], [mine.hubKey, mine.hubKey], 'own backup: still connected');
+    assert.ok(restoreData({ [KEYS.hub]: { ...mine, hubRole: 'super', hubKey: '' } }));
+    assert.equal(load(KEYS.hub, {}).hubKey, '', 'another role on the same hub: the key goes');
     // A restore that stops for lack of space has written the keys before the full one: the caller shows storage as it is (restore() answers partial).
     store.clear();
     failOn = KEYS.tasks;

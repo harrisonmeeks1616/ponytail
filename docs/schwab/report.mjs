@@ -283,12 +283,16 @@ export function byPerson(shifts, l, S) { // l: 'en' for the accountant's copy; t
   }).sort((a, b) => a.who.localeCompare(b.who) || a.crew.localeCompare(b.crew));
 }
 const edited = s => s.edited.in || s.edited.out;
-// A shift's hours, or an amber No clock-out; and whether the PM changed its times (the changed box also carries a dot).
-const shiftLine = s => `${s.out ? esc(L('{n} hrs', { n: h2(cents(s)) })) : `<span class="pill" data-tone="warn">${L('No clock-out')}</span>`}${edited(s) ? ` · ${L('edited')}` : ''}`;
+// A shift open longer than any real one (16 hours, as onShift and the Live board) was a missed clock-out; a shorter one is still on the clock.
+const missed = s => !s.out && Date.now() - started(s) >= 16 * 36e5;
+// A shift's hours (flagged past 16 hours: an In typed after the Out counts as the next morning), or On the clock / an amber
+// No clock-out; and whether the PM changed its times (the changed box also carries a dot).
+const shiftLine = s => `${s.out ? esc(L('{n} hrs', { n: h2(cents(s)) })) + (shiftMin(s) > 16 * 60 ? ` <span class="pill" data-tone="warn">${L('Over 16 hours: check the times')}</span>` : '')
+  : `<span class="pill" data-tone="${missed(s) ? 'warn' : 'info'}">${missed(s) ? L('No clock-out') : L('On the clock')}</span>`}${edited(s) ? ` · ${L('edited')}` : ''}`;
 const taskIds = s => s.tasks.map(x => x.id).filter(Boolean);
 const crewStats = (week, S) => `<div class="stat"><b>${byPerson(week, undefined, S).length}</b><span>${L('People')}</span></div>
   <div class="stat"><b>${h2(total(week))}</b><span>${L('Hours')}</span></div>
-  <div class="stat"><b class="${week.some(s => !s.out) ? 'warn' : ''}">${week.filter(s => !s.out).length}</b><span>${L('Open shifts')}</span></div>`;
+  <div class="stat"><b class="${week.some(missed) ? 'warn' : ''}">${week.filter(s => !s.out).length}</b><span>${L('Open shifts')}</span></div>`;
 
 function crewView(S, day) {
   const mon = monday(day), week = weekOf(day), people = byPerson(week, undefined, S), editable = canEditPM();
@@ -747,6 +751,12 @@ export async function reportAct(a, el, S, day, v) {
           : L('This screen was out of date. Check it and tap again.'), 'bad');
       }
       const on = onShift(), s = on || normShift({ id: uid(), device: deviceOf(S), who: S.worker, pid: S.workerId, date: today(), in: nowHM() });
+      // A shift keeps the name it was clocked in with (README): another person's name in the box cannot clock it out and take its hours.
+      // A spelling fix stays a fix: the same roster id, or the same name as the lists match it.
+      if (on && (on.pid && S.workerId ? S.workerId !== on.pid : nameKey(S.worker) !== nameKey(on.who))) {
+        renderOffice(v, S, day);
+        return toast(L('This shift was clocked in as {name}. Type that name to clock out, or ask the PM to fix it.', { name: on.who }), 'bad');
+      }
       if (on) Object.assign(on, { out: nowHM(), who: S.worker.trim(), pid: S.workerId || on.pid }); else MY.push(s); // a name fixed while on the clock goes on this shift
       // The crew and the sheets this phone lists the worker on that day go to the PM with the hours (else the
       // crew from the roster); a clock-out adds sheets assigned since and fills a crew still missing.

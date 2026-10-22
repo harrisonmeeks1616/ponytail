@@ -184,6 +184,7 @@ export function makeSync(o = {}) {
       already: L('This phone is already connected to a different hub. Disconnect it first to join this one.'),
       crew_key: L('That is the crew key: crew phones join with the crew invite. On this phone, paste the PM key from the Execution log of the hub script, or open the superintendent invite.'),
       pm_key: L('That is not the PM key. This phone is set to Project manager, so it connects only with the PM key from the Execution log of the hub script.'),
+      pm_role: L('That is the PM key. In Settings, under This phone, set Your role to Project manager, then connect again.'),
       pm_invite: L('That is a superintendent invite. This phone is set to Project manager, so connect in Settings with the PM key from the Execution log of the hub script.'),
       no_reach: L('That did not work. Check the signal and try again. If it still fails, check that the hub deployment is set to Who has access: Anyone.'),
       off: L('This phone is not connected to a hub'),
@@ -741,6 +742,7 @@ export function makeSync(o = {}) {
     try { rep = await whoami(null, { cfg: { url, key, secret: device().secret, role: '' } }); } catch (e) { return e.code === 'offline' && extra.office ? bad('no_reach') : lost(e); } // a private deployment answers like no signal (OWNER3-07)
     if (s.role === 'Project manager' && rep.role !== 'pm') return bad('pm_key'); // the PM's phone on another key: its review and timesheet would never reach the hub, and the first pull would blank them (GATE2-OWNER-01)
     if (extra.office && rep.role === 'crew') return bad('crew_key'); // the office's Connect: as a crew phone none of its office work would reach the hub (OWNER3-02)
+    if (extra.office && rep.role === 'pm' && s.role !== 'Project manager') return bad('pm_role'); // the PM key on a superintendent's phone: the hub would fill its timesheet, but the PM hours screens open by the phone's role
     if (extra.role && extra.role !== rep.role) return bad('mismatch');
     epoch++; fails = 0; nextAllowed = 0;
     // The same hub, also after a Disconnect: everything this phone knew of it stays (bases, stamps, where it was), so its unsynced
