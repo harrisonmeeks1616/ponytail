@@ -1084,8 +1084,9 @@ document.addEventListener('input', e => {
   if (stale()) return;
   const t = current();
   // A pull deleted the sheet being typed in, or may have moved a list this field points into by position: redraw, write nothing,
-  // unless the entry at that position is still the one drawn (its id is on the input): then the typing lands where it was meant to.
-  const li = /^(s\.crews|t\.items|t\.checks)\.(\d+)\./.exec(k), same = li && getPath({ t, s: S }, li[1])?.[+li[2]]?.id === el.dataset.id;
+  // unless the entry at that position is still the one drawn (its id is on the input; a report list, as stored, the same before
+  // and after the pull, drawSoon): then the typing lands where it was meant to.
+  const li = /^(s\.crews|t\.items|t\.checks)\.(\d+)\./.exec(k), same = li ? getPath({ t, s: S }, li[1])?.[+li[2]]?.id === el.dataset.id : k.startsWith('r.') && !drawLater.moved;
   if ((!t && k.startsWith('t.')) || (drawLater && /\.\d+\./.test(k) && !same)) { drawLater = false; return render(); }
   if (k.startsWith('r.')) { reportInput(el, S, day); return liveInput(ctx(), el); } // and its translated preview, if it has one
   if (k.startsWith('h.')) return hoursInput(el, S, day);
@@ -1170,10 +1171,13 @@ function remove(kind, key) {
 }
 // The sync saved what it pulled: every in-memory copy reloads now, before any further tap. The screen redraws too, but
 // never under a field someone is typing in: then it waits until the field is left, and until the tap that left it lands.
-let drawLater = false;
+let drawLater = false; // while someone types: { moved }, whether a pull replaced the report list the field points into (the input handler)
 const typing = () => !!document.activeElement?.matches?.('textarea, select, input:not([type=checkbox]):not([type=radio]):not([type=button]):not([type=file])') && app.contains(document.activeElement);
-function drawSoon() {
-  if (typing()) return void (drawLater = true);
+// The report list this page holds that a focused report field points into by position (r.floors.0.crews for r.floors.0.crews.0.lead):
+// taken before and after reloadData, so a pull that replaced it is told from one that did not (the sync saved to storage before either).
+const listSnap = k => { const m = /^(r\..*)\.\d+\.[^.]+$/.exec(k || ''); return m ? JSON.stringify(getPath({ r: reportsNow()[day] }, m[1])) : ''; };
+function drawSoon(sameList = false) { // sameList: the caller knows the pull left the focused field's report list as it was
+  if (typing()) return void (drawLater = { moved: !!drawLater.moved || !sameList });
   drawLater = false;
   if (needsOffice(view) && !office()) return route();
   // A background sync replaces rows: keep the focused task reachable by Enter after the redraw.
@@ -1184,7 +1188,7 @@ function drawSoon() {
 document.addEventListener('focusout', () => { if (drawLater) setTimeout(() => drawLater && drawSoon(), 300); });
 const SYNCED = new Set([KEYS.tasks, KEYS.reports, KEYS.hours, KEYS.crewHours, KEYS.settings]);
 // A status change redraws the header dot, and the two screens that are about the hub; Settings redraws after its own taps.
-sync.initHub({ S, toast, onChange: () => { reloadData(); drawSoon(); }, onStatus: () => { if (!stale()) header(); if (view.v === 'live' || view.v === 'hub') drawSoon(); } }); // stale(): a sign-in that ran out goes behind the passcode
+sync.initHub({ S, toast, onChange: () => { const k = typing() ? document.activeElement.dataset.k : '', was = listSnap(k); reloadData(); drawSoon(!!k && was === listSnap(k)); }, onStatus: () => { if (!stale()) header(); if (view.v === 'live' || view.v === 'hub') drawSoon(); } }); // stale(): a sign-in that ran out goes behind the passcode
 onSave(k => SYNCED.has(k) && sync.poke()); // after every save; the sync's own timer and wake-ups catch anything else
 setTextField((label, k, v, o, lang) => txField(ctx(), label, k, v, o, lang)); // the daily report's typed text
 new MutationObserver(() => liveAfter(ctx(), app)).observe(app, { childList: true }); // after every draw: translate the typed text on screen
