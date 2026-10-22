@@ -2863,3 +2863,96 @@ test('a full phone moving to another hub refuses and stays on its old hub, so th
   assert.equal((await sp.sync.connect(URL_B, KEYS.super)).ok, true, 'with room it moves');
   assert.equal(sp.hubSync()?.rev || 0, 0, 'and starts the new hub from the beginning');
 });
+
+test('a sheet or report deleted here waits out its Undo hidden: another phone\'s edit meanwhile does not bring it back; Undo shows that edit; the purge drops it everywhere; a refusal brings it back', async () => {
+  const { mock, k, real } = realHub();
+  const a = await makePhone(real, 'pm', { key: k.pm }), b = await makePhone(real, 'pm', { key: k.pm });
+  const step = async (...ps) => { for (const p of ps) { mock.advance(5e3); await p.cycle(); } };
+  const drop = (p, uid) => p.save('schwab.tasks', p.tasks().filter(t => t.uid !== uid));
+  const uid = a.addTask({ scope: 'first words' });
+  await step(a, b, a);
+  assert.equal(b.task(uid).scope, 'first words');
+  // A deletes (the app takes the sheet off and stores the purge for the 6 s Undo); B edits the same sheet meanwhile
+  const kept = a.task(uid);
+  a.sync.purgeLater('task', uid, a.now() + 6000); drop(a, uid);
+  b.editTask(uid, t => { t.scope = 'B edited meanwhile'; }); mock.advance(500); await b.cycle();
+  mock.advance(500); await a.cycle();
+  assert.equal(a.task(uid), undefined, 'stays hidden while the Undo is offered');
+  assert.ok(a.hubSync().held['task|' + uid], 'the hub\'s copy is held for an Undo');
+  // Undo: the sheet comes back with B's words, not the old ones (live.mjs deleteRecord: purgeLater 0, the app puts its copy back, release)
+  a.sync.purgeLater('task', uid, 0); a.save('schwab.tasks', [...a.tasks(), kept]);
+  assert.equal(a.sync.release('task', uid), true);
+  assert.equal(a.task(uid).scope, 'B edited meanwhile', 'Undo keeps the other phone\'s newer work');
+  assert.deepEqual(a.hubSync().held, {});
+  await step(a, b, a);
+  assert.deepEqual([a.task(uid).scope, b.task(uid).scope], ['B edited meanwhile', 'B edited meanwhile']);
+  // the Undo runs out: the purge goes, and nothing held is left; the tombstone takes it off the other phone
+  a.sync.purgeLater('task', uid, a.now() + 6000); drop(a, uid);
+  b.editTask(uid, t => { t.scope = 'B again'; }); mock.advance(500); await b.cycle();
+  mock.advance(500); await a.cycle();
+  assert.equal(a.task(uid), undefined);
+  mock.advance(7000);
+  assert.equal((await a.sync.purge('task', uid)).ok, true);
+  assert.deepEqual([a.task(uid), a.hubSync().held, a.hubSync().del], [undefined, {}, {}], 'gone here, nothing held or stored');
+  await step(b, a, b);
+  assert.equal(b.task(uid), undefined, 'the tombstone took it off the other phone');
+  // a report the same way
+  a.editReport(DAY, r => { r.results = 'A wrote'; }); await step(a, b, a);
+  assert.equal(b.reports()[DAY].results, 'A wrote');
+  const keptR = a.reports()[DAY];
+  a.sync.purgeLater('report', DAY, a.now() + 6000); a.save('schwab.reports', Object.fromEntries(Object.entries(a.reports()).filter(([d]) => d !== DAY)));
+  b.editReport(DAY, r => { r.results = 'B wrote meanwhile'; }); mock.advance(500); await b.cycle();
+  mock.advance(500); await a.cycle();
+  assert.equal(a.reports()[DAY], undefined, 'a deleted report stays hidden while the Undo is offered');
+  a.sync.purgeLater('report', DAY, 0); a.save('schwab.reports', { ...a.reports(), [DAY]: keptR });
+  assert.equal(a.sync.release('report', DAY), true);
+  assert.equal(a.reports()[DAY].results, 'B wrote meanwhile', 'Undo keeps the other phone\'s newer report text');
+  // closed during the Undo and opened again: the stored delete goes once due, and nothing held is left behind
+  const u2 = a.addTask({ id: 'T1019-02', scope: 'second' }); await step(a, b, a);
+  a.sync.purgeLater('task', u2, a.now() + 6000); drop(a, u2);
+  b.editTask(u2, t => { t.scope = 'B on second'; }); mock.advance(500); await b.cycle();
+  mock.advance(500); await a.cycle();
+  assert.equal(a.task(u2), undefined);
+  const a2 = await makePhone(real, 'pm', { storage: a.storage, fetchImpl: a.fetch });
+  mock.advance(7000); await a2.cycle();
+  assert.deepEqual([a2.task(u2), a2.hubSync().del, a2.hubSync().held], [undefined, {}, {}], 'the stored delete went with the next cycle');
+  await step(b);
+  assert.equal(b.task(u2), undefined);
+  // a stored delete from a key the hub refuses (a superintendent's): the sheet comes back as the hub has it, with the other phone's edit
+  const s = await makePhone(real, 'super', { key: k.super });
+  const u3 = s.addTask({ id: 'T1019-03', scope: 'third' }); await step(s, b, s);
+  s.sync.purgeLater('task', u3, s.now() + 6000); drop(s, u3);
+  b.editTask(u3, t => { t.scope = 'B on third'; }); mock.advance(500); await b.cycle();
+  mock.advance(500); await s.cycle();
+  assert.equal(s.task(u3), undefined);
+  const s2 = await makePhone(real, 'super', { storage: s.storage, fetchImpl: s.fetch });
+  mock.advance(7000); await s2.cycle();
+  assert.equal(s2.task(u3)?.scope, 'B on third', 'the hub said no: the sheet is back, as the hub has it');
+  assert.deepEqual([s2.hubSync().del, s2.hubSync().held], [{}, {}]);
+});
+
+test('a crew one office phone takes out stays out after people were added to it from two phones: its members text is the roster\'s, not an edit', async () => {
+  const { mock, k, real } = realHub();
+  const sp = await makePhone(real, 'super', { key: k.super }), pm = await makePhone(real, 'pm', { key: k.pm });
+  const step = async (...ps) => { for (const p of ps) { mock.advance(5e3); await p.cycle(); } };
+  sp.save('schwab.settings', { ...sp.settings(), crews: [{ id: 'cA', name: 'Crew A', lead: '', members: '' }, { id: 'cT', name: 'Hub Test A', lead: '', members: '' }], people: [{ id: 'p1', name: 'Ana R', crewId: 'cA' }] });
+  await step(sp, pm, sp);
+  assert.deepEqual(pm.settings().crews.map(c => c.name), ['Crew A', 'Hub Test A']);
+  // from the same base, each phone puts a person on the test crew; both go up, and every phone rewrites the crew's members text from its own roster
+  const add = (p, id, name, crewId) => p.save('schwab.settings', { ...p.settings(), people: [...p.settings().people, { id, name, crewId }] });
+  add(sp, 'p2', 'Beto L', 'cT'); add(pm, 'p3', 'Cris M', 'cT');
+  await step(sp, pm, sp, pm);
+  assert.deepEqual([sp.settings().people.map(x => x.name).sort(), pm.settings().people.map(x => x.name).sort()], [['Ana R', 'Beto L', 'Cris M'], ['Ana R', 'Beto L', 'Cris M']]);
+  // the superintendent takes the test crew out: it stays out on the hub and on both phones, and its people wait under no crew
+  sp.save('schwab.settings', { ...sp.settings(), crews: sp.settings().crews.filter(c => c.id !== 'cT') });
+  await step(sp, pm, sp, pm);
+  assert.deepEqual([sp.settings().crews.map(c => c.name), pm.settings().crews.map(c => c.name)], [['Crew A'], ['Crew A']], 'removed stays removed on both phones');
+  assert.deepEqual(pm.settings().people.filter(x => x.name !== 'Ana R').map(x => x.crewId), ['', ''], 'its people are kept, on no crew');
+  // a crew the other phone changed since (a lead typed on it) still stays, changed, as before
+  pm.save('schwab.settings', { ...pm.settings(), crews: [...pm.settings().crews, { id: 'cU', name: 'Crew U', lead: '', members: '' }] });
+  await step(pm, sp, pm);
+  pm.save('schwab.settings', { ...pm.settings(), crews: pm.settings().crews.map(c => (c.id === 'cU' ? { ...c, lead: 'Lead U' } : c)) });
+  sp.save('schwab.settings', { ...sp.settings(), crews: sp.settings().crews.filter(c => c.id !== 'cU') });
+  await step(pm, sp, pm, sp);
+  assert.deepEqual([sp.settings().crews.map(c => [c.name, c.lead]), pm.settings().crews.map(c => [c.name, c.lead])], [[['Crew A', ''], ['Crew U', 'Lead U']], [['Crew A', ''], ['Crew U', 'Lead U']]], 'a crew the other phone edited meanwhile stays, with the edit');
+});

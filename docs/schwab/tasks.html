@@ -28,7 +28,7 @@
 <script>setTimeout(() => { const app = document.getElementById('app'); if (window.appStarted) return; let es = false; try { es = JSON.parse(localStorage.getItem('schwab.settings')).lang === 'es'; } catch {} app.innerHTML = es ? '<div class="empty"><h2>La app no termin\u00f3 de cargar</h2><p>Con se\u00f1al, vuelva a cargar.</p><button class="btn primary" onclick="location.reload()">Recargar</button></div>' : '<div class="empty"><h2>The app didn\u2019t finish loading</h2><p>Get signal, then reload. · La app no termin\u00f3 de cargar. Con se\u00f1al, vuelva a cargar.</p><button class="btn primary" onclick="location.reload()">Reload · Recargar</button></div>'; }, 6000); // a dropped file on the first open after an update; a Spanish phone gets Spanish only</script>
 <script type="module">
 import {
-  KEYS, DEFAULT_SETTINGS, checkLabel, esc, uid, load, save, loadSettings, nameKey, cleanName, people, findPerson, personById, crewById, addPerson, normTask, newItem, mergeTask, cloneTask, pack, unpack, linkTo, langOf, typedIn,
+  KEYS, checkLabel, defaultCheck, chooseLang, esc, uid, load, save, loadSettings, nameKey, cleanName, people, findPerson, personById, crewById, addPerson, normTask, newItem, mergeTask, cloneTask, pack, unpack, linkTo, langOf, typedIn,
   nextId, renumberClashes, sameNumber, ensureDevice,
   today, addDays, niceDate, weekday, nowHM, span, fmtMin, t12, stamp, hrs, timeOf, field, datalist, seg, setPath, getPath, readInput, dateBar, daySummary,
   toast, sheet, ask, sendSheet, pasteSheet, makePdf, savePdf, fileAway, retryUploads, settingsView, settingsAct, restore,
@@ -53,7 +53,8 @@ let T = loadTasks();
 let day = today(), crewFilter = '', view = { v: 'board' }, openedFrom = null; // openedFrom: the Live or Records screen a sheet was opened from
 
 const persist = () => save(KEYS.tasks, T) || toast(L("This phone wouldn't save. Open Settings and download a backup."), 'bad');
-const keepSettings = () => save(KEYS.settings, S) || toast(L("This phone wouldn't save. Open Settings and download a backup."), 'bad'); // Settings and roster edits say so too, not only sheets
+const said = ok => ok || toast(L("This phone wouldn't save. Open Settings and download a backup."), 'bad'); // a full phone says so, as a sheet does
+const keepSettings = () => said(save(KEYS.settings, S)); // Settings and roster edits say so too, not only sheets
 const find = u => T.find(t => t.uid === u);
 const current = () => (view.v === 'task' ? find(view.uid) : null);
 const go = h => (location.hash === '#' + h ? route() : (location.hash = h));
@@ -834,11 +835,9 @@ async function act(a, el) {
       if (office()) { signOut(); toast(L('Office screens locked')); return needsOffice(view) ? go('day/' + day) : render(); } // a worker's time clock stays open
       return (await passcode()) && go('day/' + day);
     case 'changePin': return passcode('change');
-    case 'lang':
-      S.lang = v;
-      save(KEYS.settings, S);
-      setLang(v);
+    case 'lang': // on a full phone the choice still stays on screen for this visit (shared.mjs chooseLang), and the toast says why it may not next time
       if (!document.querySelector('#toast .toast-undo')) document.getElementById('toast')?.classList.remove('show');
+      said(chooseLang(S, v));
       return render();
     case 'filter': crewFilter = v; break;
     case 'tab': history.replaceState(null, '', `#task/${t.uid}/${v}`); view.tab = v; render(); return scrollTo(0, 0);
@@ -892,7 +891,7 @@ async function act(a, el) {
     case 'check': { // a check from Settings keeps its own language: the defaults are English words; one added there, this phone's
       const c = !t.checks.some(x => x.text === v) && newItem(v);
       t.checks = c ? [...t.checks, c] : t.checks.filter(x => x.text !== v);
-      if (c) t.aLangs = { ...t.aLangs, [c.id]: DEFAULT_SETTINGS.checks.includes(v) ? 'en' : getLang() }; // not the sheet's: picking one is not typing
+      if (c) t.aLangs = { ...t.aLangs, [c.id]: defaultCheck(v) ? 'en' : getLang() }; // not the sheet's: picking one is not typing
       break;
     }
     case 'tick': {
@@ -1098,7 +1097,7 @@ document.addEventListener('input', e => {
   setPath({ t, s: S }, k, readInput(el));
   if (k.startsWith('s.')) {
     if (k === 's.worker' && nameKey(personById(S, S.workerId)?.name) !== nameKey(S.worker)) S.workerId = ''; // another name typed: no longer that person (report.mjs attachShifts)
-    keepSettings();
+    if (k === 's.lang') said(chooseLang(S, S.lang)); else keepSettings();
     if (k === 's.lang' || k === 's.role') { setLang(S.lang); render(); }
     return;
   }

@@ -133,7 +133,7 @@ export function makeSync(o = {}) {
   function loadState() {
     // url and away: the hub this phone was disconnected from, and true until the first scan after (disconnect)
     const s = obj(store.get(ST, null)), st = { rev: num(s.rev), sig: String(s.sig || ''), skew: num(s.skew), ok: num(s.ok), url: String(s.url || ''), away: s.away === true };
-    for (const k of ['t', 'h', 'm', 'r', 'g', 'told', 'del']) st[k] = dict(s[k]);
+    for (const k of ['t', 'h', 'm', 'r', 'g', 'told', 'del', 'held']) st[k] = dict(s[k]); // held: the hub's copy of a sheet or report deleted here while its Undo is offered (mergePull, release)
     return st;
   }
   let meta = null; // what hubStatus shows, so a screen can ask on every draw without reading the whole state
@@ -552,6 +552,7 @@ export function makeSync(o = {}) {
       for (const raw of arr(rep.tasks).slice(0, 500)) {
         const inc = inT(raw);
         if (!inc.uid) continue;
+        if (st.del['task|' + inc.uid] !== undefined) { st.held['task|' + inc.uid] = raw; continue; } // deleted here, waiting out its Undo: the hub's copy (another phone's newer work) is held, not shown; Undo or a refusal merges it (release)
         const i = at.get(inc.uid), loc = i === undefined ? null : lc.tasks[i];
         if (!loc && inc.date < cut) continue;
         const next = mergeTask(loc, inc, ent(st.t, inc.uid), tw, c.role, ts);
@@ -568,6 +569,7 @@ export function makeSync(o = {}) {
         for (const raw of arr(rep.reports).slice(0, 500)) {
           const inc = inR(raw, obj(raw).date);
           if (!inc) continue;
+          if (st.del['report|' + inc.date] !== undefined) { st.held['report|' + inc.date] = raw; continue; } // as a deleted sheet above
           const i = ri.get(inc.date), loc = i === undefined ? null : lc.reports[i];
           if (!loc && inc.date < cut) continue;
           const next = mergeReport(loc, inc, ent(st.r, inc.date), rw);
@@ -585,6 +587,7 @@ export function makeSync(o = {}) {
       for (const d of arr(rep.deleted).slice(0, 500)) {
         const key = String(obj(d).key), t = obj(d).moved === true && lc.tasks.find(x => x.uid === key);
         if (t && !(st.t[key]?.assign?.v !== undefined && taskClean(st, t, tw))) continue; // moved to another crew: one only texted here, or with work not sent yet, stays
+        delete st.held[String(obj(d).kind).toLowerCase().replace(/s$/, '') + '|' + key]; // gone on the hub: nothing to bring back
         dropKey(lc, st, dirty, obj(d).kind, key);
       }
       // the window: older sheets that the hub holds are dropped from the phone; an unsynced or refused one never is
@@ -675,7 +678,7 @@ export function makeSync(o = {}) {
     for (const [k, due] of Object.entries(loadState().del)) if (due <= now() && !mine.has(k)) { // a delete whose Undo ran out with the app closed
       const [kind, key] = k.split('|'), r = await purge(kind, key);
       if (ep !== epoch) throw err('aborted');
-      if (['forbidden', 'bad_request'].includes(r.error)) purgeLater(kind, key, 0); // the hub will never take it (not the PM key any more)
+      if (['forbidden', 'bad_request'].includes(r.error)) { purgeLater(kind, key, 0); release(kind, key); } // the hub will never take it (not the PM key any more): what it holds comes back
     }
     // First contact (or a new role, crew or window): merge what the hub has before pushing anything, so old local copies cannot overwrite newer ones.
     const first = loadState().sig !== sigOf(c);
@@ -866,6 +869,7 @@ export function makeSync(o = {}) {
     if (c) { // the tombstone comes back on the next pull; the sheet leaves this phone now, before a push could bring it back
       purgeLater(kind, key, 0);
       const st = loadState(), lc = readLocal(c), dirty = {}, kinds = new Set();
+      delete st.held[`${kind}|${key}`]; // the copy held during the Undo goes with it
       dropKey(lc, st, dirty, kind, str(key, 60));
       try { flush(lc, dirty, kinds); saveState(st); } catch { /* full phone: the pull's tombstone retries it */ }
       notify(kinds);
@@ -876,6 +880,16 @@ export function makeSync(o = {}) {
   // first: a later start sends it once due (when the Undo runs out). This page's own Undo offer sends its own (mine).
   // due 0 takes it back (the Undo, or the purge went).
   const mine = new Set();
+  // Undo, or the hub's refusal, after a delete that waited: the hub's copy held back meanwhile (mergePull) is merged now, as a
+  // pull's, so another phone's newer work on that sheet or report shows instead of being lost. True when there was one.
+  function release(kind, key) {
+    const c = hub(), st = loadState(), k = `${kind}|${key}`, raw = st.held[k];
+    if (raw === undefined) return false;
+    delete st.held[k];
+    if (!c || !isObj(raw)) return saveState(st), false;
+    try { applyPull(c, { more: true, tasks: kind === 'task' ? [raw] : [], reports: kind === 'report' ? [raw] : [] }, st.sig, st); } catch { return false; } // a full phone: the hub keeps it
+    return true;
+  }
   function purgeLater(kind, key, due) {
     const st = loadState(), k = `${kind}|${key}`;
     if (due) { st.del[k] = num(due); mine.add(k); } else { delete st.del[k]; mine.delete(k); }
@@ -956,7 +970,7 @@ export function makeSync(o = {}) {
     return out;
   }
 
-  return { hubStatus, poke, cycle, wake, start, joinFrom, connect, disconnect, invite, translate, records, stats, purge, purgeLater, rotate, archive, selftest, fromText, officeAt,
+  return { hubStatus, poke, cycle, wake, start, joinFrom, connect, disconnect, invite, translate, records, stats, purge, purgeLater, release, rotate, archive, selftest, fromText, officeAt,
     liveData: () => ({ ...live, info }), onHub: (key, kind = 'task') => (kind === 'report' ? loadState().r[key]?.sup : loadState().t[key]?.assign)?.v !== undefined, // onHub: the hub has this sheet (so its number is known) or report
     replyOnHub: t => { const b = loadState().t[t?.uid]?.assign?.b; return !!b && b.reply === t.reply && b.replyAt === t.replyAt; } }; // the hub took this sheet's message as it is here (the office part as last had from the hub)
 }
@@ -996,6 +1010,7 @@ export const records = q => get().records(q);
 export const stats = () => get().stats();
 export const purge = (kind, key) => get().purge(kind, key);
 export const purgeLater = (kind, key, due) => get().purgeLater(kind, key, due);
+export const release = (kind, key) => get().release(kind, key);
 export const rotate = role => get().rotate(role);
 export const archive = before => get().archive(before);
 export const selftest = () => get().selftest();

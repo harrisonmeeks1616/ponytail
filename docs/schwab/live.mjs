@@ -686,7 +686,7 @@ export async function deleteRecord(ctx, kind, key) {
   if (!t) return false;
   if (h.state !== 'off' && !onHub && ctx.sync.onHub(key, kind)) { ctx.toast(L('Only the PM can delete what is on the hub. Ask the PM to delete it.'), 'bad'); return false; }
   const unsaved = onHub && ctx.sync.purgeLater(kind, key, nowOf(ctx) + UNDO_MS) === false; // a full phone: the hub copy goes only if the app stays open
-  const back = await ctx.remove(kind, key), put = () => { if (onHub) ctx.sync.purgeLater(kind, key, 0); if (typeof back === 'function') back(); ctx.render(); };
+  const back = await ctx.remove(kind, key), put = () => { if (onHub) ctx.sync.purgeLater(kind, key, 0); if (typeof back === 'function') back(); if (onHub) ctx.sync.release?.(kind, key); ctx.render(); }; // release: what the hub's copy became meanwhile (another phone's edit) is merged back in
   const msg = kind === 'task' ? L('Task {id} deleted', { id: t.id || L('New task') }) : L('The {date} report was deleted', { date: niceDate(t.date) });
   ctx.toast(onHub ? `${msg}. ${L('It is also removed from the hub.')}${unsaved ? ` ${L('This phone is out of space: keep the app open until Undo is gone, or the hub keeps it.')}` : ''}` : msg, unsaved ? 'bad' : '', { undo: put, done: async undone => {
     if (undone || !onHub) return;
