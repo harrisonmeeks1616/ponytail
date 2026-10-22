@@ -229,6 +229,17 @@ test('permission matrix: every action by every role, allowed or forbidden exactl
   assert.equal(Object.keys(MINIMAL).length, 11, 'every action in the contract is covered');
 });
 
+test('list-fed report text and a room list are long text, kept whole; a carried sheet\'s from travels with its office part', () => {
+  const env = setup(), sup = office(env), pm = phone(env, 'pm', 'pm-dev');
+  const long = 'E-301, detail 4/E-502; '.repeat(14).trim(); // 321 characters, as Fill from task sheets makes with a few sheets
+  let r = ok(sup.push({ reports: [report({ floors: [{ floor: 'L1', crews: [{ name: 'Crew A', na: false, lead: '', workers: 3, labor: 0, laborFromTasks: false, members: '', area: long, ref: long, start: '', stop: '', done: '', quality: '', holdups: '', good: '' }] }], needs: [{ item: long, qty: '10', where: 'L1', confirmed: false, by: 'Sam' }] })] }));
+  const c = r.reports[0].report.floors[0].crews[0];
+  assert.deepEqual([c.area.length, c.ref.length, r.reports[0].report.needs[0].item.length], [321, 321, 321], 'nothing clipped at 200');
+  r = ok(sup.push({ tasks: [task({ uid: 'carried', id: 'T1020-01', date: '2026-10-20', from: 'u1', area: long })] }));
+  assert.deepEqual([r.tasks[0].task.from, r.tasks[0].task.area.length], ['u1', 321]);
+  assert.equal(ok(pm.pull()).tasks.find(t => t.uid === 'carried').from, 'u1', 'the other office phone learns which sheet was carried');
+});
+
 // The HUB.md role table, row by row. Each probe does the thing as that role and reports whether it took effect.
 test('the HUB.md role table, cell by cell: what each key can actually do, judged by the effect', () => {
   const base = () => {
@@ -445,9 +456,10 @@ test('task: local-only fields never reach the hub; an unchanged push writes noth
   const env = setup(), sup = office(env);
   const first = ok(sup.push({ tasks: [task({ origin: 'mine', from: 'x', gotAt: 9, filedAt: 8, updatedAt: 7, evil: 'x' })] }));
   const t = first.tasks[0].task;
-  for (const k of ['origin', 'from', 'gotAt', 'filedAt', 'updatedAt', 'evil']) assert.ok(!(k in t), k);
+  for (const k of ['origin', 'gotAt', 'filedAt', 'updatedAt', 'evil']) assert.ok(!(k in t), k);
+  assert.equal(t.from, 'x', 'from (the sheet this one carried) is office data: every office phone must know it');
   const calls = env.hub.calls.length, rev = first.rev;
-  const again = ok(sup.push({ tasks: [task({ origin: 'link' })] }));
+  const again = ok(sup.push({ tasks: [task({ origin: 'link', from: 'x' })] }));
   assert.equal(again.rev, rev, 'rev did not move');
   assert.equal(again.tasks[0].task.rev, t.rev);
   assert.ok(!env.hub.calls.slice(calls).some(c => /append|batchUpdate|clear/.test(c)), 'no Sheet write for an unchanged entity');
@@ -1176,7 +1188,7 @@ test('ASSIGN and CREW agree with shared.mjs; the entity templates are the client
   // A template's shape: field names and value types, all the way down ('s' and 't' on the server are both strings).
   const sig = t => (Array.isArray(t) ? [sig(t[0])] : t && typeof t === 'object' ? Object.fromEntries(Object.keys(t).sort().map(k => [k, sig(t[k])])) : typeof t);
   const omit = (o, keys) => Object.fromEntries(Object.entries(o).filter(([k]) => !keys.includes(k)));
-  const LOCAL = ['origin', 'from', 'gotAt', 'filedAt', 'updatedAt', 'news']; // HUB.md: task fields that never leave a phone
+  const LOCAL = ['origin', 'gotAt', 'filedAt', 'updatedAt', 'news']; // HUB.md: task fields that never leave a phone
   const server = { TASK: get('TASK'), SHIFT: get('SHIFT'), REPORT: get('REPORT'), CONFIG: get('CONFIG') };
   assert.deepEqual(sig(server.TASK), sig(omit(shared.TASK_TPL, LOCAL)), 'TASK_TPL holds every synced task field: crewId, memberIds, reply, replyAt, replyBy, aLang and the part stamps assignAt, crewAt');
   assert.deepEqual(sig(get('ITEM')), sig(shared.TASK_TPL.items[0]));

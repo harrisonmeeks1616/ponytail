@@ -74,12 +74,12 @@ const KINDS = { task: 'tasks', tasks: 'tasks', shift: 'shifts', shifts: 'shifts'
 // ---------- entity templates (what a stored entity looks like) ----------
 // 's' = short text (200 chars), 't' = long text (8000), 0 = number >= 0, false/true = boolean (the default is kept).
 // Local-only task fields (origin, from, gotAt, filedAt, updatedAt) are not here: they never leave a phone.
-const ASSIGN = ['id', 'date', 'by', 'floor', 'area', 'crew', 'crewId', 'members', 'memberIds', 'size', 'scope', 'refs', 'allot', 'allotNote', 'est', 'estNote', 'pStart', 'pStop', 'checkIn'];
+const ASSIGN = ['from', 'id', 'date', 'by', 'floor', 'area', 'crew', 'crewId', 'members', 'memberIds', 'size', 'scope', 'refs', 'allot', 'allotNote', 'est', 'estNote', 'pStart', 'pStop', 'checkIn'];
 const CREW = ['lead', 'aStart', 'aStop', 'delay', 'status', 'doneText', 'remain', 'comments', 'cLang', 'cLangs', 'resultAt'];
 const OFFICE_EXTRA = ['review', 'reviewer', 'followUp', 'reply', 'replyAt', 'replyBy', 'aLang', 'aLangs', 'sentAt'];
 const ITEM = { id: 's', text: 's', done: false, at: 0 };
 const TASK = {
-  uid: 's', id: 's', date: 's', by: 's', floor: 's', area: 's', crew: 's', crewId: 's', members: ['s'], memberIds: ['s'], size: 0, scope: 't', refs: 't',
+  uid: 's', from: 's', id: 's', date: 's', by: 's', floor: 's', area: 't', crew: 's', crewId: 's', members: ['s'], memberIds: ['s'], size: 0, scope: 't', refs: 't', // from: the sheet this one carried (uid), so a second office phone does not carry it again; area: a room list can run long
   allot: 0, allotNote: 't', est: 0, estNote: 't', pStart: 's', pStop: 's', checkIn: 's',
   items: [ITEM], checks: [ITEM],
   review: 's', reviewer: 's', followUp: 't', reply: 't', replyAt: 0, replyBy: 's', aLang: 's', aLangs: {}, sentAt: 0, assignAt: 0,
@@ -96,10 +96,10 @@ function langs_(m) {
 // A shift names the person (pid), the crew (crewId) and the task sheets (uid) by id; who, crew and tasks[].id are the labels
 // they had then, for reading.
 const SHIFT = { id: 's', device: 's', who: 's', pid: 's', date: 's', in: 's', out: 's', crew: 's', crewId: 's', tasks: [{ uid: 's', id: 's' }], edited: { who: false, in: false, out: false }, gone: false, at: 0 };
-const CREW_BLOCK = { name: 's', na: true, lead: 's', workers: 0, labor: 0, laborFromTasks: false, members: 't', area: 's', ref: 's', start: 's', stop: 's', done: 't', quality: 't', holdups: 't', good: 't' };
+const CREW_BLOCK = { name: 's', na: true, lead: 's', workers: 0, labor: 0, laborFromTasks: false, members: 't', area: 't', ref: 't', start: 's', stop: 's', done: 't', quality: 't', holdups: 't', good: 't' }; // area and ref are filled from the day's sheets: long text, never clipped at 200
 const REPORT = {
   date: 's', super: 's', shiftStart: 's', shiftEnd: 's', submittedAt: 0, status: 's', results: 't', wins: 't', issues: 't', notified: 't',
-  needs: [{ item: 's', qty: 's', where: 's', confirmed: false, by: 's' }],
+  needs: [{ item: 't', qty: 's', where: 's', confirmed: false, by: 's' }],
   decisions: [{ q: 't', rec: 't', by: 's', pm: 't', pmNote: 't' }],
   floors: [{ floor: 's', crews: [CREW_BLOCK] }],
   next: [{ step: 't', prereq: 't', start: 's', dur: 's', finish: 's', deadline: 's', lead: 's', checkin: 's' }],

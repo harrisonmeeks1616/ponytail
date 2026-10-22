@@ -14,7 +14,7 @@ This file is the contract between the server (`hub/Code.gs`), the client sync en
 3. **The hub is the durable log; phones keep a recent window** (crews 14 days, PM and superintendent 60 days). Older records are browsed from the hub on demand (`records`), not stored on the phone.
 4. **The server enforces roles.** The client UI is not a security boundary.
 5. **Deleting is PM-only and asks first.** Hours edits are PM-only.
-6. Local-only fields (never synced): task `origin`, `from`, `gotAt`, `filedAt`, `updatedAt`, `news` (an office message or follow-up reached this crew phone: marked on the board until the sheet is opened).
+6. Local-only fields (never synced): task `origin`, `gotAt`, `filedAt`, `updatedAt`, `news` (an office message or follow-up reached this crew phone: marked on the board until the sheet is opened).
 
 ## Roles and keys
 
