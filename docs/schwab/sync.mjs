@@ -16,16 +16,16 @@
 // and crews by their ids in the shared settings, and task sheets by uid. Short task ids are labels that two office phones
 // working offline can both hand out.
 
-import { KEYS, HUB_FIELDS, load, save, shape, L, normTask, normShift, normReport, normSettings, mergeAnswers, pack, linkTo, PIN_FORMAT, ensureDevice, nextId, nameKey, findPerson, personById, crewById } from './shared.mjs';
+import { KEYS as APP_KEYS, jobScope, HUB_FIELDS, load, save, shape, L, normTask, normShift, normReport, normSettings, mergeAnswers, pack, linkTo, PIN_FORMAT, ensureDevice, nextId, nameKey, findPerson, personById, crewById } from './shared.mjs';
 
 const ROLES = ['crew', 'super', 'pm'];
 const URL_OK = /^https:\/\/script\.google\.com\/(?:a\/macros\/[\w.-]+|macros)\/s\/[\w-]+\/exec$/;
 const KEY_OK = /^[A-Za-z0-9]{32}$/;
-const ERRORS = ['bad_request', 'unauthorized', 'forbidden', 'busy', 'too_large', 'quota', 'not_ready', 'server'];
+const ERRORS = ['bad_request', 'unauthorized', 'forbidden', 'busy', 'too_large', 'quota', 'not_ready', 'server', 'conflict'];
 const BACKOFF = [5, 10, 20, 40, 60]; // seconds after the 1st, 2nd, ... failure in a row
 const LIVE_MS = 60e3, TICK_MS = 20e3, POKE_MS = 1500, HALT_MS = 600e3;
 const TIMEOUT = { translate: 20e3, archive: 120e3, selftest: 90e3, stats: 40e3 };
-const ST = 'schwab.hubSync', TR = 'schwab.tr', TR_MAX = 800;
+const TR_MAX = 800;
 const CAP = { push: 100, bytes: 500e3, entity: 45e3 }; // the hub takes 200 entities, 1,000,000 characters and 45,000 per entity
 
 const EV_TPL = { rev: 0, ts: 0, who: '', role: '', kind: '', text: '', ref: '' }, ON_TPL = { who: '', in: '', date: '', pid: '', crewId: '', crew: '' }; // pid and crew when the hub sends them
@@ -93,6 +93,9 @@ const keeps = (pr, mine, vh, theirs, fn) => mine !== pr.s && mine !== vh && (the
 const pmSide = s => [s.who, s.date, s.in, s.out, s.edited, s.gone];
 
 export function makeSync(o = {}) {
+  const scope = o.scope || jobScope; // captured once; never reads a mutable active-job selector
+  const KEYS = Object.fromEntries(Object.keys(APP_KEYS).map(k => [k, scope.key('schwab.' + k)]));
+  const ST = scope.key('schwab.hubSync'), TR = scope.key('schwab.tr'), PENDING = scope.key('schwab.hubPending'), INSTANCE = scope.key('schwab.hubInstance');
   const fetchImpl = o.fetchImpl || ((...a) => globalThis.fetch(...a));
   const now = o.now || Date.now;
   const store = o.storage || { get: load, set: save };
@@ -116,6 +119,7 @@ export function makeSync(o = {}) {
   // This phone's secret and the id the hub derives from it (shared.mjs ensureDevice writes both); empty until it has run.
   const device = () => { const d = obj(store.get(KEYS.device, null)); return KEY_OK.test(d.secret) && DEV_ID.test(d.id) ? d : { secret: '', id: '' }; };
   function hub() {
+    if (scope.needsConnection?.()) return null;
     const s = cfg();
     if (!URL_OK.test(s.hubUrl) || !KEY_OK.test(s.hubKey)) return null;
     const d = device(), role = ROLES.includes(s.hubRole) ? s.hubRole : '', w = role === 'crew' ? person(s) : { crew: str(s.hubCrew, 60), pid: '' }; // dev labels and finds this phone's own shifts; only secret goes to the hub
@@ -136,7 +140,7 @@ export function makeSync(o = {}) {
     for (const k of ['t', 'h', 'm', 'r', 'g', 'told', 'del', 'held']) st[k] = dict(s[k]); // held: the hub's copy of a sheet or report deleted here while its Undo is offered (mergePull, release)
     return st;
   }
-  let meta = null; // what hubStatus shows, so a screen can ask on every draw without reading the whole state
+  let meta = null, pushRev = null; // push head is separate from the pull cursor: a push must not skip unseen remote changes
   const saveState = st => { const ok = store.set(ST, st); if (ok) meta = pick(st, ['rev', 'ok', 'skew']); return ok; };
   const inT = raw => {
     const t = norm.task(raw);
@@ -188,6 +192,10 @@ export function makeSync(o = {}) {
       pm_invite: L('That is a superintendent invite. This phone is set to Project manager, so connect in Settings with the PM key from the Execution log of the hub script.'),
       no_reach: L('That did not work. Check the signal and try again. If it still fails, check that the hub deployment is set to Who has access: Anyone.'),
       off: L('This phone is not connected to a hub'),
+      conflict: L('The job changed on the hub. Reloading before retrying your saved edits.'),
+      migration: L('Migration is paused. Reconcile the original Schwab data in Jobs before syncing.'),
+      pending_connection: L('A saved push is waiting on its original Hub connection. Reconnect that job before retrying.'),
+      instance_mismatch: L('This job points to a different Hub instance. Keep local data and ask the owner to reconcile the connection.'),
     })[code] || L('The hub had a problem. Trying again shortly.');
   }
   function setStatus(state, message = '', at = cur.at) {
@@ -209,6 +217,7 @@ export function makeSync(o = {}) {
   // ---------- transport ----------
 
   async function call(action, extra = {}, opt = {}) {
+    if (scope.status()) throw err('migration');
     const c = opt.cfg || hub();
     if (!c) throw err('off');
     const ac = typeof AbortController === 'undefined' ? null : new AbortController(), t0 = now();
@@ -217,17 +226,26 @@ export function makeSync(o = {}) {
     try {
       // A plain-text body keeps this a "simple" request, which Apps Script answers without a CORS preflight. The key and the
       // device secret ride in the body, never the address; the hub works out the device from the secret, so no dev is sent.
-      const res = await fetchImpl(c.url, { method: 'POST', body: JSON.stringify({ ...extra, v: 1, key: c.key, action, ...(c.secret && { devSecret: c.secret }) }), headers: { 'Content-Type': 'text/plain;charset=utf-8' },
+      const res = await fetchImpl(c.url, { method: 'POST', body: JSON.stringify({ ...extra, v: scope.id ? 2 : 1, ...(scope.id && { jobId: scope.id }), key: c.key, action, ...(c.secret && { devSecret: c.secret }) }), headers: { 'Content-Type': 'text/plain;charset=utf-8' },
         signal: ac?.signal, credentials: 'omit', redirect: 'follow', referrerPolicy: 'no-referrer', cache: 'no-store' });
       status = res.status;
       j = await res.json().catch(() => null);
     } catch { throw err('offline'); } finally { tm.clear(timeout); }
+    if (scope.status()) throw err('migration');
     if (!j || typeof j !== 'object' || Array.isArray(j)) throw err(status && status < 500 && (opt.cfg || status >= 400) ? 'bad_reply' : 'server'); // Google's error page (200) from a working hub: its problem, not the link
     if (j.ok !== true) {
       const code = ERRORS.includes(j.error) ? j.error : 'server'; // our own wording: the hub's text is never shown
       if (code === 'unauthorized' && !opt.cfg) setStatus('error', say(code));
       throw err(code);
     }
+    if (scope.id) {
+      if (j.jobId !== scope.id || !/^[0-9a-f]{32}$/.test(j.instanceId || '')) throw err('bad_reply');
+      if (action === 'whoami' && !ROLES.includes(j.role)) throw err('forbidden'); // bridge credentials never enter browser settings
+      const pinned = store.get(INSTANCE, null);
+      if (pinned && (pinned.url !== c.url || pinned.instanceId !== j.instanceId)) throw err('instance_mismatch');
+      if (!pinned && !store.set(INSTANCE, { url: c.url, instanceId: j.instanceId })) throw err('space');
+    }
+    if (Number.isInteger(j.rev) && j.rev >= 0) pushRev = j.rev;
     if (!opt.cfg && num(j.now) > 1e12 && hub()?.url === c.url) { const st = loadState(); st.skew = Math.round(j.now - (t0 + now()) / 2); saveState(st); } // not after a disconnect
     return j;
   }
@@ -332,7 +350,17 @@ export function makeSync(o = {}) {
   // One request; a request the hub calls malformed or too big is halved until the one bad entity is alone and can be set aside.
   async function sendBatch(batch, ep, out) {
     try {
-      const rep = await call('push', wireBody(batch));
+      let body = wireBody(batch);
+      if (scope.id) {
+        const c = hub(), saved = store.get(PENDING, null);
+        if (saved && (saved.url !== c.url || saved.credential !== hs(c.key) || saved.device !== hs(c.secret))) throw err('pending_connection');
+        if (saved) { batch = saved.batch; body = saved.body; }
+        else {
+          body = { ...body, opId: crypto.randomUUID().replace(/-/g, ''), expectedRev: pushRev ?? loadState().rev };
+          if (!store.set(PENDING, { url: c.url, credential: hs(c.key), device: hs(c.secret), body, batch })) throw err('space');
+        }
+      }
+      const rep = await call('push', body);
       if (ep !== epoch) throw err('aborted');
       const by = new Map([...arr(rep.tasks).map(x => ['t', x]), ...arr(rep.shifts).map(x => ['s', x]), ...arr(rep.reports).map(x => ['r', x])].map(([k, x]) => [k + ':' + obj(x).key, obj(x)]));
       const lists = { t: rep.tasks, s: rep.shifts, r: rep.reports };
@@ -341,12 +369,25 @@ export function makeSync(o = {}) {
         out.push([it, kind === 'g' ? { status: rep.configStatus === 'rejected' ? 'rejected' : 'ok', reason: rep.configReason, config: rep.config } : !Array.isArray(lists[kind]) ? { status: 'ok' } : by.get(kind + ':' + it.key) || null]);
       }
     } catch (e) {
+      if (scope.id && ['bad_request', 'too_large', 'conflict', 'forbidden'].includes(e.code) && !store.set(PENDING, null)) throw err('space');
+      // ponytail: malformed v2 batches stay unsent as a unit; splitting needs a durable child-attempt journal.
+      if (scope.id) throw e;
       if (!['bad_request', 'too_large'].includes(e.code)) throw e;
       if (batch.length === 1) return void out.push([batch[0], { status: 'rejected' }]);
       const mid = batch.length >> 1;
       await sendBatch(batch.slice(0, mid), ep, out);
       await sendBatch(batch.slice(mid), ep, out);
     }
+  }
+  function applyAcks(c, ep, done) {
+    if (ep !== epoch || !done.length) return 0;
+    const st = loadState(), back = { more: true, tasks: [], reports: [] };
+    let fresh = 0;
+    for (const [it, res] of done) fresh += ack(st, it, res, back);
+    if (back.tasks.length || back.reports.length || back.config) applyPull(c, back, st.sig, st);
+    else if (!saveState(st)) throw err('space');
+    if (scope.id && !store.set(PENDING, null)) throw err('space');
+    return fresh;
   }
   function ack(st, it, res, back) { // back: the hub's merged copies that differ from what went up (pushPhase merges them)
     const rec = ent(st[it.k], it.key);
@@ -394,7 +435,7 @@ export function makeSync(o = {}) {
         const done = [];
         try { await sendBatch(batch, ep, done); } finally { // what the hub did accept is recorded even if a later request fails
           // the hub's copies that differ from what went up are merged as a pull's, saved before their acks are (applyPull)
-          if (ep === epoch) { st = loadState(); const back = { more: true, tasks: [], reports: [] }; for (const [it, res] of done) fresh += ack(st, it, res, back); if (back.tasks.length || back.reports.length || back.config) applyPull(c, back, st.sig, st); else saveState(st); }
+          fresh += applyAcks(c, ep, done);
           // A record the PM deleted: the hub says so here, and its tombstone may never come in a pull (this phone can be past it), so it leaves now.
           const gone = ep === epoch ? done.filter(([, res]) => res?.reason === 'deleted') : [];
           if (gone.length) try { const s2 = loadState(), lc = readLocal(c), dirty = {}, kinds = new Set(); for (const [it] of gone) dropKey(lc, s2, dirty, { t: 'task', r: 'report' }[it.k] || 'shift', it.key); flush(lc, dirty, kinds); saveState(s2); notify(kinds); } catch { /* a full phone: it stays here, refused */ }
@@ -675,6 +716,12 @@ export function makeSync(o = {}) {
     if (!c) return setStatus('off');
     relabel(c);
     if (!c.role) { const rep = await whoami(c); if (ep !== epoch) throw err('aborted'); patchSettings({ hubRole: rep.role }); c = hub(); }
+    if (scope.id && store.get(PENDING, null)) {
+      // Recover the exact durable attempt before any new scan or pull; edits made while offline remain unsent edits.
+      const done = [];
+      await sendBatch(store.get(PENDING, null).batch, ep, done);
+      applyAcks(c, ep, done);
+    }
     for (const [k, due] of Object.entries(loadState().del)) if (due <= now() && !mine.has(k)) { // a delete whose Undo ran out with the app closed
       const [kind, key] = k.split('|'), r = await purge(kind, key);
       if (ep !== epoch) throw err('aborted');
@@ -703,6 +750,7 @@ export function makeSync(o = {}) {
         } catch (e) {
           if (e.code === 'aborted' || ep !== epoch) return void (hub() && schedule(POKE_MS)); // the settings changed under this cycle: start over with the new ones
           const code = e.code || 'server';
+          if (code === 'conflict') { const st = loadState(); st.sig = ''; saveState(st); pushRev = null; }
           if (!e.code) console.error(e); // not a hub answer: a bug worth seeing in the console (the screen only says the hub had a problem)
           fails++;
           delay = BACKOFF[Math.min(fails, BACKOFF.length) - 1] * 1000;
@@ -758,7 +806,12 @@ export function makeSync(o = {}) {
     // its changed fields, rather than a newer part replacing unrelated offline work. A part without a base follows its stamp.
     const same = url === (s.hubUrl || loadState().url);
     if (!same && !store.set(ST, keepHashes())) return bad('space'); // a full phone stays on its old hub, unchanged: the new one's first pull would start at the old one's place (D4S-03)
-    patchSettings({ hubUrl: url, hubKey: key, hubRole: rep.role, hubCrew: typeof extra.crew === 'string' ? extra.crew : same ? String(s.hubCrew || '') : '' });
+    if (!patchSettings({ hubUrl: url, hubKey: key, hubRole: rep.role, hubCrew: typeof extra.crew === 'string' ? extra.crew : same ? String(s.hubCrew || '') : '' })) return bad('space');
+    if (scope.needsConnection?.()) {
+      const st = loadState(); st.rev = 0; st.sig = ''; st.away = true;
+      if (!saveState(st)) return bad('space');
+      try { scope.connected(); } catch { return bad('space'); }
+    }
     setStatus('syncing');
     poke();
     return { ok: true, role: rep.role, name: info.name, sheetUrl: info.sheetUrl };
@@ -766,7 +819,7 @@ export function makeSync(o = {}) {
   // A "join" link: only a deliberate, PM-made invite sets a phone up, and it never replaces a hub this phone already uses unless told to.
   async function joinFrom(data, opt = {}) {
     const d = obj(data), h = obj(d.hub);
-    if (d.v !== 1 || d.kind !== 'join' || !['crew', 'super'].includes(d.role)) return bad('bad_join');
+    if (d.v !== 1 || (d.jobId || '') !== scope.id || d.kind !== 'join' || !['crew', 'super'].includes(d.role)) return bad('bad_join');
     const c0 = hub();
     if (c0 && !opt.replace && c0.url !== h.url) return bad('already');
     const crew = typeof d.crew === 'string' && d.role === 'crew' ? d.crew.trim().slice(0, 60) : '';

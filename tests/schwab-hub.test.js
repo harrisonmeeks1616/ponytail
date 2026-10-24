@@ -1306,7 +1306,7 @@ test('the fake refuses what the real Sheets API refuses: unknown fields, wrong t
   bad(() => S.Values.batchUpdate({ data: [{ range: 'Tasks!A5', values: [['x']] }] }, id), /valueInputOption/);
   bad(() => S.Values.batchUpdate({ valueInputOption: 'RAW', data: [{ values: [['x']] }] }, id), /range and values are required/);
   bad(() => S.batchUpdate({ requests: [{ repeatCell: { range: { sheetId: sid }, cell: {}, fields: 'userEnteredFormat.bold' } }] }, id), /unknown field/);
-  bad(() => S.batchUpdate({ requests: [{ updateCells: {} }] }, id), /Unknown name "updateCells"/);
+  bad(() => S.batchUpdate({ requests: [{ unknownCells: {} }] }, id), /Unknown name "unknownCells"/);
   bad(() => S.batchUpdate({ requests: [{ deleteDimension: { range: { sheetId: sid, dimension: 'ROW', startIndex: 1, endIndex: 2 } } }] }, id), /expected one of/);
   bad(() => S.batchUpdate({ requests: [{ deleteDimension: { range: { sheetId: sid, dimension: 'ROWS', startIndex: 1, endIndex: '2' } } }] }, id), /expected an integer/);
   bad(() => S.batchUpdate({ requests: [{ deleteDimension: { range: { sheetId: sid, dimension: 'ROWS', startIndex: 1, endIndex: 100000 } } }] }, id), /Invalid dimension range/);
@@ -1795,7 +1795,8 @@ test('pull cache: a large index is stored in chunks under the 100 KB value limit
   assert.equal(first.tasks.length, 500);
   assert.equal(first.more, true);
   const rev = env.hub.props.REV;
-  assert.ok(env.hub.cache.has(`ix:${rev}:1`) && Number(env.hub.cache.get(`ix:${rev}:n`).v) >= 2, 'the index spans several cache values');
+  const prefix = 's:' + sha(env.hub.sheetId()).slice(0, 24) + ':';
+  assert.ok(env.hub.cache.has(`${prefix}ix:${rev}:1`) && Number(env.hub.cache.get(`${prefix}ix:${rev}:n`).v) >= 2, 'the index spans several cache values in this Sheet namespace');
   for (const [k, e] of env.hub.cache) assert.ok(e.v.length <= 100 * 1024, k + ' fits a cache value');
   const n = env.hub.calls.length;
   const again = crew.pull({ days: 30 });
@@ -1807,6 +1808,15 @@ test('pull cache: a large index is stored in chunks under the 100 KB value limit
 });
 
 // ---------- selftest ----------
+test('selftest reserves translation quota and stops at the configured daily cap', () => {
+  const env = setup(), pm = phone(env, 'pm', 'pm-dev');
+  env.hub.props.TR_CAP = '1';
+  assert.equal(ok(pm.call('selftest')).checks.find(c => c.name === 'translate').ok, true);
+  assert.equal(env.hub.props.TR_N, '1');
+  assert.deepEqual(ok(pm.call('selftest')).checks.find(c => c.name === 'translate'), { name: 'translate', ok: false, detail: 'quota' });
+  assert.equal(env.hub.props.TR_N, '1');
+});
+
 test('selftest: write, read, merge rules, a translated drawing number, delete; leaves nothing behind', () => {
   const env = setup(), pm = phone(env, 'pm', 'pm-dev'), crew = phone(env, 'crew', 'crew-dev');
   ok(office(env).push({ tasks: [task({ uid: 'real1' }), task({ uid: 'real2' })] }));

@@ -19,7 +19,7 @@
   <button class="icon-btn" id="lockBtn" data-act="lockBtn" aria-label="Office sign-in"></button>
 </div></header>
 <main>
-  <div class="screen-head" id="head"><span id="headBack"></span><p class="proj" id="proj"></p>
+  <div class="screen-head" id="head"><span id="headBack"></span><p class="proj" id="proj"></p><a id="jobsLink" href="#jobs"></a>
     <div class="title-row"><h2 class="large-title" id="title" tabindex="-1"></h2><button class="icon-btn find-btn" id="findBtn" data-act="find" hidden></button><span id="titleMore"></span></div><p class="subtitle" id="subtitle"></p></div>
   <div id="app"></div>
   <div class="bar" id="bar"></div>
@@ -34,11 +34,12 @@ import {
   toast, sheet, ask, sendSheet, pasteSheet, makePdf, savePdf, fileAway, retryUploads, settingsView, settingsAct, restore,
   registerSW, crewVar as cv, L, setLang, getLang, COMPANY, COMPANY_ALT, COMPANIES, letterhead, icon, screenHead, busy,
   UNLOCK, PIN_FORMAT, hasPin, adoptPin, setPin, pinHash, tryPin, unlocked, signIn, signOut, onSave,
-  findSheet, pullDown, daysNamed, initials,
+  findSheet, pullDown, daysNamed, initials, jobScope, jobKey,
 } from './shared.mjs';
 import { renderOffice, reportAct, reportInput, openReport, openHours, hoursInput, workerChange, fileReportIfChanged, reloadReports, sectionToggle, hasReports, attachShifts,
   reportsNow, crewNow, dropReport, setTextField } from './report.mjs';
 import * as sync from './sync.mjs';
+import { jobsView, jobsAct, openShiftLinks } from './jobs-ui.mjs';
 import { liveView, recordsView, hubSettingsView, statusDot, joinSheet, crewKeyNote, txView, txField, after as liveAfter, owns as liveOwns, act as liveAct, onInput as liveInput, deleteRecord, txCached } from './live.mjs';
 
 window.appStarted = true; // every file loaded (see the fallback above)
@@ -118,7 +119,7 @@ function enlist(t) {
 // assignments (any sheet this phone didn't receive). On the PM's phone the time clock is the crew
 // timesheet, so it is guarded too. Crew sheets and everyone else's time clock are open.
 // #live, #records/<people|sheets|reports> and #hub (the hub's status, open to a crew phone) are the hub screens of live.mjs.
-const VIEWS = ['clock', 'report', 'settings', 'live', 'records', 'hub', 'upcoming']; // #upcoming/<day>: the 7 days after the board's day
+const VIEWS = ['clock', 'report', 'settings', 'live', 'records', 'hub', 'upcoming', 'jobs']; // #jobs is local navigation, not an authorization boundary
 const isPM = () => S.role === 'Project manager';
 const crewPhone = () => S.role === 'Crew member'; // set on the first run: no office words on this phone unless Settings changes it
 const needsOffice = vw => ['report', 'settings', 'live', 'records', 'upcoming'].includes(vw.v) || (vw.v === 'clock' && isPM()) || (vw.v === 'task' && find(vw.uid)?.origin !== 'link');
@@ -158,6 +159,7 @@ function route() {
 async function openCode(code) {
   let data;
   try { data = await unpack(code); } catch { toast(L('That link is damaged or cut off. Ask for it to be sent again.'), 'bad'); return location.replace('#day/' + day); }
+  if ((data.jobId || '') !== jobScope.id) { toast(L('This link belongs to another job. Open its original job link.'), 'bad'); return location.replace('#jobs'); }
   if (data.kind === 'join') return openJoin(data);
   // A crew phone (or a new office phone) learns the office's code from its first link. A phone with
   // office-made sheets of its own never does, so no link can lock it out of its own records.
@@ -264,6 +266,7 @@ function header() {
   gear.innerHTML = icon('gear');
   gear.setAttribute('aria-label', L('Settings'));
   document.getElementById('proj').textContent = [S.project, S.site].filter(Boolean).join(' · ');
+  document.getElementById('jobsLink').textContent = L('Jobs / PM records');
   tabs.setAttribute('aria-label', L('Screens'));
   const here = { clock: 'clock', report: 'report', live: 'live', records: 'records', settings: '', hub: '' }[view.v] ?? 'day';
   const list = on ? [['day', L('Tasks')], ['clock', isPM() ? L('Hours') : L('Time clock')], ['report', L('Report')], ...(hubOn() ? [['live', L('Live')], ['records', L('Records')]] : [])]
@@ -288,7 +291,8 @@ function render() {
   bar.hidden = ['settings', 'live', 'records', 'hub'].includes(view.v);
   bar.innerHTML = ''; // and puts its one primary action here
   const back = { go: `day/${day}`, label: dayLabel(day) };
-  if (view.v === 'settings') { screenHead(L('Settings'), { back }); app.innerHTML = settingsView(S, hubSettingsView(ctx())); }
+  if (view.v === 'jobs' || jobScope.status()) { screenHead(L('Jobs on this phone'), { back }); app.innerHTML = jobsView(); bar.hidden = true; }
+  else if (view.v === 'settings') { screenHead(L('Settings'), { back }); app.innerHTML = settingsView(S, hubSettingsView(ctx())); }
   else if (view.v === 'hub') { screenHead(L('Hub'), { back }); app.innerHTML = `<div class="settings">${hubSettingsView(ctx())}</div>`; } // a crew phone's way to the hub (the dot)
   else if (view.v === 'live') app.innerHTML = liveView(ctx());
   else if (view.v === 'records') app.innerHTML = recordsView(ctx(), view.sub);
@@ -296,6 +300,7 @@ function render() {
   else if (view.v === 'task') renderTask(current());
   else if (view.v === 'upcoming') renderUpcoming();
   else renderBoard();
+  if (view.v === 'clock' && !jobScope.status()) app.insertAdjacentHTML('afterbegin', openShiftLinks());
   if (office() && !['board', 'live'].includes(view.v)) { const note = crewKeyNote(ctx()); if (note) app.insertAdjacentHTML('afterbegin', note); }
 }
 
@@ -647,6 +652,7 @@ async function firstRun() {
     if (!location.hash.startsWith('#p=')) return;
     try {
       const data = await unpack(location.hash.slice(3));
+      if ((data.jobId || '') !== jobScope.id) return;
       if (data.kind === 'join') invite = data;
       linked = [data.task, ...(Array.isArray(data.tasks) ? data.tasks : [])].filter(Boolean).flatMap(x => normTask(x).members);
       if (['task', 'result', 'day', 'report'].includes(data.kind) && !hasPin(S) && PIN_FORMAT.test(data.pin)) S.pin = data.pin;
@@ -734,7 +740,7 @@ async function firstRun() {
 // Sheets match their number, area, floor, crew, people, date, scope, drawings, steps and notes, as typed and as this
 // session has them translated; people their name and crew; days their name (shared.mjs daysNamed) or a report's text.
 const FIND_ON = ['board', 'upcoming', 'live', 'records', 'clock']; // the main screens
-const RECENT = 'schwab.recent'; // the last 5 sheets opened on this phone, newest first; a convenience, so not in backups
+const RECENT = jobKey('schwab.recent'); // recent sheets are private to this job
 const sawSheet = u => save(RECENT, [u, ...load(RECENT, []).filter(x => typeof x === 'string' && x !== u)].slice(0, 5));
 const canFind = () => FIND_ON.includes(view.v) && !setup && !document.querySelector('dialog[open]') && !document.activeElement?.matches?.('input, textarea, select');
 const strings = x => (typeof x === 'string' ? [x] : x && typeof x === 'object' ? Object.entries(x).flatMap(([k, v]) => (['date', 'lang', 'pmLang', 'status'].includes(k) ? [] : strings(v))) : []);
@@ -819,6 +825,8 @@ async function send(kind, t) {
 }
 
 async function act(a, el) {
+  if (jobsAct(a)) return;
+  if (jobScope.status() && !['toggleLang', 'lang'].includes(a)) return;
   const t = current(), v = el.dataset.v;
   switch (a) {
     case 'new': { // Magic Plus (below) puts the floor or the Upcoming day it was dropped on in data-floor / data-day
@@ -1196,6 +1204,7 @@ onSave(k => SYNCED.has(k) && sync.poke()); // after every save; the sync's own t
 setTextField((label, k, v, o, lang) => txField(ctx(), label, k, v, o, lang)); // the daily report's typed text
 new MutationObserver(() => liveAfter(ctx(), app)).observe(app, { childList: true }); // after every draw: translate the typed text on screen
 addEventListener('storage', e => [...Object.values(KEYS), UNLOCK].includes(e.key) && reload());
+addEventListener('storage', e => { if (e.key?.startsWith('schwab.') || e.key?.startsWith('fieldHub.legacyMigration') || e.key === 'fieldHub.jobs.v1') { if (jobScope.status() || view.v === 'jobs') render(); } });
 addEventListener('pageshow', e => e.persisted && reload());
 addEventListener('hashchange', route);
 addEventListener('online', () => retryUploads(S));
@@ -1209,7 +1218,7 @@ addEventListener('pagehide', () => { fileIfChanged(current()); fileReportIfChang
 app.addEventListener('toggle', sectionToggle, true);
 pullDown(canFind, quickFind, () => document.getElementById('findBtn')); // Quick Find: pull down past the top of a main screen, or "/" on a computer
 addEventListener('keydown', e => { if (e.key === '/' && !e.ctrlKey && !e.metaKey && !e.altKey && canFind()) { e.preventDefault(); quickFind(); } });
-if (isNewPhone()) firstRun().then(route); else route();
+if (isNewPhone() && !jobScope.status()) firstRun().then(route); else route();
 retryUploads(S);
 </script>
 </body>

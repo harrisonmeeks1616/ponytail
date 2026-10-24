@@ -194,7 +194,7 @@ test('Spanish mode has a Spanish version of every on-screen phrase', async () =>
   const dir = path.join(__dirname, '..', 'docs', 'schwab');
   const { DEFAULT_SETTINGS } = await lib;
   const used = new Set(['Complete', 'Partial', 'Blocked', 'Accepted', 'Follow-up needed', 'Superintendent', 'Project manager', 'Crew lead', '1 person', '{n} people', ...DEFAULT_SETTINGS.checks]); // looked up from data, not literals (the default checks through checkLabel)
-  for (const f of ['tasks.html', 'shared.mjs', 'report.mjs', 'sync.mjs', 'live.mjs']) {
+  for (const f of ['tasks.html', ...fs.readdirSync(dir).filter(f => f.endsWith('.mjs') && f !== 'es.mjs')]) {
     const src = fs.readFileSync(path.join(dir, f), 'utf8');
     for (const m of src.matchAll(/\b(?:L|x)\(\s*(['"])((?:\\.|(?!\1)[^\\])*)\1/g)) used.add(m[2].replace(/\\(.)/g, '$1'));
   }

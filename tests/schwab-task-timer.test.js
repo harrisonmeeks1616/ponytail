@@ -11,8 +11,9 @@ test('task Stop before Start writes nothing; normal and overnight work still cou
   const action = source.match(/async function act\(a, el\) \{[\s\S]*?\r?\n\}\r?\n\r?\ndocument\.addEventListener\('click'/);
   assert.ok(action, 'find the actual task action');
   const task = normTask({ uid: 'timer-test', origin: 'link', date: '2026-10-19', size: 3 });
-  let time = '09:00', saves = 0;
+  let time = '09:00', saves = 0, blocked = '';
   const context = vm.createContext({
+    jobsAct: () => false, jobScope: { status: () => blocked },
     current: () => task, nowHM: () => time,
     persist: () => { saves++; }, render: () => {},
   });
@@ -27,4 +28,7 @@ test('task Stop before Start writes nothing; normal and overnight work still cou
   assert.equal(worked(task), 30);
   assert.equal(saves, 2);
   assert.equal(worked(normTask({ aStart: '22:00', aStop: '06:00' })), 480, 'manual overnight times stay valid');
+  blocked = 'legacy_changed'; time = '10:00'; await tap('aStop');
+  assert.equal(task.aStop, '09:31', 'a migration pause stops the actual task action');
+  assert.equal(saves, 2);
 });

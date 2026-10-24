@@ -70,6 +70,7 @@ const SHEET_PROPS = S.obj({ sheetId: S.int, title: S.str, index: S.int, sheetTyp
 const GRID_RANGE = S.obj({ sheetId: S.int, startRowIndex: S.int, endRowIndex: S.int, startColumnIndex: S.int, endColumnIndex: S.int }, ['sheetId']);
 const DIM_RANGE = S.obj({ sheetId: S.int, dimension: S.enum('ROWS', 'COLUMNS'), startIndex: S.int, endIndex: S.int }, ['sheetId', 'dimension']);
 const CELL_DATA = S.obj({
+  userEnteredValue: S.obj({ stringValue: S.str, numberValue: S.num, boolValue: S.bool }),
   userEnteredFormat: S.obj({
     textFormat: S.obj({ bold: S.bool, italic: S.bool, fontSize: S.int }),
     wrapStrategy: S.enum('OVERFLOW_CELL', 'LEGACY_WRAP', 'CLIP', 'WRAP'),
@@ -84,6 +85,8 @@ const REQUESTS = {
   updateDimensionProperties: S.obj({ range: DIM_RANGE, properties: DIM_PROPS, fields: S.str }, ['range', 'properties', 'fields']),
   deleteDimension: S.obj({ range: DIM_RANGE }, ['range']),
   appendDimension: S.obj({ sheetId: S.int, dimension: S.enum('ROWS', 'COLUMNS'), length: S.int }, ['sheetId', 'dimension', 'length']),
+  updateCells: S.obj({ start: S.obj({ sheetId: S.int, rowIndex: S.int, columnIndex: S.int }, ['sheetId']), rows: S.arr(S.obj({ values: S.arr(CELL_DATA) })), fields: S.str }, ['start', 'rows', 'fields']),
+  appendCells: S.obj({ sheetId: S.int, rows: S.arr(S.obj({ values: S.arr(CELL_DATA) })), fields: S.str }, ['sheetId', 'rows', 'fields']),
 };
 const SPREADSHEET = S.obj({ properties: S.obj({ title: S.str, locale: S.str, timeZone: S.str }), sheets: S.arr(S.obj({ properties: SHEET_PROPS })) });
 const BATCH_BODY = S.obj({ requests: S.arr({ t: 'request' }), includeSpreadsheetInResponse: S.bool, responseRanges: S.arr(S.str), responseIncludeGridData: S.bool }, ['requests']);
@@ -250,6 +253,7 @@ function makeSheets(hub) {
     });
     capCells(m, ss);
     hub.spreadsheets.set(id, ss);
+    hub.maybeFail(m + ':after');
     return respSpreadsheet(ss);
   }
   function get(...a) {
@@ -298,6 +302,19 @@ function makeSheets(hub) {
         s.formats.push({ range: q.range, cell: q.cell, fields: q.fields, applied: { bold: inMask(q.fields, 'userEnteredFormat.textFormat.bold') && !!(q.cell.userEnteredFormat && q.cell.userEnteredFormat.textFormat && q.cell.userEnteredFormat.textFormat.bold), wrap: inMask(q.fields, 'userEnteredFormat.wrapStrategy') ? q.cell.userEnteredFormat && q.cell.userEnteredFormat.wrapStrategy : undefined } });
         return {};
       }
+      if (type === 'updateCells' || type === 'appendCells') {
+        checkMask(m, q.fields, CELL_DATA, `${where}.fields`);
+        const s = byId(type === 'appendCells' ? q.sheetId : q.start.sheetId);
+        const r0 = type === 'appendCells' ? lastRow(s) + 1 : q.start.rowIndex || 0, c0 = type === 'appendCells' ? 0 : q.start.columnIndex || 0;
+        const values = q.rows.map(r => r.values.map(c => {
+          const v = c.userEnteredValue || {}, entries = Object.entries(v);
+          if (entries.length !== 1) throw apiError(m, 'Exactly one entered value required');
+          return entries[0][1];
+        }));
+        if (type === 'appendCells') s.rowCount = Math.max(s.rowCount, r0 + values.length);
+        writeCells(m, s, r0, c0, values, 'RAW', type);
+        return {};
+      }
       if (type === 'updateDimensionProperties') {
         checkMask(m, q.fields, DIM_PROPS, `${where}.fields`);
         const s = byId(q.range.sheetId);
@@ -326,6 +343,7 @@ function makeSheets(hub) {
     });
     const was = new Map(ss.sheets.map(x => [x.sheetId, x])); // keep each sheet object, so a test holding one still sees the live grid
     Object.assign(ss, { sheets: work.sheets.map(w => (was.has(w.sheetId) ? Object.assign(was.get(w.sheetId), w) : w)), seq: work.seq });
+    hub.maybeFail(m + ':after');
     return { spreadsheetId: ss.id, replies };
   }
 

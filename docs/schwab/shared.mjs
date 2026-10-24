@@ -4,6 +4,8 @@
 // An explicitly configured review receiver also receives PDF copies of finished records.
 
 import ES from './es.mjs';
+import { jobScope, jobKey } from './jobs.mjs';
+export { jobScope, jobKey } from './jobs.mjs';
 
 // The passcode also keeps a key of its own: a tab still running the version before it (phones keep old
 // tabs open for days) rewrites settings without it, and an old backup has none. hours: this phone's own
@@ -11,7 +13,7 @@ import ES from './es.mjs';
 // and crew (HUB_FIELDS), each in a key of its own for the same reason as the passcode. roster: the people and crews with
 // their ids, kept apart for the same reason (see normSettings). Backups and restores carry every key here (a backup
 // leaves out the hub key).
-export const KEYS = { settings: 'schwab.settings', tasks: 'schwab.tasks', reports: 'schwab.reports', pin: 'schwab.pin', hours: 'schwab.hours', crewHours: 'schwab.crewHours', device: 'schwab.device', roster: 'schwab.roster', hub: 'schwab.hub' };
+export const KEYS = Object.fromEntries(['settings', 'tasks', 'reports', 'pin', 'hours', 'crewHours', 'device', 'roster', 'hub'].map(k => [k, jobKey('schwab.' + k)]));
 export const HUB_FIELDS = ['hubUrl', 'hubKey', 'hubRole', 'hubCrew'];
 export const COMPANY = 'H.A. Sack-Electrical', COMPANY_ALT = 'Sack Company-Electrical', COMPANIES = `${COMPANY} · ${COMPANY_ALT}`;
 // The top lines of every PDF: who did the work, then the job.
@@ -56,13 +58,15 @@ export const uid = () => Date.now().toString(36) + Math.random().toString(36).sl
 
 export function load(key, fallback) {
   // A list key holding something else (say, from a restored file) would crash the page that maps over it.
-  try { const v = localStorage.getItem(key), x = v ? JSON.parse(v) : fallback; return Array.isArray(fallback) && !Array.isArray(x) ? fallback : x; } catch { return fallback; }
+  try { const v = localStorage.getItem(jobKey(key)), x = v ? JSON.parse(v) : fallback; return Array.isArray(fallback) && !Array.isArray(x) ? fallback : x; } catch { return fallback; }
 }
 // ponytail: everything lives in localStorage (~5 MB per site), roughly a year of daily sheets.
 // Past that, move to IndexedDB or a shared backend; Backup keeps a copy until then.
 // Settings with a roster also write it to its own key, wherever they are saved from.
 export function save(key, val) {
   try {
+    jobScope.assertWritable();
+    key = jobKey(key);
     localStorage.setItem(key, JSON.stringify(val));
     if (key === KEYS.settings && Array.isArray(val?.people) && Array.isArray(val.crews)) localStorage.setItem(KEYS.roster, JSON.stringify(rosterOf(val)));
   } catch { return false; }
@@ -100,7 +104,7 @@ export const checkLabel = (text, l) => { const d = defaultCheck(text), s = d && 
 export function normSettings(raw) {
   const roster = raw && typeof raw === 'object' && !Array.isArray(raw.people) && load(KEYS.roster, null);
   if (Array.isArray(roster?.people)) raw = withRoster(raw, shape(ROSTER_TPL, roster));
-  const s = raw ? shape(SETTINGS_TPL, raw) : structuredClone(DEFAULT_SETTINGS);
+  const s = raw ? shape(SETTINGS_TPL, raw) : jobScope.id !== '' ? { ...shape(SETTINGS_TPL, {}), project: jobScope.label() } : structuredClone(DEFAULT_SETTINGS);
   fixRoster(s, Array.isArray(raw?.people));
   return s;
 }
@@ -437,7 +441,7 @@ export function fillFromTasks(rep, tasks, crewNames) {
 // ponytail: a 4-digit code in a phone web app is a door lock, not a vault: 10,000 codes, and anyone holding
 // a link or this phone's storage can try them all offline. It keeps crews on the crew screens and a
 // picked-up phone out of the office records. Sign-ins on a shared server are the upgrade past that.
-export const UNLOCK = 'schwab.unlock';
+export const UNLOCK = jobKey('schwab.unlock');
 export const PIN_FORMAT = /^[0-9a-f]{16}:[0-9a-f]{64}$/;
 export const hasPin = s => PIN_FORMAT.test(s.pin);
 export const setPin = (s, pin) => { s.pin = pin; return save(KEYS.pin, pin) && save(KEYS.settings, s); };
@@ -497,6 +501,7 @@ export async function tryPin(s, pin, now = Date.now()) {
 export const b64 = bytes => { let s = ''; for (const b of bytes) s += String.fromCharCode(b); return btoa(s); };
 
 export async function pack(obj) {
+  if (jobScope.id) obj = { ...obj, jobId: jobScope.id };
   const stream = new Blob([JSON.stringify(obj)]).stream().pipeThrough(new CompressionStream('deflate-raw'));
   return b64(new Uint8Array(await new Response(stream).arrayBuffer())).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
 }
@@ -519,7 +524,7 @@ export async function unpack(code) {
 
 // Pull the code out of a pasted link, a pasted message, or a bare code.
 export const codeFrom = text => (/[#&]p=([\w-]+)/.exec(text) || /^\s*([\w-]{24,})\s*$/.exec(text) || [])[1] || '';
-export const linkTo = (page, code) => new URL(page, location.href).href.split('#')[0] + '#p=' + code;
+export const linkTo = (page, code) => { const u = new URL(page, location.href); if (jobScope.id) u.searchParams.set('jobId', jobScope.id); u.hash = 'p=' + code; return u.href; };
 
 // ---------- time ----------
 
@@ -940,7 +945,7 @@ export async function savePdf(filename, bytes) {
 // retries when an app opens or the phone reconnects. The queue keeps the latest pending edit
 // per date and name; the receiver preserves earlier uploaded edits as separate files.
 
-const OUTBOX = 'schwab.outbox';
+const OUTBOX = jobKey('schwab.outbox');
 // A record with no valid date (saved before blank dates were fixed) is refused forever; drop it.
 // Its sheet is re-dated on load and filed again, so nothing is lost. A backup file gets passed around, so only a PDF
 // (base64 of %PDF-...) and only its own fields go out: whatever else a crafted item carries (ping, url) is never sent.
@@ -1023,7 +1028,7 @@ export function retryUploads(s) {
 // ---------- settings (office only: behind the passcode) ----------
 
 // Everything this app keeps on the phone, the hub sync's record and the translation cache included (they are as large as the records they describe).
-const storedChars = () => { let n = 0; try { for (let i = 0; i < localStorage.length; i++) { const k = localStorage.key(i); if (k.startsWith('schwab.')) n += (localStorage.getItem(k) || '').length; } } catch {} return n; };
+const storedChars = () => { let n = 0; try { for (let i = 0; i < localStorage.length; i++) { const k = localStorage.key(i); if (k.startsWith('schwab.') || k.startsWith('fieldHub.')) n += (localStorage.getItem(k) || '').length; } } catch {} return n; };
 // hub: the Settings > Hub group (live.mjs hubSettingsView), between the checks and the review folder.
 export function settingsView(s, hub = '') {
   const roles = ['Crew member', 'Superintendent', 'Project manager']; // a crew phone (set on its first run) shows no office words
@@ -1149,7 +1154,7 @@ export async function settingsAct(act, s, el, change = f => { f(s); save(KEYS.se
       movePerson(t, p.id, p.crewId); // back on their crew if it is still there, and the crew lists rewritten
     }) });
   }
-  if (act === 'backup') download(new Blob([JSON.stringify(backupData())], { type: 'application/json' }), `schwab-field-backup-${today()}.json`);
+  if (act === 'backup') download(new Blob([JSON.stringify(backupData())], { type: 'application/json' }), `${jobScope.id ? 'field-hub-' + jobScope.id : 'schwab-field'}-backup-${today()}.json`);
   if (act === 'testFolder') {
     try {
       await post(s, { ping: true });
@@ -1164,13 +1169,18 @@ export async function settingsAct(act, s, el, change = f => { f(s); save(KEYS.se
 
 // Everything this phone keeps, including pending PDFs, as stored, except the hub key: a backup file gets passed around, and the PM can send a
 // new invite. The device secret goes along, so a restored phone keeps its own hours.
-const SYNC = 'schwab.hubSync'; // sync.mjs keeps it, and restoreData below says why it travels with a backup
+const SYNC = jobKey('schwab.hubSync'); // sync.mjs keeps it, and restoreData below says why it travels with a backup
 export function backupData() {
-  const data = Object.fromEntries([...Object.values(KEYS), OUTBOX, SYNC].map(k => [k, load(k, null)]));
+  const data = Object.fromEntries([...Object.values(KEYS), OUTBOX, SYNC, ...(jobScope.id ? [jobKey('schwab.hubPending'), jobKey('schwab.hubInstance')] : [])].map(k => [k, load(k, null)]));
+  if (jobScope.id) data.__fieldHub = { v: 2, jobId: jobScope.id };
   for (const k of [KEYS.settings, KEYS.hub]) if (data[k] && typeof data[k] === 'object') data[k] = { ...data[k], hubKey: '' };
   return data;
 }
-export const isBackup = data => !!data && typeof data === 'object' && Object.values(KEYS).some(k => k in data);
+export const isBackup = data => {
+  if (!data || typeof data !== 'object' || (data.__fieldHub?.jobId || '') !== jobScope.id || !Object.values(KEYS).some(k => k in data)) return false;
+  const own = jobScope.id && load(jobKey('schwab.hubInstance'), null), incoming = data[jobKey('schwab.hubInstance')];
+  return !own || !incoming || (own.url === incoming.url && own.instanceId === incoming.instanceId);
+};
 // Writes every key the backup has; false if the phone ran out of space part way. A backup's settings bring their own
 // roster (or, from before people had ids, none), never this phone's old one. The hub sync's record of what the hub had of
 // each record (sync.mjs schwab.hubSync) comes along and is written last: it describes the restored records, so only what
@@ -1180,13 +1190,16 @@ export const isBackup = data => !!data && typeof data === 'object' && Object.val
 // leaves it out; README, Backups), but a phone restoring its own backup stays connected. '' for another hub, another role, or none.
 const ownKeyFor = data => { const own = load(KEYS.hub, null), h = data[KEYS.hub]; return own?.hubKey && h && typeof h === 'object' && h.hubUrl === own.hubUrl && h.hubRole === own.hubRole ? own.hubKey : ''; };
 export const restoreData = data => {
+  if (jobScope.status() || (jobScope.id ? !isBackup(data) : data?.__fieldHub?.jobId)) return false;
+  if (jobScope.id && load(jobKey('schwab.hubPending'), null)) return false; // recover an uncertain write before replacing its source records
   const hubKey = ownKeyFor(data);
   for (const k of [KEYS.settings, KEYS.hub]) if (data[k] && typeof data[k] === 'object') data[k] = { ...data[k], hubKey }; // a file never connects a phone to a hub
   try { localStorage.removeItem(SYNC); } catch {}
-  return (data[KEYS.settings] == null || save(KEYS.roster, null)) && [...Object.values(KEYS), OUTBOX, SYNC].every(k => data[k] == null || save(k, k === OUTBOX ? clean(data[k]) : data[k]));
+  return (data[KEYS.settings] == null || save(KEYS.roster, null)) && [...Object.values(KEYS), OUTBOX, SYNC, ...(jobScope.id ? [jobKey('schwab.hubPending'), jobKey('schwab.hubInstance')] : [])].every(k => data[k] == null || save(k, k === OUTBOX ? clean(data[k]) : data[k]));
 };
 
 export async function restore(file) {
+  if (jobScope.id && load(jobKey('schwab.hubPending'), null)) return toast(L('Finish syncing the saved push before restoring a backup.'), 'bad');
   let data;
   try { data = JSON.parse(await file.text()); } catch { return toast(L("That file isn't a field app backup"), 'bad'); }
   if (!isBackup(data)) return toast(L("That file isn't a field app backup"), 'bad');

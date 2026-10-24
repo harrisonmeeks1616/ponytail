@@ -117,6 +117,7 @@ function fail_(code) { throw new HubError_(code); }
 const MESSAGES = {
   bad_request: 'Bad request', unauthorized: 'Wrong key', forbidden: 'Not allowed for this key', busy: 'Busy, try again shortly',
   too_large: 'Too large', quota: 'Daily limit reached', not_ready: 'The hub is not set up', server: 'Server error',
+  conflict: 'Changed on the hub; reload before retrying',
 };
 function reply_(value) { return ContentService.createTextOutput(JSON.stringify(value)).setMimeType(ContentService.MimeType.JSON); }
 function isObj_(x) { return x !== null && typeof x === 'object' && !Array.isArray(x); }
@@ -296,6 +297,108 @@ function resetPmKey() {
   });
 }
 
+// ---------- opt-in v2 directory (owner editor only; never exposed as web actions) ----------
+const JOB_ID = /^[A-Za-z0-9][A-Za-z0-9_-]{0,79}$/;
+const OP_ID = /^[A-Za-z0-9_-]{8,80}$/;
+const OP_TAB = 'Operations', OP_COLS = 67, OP_CHUNK = 32000;
+function directoryKey_(jobId) { return 'JOB_' + digestHex_(jobId).slice(0, 32); }
+function authKey_(key) { return 'AUTH_' + digestHex_(key).slice(0, 32); }
+function jobPrefix_(job) { return job.legacy ? '' : 'J' + digestHex_(job.jobId).slice(0, 24) + ':'; }
+function propertyStore_(prefix) {
+  const raw = PropertiesService.getScriptProperties();
+  return {
+    getProperties: function () { const all = raw.getProperties(), out = {}; Object.keys(all).forEach(function (k) { if (k.indexOf(prefix) === 0) out[k.slice(prefix.length)] = all[k]; }); return out; },
+    setProperty: function (k, v) { raw.setProperty(prefix + k, v); },
+    deleteProperty: function (k) { raw.deleteProperty(prefix + k); },
+    setProperties: function (o) { const p = {}; Object.keys(o).forEach(function (k) { p[prefix + k] = o[k]; }); raw.setProperties(p); },
+  };
+}
+function scopedCache_(cache, id) {
+  const prefix = 's:' + digestHex_(id || 'legacy').slice(0, 24) + ':';
+  return {
+    get: function (k) { return cache.get(prefix + k); },
+    put: function (k, v, ttl) { cache.put(prefix + k, v, ttl); },
+    getAll: function (keys) { const got = cache.getAll(keys.map(function (k) { return prefix + k; })), out = {}; keys.forEach(function (k) { if (own_(got, prefix + k)) out[k] = got[prefix + k]; }); return out; },
+    putAll: function (o, ttl) { const out = {}; Object.keys(o).forEach(function (k) { out[prefix + k] = o[k]; }); cache.putAll(out, ttl); },
+  };
+}
+function resolveAuth_(req, all) {
+  if (req.v === 1) {
+    const role = roleOf_(req.key, all);
+    if (!role) fail_('unauthorized');
+    return { role: role, principal: role, prefix: '', id: all.SHEET_ID, jobId: all.LEGACY_JOB_ID || '', instanceId: all.LEGACY_INSTANCE_ID || '' };
+  }
+  if (!JOB_ID.test(req.jobId || '') || typeof req.key !== 'string' || !FORMAT.key.test(req.key)) fail_('bad_request');
+  // Authenticate the credential's job binding BEFORE resolving a caller-selected Sheet.
+  const binding = parseCell_(all[authKey_(req.key)] || '');
+  if (!binding || !sameStr_(binding.hash || '', digestHex_(req.key)) || binding.jobId !== req.jobId) fail_('unauthorized');
+  const job = parseCell_(all[directoryKey_(binding.jobId)] || '');
+  if (!job || job.jobId !== binding.jobId || !job.ready) fail_('not_ready');
+  if (['crew', 'super', 'pm', 'bridge'].indexOf(binding.role) < 0) fail_('unauthorized');
+  return { role: binding.role === 'bridge' ? 'pm' : binding.role, principal: binding.role, prefix: jobPrefix_(job), id: job.id, jobId: job.jobId, instanceId: job.instanceId };
+}
+function operationTab_(id) {
+  const sheets = apiGet_(id, 'sheets.properties(sheetId,title)').sheets;
+  if (!sheets.some(function (s) { return s.properties.title === OP_TAB; })) apiBatch_(id, [{ addSheet: { properties: { title: OP_TAB, gridProperties: { rowCount: 1000, columnCount: OP_COLS, frozenRowCount: 1 } } } }]);
+  apiValuesBatchUpdate_(id, [{ range: "'Operations'!A1:C1", values: [['Operation', 'Request digest', 'State']] }]);
+}
+// Put FH_SETUP JSON in Script Properties, run this function, then remove the local secret copy.
+// {jobId,label,legacy,crewKey,superKey,pmKey,bridgeKey,recoverSheetId?}. Never log keys.
+// A creation timeout leaves an intent; inspect Drive and supply its exact Sheet id to recover.
+// It deliberately refuses to create another Sheet while the first result is uncertain.
+function configureFieldHubJob() {
+  return withScriptLock_(30000, function () {
+    const props = PropertiesService.getScriptProperties(), all = props.getProperties(), input = parseCell_(all.FH_SETUP || '');
+    if (!input || !JOB_ID.test(input.jobId || '') || typeof input.label !== 'string' || !input.label.trim() || typeof input.legacy !== 'boolean') fail_('bad_request');
+    const roles = ['crew', 'super', 'pm', 'bridge'], keys = roles.map(function (r) { return input[r + 'Key']; });
+    if (!keys.every(function (k) { return typeof k === 'string' && FORMAT.key.test(k); }) || keys.some(function (k, i) { return keys.indexOf(k) !== i || roleOf_(k, all); })) fail_('bad_request');
+    roles.forEach(function (role, i) { const old = parseCell_(all[authKey_(keys[i])] || ''); if (old && (old.jobId !== input.jobId || old.role !== role || old.hash !== digestHex_(keys[i]))) fail_('conflict'); });
+    const dk = directoryKey_(input.jobId), ik = 'CREATE_' + digestHex_(input.jobId).slice(0, 32);
+    let job = parseCell_(all[dk] || ''), intent = parseCell_(all[ik] || '');
+    if (job && (job.jobId !== input.jobId || job.legacy !== input.legacy)) fail_('conflict');
+    if (input.legacy && (all.LEGACY_JOB_ID && all.LEGACY_JOB_ID !== input.jobId || !all.SHEET_ID)) fail_('conflict');
+    if (!job) {
+      if (!intent) { intent = { instanceId: digestHex_(Utilities.getUuid()).slice(0, 32), id: input.legacy ? all.SHEET_ID : '', started: false }; props.setProperty(ik, JSON.stringify(intent)); }
+      const title = clip_(input.label, 120) + ' field hub [' + intent.instanceId + ']';
+      if (!intent.id && input.recoverSheetId) {
+        const recovered = apiGet_(input.recoverSheetId, 'properties.title');
+        if (!recovered.properties || recovered.properties.title !== title) fail_('conflict');
+        intent.id = input.recoverSheetId;
+      }
+      if (!intent.id) {
+        if (intent.started) fail_('conflict');
+        intent.started = true; props.setProperty(ik, JSON.stringify(intent));
+        intent.id = apiCreate_(sheetSpec_(Object.keys(TABS), title)).spreadsheetId;
+      }
+      props.setProperty(ik, JSON.stringify(intent));
+      Object.keys(all).filter(function (k) { return k.indexOf('JOB_') === 0; }).forEach(function (k) { const other = parseCell_(all[k]); if (other && other.id === intent.id && other.jobId !== input.jobId) fail_('conflict'); });
+      job = { jobId: input.jobId, id: intent.id, instanceId: intent.instanceId, legacy: input.legacy, ready: false };
+      props.setProperty(dk, JSON.stringify(job));
+    }
+    if (!job.ready) {
+      if (!job.legacy) formatTabs_({ memo: {} }, job.id, Object.keys(TABS));
+      operationTab_(job.id);
+      if (job.legacy) props.setProperties({ LEGACY_JOB_ID: job.jobId, LEGACY_INSTANCE_ID: job.instanceId });
+      else propertyStore_(jobPrefix_(job)).setProperties({ SHEET_ID: job.id, REV: '0' });
+      job.ready = true; props.setProperty(dk, JSON.stringify(job));
+    }
+    roles.forEach(function (role, i) { props.setProperty(authKey_(keys[i]), JSON.stringify({ hash: digestHex_(keys[i]), jobId: job.jobId, role: role })); });
+    props.deleteProperty('FH_SETUP'); props.deleteProperty(ik);
+    return { jobId: job.jobId, instanceId: job.instanceId, sheetUrl: sheetUrl_(job.id), ready: true };
+  });
+}
+// Owner-only revocation: FH_REVOKE is {jobId, credentialHash} (the full SHA-256 hash, no raw key).
+function revokeFieldHubCredential() {
+  return withScriptLock_(30000, function () {
+    const props = PropertiesService.getScriptProperties(), all = props.getProperties(), input = parseCell_(all.FH_REVOKE || '');
+    if (!input || !JOB_ID.test(input.jobId || '') || !/^[0-9a-f]{64}$/.test(input.credentialHash || '')) fail_('bad_request');
+    const key = 'AUTH_' + input.credentialHash.slice(0, 32), binding = parseCell_(all[key] || '');
+    if (binding && (binding.jobId !== input.jobId || binding.hash !== input.credentialHash)) fail_('conflict');
+    props.deleteProperty(key); props.deleteProperty('FH_REVOKE');
+    return { jobId: input.jobId, revoked: true };
+  });
+}
+
 // ---------- web app entry points ----------
 function doGet() { return reply_({ ok: true, service: 'schwab-field-hub', version: HUB_VERSION }); } // health only: nothing else
 
@@ -305,7 +408,7 @@ function doPost(e) {
   } catch (err) {
     const code = err instanceof HubError_ ? err.code : 'server';
     // Never echo submitted data or a stack. A server error logs only a clipped, generic line for the owner.
-    if (code === 'server') Logger.log('hub error: ' + clip_(err && err.message, 160));
+    if (code === 'server') Logger.log('hub error: server');
     return reply_({ ok: false, error: code, message: MESSAGES[code] });
   }
 }
@@ -358,19 +461,22 @@ function handle_(e) {
   if (body.length > MAX_BODY) fail_('too_large');
   let req;
   try { req = JSON.parse(body); } catch (x) { fail_('bad_request'); }
-  if (!isObj_(req) || req.v !== 1 || typeof req.action !== 'string') fail_('bad_request');
-  const P = PropertiesService.getScriptProperties().getProperties(); // one read: keys, rev, sheet id
-  const role = roleOf_(req.key, P);
-  if (!role) fail_('unauthorized');
+  if (!isObj_(req) || (req.v !== 1 && req.v !== 2) || typeof req.action !== 'string') fail_('bad_request');
+  const all = PropertiesService.getScriptProperties().getProperties(), auth = resolveAuth_(req, all);
+  const role = auth.role, props = propertyStore_(auth.prefix), P = props.getProperties();
   if (!own_(ACTIONS, req.action)) fail_('bad_request');
   const rule = ACTIONS[req.action];
   if (rule.roles.indexOf(role) < 0) fail_('forbidden');
-  if (req.action !== 'whoami' && !P.SHEET_ID) fail_('not_ready');
+  if (auth.principal === 'bridge' && ['whoami', 'pull', 'push', 'records'].indexOf(req.action) < 0) fail_('forbidden');
+  if (req.v === 2 && ['keys', 'rotate'].indexOf(req.action) >= 0) fail_('forbidden');
+  if (req.action !== 'whoami' && !auth.id) fail_('not_ready');
   // The phone is what its secret proves, never what it says: a `dev` in the request is ignored.
   const dev = typeof req.devSecret === 'string' && FORMAT.key.test(req.devSecret) ? digestHex_(req.devSecret).slice(0, 32) : '';
-  const ctx = { req: req, role: role, dev: dev, now: now, P: P, id: P.SHEET_ID, cache: cache, memo: {}, state: { rev: Number(P.REV) || 0 } };
-  if (req.action === 'push' && (bump_(cache, 'pk:' + role, now) > PUSH_CAP_KEY || bump_(cache, 'pd:' + role + ':' + dev, now) > PUSH_CAP_DEV)) fail_('busy');
-  const out = rule.write ? locked_(ctx, req.key, rule.run) : rule.run(ctx);
+  const ctx = Object.assign({ req: req, dev: dev, now: now, P: P, props: props, cache: scopedCache_(cache, auth.id), memo: {}, state: { rev: Number(P.REV) || 0 } }, auth);
+  if (req.action === 'push' && (bump_(ctx.cache, 'pk:' + auth.principal, now) > PUSH_CAP_KEY || bump_(ctx.cache, 'pd:' + auth.principal + ':' + dev, now) > PUSH_CAP_DEV)) fail_('busy');
+  const run = req.v === 2 && req.action === 'push' ? receiptedPush_ : rule.run;
+  const out = rule.write || P.OP_PENDING ? locked_(ctx, req.key, run) : run(ctx);
+  if (req.v === 2) { out.jobId = ctx.jobId; out.instanceId = ctx.instanceId; if (out.rev === undefined) out.rev = ctx.state.rev; }
   out.ok = true;
   return out;
 }
@@ -379,12 +485,14 @@ function handle_(e) {
 // ponytail: one script lock serializes all writes. Fine for one crew; the real ceiling is Google's own request quota.
 function locked_(ctx, key, run) {
   return withScriptLock_(20000, function () {
-    const props = PropertiesService.getScriptProperties();
+    const props = ctx.props || propertyStore_('');
+    const fresh = resolveAuth_(ctx.req || { v: 1, key: key }, PropertiesService.getScriptProperties().getProperties());
+    if (fresh.role !== ctx.role || ctx.principal && fresh.principal !== ctx.principal || ctx.id && fresh.id !== ctx.id) fail_('unauthorized');
     ctx.P = props.getProperties();
-    if (roleOf_(key, ctx.P) !== ctx.role) fail_('unauthorized'); // rotated while this request waited
     ctx.state.rev = Number(ctx.P.REV) || 0;
     const rev0 = ctx.state.rev;
     try {
+      if (ctx.P.OP_PENDING) recoverOperation_(ctx, ctx.P.OP_PENDING);
       if (ctx.P.ARCHIVE_PENDING) {
         const pending = JSON.parse(ctx.P.ARCHIVE_PENDING), done = finishArchive_(ctx, pending);
         if (ctx.req.action === 'archive' && ctx.req.before === pending.before) return done;
@@ -399,7 +507,8 @@ function nextRev_(ctx) { return ++ctx.state.rev; } // one revision per row writt
 function whoami_(ctx) {
   // dev: the device id this request's devSecret proves ('' without a valid one), so a phone can check it is the one it labels its shifts with
   const out = { role: ctx.role, rev: ctx.state.rev, now: ctx.now, tz: HUB_TZ, version: HUB_VERSION, dev: ctx.dev };
-  if (ctx.role === 'pm' && ctx.id) out.sheetUrl = sheetUrl_(ctx.id);
+  if (ctx.principal === 'bridge') { out.role = 'bridge'; out.capabilities = ['pull', 'push', 'records']; }
+  else if (ctx.role === 'pm' && ctx.id) out.sheetUrl = sheetUrl_(ctx.id);
   return out;
 }
 
@@ -557,7 +666,7 @@ function newBatch_() { return { upd: [], add: {}, del: {}, hours: false }; }
 function rowRange_(name, row) { const t = TABS[name]; return a1_(t, 0, row, t.head.length - 1, row); }
 function flush_(ctx, b) {
   // The source row can land before a later Sheets call fails. An identical retry must still rebuild its totals.
-  if (b.hours) PropertiesService.getScriptProperties().setProperty('WEEKLY_DIRTY', '1');
+  if (b.hours) (ctx.props || propertyStore_('')).setProperty('WEEKLY_DIRTY', '1');
   for (let i = 0; i < b.upd.length; i += 100) apiValuesBatchUpdate_(ctx.id, b.upd.slice(i, i + 100));
   const names = Object.keys(b.del);
   if (names.length) { // one atomic request; each tab's runs go bottom up so the row numbers stay right
@@ -620,7 +729,7 @@ function configRow_(c, rev, now, json) { return rowBase_(TABS.config, [c.project
 // Server-written, append only. label: what the readable Ref cell shows when the ref is not for people (a task's uid).
 function addEvent_(ctx, b, kind, who, text, ref, label) {
   if (ctx.system) return; // the selftest leaves no trace in the feed
-  const rev = nextRev_(ctx), ev = { rev: rev, ts: ctx.now, who: clip_(who || ctx.role, 100), role: ctx.role, kind: kind, text: clip_(text, 300), ref: clip_(ref, 60) };
+  const rev = nextRev_(ctx), ev = { rev: rev, ts: ctx.now, who: clip_(who || ctx.role, 100), role: ctx.principal === 'bridge' ? 'bridge' : ctx.role, kind: kind, text: clip_(text, 300), ref: clip_(ref, 60) };
   const json = JSON.stringify(ev);
   appendRow_(ctx, b, 'events', [stampText_(ev.ts), ev.who, ev.text, label ? clip_(label, 60) : ev.ref, String(rev), rev, json]);
   (b.warm || (b.warm = {}))['en:events:' + rev + ':' + rev] = json;
@@ -1026,7 +1135,7 @@ function keepRoster_(n, stored, raw) {
   });
 }
 
-function push_(ctx) {
+function preparePush_(ctx) {
   const r = ctx.req, b = newBatch_(), out = {};
   const lists = { tasks: arr_(r.tasks), shifts: arr_(r.shifts), reports: arr_(r.reports), deleted: arr_(r.deleted) };
   Object.keys(lists).forEach(function (k) { if (lists[k].length > MAX_PER_KIND) fail_('too_large'); });
@@ -1036,10 +1145,92 @@ function push_(ctx) {
   out.shifts = pushKind_(ctx, b, 'shifts', lists.shifts);
   out.reports = pushKind_(ctx, b, 'reports', lists.reports);
   if (isObj_(r.config)) Object.assign(out, pushConfig_(ctx, b, r.config));
+  out.rev = ctx.state.rev;
+  return { batch: b, result: out };
+}
+function push_(ctx) {
+  const prepared = preparePush_(ctx), b = prepared.batch, out = prepared.result;
   flush_(ctx, b);
   if (b.hours) rewriteWeekly_(ctx);
   out.rev = ctx.state.rev;
   return out;
+}
+
+// v2 writes use a durable intent and one atomic Sheets batch for source rows, activity and completion.
+// The pending pointer blocks/recoveries later writes, including v1, before row positions can move.
+// Receipts are retained indefinitely (no offline replay expiry). ponytail: one key-column scan per write;
+// when the journal grows large, move its index to a dedicated database without dropping old receipts.
+function stableJson_(v) {
+  if (Array.isArray(v)) return '[' + v.map(stableJson_).join(',') + ']';
+  if (isObj_(v)) return '{' + Object.keys(v).sort().map(function (k) { return JSON.stringify(k) + ':' + stableJson_(v[k]); }).join(',') + '}';
+  return JSON.stringify(v);
+}
+function operationRow_(ctx, key) {
+  const rows = apiValuesGet_(ctx.id, "'Operations'!A2:C").values || [];
+  const pos = rows.findIndex(function (r) { return r[0] === key; });
+  if (pos < 0) return { row: rows.length + 2 };
+  const cells = (apiValuesGet_(ctx.id, "'Operations'!A" + (pos + 2) + ':BO' + (pos + 2)).values || [])[0] || [];
+  const data = parseCell_(cells.slice(3).join(''));
+  if (!data) fail_('server');
+  return { row: pos + 2, key: cells[0], digest: cells[1], state: cells[2], data: data };
+}
+function enteredCells_(values) { return values.map(function (v) { const x = {}; x[typeof v === 'number' ? 'numberValue' : typeof v === 'boolean' ? 'boolValue' : 'stringValue'] = v; return { userEnteredValue: x }; }); }
+function updateCells_(id, row, col, values) { return { updateCells: { start: { sheetId: id, rowIndex: row - 1, columnIndex: col }, rows: values.map(function (r) { return { values: enteredCells_(r) }; }), fields: 'userEnteredValue' } }; }
+function atomicRequests_(ctx, b, receiptRow) {
+  const ids = sheetIds_(ctx, ctx.id), requests = [];
+  b.upd.forEach(function (u) {
+    const name = Object.keys(TABS).filter(function (n) { return u.range.indexOf("'" + TABS[n].title + "'!") === 0; })[0];
+    const row = /!A(\d+):/.exec(u.range);
+    if (!name || !row) fail_('server');
+    requests.push(updateCells_(ids[TABS[name].title], Number(row[1]), 0, u.values));
+  });
+  Object.keys(b.del).forEach(function (n) { runs_(b.del[n]).reverse().forEach(function (r) { requests.push({ deleteDimension: { range: { sheetId: ids[TABS[n].title], dimension: 'ROWS', startIndex: r[0] - 1, endIndex: r[1] } } }); }); });
+  Object.keys(b.add).forEach(function (n) { requests.push({ appendCells: { sheetId: ids[TABS[n].title], rows: b.add[n].map(function (r) { return { values: enteredCells_(r) }; }), fields: 'userEnteredValue' } }); });
+  requests.push(updateCells_(ids[OP_TAB], receiptRow, 2, [['done']]));
+  return requests;
+}
+function finishOperation_(ctx, receipt) {
+  if (receipt.state !== 'done') {
+    if (receipt.state !== 'prepared') fail_('server');
+    if (receipt.data.hours) ctx.props.setProperty('WEEKLY_DIRTY', '1');
+    apiBatch_(ctx.id, receipt.data.requests);
+  }
+  ctx.state.rev = Math.max(ctx.state.rev, receipt.data.result.rev);
+  ctx.props.setProperty('REV', String(ctx.state.rev));
+  if (receipt.data.hours || ctx.P.WEEKLY_DIRTY === '1') rewriteWeekly_(ctx);
+  ctx.props.deleteProperty('OP_PENDING'); delete ctx.P.OP_PENDING;
+  ctx.memo = {};
+  return clone_(receipt.data.result);
+}
+function recoverOperation_(ctx, key) {
+  const receipt = operationRow_(ctx, key);
+  if (receipt.key) return finishOperation_(ctx, receipt);
+  // The process stopped before the intent row landed; source rows cannot have been written yet.
+  ctx.props.deleteProperty('OP_PENDING'); delete ctx.P.OP_PENDING;
+}
+function receiptedPush_(ctx) {
+  const r = ctx.req;
+  if (!OP_ID.test(r.opId || '') || !Number.isSafeInteger(r.expectedRev) || r.expectedRev < 0) fail_('bad_request');
+  if (ctx.principal === 'bridge') {
+    if (r.config !== undefined || arr_(r.deleted).length) fail_('forbidden');
+    if (arr_(r.tasks).length + arr_(r.shifts).length + arr_(r.reports).length !== 1) fail_('bad_request');
+  }
+  const principal = ctx.principal + ':' + ctx.dev, key = digestHex_(principal + ':' + r.opId), payload = clone_(r);
+  delete payload.key;
+  const digest = digestHex_(stableJson_(payload)), old = operationRow_(ctx, key);
+  if (old.key) { if (old.digest !== digest) fail_('conflict'); return finishOperation_(ctx, old); }
+  if (r.expectedRev !== ctx.state.rev) fail_('conflict');
+  const sub = Object.assign({}, ctx, { state: { rev: ctx.state.rev } }), prepared = preparePush_(sub);
+  const data = { result: prepared.result, hours: prepared.batch.hours, requests: atomicRequests_(sub, prepared.batch, old.row) }, json = JSON.stringify(data);
+  if (json.length > OP_CHUNK * (OP_COLS - 3)) fail_('too_large');
+  const cells = [key, digest, 'prepared'];
+  for (let i = 0; i < json.length; i += OP_CHUNK) cells.push(json.slice(i, i + OP_CHUNK));
+  const meta = apiGet_(ctx.id, 'sheets.properties(sheetId,title,gridProperties)').sheets.filter(function (s) { return s.properties.title === OP_TAB; })[0].properties;
+  if (old.row > meta.gridProperties.rowCount) apiBatch_(ctx.id, [{ appendDimension: { sheetId: meta.sheetId, dimension: 'ROWS', length: 1000 } }]);
+  // Persist the recovery pointer before the intent, and the intent before any source mutation.
+  ctx.props.setProperty('OP_PENDING', key); ctx.P.OP_PENDING = key;
+  apiValuesBatchUpdate_(ctx.id, [{ range: "'Operations'!A" + old.row + ':BO' + old.row, values: [cells] }]);
+  return finishOperation_(ctx, { state: 'prepared', data: data });
 }
 
 // ---------- delete (purge) ----------
@@ -1112,7 +1303,7 @@ function rewriteWeekly_(ctx) {
   const rows = weeklyRows_(vr[0].values || [], names_(ctx, vr[1].values || []));
   apiValuesClear_(ctx.id, a1_(TABS.weekly, 0, 2, 4));
   for (let i = 0; i < rows.length; i += 200) apiValuesAppend_(ctx.id, rowRange_('weekly', 1), rows.slice(i, i + 200));
-  PropertiesService.getScriptProperties().deleteProperty('WEEKLY_DIRTY');
+  (ctx.props || propertyStore_('')).deleteProperty('WEEKLY_DIRTY');
   delete ctx.P.WEEKLY_DIRTY;
 }
 
@@ -1260,8 +1451,8 @@ function translateText_(text, from, to) {
   if (typeof out !== 'string') fail_('server');
   return unprotect_(out);
 }
-function reserveTranslations_(n) { // per UTC day, default 1,500 calls; the counter is written under the script lock
-  const props = PropertiesService.getScriptProperties(), P = props.getProperties(), day = new Date().toISOString().slice(0, 10);
+function reserveTranslations_(ctx, n) { // per UTC day, default 1,500 calls; the counter is written under the script lock
+  const props = ctx.props || propertyStore_(''), P = props.getProperties(), day = new Date().toISOString().slice(0, 10);
   const used = P.TR_DAY === day ? Number(P.TR_N) || 0 : 0, cap = Number(P.TR_CAP) > 0 ? Number(P.TR_CAP) : TR_CAP_DEFAULT;
   if (used + n > cap) fail_('quota');
   props.setProperties({ TR_DAY: day, TR_N: String(used + n) });
@@ -1281,7 +1472,7 @@ function translate_(ctx) {
   need.forEach(function (t) { const c = found[key(t)]; if (typeof c === 'string') done[t] = c; });
   const miss = need.filter(function (t) { return !(t in done); });
   if (miss.length) {
-    withScriptLock_(20000, function () { reserveTranslations_(miss.length); }); // lock only for the counter, not for the slow calls
+    withScriptLock_(20000, function () { reserveTranslations_(ctx, miss.length); }); // lock only for the counter, not for the slow calls
     const puts = {};
     miss.forEach(function (t) { done[t] = translateText_(t, r.from, r.to); puts[key(t)] = done[t]; });
     cachePutAll_(ctx.cache, puts, TR_CACHE_S);
@@ -1359,7 +1550,7 @@ function rotate_(ctx) { // the old key stops working at once: every request read
   addEvent_(ctx, b, 'key.rotated', 'PM', (role === 'crew' ? 'Crew' : 'Superintendent') + ' key replaced', '');
   flush_(ctx, b);
   const key = newKey_();
-  PropertiesService.getScriptProperties().setProperty(role === 'crew' ? 'CREW_KEY' : 'SUPER_KEY', key);
+  (ctx.props || propertyStore_('')).setProperty(role === 'crew' ? 'CREW_KEY' : 'SUPER_KEY', key);
   return { key: key, rev: ctx.state.rev };
 }
 
@@ -1394,7 +1585,7 @@ function archive_(ctx) {
   // Every row is copied. Retain this receipt until deletion and the archive horizons both finish; a later write
   // completes it under the same lock before it can revive old records. A retry reuses the copy already made.
   const pending = { before: before, hoursCut: hoursCut, url: sheetUrl_(aid), at: ctx.now, moved: moved };
-  PropertiesService.getScriptProperties().setProperty('ARCHIVE_PENDING', JSON.stringify(pending));
+  (ctx.props || propertyStore_('')).setProperty('ARCHIVE_PENDING', JSON.stringify(pending));
   return finishArchive_(ctx, pending);
 }
 function finishArchive_(ctx, pending) {
@@ -1409,7 +1600,7 @@ function finishArchive_(ctx, pending) {
   addEvent_(Object.assign({}, ctx, { role: 'pm' }), b, 'archive', 'PM', 'Archived ' + (moved.tasks + moved.shifts + moved.reports + moved.events) + ' rows older than ' + before, before);
   flush_(ctx, b);
   if (moved.shifts) rewriteWeekly_(ctx);
-  const props = PropertiesService.getScriptProperties(), url = pending.url, list = JSON.parse(ctx.P.ARCHIVES || '[]');
+  const props = ctx.props || propertyStore_(''), url = pending.url, list = JSON.parse(ctx.P.ARCHIVES || '[]');
   list.push({ url: url, before: before, at: pending.at });
   const saved = {
     ARCHIVED_BEFORE: before > (ctx.P.ARCHIVED_BEFORE || '') ? before : ctx.P.ARCHIVED_BEFORE,
@@ -1455,7 +1646,7 @@ function selftest_(ctx) {
       c.scope === 'Selftest scope 2' && c.status === 'Partial' && c.doneText === 'Done a bit' && c.items[0].done === true;       // and the office cannot erase crew results
   });
   step('translate', function () {
-    reserveTranslations_(1); // the script lock is already held by this action
+    reserveTranslations_(ctx, 1); // the script lock is already held by this action
     const out = translateText_('Pull wire to E-301 on Level 3', 'en', 'es');
     return out.indexOf('E-301') >= 0 && !/[<>]|&lt;|&amp;/.test(out);
   });

@@ -32,7 +32,7 @@
 //   bar        these screens use no bottom bar: hide it, as Settings does
 //   paste      hubSettingsView on a phone with no hub offers the app's own data-act="paste" (Open a link someone sent you)
 
-import { KEYS, COMPANY, L, getLang, esc, attr, iso, addDays, niceDate, t12, fmtMin, worked, nameKey, crewVar, field, sheet, ask, choose, sendSheet, download, load, save, personById, crewById,
+import { KEYS, jobScope, COMPANY, L, getLang, esc, attr, iso, addDays, niceDate, t12, fmtMin, worked, nameKey, crewVar, field, sheet, ask, choose, sendSheet, download, load, save, personById, crewById,
   screenHead, icon, initials, setSec, actRow, UNDO_MS, people, langOf, daySummary } from './shared.mjs';
 import { monday, shiftMin, byPerson, personKey, timesheetCsv } from './report.mjs';
 import { duplicateShortIds } from './sync.mjs';
@@ -706,7 +706,7 @@ export async function deleteRecord(ctx, kind, key) {
 export function hubSettingsView(ctx) {
   const st = hub(ctx), now = nowOf(ctx), office = ctx.role === 'pm' || ctx.role === 'super';
   if (st.state === 'off') {
-    return office ? setSec(L('Hub'), `<div class="fgroup">
+    return office || jobScope.id ? setSec(L('Hub'), `<div class="fgroup">
         <label class="field"><span>${L('Hub link')}</span><input id="hubUrl" inputmode="url" autocomplete="off" autocapitalize="off" spellcheck="false" placeholder="https://script.google.com/macros/s/.../exec"></label>
         <label class="field"><span>${L('Hub key')}</span><input id="hubKey" type="password" autocomplete="off" autocapitalize="off" spellcheck="false"></label>
         ${actRow('hubConnect', L('Connect'))}</div><p class="hub-err set-note" id="hubErr" role="alert"></p>`,
@@ -723,7 +723,7 @@ export function hubSettingsView(ctx) {
       ${row(L('This phone'), roleName(st.role))}${st.role === 'crew' && st.crew ? row(L('Crew'), st.crew) : ''}
       ${actRow('hubSync', L('Sync now'))}${pm ? actRow('hubTest', L('Test the hub'), test === 'running' ? ' disabled' : '') : ''}</div>${results}`,
     [st.message && st.state !== 'live' ? esc(st.message) : '', st.pending ? esc(L('{n} not sent yet', { n: st.pending })) : ''].filter(Boolean))
-    + (pm ? setSec(L('Invite people'), `<div class="fgroup">${actRow('hubInvite', L('Invite crew'), ' data-v="crew"')}${actRow('hubInvite', L('Invite superintendent'), ' data-v="super"')}
+    + (pm && !jobScope.id ? setSec(L('Invite people'), `<div class="fgroup">${actRow('hubInvite', L('Invite crew'), ' data-v="crew"')}${actRow('hubInvite', L('Invite superintendent'), ' data-v="super"')}
         ${actRow('hubRotate', L('Replace the crew key'), ' data-v="crew"')}${actRow('hubRotate', L('Replace the superintendent key'), ' data-v="super"')}${sheetLink(ctx.sync.liveData?.().info?.sheetUrl, 'row set-act')}</div>`,
       L('An invite link carries the hub key. Send it only to the person it is for. If a phone is lost, replace the key.')) : '')
     + `<section class="set"><div class="fgroup">${actRow('hubDisconnect', L('Disconnect this phone'), ' data-tone="bad"')}</div><p class="hint set-note">${L('Your work stays on this phone.')}</p></section>`;
@@ -856,7 +856,7 @@ async function connect(ctx, el) {
   if (!url.trim() || !key.trim()) return err(L('Paste the hub link and the key.'));
   el.disabled = true;
   err('');
-  const r = await ctx.sync.connect(url, key, { office: true }); // only the office has this form: a crew key is refused (sync.mjs)
+  const r = await ctx.sync.connect(url, key, { office: !jobScope.id || ctx.role !== 'crew', ...(jobScope.id && ctx.role === 'crew' && { role: 'crew' }) });
   el.disabled = false;
   if (!r.ok) return err(r.message || L('That did not work. Try again.'));
   ctx.toast(L('Connected as {role}', { role: roleName(r.role) }));
