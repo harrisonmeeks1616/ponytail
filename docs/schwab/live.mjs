@@ -437,7 +437,7 @@ function messageSheet(ctx, t) {
   const now = nowOf(ctx);
   const d = sheet(`<h3>${esc(L('Message to {crew}', { crew: t.crew || L('the crew') }))}</h3>
     <p class="hint">${esc(L('Task {id}', { id: t.id }))} · ${L('The crew sees it on their sheet, in their language.')}</p>
-    ${t.reply ? `<p class="preview">${txView(ctx, t.reply, langOf(t, 'reply'), getLang(), { toggle: false })}<br><small>${esc(L('Last message {ago}. A new one replaces it.', { ago: ago(t.replyAt, now) }))}</small></p>` : ''}
+    ${t.reply ? `<p class="preview">${txView(ctx, t.reply, langOf(t, 'reply'), getLang(), { toggle: false })}<br><small>${esc(t.replyAt ? L('Last message {ago}. A new one replaces it.', { ago: ago(t.replyAt, now) }) : L('Last message. A new one replaces it.'))}</small></p>` : ''}
     <label class="field"><span>${L('Your message')}</span><textarea rows="4" maxlength="${MSG_MAX}"></textarea></label>
     <div class="btns"><button class="btn primary" data-send>${L('Send')}</button></div>`);
   after(ctx, d);

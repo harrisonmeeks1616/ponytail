@@ -1042,6 +1042,16 @@ test('messageSheet and reviewSheet act on the sheet as it is now', async () => {
     await live.act(ctx, 'liveReview', { dataset: { u: 'live1' } });
     assert.match(opened[1].innerHTML, /Review T1019-01/);
     assert.match(opened[1].innerHTML, /data-r="Accepted"/);
+    t.reply = 'Prior message';
+    await live.act(ctx, 'liveMsg', { dataset: { u: 'live1' } });
+    assert.match(opened[2].innerHTML, /Last message\. A new one replaces it\./);
+    assert.doesNotMatch(opened[2].innerHTML, /Last message \./);
+    t.replyAt = NOW - min(1);
+    await live.act(ctx, 'liveMsg', { dataset: { u: 'live1' } });
+    assert.match(opened[3].innerHTML, /Last message 1 min ago\. A new one replaces it\./);
+    delete t.replyAt; globalThis.document.documentElement = {}; lib.setLang('es');
+    await live.act(ctx, 'liveMsg', { dataset: { u: 'live1' } });
+    assert.match(opened[4].innerHTML, /Último mensaje\. Uno nuevo lo reemplaza\./);
   } finally { globalThis.document = prev; globalThis.location = prevLoc; }
 });
 

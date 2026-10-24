@@ -5,6 +5,30 @@ const fs = require('node:fs');
 const path = require('node:path');
 const vm = require('node:vm');
 
+test('crew-hour hint shows only calculable positive totals and keeps the planned window independent', async () => {
+  const { L, hrs, fmtMin, span, normTask, setLang } = await import('../docs/schwab/shared.mjs');
+  const source = fs.readFileSync(path.join(__dirname, '../docs/schwab/tasks.html'), 'utf8');
+  const fn = source.match(/function crewHrsLine\(t\) \{[\s\S]*?\r?\n\}/);
+  assert.ok(fn, 'find the actual task hint');
+  const context = vm.createContext({ L, hrs, fmtMin, span });
+  vm.runInContext(fn[0] + '\nthis.hint = crewHrsLine;', context);
+  const hint = values => context.hint(normTask(values));
+  const incomplete = 'Enter crew size and hours to calculate crew-hours.';
+  assert.equal(hint({}), incomplete);
+  assert.equal(hint({ size: 0, allot: 4, est: 3 }), incomplete);
+  assert.equal(hint({ size: 3 }), incomplete);
+  assert.equal(hint({ size: 3, allot: 2 }), 'Crew of 3: 6 crew-hrs allotted.');
+  assert.equal(hint({ size: 3, est: 2.5 }), 'Crew of 3: 7.5 crew-hrs estimated.');
+  assert.equal(hint({ size: 3, allot: 2, est: 2.5 }), 'Crew of 3: 6 crew-hrs allotted, 7.5 estimated.');
+  assert.equal(hint({ size: -1, allot: 4, est: 3 }), incomplete);
+  assert.equal(hint({ pStart: '07:00', pStop: '09:00' }), incomplete + ' Planned window ' + fmtMin(120) + '.');
+  setLang('es');
+  try {
+    assert.equal(hint({}), 'Ingrese el tamaño de la cuadrilla y las horas para calcular las horas-cuadrilla.');
+    assert.equal(hint({ size: 3, est: 2 }), 'Cuadrilla de 3: 6 horas-cuadrilla estimadas.');
+  } finally { setLang('en'); }
+});
+
 test('task Stop before Start writes nothing; normal and overnight work still count', async () => {
   const { normTask, worked } = await import('../docs/schwab/shared.mjs');
   const source = fs.readFileSync(path.join(__dirname, '../docs/schwab/tasks.html'), 'utf8');

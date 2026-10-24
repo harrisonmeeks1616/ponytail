@@ -430,8 +430,15 @@ function banner(t, crewSide) {
   return '';
 }
 
-const crewHrsLine = t => L('Crew of {size}: {allot} crew-hrs allotted, {est} estimated.', { size: t.size || 1, allot: hrs(t.allot * (t.size || 1)), est: hrs(t.est * (t.size || 1)) })
-  + (t.pStart && t.pStop ? ' ' + L('Planned window {time}.', { time: fmtMin(span(t.pStart, t.pStop)) }) : '');
+function crewHrsLine(t) {
+  const allotted = t.size > 0 && t.allot > 0 && Number.isFinite(t.size * t.allot);
+  const estimated = t.size > 0 && t.est > 0 && Number.isFinite(t.size * t.est);
+  const line = allotted && estimated ? L('Crew of {size}: {allot} crew-hrs allotted, {est} estimated.', { size: t.size, allot: hrs(t.allot * t.size), est: hrs(t.est * t.size) })
+    : allotted ? L('Crew of {size}: {allot} crew-hrs allotted.', { size: t.size, allot: hrs(t.allot * t.size) })
+    : estimated ? L('Crew of {size}: {est} crew-hrs estimated.', { size: t.size, est: hrs(t.est * t.size) })
+    : L('Enter crew size and hours to calculate crew-hours.');
+  return line + (t.pStart && t.pStop ? ' ' + L('Planned window {time}.', { time: fmtMin(span(t.pStart, t.pStop)) }) : '');
+}
 
 const addRow = (id, ph, a) => `<div class="edit-row"><input id="${id}" aria-label="${esc(ph)}" placeholder="${esc(ph)}" enterkeyhint="done" data-enter="${a}"><button class="x add" data-act="${a}" aria-label="${esc(ph)}">+</button></div>`;
 
