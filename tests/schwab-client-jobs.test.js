@@ -63,7 +63,7 @@ test('legacy PM handoff maps only the link to CharlesS and preserves legacy keys
   storage.set('schwab.tasks', [{uid:'original-task'}]);
   storage.set('schwab.device', {secret:'original-device'});
   const before = [...storage.values], legacy = createJobScope({href:ADDRESS,storage});
-  assert.equal(legacy.pmUrl(),'https://harrison-electrical-pm.clever-tern-3085.chatgpt.site/projects/prj_x18rhfh3ni9shu3bmq/pm-records');
+  assert.equal(legacy.pmUrl(),'https://harrison-electrical-pm.harrison-meeks-pm.workers.dev/projects/prj_x18rhfh3ni9shu3bmq/pm-records');
   assert.equal(legacy.id,'');
   for(const k of ['settings','tasks','device','hubSync']) assert.equal(legacy.key('schwab.'+k),'schwab.'+k);
   assert.equal(new URL(legacy.url('')).search,'');
@@ -99,7 +99,7 @@ test('scope is pinned across navigation and late saves; IDs, keys, PM origin and
   storage.set(a.key('schwab.hours'), [{ id: 'open-A', date: '2026-10-24', in: '07:00', out: '' }]);
   assert.equal(new URL(b.openShifts()[0].url).searchParams.get('jobId'), 'job-A');
   assert.equal(new URL(b.openShifts()[0].url).hash, '#clock/2026-10-24');
-  assert.equal(a.pmUrl(), 'https://harrison-electrical-pm.clever-tern-3085.chatgpt.site/projects/job-A/pm-records');
+  assert.equal(a.pmUrl(), 'https://harrison-electrical-pm.harrison-meeks-pm.workers.dev/projects/job-A/pm-records');
   const invalid = createJobScope({ href: ADDRESS + '?jobId=..%2Fsecret', storage });
   assert.equal(invalid.status(), 'invalid_job'); assert.equal(invalid.pmUrl(), '');
   assert.notEqual(invalid.key('schwab.tasks'), 'schwab.tasks');

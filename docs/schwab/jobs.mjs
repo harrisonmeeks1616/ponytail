@@ -1,7 +1,7 @@
 // A page owns one immutable job. Navigation creates another realm; late work retains this scope.
 export const JOB_ID = /^[A-Za-z0-9][A-Za-z0-9_-]{0,79}$/;
 export const JOBS_KEY = 'fieldHub.jobs.v1', MIGRATION_KEY = 'fieldHub.legacyMigration.v1';
-export const PM_ORIGIN = 'https://harrison-electrical-pm.clever-tern-3085.chatgpt.site';
+export const PM_ORIGIN = 'https://harrison-electrical-pm.harrison-meeks-pm.workers.dev';
 const LEGACY_PM_JOB_ID = 'prj_x18rhfh3ni9shu3bmq'; // owner-confirmed CharlesS mapping: link only, never a storage or credential migration
 const parse = (s, key, fallback) => { try { return JSON.parse(s.getItem(key)) ?? fallback; } catch { return fallback; } };
 const fail = code => { throw Object.assign(new Error(code), { code }); };
