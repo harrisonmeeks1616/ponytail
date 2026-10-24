@@ -70,6 +70,7 @@ export function save(key, val) {
     localStorage.setItem(key, JSON.stringify(val));
     if (key === KEYS.settings && Array.isArray(val?.people) && Array.isArray(val.crews)) localStorage.setItem(KEYS.roster, JSON.stringify(rosterOf(val)));
   } catch { return false; }
+  jobScope.remember();
   saved(key);
   return true;
 }

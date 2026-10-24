@@ -5,7 +5,7 @@ export function jobsView() {
   return `<div class="settings"><h3>${L('Jobs on this phone')}</h3>
     <p class="hint">${L('Each job keeps its own tasks, hours, reports and connection. Switching opens a fresh page.')}</p>
     ${blocked ? `<p role="alert">${L('Migration is paused. An old tab changed the Schwab data, or the copy did not finish. Close old tabs and reconcile before using this job.')}</p>` : ''}
-    <div class="list"><a class="row" href="${esc(jobScope.url(''))}">${L('Original Schwab (legacy)')}</a>${jobs.map(j => `<a class="row" href="${esc(jobScope.url(j.id))}"${j.id === jobScope.id ? ' aria-current="page"' : ''}>${esc(j.label)}<small>${esc(j.id)}</small></a>`).join('')}</div>
+    <div class="list"><a class="row" href="${esc(jobScope.url(''))}">${L('Original Schwab (legacy)')}</a>${jobs.map(j => `<a class="row" href="${esc(jobScope.url(j.id))}"${j.id === jobScope.id ? ' aria-current="page"' : ''}><span class="row-main"><span class="row-title">${esc(j.label)}</span><small class="row-sub">${esc(j.id)}</small></span></a>`).join('')}</div>
     ${jobScope.pmUrl() ? `<p><a class="btn" href="${esc(jobScope.pmUrl())}" target="_blank" rel="noopener noreferrer">${L('PM records — Only you')}</a></p><p class="hint">${L('Opens Electrical PM sign-in. Private records stay there and are never stored in this field app.')}</p>` : ''}
     <h3>${L('Add or rename a job')}</h3><label>${L('Canonical job ID')}<input id="job-id" maxlength="80" autocomplete="off"></label>
     <label>${L('Job name')}<input id="job-label" maxlength="120" autocomplete="off"></label>
@@ -21,7 +21,7 @@ export function jobsView() {
 }
 export function openShiftLinks() {
   const shifts = jobScope.openShifts().filter(s => s.jobId !== jobScope.id);
-  return shifts.length ? `<section class="set"><h3>${L('Open shifts in other jobs')}</h3>${shifts.map(s => `<a class="row" href="${esc(s.url)}">${esc(s.label || L('Original Schwab (legacy)'))} · ${esc(s.date)} · ${L('Return to clock out')}</a>`).join('')}</section>` : '';
+  return shifts.length ? `<section class="set"><h3>${L('Open shifts in other jobs')}</h3>${shifts.map(s => `<a class="row" href="${esc(s.url)}"><span class="row-main"><span class="row-title">${esc(s.label || L('Original Schwab (legacy)'))}</span><span class="row-sub">${esc(s.date)} · ${L('Return to clock out')}</span></span></a>`).join('')}</section>` : '';
 }
 export function jobsAct(action) {
   if (!['job-add', 'job-migrate'].includes(action)) return false;

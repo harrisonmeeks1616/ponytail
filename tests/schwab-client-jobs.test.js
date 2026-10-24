@@ -13,6 +13,65 @@ function memory() {
     get(k, d = null) { const value = values.get(k); return value == null ? d : JSON.parse(value); },
     set(k, v) { values.set(k, JSON.stringify(v)); return true; } };
 }
+test('direct-link setup remembers the scoped job after a successful save and preserves its chosen label', () => {
+  const { execFileSync } = require('node:child_process');
+  execFileSync(process.execPath, ['--input-type=module', '-e', `
+    import assert from 'node:assert/strict';
+    const values = new Map([['schwab.settings','{"project":"Original","hubKey":"legacy-key"}'],['schwab.device','{"secret":"legacy-device"}']]);
+    const original = [...values]; let failKey = 'fieldHub.job.direct.settings';
+    globalThis.location = { href:'${ADDRESS}?jobId=direct' };
+    globalThis.localStorage = { get length() { return values.size; }, key:i=>[...values.keys()][i], getItem:k=>values.get(k)??null, setItem(k,v) { if(k===failKey) throw Error('full'); values.set(k,String(v)); }, removeItem:k=>values.delete(k) };
+    const app = await import('./docs/schwab/shared.mjs');
+    assert.equal(app.save(app.KEYS.settings,{project:'Direct job'}),false);
+    assert.equal(values.has('fieldHub.jobs.v1'),false);
+    failKey = '';
+    assert.equal(app.save(app.KEYS.settings,{project:'Direct job'}),true);
+    assert.deepEqual(JSON.parse(values.get('fieldHub.jobs.v1')),[{id:'direct',label:'Direct job'}]);
+    app.jobScope.register('direct','Chosen label');
+    assert.equal(app.save(app.KEYS.settings,{project:'Changed project title'}),true);
+    assert.equal(app.jobScope.list()[0].label,'Chosen label');
+    values.delete('fieldHub.jobs.v1'); failKey = 'fieldHub.jobs.v1';
+    assert.equal(app.save(app.KEYS.settings,{project:'Recovered label'}),true,'registry capacity cannot turn a saved record into a failed save');
+    assert.equal(app.jobScope.list()[0].label,'Recovered label');
+    assert.deepEqual([...values].filter(([k])=>k.startsWith('schwab.')),original);
+    assert.equal(values.has('fieldHub.legacyMigration.v1'),false);
+  `], { cwd: require('node:path').join(__dirname, '..'), stdio: 'pipe' });
+});
+
+test('Jobs and clock-out links recover valid scoped settings without writes or changing registered labels', async () => {
+  const { createJobScope, JOBS_KEY } = await jobs, storage = memory();
+  storage.set(JOBS_KEY, [{ id:'known', label:'Chosen label' }]);
+  storage.set('fieldHub.job.known.settings', { project:'Different title' });
+  storage.set('fieldHub.job.direct.settings', { project:'Direct link job', hubKey:'scoped-key' });
+  storage.set('fieldHub.job.direct.hours', [{ id:'open', date:'2026-10-24', in:'07:00', out:'' }]);
+  storage.set('fieldHub.job.empty-name.settings', {});
+  storage.set('fieldHub.job.array.settings', []);
+  storage.setItem('fieldHub.job.broken.settings', '{');
+  storage.set('fieldHub.job.%2Fbad.settings', { project:'Invalid ID' });
+  storage.set('schwab.settings', { project:'Original', hubKey:'original-key' });
+  const before = [...storage.values];
+  const b = createJobScope({ href:ADDRESS+'?jobId=other', storage });
+  assert.deepEqual(b.list(), [{id:'known',label:'Chosen label'},{id:'direct',label:'Direct link job'},{id:'empty-name',label:'empty-name'}]);
+  assert.equal(new URL(b.openShifts()[0].url).searchParams.get('jobId'),'direct');
+  assert.equal(new URL(b.openShifts()[0].url).hash,'#clock/2026-10-24');
+  assert.deepEqual([...storage.values],before,'recovery is read-only and returns only job labels/IDs');
+});
+
+test('legacy PM handoff maps only the link to CharlesS and preserves legacy keys, records and URL', async () => {
+  const { createJobScope } = await jobs, storage = memory();
+  storage.set('schwab.settings', {project:'Original',hubKey:'original-key'});
+  storage.set('schwab.tasks', [{uid:'original-task'}]);
+  storage.set('schwab.device', {secret:'original-device'});
+  const before = [...storage.values], legacy = createJobScope({href:ADDRESS,storage});
+  assert.equal(legacy.pmUrl(),'https://harrison-electrical-pm.clever-tern-3085.chatgpt.site/projects/prj_x18rhfh3ni9shu3bmq/pm-records');
+  assert.equal(legacy.id,'');
+  for(const k of ['settings','tasks','device','hubSync']) assert.equal(legacy.key('schwab.'+k),'schwab.'+k);
+  assert.equal(new URL(legacy.url('')).search,'');
+  legacy.remember();
+  assert.deepEqual(legacy.list(),[]);
+  assert.deepEqual([...storage.values],before);
+});
+
 test('denied browser storage still loads the legacy app and reports failed saves', () => {
   const { execFileSync } = require('node:child_process');
   execFileSync(process.execPath, ['--input-type=module', '-e', `

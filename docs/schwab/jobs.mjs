@@ -2,6 +2,7 @@
 export const JOB_ID = /^[A-Za-z0-9][A-Za-z0-9_-]{0,79}$/;
 export const JOBS_KEY = 'fieldHub.jobs.v1', MIGRATION_KEY = 'fieldHub.legacyMigration.v1';
 export const PM_ORIGIN = 'https://harrison-electrical-pm.clever-tern-3085.chatgpt.site';
+const LEGACY_PM_JOB_ID = 'prj_x18rhfh3ni9shu3bmq'; // owner-confirmed CharlesS mapping: link only, never a storage or credential migration
 const parse = (s, key, fallback) => { try { return JSON.parse(s.getItem(key)) ?? fallback; } catch { return fallback; } };
 const fail = code => { throw Object.assign(new Error(code), { code }); };
 const prefix = id => `fieldHub.job.${encodeURIComponent(id)}.`;
@@ -17,7 +18,21 @@ export function createJobScope({ href = 'https://local.invalid/tasks.html', stor
   const page = new URL(href), rawId = page.searchParams.get('jobId');
   const id = rawId === null ? '' : JOB_ID.test(rawId) ? rawId : null;
   const key = k => storageKey(id, k);
-  const list = () => { const rows = parse(storage, JOBS_KEY, []); return (Array.isArray(rows) ? rows : []).filter(j => j && JOB_ID.test(j.id) && typeof j.label === 'string'); };
+  function list() {
+    const rows = parse(storage, JOBS_KEY, []);
+    const jobs = new Map((Array.isArray(rows) ? rows : []).filter(j => j && JOB_ID.test(j.id) && typeof j.label === 'string').map(j => [j.id, { id: j.id, label: j.label }]));
+    // Recover direct-link jobs from their own settings; listing never writes or inspects legacy stores.
+    try {
+      for (let i = 0; i < storage.length; i++) {
+        const k = storage.key(i), jobId = /^fieldHub\.job\.([^.]+)\.settings$/.exec(k || '')?.[1];
+        if (!jobId || !JOB_ID.test(jobId) || jobs.has(jobId)) continue;
+        const settings = parse(storage, k, null);
+        if (!settings || typeof settings !== 'object' || Array.isArray(settings)) continue;
+        jobs.set(jobId, { id: jobId, label: typeof settings.project === 'string' && settings.project.trim() ? settings.project.trim().slice(0, 120) : jobId });
+      }
+    } catch { /* denied storage still permits the app to render */ }
+    return [...jobs.values()];
+  }
   function status() {
     if (id === null) return 'invalid_job';
     const m = parse(storage, MIGRATION_KEY, null);
@@ -33,6 +48,17 @@ export function createJobScope({ href = 'https://local.invalid/tasks.html', stor
     const jobs = list(), old = jobs.find(j => j.id === jobId);
     if (old) old.label = String(label).trim().slice(0, 120); else jobs.push({ id: jobId, label: String(label).trim().slice(0, 120) });
     storage.setItem(JOBS_KEY, JSON.stringify(jobs));
+  }
+  function remember() {
+    if (!id) return;
+    try {
+      if (status()) return;
+      const rows = parse(storage, JOBS_KEY, []);
+      if (Array.isArray(rows) && rows.some(j => j?.id === id && typeof j.label === 'string')) return;
+      const jobs = list();
+      if (!jobs.some(j => j.id === id)) jobs.push({ id, label: id });
+      storage.setItem(JOBS_KEY, JSON.stringify(jobs));
+    } catch { /* the record already saved; a full registry can recover from scoped settings */ }
   }
   function url(jobId, hash = '#day/') {
     if (jobId && !JOB_ID.test(jobId)) fail('invalid_job');
@@ -72,8 +98,8 @@ export function createJobScope({ href = 'https://local.invalid/tasks.html', stor
   }
   const needsConnection = () => { const m = parse(storage, MIGRATION_KEY, null); return !!id && m?.jobId === id && !m.connected; };
   const connected = () => { const m = parse(storage, MIGRATION_KEY, null); if (id && m?.jobId === id) storage.setItem(MIGRATION_KEY, JSON.stringify({ ...m, connected: true })); };
-  return Object.freeze({ id, key, status, assertWritable, list, register, migrate, openShifts, url, needsConnection, connected, switchTo: (jobId, hash) => navigate(url(jobId, hash)),
-    label: () => list().find(j => j.id === id)?.label || id || '', pmUrl: () => id ? `${PM_ORIGIN}/projects/${encodeURIComponent(id)}/pm-records` : '' });
+  return Object.freeze({ id, key, status, assertWritable, list, register, remember, migrate, openShifts, url, needsConnection, connected, switchTo: (jobId, hash) => navigate(url(jobId, hash)),
+    label: () => list().find(j => j.id === id)?.label || id || '', pmUrl: () => id === null ? '' : `${PM_ORIGIN}/projects/${encodeURIComponent(id || LEGACY_PM_JOB_ID)}/pm-records` });
 }
 export const jobScope = createJobScope({ href: globalThis.location?.href });
 export const jobKey = key => jobScope.key(key);
