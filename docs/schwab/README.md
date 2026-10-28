@@ -163,8 +163,9 @@ and live updates. It is one Google Apps Script web app plus one Google Sheet, bo
 **What it does**
 
 - Task sheets reach the crew's phones by themselves once you tap **Send to crew** (a draft stays on the office phones),
-  and ticks, start, stop and results reach the office as they happen. **Send results** still opens a text, and texted
-  links still work.
+  and ticks, start, stop and results reach the office as they happen. On a phone with a hub, **Send to crew** and
+  **Send results** say so and offer **Share a link instead** for a phone that is not on the hub; texted links still work.
+  Without a hub they open the text as before.
 - **Clock in** and **Clock out** reach the PM's **Crew hours** without a text. When that does not get through (no signal,
   the hub busy, a replaced key) the text opens as before.
 - Office phones get two more tabs. **Live**: who is on site, today's sheets by crew with their progress, and the activity

@@ -193,7 +193,7 @@ async function join(p, link, o = {}) {
   log(`local hub on port ${h.port}${h.port !== HUBPORT ? ` (${HUBPORT} was taken by another process)` : ''}`);
   await dev('__clock', { real: true });
   await dev('__clock', { advance: START - Date.now() }); // the hub's clock runs from the job's morning, like every phone's
-  browser = await chromium.launch();
+  browser = await chromium.launch(process.env.PW_CHANNEL ? { channel: process.env.PW_CHANNEL } : {}); // PW_CHANNEL=chrome: the system Chrome where no bundled Chromium is installed
   let pm, sup, ca, cb, w1, w2, make; // make: a new sheet from the superintendent phone (step 3)
   const links = {}, S = {}; // invite links; the sheets' uids and ids
 
@@ -347,7 +347,7 @@ async function join(p, link, o = {}) {
       for (const st of steps) { await sup.fill('#newItem', st); await sup.press('#newItem', 'Enter'); await sup.waitForTimeout(120); }
       await blur(sup);
       const uid = await sup.evaluate(() => location.hash.split('/')[1]);
-      if (send) { await sup.click('.bar [data-act=sendTask]'); await sup.waitForSelector('dialog .linkbox'); await narrow(sup, 'send to crew share sheet'); await sup.click('dialog .sheet-x'); }
+      if (send) { await sup.click('.bar [data-act=sendTask]'); await sup.waitForSelector('dialog [data-a=done]'); await narrow(sup, 'send to crew confirmation'); await sup.click('dialog [data-a=done]'); } // a hub phone: sent through the hub, no share sheet (FLOW-01)
       const t = await taskOf(sup, uid);
       return { uid, id: t.id };
     };
@@ -949,6 +949,7 @@ async function join(p, link, o = {}) {
     await ca.click('[data-act=tick][data-list=items][data-i="0"]');
     await ca.click('[data-act=set][data-k="t.status"][data-v=Complete]');
     await ca.click('[data-act=sendResults]');
+    await ca.waitForSelector('dialog [data-a=share]'); await ca.click('dialog [data-a=share]'); // the hub phone offers the texted link as the fallback (FLOW-01)
     const link = await takeLink(ca);
     await pm.goto(link);
     await pm.waitForFunction(() => window.appStarted === true);
