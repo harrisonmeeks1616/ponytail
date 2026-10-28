@@ -1093,7 +1093,7 @@ async function join(p, link, o = {}) {
     await pm.click('[data-act=crew] >> text="Crew A"'); await pm.fill('[data-k="t.floor"]', 'Level 10'); await pm.fill('[data-k="t.scope"]', 'Pull wire to the level 10 panel');
     await pm.fill('#newItem', 'Pull wire'); await pm.press('#newItem', 'Enter'); await blur(pm);
     const uid = await pm.evaluate(() => location.hash.split('/')[1]);
-    await pm.click('.bar [data-act=sendTask]'); const link = await takeLink(pm);
+    await pm.click('.bar [data-act=sendTask]'); await pm.waitForSelector('dialog [data-a=share]'); await pm.click('dialog [data-a=share]'); const link = await takeLink(pm); // a hub phone: the texted link is the fallback (FLOW-01)
     check(await until(async () => { await syncNow(pm); return entities(await dump(), 'Tasks').some(t => t.uid === uid); }, 30000), 'the PM sheet is on the hub');
     await sup.goto(link); await sup.waitForFunction(() => window.appStarted === true); await signIn(sup); await sup.waitForTimeout(800);
     const got = await taskOf(sup, uid);
