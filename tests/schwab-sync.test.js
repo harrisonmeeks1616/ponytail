@@ -2956,3 +2956,31 @@ test('a crew one office phone takes out stays out after people were added to it 
   await step(pm, sp, pm, sp);
   assert.deepEqual([sp.settings().crews.map(c => [c.name, c.lead]), pm.settings().crews.map(c => [c.name, c.lead])], [[['Crew A', ''], ['Crew U', 'Lead U']], [['Crew A', ''], ['Crew U', 'Lead U']]], 'a crew the other phone edited meanwhile stays, with the edit');
 });
+
+// Send to crew / Send results on a hub phone (tasks.html sentSheet, Codex review of 672cc6b): the line that says the hub has it comes from
+// confirmed(), which runs a round and compares the hash the hub acknowledged with this record's hash now. The status dot is never the proof.
+test('confirmed(): the hub acknowledged THIS record as it is now; a newer local edit or no signal is "saved on this phone", whatever the dot says', async () => {
+  const hub = fresh(), sp = await makePhone(hub, 'super'), cp = await makePhone(hub, 'crew', { crew: 'Crew A' });
+  const uid = sp.addTask({ sentAt: sp.now() });
+  assert.equal(await sp.sync.confirmed('t', uid, 'assign'), true, 'a round ran and the hub acknowledged the office part');
+  assert.ok(hub.tasks.get(uid), 'the sheet is on the hub');
+  assert.equal(await sp.sync.confirmed('t', uid, 'assign'), true, 'asking again costs nothing new and stays true');
+  // the office edits again with no signal: the dot still says live (the last round got through), but this record is not on the hub as it is now
+  sp.editTask(uid, t => { t.scope = 'Reworded after sending'; });
+  sp.net.down = true;
+  assert.equal(sp.sync.hubStatus().state, 'live', 'the dot is green from the last round');
+  assert.equal(await sp.sync.confirmed('t', uid, 'assign'), false, 'and yet the reworded sheet is saved on this phone only');
+  sp.net.down = false;
+  assert.equal(await sp.sync.confirmed('t', uid, 'assign'), true, 'back online: the round carries it');
+  assert.equal(hub.tasks.get(uid).a.scope, 'Reworded after sending');
+  // the crew's results the same way
+  await cp.cycle();
+  assert.ok(cp.task(uid), 'the crew phone pulled the sent sheet');
+  cp.tick(uid, 'i1'); cp.editTask(uid, t => { t.status = 'Complete'; t.resultAt = cp.now(); });
+  cp.net.down = true;
+  assert.equal(await cp.sync.confirmed('t', uid, 'crew'), false, 'no signal: results saved on this phone, not "saved to the hub"');
+  cp.net.down = false;
+  assert.equal(await cp.sync.confirmed('t', uid, 'crew'), true);
+  assert.equal(hub.tasks.get(uid).c.status, 'Complete', 'the hub has the result');
+  assert.equal(await cp.sync.confirmed('t', 'no-such-sheet', 'crew'), false, 'a record the hub never had is not confirmed');
+});

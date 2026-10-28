@@ -79,6 +79,7 @@ export default {
   'Results saved to the hub. The office sees them on its next refresh.': 'Resultados guardados en el hub. La oficina los ve en su próxima actualización.',
   'Results saved on this phone. They go to the hub when the connection returns.': 'Resultados guardados en este teléfono. Van al hub cuando vuelva la conexión.',
   'Share a link instead': 'Compartir un enlace',
+  'Saved on this phone. Sending to the hub…': 'Guardado en este teléfono. Enviando al hub…',
   'Resend to crew': 'Reenviar',
   'Send to crew': 'Enviar a cuadrilla',
   'Assignment': 'Asignación',

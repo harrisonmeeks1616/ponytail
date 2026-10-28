@@ -859,6 +859,30 @@ export function makeSync(o = {}) {
     } catch (e) { return lost(e); }
   }
 
+  // Send to crew / Send results (tasks.html sentSheet): is this part, as it is on this phone now, acknowledged by the hub? Runs a round
+  // now (and one more when a round already under way may have scanned before the save), then compares the hash the hub acknowledged
+  // (hubSync .s, applyAcks) with the part's hash here. Never read off the global dot: a live dot says the last round got through, not
+  // that this record did (Codex review of 672cc6b). False means saved on this phone only: no signal, the hub busy, a refused key, or a
+  // newer edit here since the push.
+  async function confirmed(kind, key, part) {
+    const c = hub();
+    if (!c) return false;
+    const check = () => {
+      const pr = loadState()[kind]?.[key]?.[part];
+      if (!pr || pr.s === undefined) return false;
+      const lc = readLocal(c), doc = kind === 't' ? lc.tasks.find(t => t.uid === key) : kind === 'r' ? lc.reports.find(r => r.date === key) : null;
+      const fn = PARTS[kind]?.find(x => x[0] === part)?.[1];
+      return !!doc && !!fn && pr.s === hs(fn(doc));
+    };
+    for (let round = 0; round < 2; round++) {
+      const underWay = !!running; // a round in flight may have scanned before the save: its follow-up is the one that carries it
+      try { await cycle(); } catch { /* hubStatus says why */ }
+      if (check()) return true;
+      if (!underWay) break; // a fresh round did not confirm it (no signal, refused): another round now would not either
+    }
+    return check();
+  }
+
   // A texted copy opened on a hub phone (HUB.md, Texts on a hub phone): kind 't' or 'r', the sheet's uid or the report's day,
   // the part the text would change and the text's own time. False when this phone already holds that part as new as the
   // text (from the hub, or its own unsynced edit): the app keeps its copy. Else true: the app merges it, and the change goes
@@ -1023,7 +1047,7 @@ export function makeSync(o = {}) {
     return out;
   }
 
-  return { hubStatus, poke, cycle, wake, start, joinFrom, connect, disconnect, invite, translate, records, stats, purge, purgeLater, release, rotate, archive, selftest, fromText, officeAt,
+  return { hubStatus, poke, cycle, wake, start, joinFrom, connect, disconnect, invite, translate, records, stats, purge, purgeLater, release, rotate, archive, selftest, fromText, officeAt, confirmed,
     liveData: () => ({ ...live, info }), onHub: (key, kind = 'task') => (kind === 'report' ? loadState().r[key]?.sup : loadState().t[key]?.assign)?.v !== undefined, // onHub: the hub has this sheet (so its number is known) or report
     replyOnHub: t => { const b = loadState().t[t?.uid]?.assign?.b; return !!b && b.reply === t.reply && b.replyAt === t.replyAt; } }; // the hub took this sheet's message as it is here (the office part as last had from the hub)
 }
@@ -1072,3 +1096,4 @@ export const onHub = (key, kind) => get().onHub(key, kind);
 export const replyOnHub = t => get().replyOnHub(t);
 export const fromText = (kind, key, part, at, skew, copy, parts) => get().fromText(kind, key, part, at, skew, copy, parts);
 export const officeAt = t => get().officeAt(t);
+export const confirmed = (kind, key, part) => get().confirmed(kind, key, part);
