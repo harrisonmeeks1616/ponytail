@@ -56,7 +56,7 @@ function rowsOf(hub, title) {
 // ---------- the Sheet, keys, manifest, code hygiene ----------
 test('setupHub: every tab labeled, bold frozen headers, narrow data column; keys made and kept the safe way', () => {
   const { hub, k } = setup();
-  assert.deepEqual(hub.tabs(), ['Tasks', 'Hours', 'Weekly totals', 'Reports', 'Activity', 'Deleted', 'Config']);
+  assert.deepEqual(hub.tabs(), ['Tasks', 'Hours', 'Weekly totals', 'Reports', 'Activity', 'Deleted', 'Config', 'Daily log']);
   assert.deepEqual(hub.header('Tasks'), ['Date', 'Task ID', 'Crew', 'Floor', 'Area', 'Status', 'Steps done', 'Minutes worked', 'Scope', 'Completed', 'Remaining', 'Crew comments', 'Review', 'Follow-up', 'Reply', 'Updated', 'key', 'rev', 'data']);
   assert.deepEqual(hub.header('Hours').slice(0, 9), ['Name', 'Week of', 'Date', 'Day', 'Clock in', 'Clock out', 'Hours', 'Edited by PM', 'Note']);
   assert.deepEqual(hub.header('Weekly totals'), ['Name', 'Week of', 'Hours', 'Shifts', 'Open shifts']);
@@ -1867,12 +1867,12 @@ test('archive: copies old rows into a new spreadsheet, then deletes them here; h
     shift({ id: 'w3', device: '', date: '2026-10-05', in: '07:00', out: '14:00' }), shift({ id: 'w4', device: '', date: '2026-10-07', in: '07:00', out: '15:00' }), shift({ id: 'w5', device: '', date: '2026-10-06', in: '07:00', out: '15:00' })] }));
   const events0 = env2.hub.table('Activity').length;
   const r = ok(pm2.call('archive', { before: '2026-10-07' }));
-  assert.deepEqual(r.moved, { tasks: 2, shifts: 2, reports: 1, events: 0 });
+  assert.deepEqual(r.moved, { tasks: 2, shifts: 2, reports: 1, events: 0, logs: 0 });
   assert.match(r.sheetUrl, /^https:\/\/docs\.google\.com\/spreadsheets\/d\/\w+\/edit$/);
   assert.notEqual(r.sheetUrl, env2.k.sheetUrl);
   const [arch] = env2.hub.archives();
   assert.ok(r.sheetUrl.includes(arch.id));
-  assert.deepEqual(env2.hub.tabs(arch.id), ['Tasks', 'Hours', 'Weekly totals', 'Reports', 'Activity']);
+  assert.deepEqual(env2.hub.tabs(arch.id), ['Tasks', 'Hours', 'Weekly totals', 'Reports', 'Activity', 'Daily log']);
   assert.deepEqual(env2.hub.header('Hours', arch.id), env2.hub.header('Hours'));
   assert.equal(env2.hub.format('Tasks', arch.id).bold, true);
   assert.deepEqual(env2.hub.table('Tasks', arch.id).map(x => x[1]).sort(), ['S1', 'S2'], 'old tasks copied with their readable cells');
@@ -1901,7 +1901,7 @@ test('archive: copies old rows into a new spreadsheet, then deletes them here; h
   assert.equal(rowsOf(env2.hub, 'Tasks').length, 1);
   // Nothing to move: no new spreadsheet.
   const n = env2.hub.spreadsheets.size;
-  assert.deepEqual(ok(pm2.call('archive', { before: '2026-10-07' })), { sheetUrl: '', moved: { tasks: 0, shifts: 0, reports: 0, events: 0 }, ok: true });
+  assert.deepEqual(ok(pm2.call('archive', { before: '2026-10-07' })), { sheetUrl: '', moved: { tasks: 0, shifts: 0, reports: 0, events: 0, logs: 0 }, ok: true });
   assert.equal(env2.hub.spreadsheets.size, n);
   // Guards.
   for (const before of ['2026-02-30', 'x', '', undefined, '2026-10-20', '2099-01-01']) assert.equal(pm2.call('archive', { before }).error, 'bad_request', String(before));
@@ -2166,7 +2166,7 @@ test('stats: rows per tab, cells against the 10 million limit, the Sheet link', 
   ok(sup.push({ tasks: [task(), task({ uid: 'u2' })], reports: [report()] }));
   ok(pm.push({ shifts: [shift({ id: 'z', device: '' })] }));
   const r = ok(pm.call('stats'));
-  assert.deepEqual(r.rows, { tasks: 2, shifts: 1, reports: 1, events: 3 });
+  assert.deepEqual(r.rows, { tasks: 2, shifts: 1, reports: 1, events: 3, logs: 0 });
   assert.equal(r.cellLimit, 10000000);
   assert.equal(r.cells, env.hub.cells());
   assert.ok(r.cells > 50000 && r.cells < 200000);
