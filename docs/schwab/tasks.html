@@ -813,6 +813,10 @@ function taskMsg(t, l) {
   return x('{crew}: task {id}, {where}, {when}. Open it, check off steps as you go, then tap "Send results".', { crew: t.crew, id: t.id, where, when });
 }
 
+// Publishing and sharing are two different things on a phone with a hub (FLOW-01, 2026-10-27). "Send to crew" stamps sentAt: the hub
+// delivers the sheet to the crew's connected phones on their next pull (HUB.md, pull), and "Send results" saves the crew part the same
+// way. The texted link is the fallback for a phone that is not on the hub or has no signal: offered as a choice, not opened every time.
+// Without a hub the text is the whole transport, as before. A day plan is still shared by link (it has no hub record of its own).
 async function send(kind, t) {
   if (kind === 'task') { t.sentAt = Date.now(); persist(); render(); }
   const payload = { v: 1, kind, pin: S.pin, skew: sync.hubStatus().skew, ...(kind === 'day' ? { date: day, tasks: dayTasks().map(x => ({ ...x, assignAt: sync.officeAt(x) })) } : { task: t }) }; // skew: this phone's hub time offset, only from a phone on a hub (sync.mjs fromText)
@@ -820,15 +824,36 @@ async function send(kind, t) {
   if (kind === 'task') {
     // A crew that has answered in Spanish before gets the message in both languages.
     const both = getLang() === 'es' || T.some(x => x.crew === t.crew && x.cLang === 'es');
-    sendSheet({ title: L('Task {id} for {crew}', { id: t.id, crew: t.crew }), url, text: both ? `${taskMsg(t, 'en')}\n\n${taskMsg(t, 'es')}` : taskMsg(t, 'en') });
+    const share = () => sendSheet({ title: L('Task {id} for {crew}', { id: t.id, crew: t.crew }), url, text: both ? `${taskMsg(t, 'en')}\n\n${taskMsg(t, 'es')}` : taskMsg(t, 'en') });
+    if (!hubOn()) return share();
+    return void sentSheet('task', t, share); // the sheet opens now; its line follows the hub's answer, the tap does not wait on the network
   } else if (kind === 'result') {
     // A Spanish-mode crew sees its own language first; the superintendent gets the English line.
-    sendSheet({ title: L('Results for task {id}', { id: t.id }), url, text: t.cLang === 'es' ? `${resultMsg(t, 'es')}\n\n${resultMsg(t, 'en')}` : resultMsg(t, 'en') });
+    const share = () => sendSheet({ title: L('Results for task {id}', { id: t.id }), url, text: t.cLang === 'es' ? `${resultMsg(t, 'es')}\n\n${resultMsg(t, 'en')}` : resultMsg(t, 'en') });
+    if (!hubOn()) return share();
+    return void sentSheet('result', t, share);
   } else {
     const ts = dayTasks();
     sendSheet({ title: L('Task plan for {date}', { date: niceDate(day) }), url,
       text: L('Task plan for {date}: {n} sheets ({crews}). Open to load it on your phone.', { date: niceDate(day), n: ts.length, crews: [...new Set(ts.map(x => x.crew).filter(Boolean))].join(', ') }) });
   }
+}
+
+// After Send to crew / Send results on a hub phone: the sheet opens at once saying the entry is saved here and on its way, and its line
+// changes only when the hub has acknowledged THIS record as it is now (sync.confirmed: a round runs, the acknowledged hash is compared),
+// or says it waits on this phone (no signal, the hub busy, a refused key). The global status dot is never the proof (Codex review of
+// 672cc6b). Done, or share the link after all (a phone that is not on the hub still takes a texted link).
+async function sentSheet(kind, t, share) {
+  const d = sheet(`<p class="ask" data-sent>${esc(L('Saved on this phone. Sending to the hub…'))}</p><div class="acts"><button class="btn primary" data-a="done">${L('Done')}</button><button class="btn" data-a="share">${L('Share a link instead')}</button></div>`);
+  d.classList.add('action');
+  d.addEventListener('click', e => { const b = e.target.closest('[data-a]'); if (!b) return; d.close(); if (b.dataset.a === 'share') share(); });
+  let ok = false;
+  try { ok = await sync.confirmed('t', t.uid, kind === 'task' ? 'assign' : 'crew'); } catch { ok = false; }
+  const line = d.querySelector('[data-sent]');
+  if (!line) return;
+  line.textContent = kind === 'task'
+    ? (ok ? L('Sent to {crew} through the hub. Their connected phones get it on their next refresh.', { crew: t.crew }) : L('Saved on this phone. It goes to {crew} through the hub when the connection returns.', { crew: t.crew }))
+    : (ok ? L('Results saved to the hub. The office sees them on its next refresh.') : L('Results saved on this phone. They go to the hub when the connection returns.'));
 }
 
 async function act(a, el) {

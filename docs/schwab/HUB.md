@@ -27,15 +27,17 @@ build invite links; the PM can `rotate` either one.
 | whoami, translate | yes | yes | yes |
 | pull tasks, config | yes (window; sent sheets only, never a draft) | yes | yes |
 | pull shifts | own device only | own, plus today's on-site list | all |
+| pull logs | own device only | yes | yes |
 | pull reports, events | no | yes | yes |
 | push crew part of a task | yes | yes | yes |
 | push assign part, review, reply, create task | no | yes | yes |
 | push config | no | yes | yes |
 | push own shifts (worker rules) | yes | yes | yes |
+| push own daily log (device rules) | yes | yes | yes |
 | push shifts with PM rules (edit, add, rename, remove) | no | no | yes |
 | push report super part | no | yes | yes |
 | push report PM part (decision answers, pmReview) | no | no | yes |
-| records (archive browse) | no | tasks, reports | all |
+| records (archive browse) | no | tasks, reports, logs | all |
 | purge (hard delete), stats, keys, rotate, archive, selftest | no | no | yes |
 
 Wrong keys: no detail in the error, and no lockout: the hub cannot tell callers apart, so a lockout would stop every phone, and a 32-character key cannot be guessed online. A right key is never refused `busy` because of wrong ones.
@@ -69,6 +71,12 @@ Wrong keys: no detail in the error, and no lockout: the hub cannot tell callers 
 - **Which rules**: a push carrying `pmAt` (the PM's timesheet) goes by PM rules, also for a shift of the PM phone's own clock, an Undo with every flag clear included; the PM phone's own clock taps carry no `pmAt` and go by worker rules. The PM phone sends a shift of its own clock from the timesheet only when it was corrected or removed there: an `edited` flag, `gone`, or its `who`, `date`, `in`, `out`, flags or `gone` differ from its hub base. A `pid`, crew or task link filled in on the phone (attachPeople, when the roster knows the name) goes up from its own clock, never as a PM edit, so Activity never says "PM edited" for it.
 - Hours math is identical on client and server: clock-in to clock-out in real minutes (DST-correct, overnight = next morning), payroll hundredths `round(minutes * 5 / 3)` per shift, summed (`cents` in report.mjs). The server's timezone is America/New_York (the job's).
 
+### Log (key `uid`; fields `uid date device pid who crewId crew body hours at`)
+- A worker's daily entry: one per phone per day. The key is the phone and the day: `uid = 'wl-' + <first 12 characters of the device id> + '-' + date` (26 characters), so a phone can only ever write its own days, and writing the same day twice is one record (creation is idempotent). `who`, `crew` are the labels at the time (trimmed to 60), `pid`, `crewId` the roster ids; `body` is long text; `hours` is a number, clamped to 0 to 24 in hundredths; `at` is the phone's stamp (clamped like every stamp).
+- **Device rules** (any key, the phone authenticated by `devSecret`; see Identity): no secret is `device`; a uid that is not `logUid_(this device, its date)` is `forbidden`; the stored `device` is forced to the proven one. A push whose `at` is older than the stored entry changes nothing, and the reply carries the stored (newer) copy. There is no office part: the PM reads logs, never edits them (delete is `purge`, as for everything).
+- One event, `log.created`, when the day's entry first lands ("Dana R started a daily log for 2026-10-19", ref the uid, the Activity tab's Ref cell shows the name). Later edits (autosave) write no event.
+- Pull: a crew key gets its own device's logs in the window; super and pm (so the bridge too) get every log. `records {kind: 'logs', who: <device id>}` lists one phone's entries (`who` also matches the name and the person id).
+
 ### Report (key `date`)
 - **Super part**: everything except the PM part; stamp `updatedAt`.
 - **PM part**: `decisions[].pm` and `pmNote` (matched by `q`), `pmReview`, `pmLang`; stamp new `pmAt`. A PM part push carries `pmBase`, the PM part (`pmReview`, `pmLang`, `decisions` as `{q, pm, pmNote}`) as that PM device last had it from the hub, or `null` (a blank base). With it, only the answers (each `[pm, pmNote]` by `q`), `pmReview` and `pmLang` it changed since are applied, as with `supBase`: a PM phone and a PM laptop answering different decisions both stand, and one both changed goes to the newer `pmAt`. Without it the newer `pmAt` takes the whole part. The stored `pmAt` is the PM part's version: a push that changes it moves it past the stored one even when its own stamp is older (the larger of stored + 1 and the push's), so a phone that has not pulled that answer never holds it as seen.
@@ -91,12 +99,12 @@ A push may carry `base`, the settings as that phone last had them from the hub. 
 | action | request extras | reply extras |
 | --- | --- | --- |
 | `whoami` | | `role, name?, rev, now, tz, version, sheetUrl?` (pm) |
-| `pull` | `since` (rev, 0 = full), `days` (default 14, max 90), `crews?`, `pid?` | `rev, now, same?:true` when nothing changed; else `tasks[], shifts[], reports[], config?, events[], deleted[{kind,key,rev}], onsite?[{who,in,date}]` (super). Every entity carries its `rev`. A crew phone sends its person's crew on the roster (else the crew it joined) as `crews`, and their roster id as `pid`: a sheet whose `memberIds` lists that person comes too, whatever its crew. With `crews`, a sent sheet that changed and is now another roster crew's (and does not list `pid`) is listed in `deleted` with `moved: true`, so it leaves the old crew's phones; a phone keeps one it got only by text, or one with work it has not pushed yet (that work goes up first, and the sheet leaves on a later pull). |
-| `push` | `tasks[], shifts[], reports[], config?, deleted[{kind,key}]` (pm) | `rev, tasks[{key,status:'ok'\|'rejected',reason?,task?}], shifts[...], reports[...], config?` with each entity's canonical merged copy |
+| `pull` | `since` (rev, 0 = full), `days` (default 14, max 90), `crews?`, `pid?` | `rev, now, same?:true` when nothing changed; else `tasks[], shifts[], reports[], logs[], config?, events[], deleted[{kind,key,rev}], onsite?[{who,in,date}]` (super). Every entity carries its `rev`. A crew phone sends its person's crew on the roster (else the crew it joined) as `crews`, and their roster id as `pid`: a sheet whose `memberIds` lists that person comes too, whatever its crew. With `crews`, a sent sheet that changed and is now another roster crew's (and does not list `pid`) is listed in `deleted` with `moved: true`, so it leaves the old crew's phones; a phone keeps one it got only by text, or one with work it has not pushed yet (that work goes up first, and the sheet leaves on a later pull). |
+| `push` | `tasks[], shifts[], reports[], logs[], config?, deleted[{kind,key}]` (pm) | `rev, tasks[{key,status:'ok'\|'rejected',reason?,task?}], shifts[...], reports[...], logs[{key,status,reason?,log?}], config?` with each entity's canonical merged copy |
 | `translate` | `items[]` (max 25, each text <= 2000 chars), `from`, `to` ('en'\|'es') | `items[]` same order, `cached?:n`. Error `quota` when Google's daily limit is hit. |
 | `records` | `kind, from, to, who?, q?, cursor?` | `items[]` (<= 200), `cursor?` |
 | `purge` (pm) | `kind, key` | `rev` |
-| `stats` (pm) | | `rows{tasks,shifts,reports,events}, cells, cellLimit, sheetUrl` |
+| `stats` (pm) | | `rows{tasks,shifts,reports,events,logs?}, cells, cellLimit, sheetUrl` (`logs` once the Daily log tab exists) |
 | `keys` (pm) | | `crew, super` |
 | `rotate` (pm) | `role:'crew'\|'super'` | `key` |
 | `archive` (pm) | `before:'YYYY-MM-DD'` | `sheetUrl, moved{...}` (creates an archive Sheet and moves older rows into it) |
@@ -106,7 +114,7 @@ A push may carry `base`, the settings as that phone last had them from the hub. 
 
 ## Protocol details, as built (wave 1)
 
-- `purge` names the record as `target` (the request's `key` is always the credential). Kinds are plural on output (`tasks shifts reports`, `events` in records), singular accepted on input.
+- `purge` names the record as `target` (the request's `key` is always the credential). Kinds are plural on output (`tasks shifts reports logs`, `events` in records), singular accepted on input.
 - Push results carry `i` (index in the request list); `key` is '' when the sent key had an unsafe shape. Refusal reasons are a fixed list: `forbidden invalid too_large device deleted archived`. Caps apply per kind (200 each) plus the 1,000,000 character body cap.
 - A part stamp of 0 means "not sent" and never replaces a stored part. A key writing the other role's part (an office key editing the crew part, the PM editing the super part of a report) needs a strictly newer stamp; ties go to the incoming copy only for the part's own role.
 - Every task push carries `uid` and `date`. A crew phone's push carries only those plus crew fields and ticks.
@@ -136,6 +144,7 @@ Readable tabs, each with a bold frozen header; the machine copy is the last colu
 - **Reports**: Date, Superintendent, Status, Results, Wins, Issues, Decisions waiting, PM review.
 - **Activity**: When, Who, What, Ref.
 - **Deleted**: key, kind, rev, when. **Config**: one JSON row.
+- **Daily log**: Date, Name, Crew, Hours, Entry, Updated. On a Sheet made before this tab existed it is added by the first log push (the job's `LOGS_TAB` Script Property says it is there; until then the hub reads it as empty), so `setupHub` is never rerun for it.
 The owner can open the Sheet on any phone and read everything labeled by person, week and task. Sheets hold 10 million cells; `stats` reports use and the app warns at 70%.
 
 ## Client contract (`sync.mjs`)
@@ -201,9 +210,9 @@ Every successful v2 response includes `jobId`, `instanceId` and `rev`. Validate 
 
 `pull` retains `{since,days}`: start at `since:0`; `days` is capped at 90 (14 by default). If `more:true`, repeat with `since:response.rev` until complete. This is an active window, not a historical export. `records` accepts `{kind,from,to,cursor?}` and returns `{items,cursor?}` (at most 200 items); carry its cursor until absent. A paged pull's `rev` is its delivered cursor. Request `whoami` for the current head when needed. Missing window records are not deletion markers.
 
-Every v2 `push` additionally requires `opId` (8–80 ASCII letters, digits, underscore or hyphen) and integer `expectedRev`. Keep the exact payload, bases, timestamps, revision and operation ID across network/busy/server retries. Requests are digested with sorted object keys, excluding the credential, and receipts are scoped to job, principal and proven device. Reusing an ID for different content returns `conflict`. A new operation with a stale expected revision also returns `conflict` before changing records; pull/rebase and use a new operation ID. A successful replay returns its original canonical result, whose revision may be lower than the present head.
+Every v2 `push` additionally requires `opId` (8–80 ASCII letters, digits, underscore or hyphen) and integer `expectedRev`. A push of exactly one log and nothing else (no tasks, shifts, reports, config or deletions) may send `expectedRev: -1`, which skips the revision check: the entry is its author's alone and ordered by its own `at`, so no other writer can be overtaken; `-1` on any other push is `bad_request`. Keep the exact payload, bases, timestamps, revision and operation ID across network/busy/server retries. Requests are digested with sorted object keys, excluding the credential, and receipts are scoped to job, principal and proven device. Reusing an ID for different content returns `conflict`. A new operation with a stale expected revision also returns `conflict` before changing records; pull/rebase and use a new operation ID. A successful replay returns its original canonical result, whose revision may be lower than the present head.
 
-Role clients may submit normal batches and config/deletions. The bridge submits exactly one task, shift or report per operation, with no config/deletion payload. Task base wrappers are `assignBase` and `crewBase`; shifts use `base`; reports use `supBase` and `pmBase`. Existing merge and refusal semantics still apply, including archived/deleted protection and PM/worker punch rules. An HTTP success with an entity `status:"rejected"` is a refusal, not a saved edit.
+Role clients may submit normal batches and config/deletions. The bridge submits exactly one task, shift, report or log per operation, with no config/deletion payload; a log goes with the `devSecret` of the phone it belongs to (device rules). Task base wrappers are `assignBase` and `crewBase`; shifts use `base`; reports use `supBase` and `pmBase`. Existing merge and refusal semantics still apply, including archived/deleted protection and PM/worker punch rules. An HTTP success with an entity `status:"rejected"` is a refusal, not a saved edit.
 
 The `Operations` tab stores a prepared result and exact Sheets mutation plan before source writes. One atomic `spreadsheets.batchUpdate` applies entity rows, activity rows and the receipt's completion marker together. A durable per-job pending pointer causes the next request to recover that operation before another writer can move rows. Weekly totals are repaired after the atomic source commit and before acknowledgement. Receipts are retained indefinitely; they are not purged with field records. Never manually reorder/edit/delete this tab. The journal is scanned by operation key on each write, and the global script lock still serializes writes across jobs. The prepared journal has a 2,048,000-character limit; an oversized batch returns `too_large` without changing source rows. These are deliberate initial capacity ceilings.
 
@@ -213,9 +222,9 @@ The atomic write uses Google's documented [batch update transaction](https://dev
 
 1. Verify the real Electrical PM Schwab project ID and signed-in owner, current Hub deployment, original Sheet/archive inventory and backups. Export representative phones with unsent work and sync bases. Keep the current endpoint/deployment identity. Server compatibility must be deployed before v2 clients.
 2. Generate four distinct cryptographically random 32-character alphanumeric credentials per job through an approved secret-management workflow. They must differ from existing v1 credentials. Store only the bridge credential in Electrical PM's server secret storage; never put it in a browser, source file, URL, Sheet, export, log or chat.
-3. In the existing Apps Script project's Script Properties, temporarily set `FH_SETUP` to JSON with `jobId`, `label`, boolean `legacy`, and `crewKey`, `superKey`, `pmKey`, `bridgeKey`. Set `legacy:true` only for the explicitly verified original Schwab mapping. Run the owner-editor function `configureFieldHubJob()` manually. It returns only job/instance/Sheet metadata and removes `FH_SETUP`; it does not log credentials. New jobs start with empty record and config tabs. Distribute each role credential only to that job's intended devices through the approved setup flow.
+3. In the existing Apps Script project's Script Properties, temporarily set `FH_SETUP` to JSON with `jobId`, `label`, boolean `legacy`, and `crewKey`, `superKey`, `pmKey`, `bridgeKey`. Set `legacy:true` only for the explicitly verified original Schwab mapping. Run the owner-editor function `configureFieldHubJob()` manually. It returns only job/instance/Sheet metadata and removes `FH_SETUP`; it does not log credentials. New jobs start with empty record and config tabs, the Daily log among them (their `LOGS_TAB` is set with `SHEET_ID`); the legacy job's Sheet gets that tab from its first log push, never from a rerun of `setupHub`. Distribute each role credential only to that job's intended devices through the approved setup flow.
 4. Creation writes an intent before requesting a new Sheet. An uncertain create deliberately refuses to make a second Sheet. Inspect the owner's Drive for the exact title containing the intent's instance ID; add `recoverSheetId` to the same `FH_SETUP` and rerun. A mismatched title is refused. The original Sheet and established job mapping cannot be reassigned by this function. Remove any retained local staging copy after success.
 5. The owner can revoke a v2 credential by setting `FH_REVOKE` to `{jobId,credentialHash}` using its full SHA-256 hash, then manually running `revokeFieldHubCredential()`. Revocation leaves saved data and legacy credentials intact. Do not treat a shared role key as Harrison's identity.
 6. Configure the PM adapter's exact endpoint, job/instance mapping and server secret; verify reads, a clearly marked test-job edit, canonical readback, lost-response retry, second-device propagation, and wrong-job/refused access. Then pilot the separate phone copy/verify/commit migration, retaining legacy keys and unsent records. Existing phones keep their original v1 setup until that explicit migration.
 
-Local verification: `node --test tests/schwab-hub.test.js tests/schwab-hub-jobs.test.js` uses fake Google services only. It verifies contracts and failure recovery, not deployed Apps Script access, real Google quotas/transactions, physical-phone upgrade behavior, PM platform authentication or measured live propagation. Those gates remain required before describing this as connected.
+Local verification: `node --test tests/schwab-hub.test.js tests/schwab-hub-jobs.test.js tests/schwab-hub-logs.test.js` uses fake Google services only. It verifies contracts and failure recovery, not deployed Apps Script access, real Google quotas/transactions, physical-phone upgrade behavior, PM platform authentication or measured live propagation. Those gates remain required before describing this as connected.
