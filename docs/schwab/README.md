@@ -252,8 +252,9 @@ Do not treat a public health reply or a green status dot as a substitute for all
   says to ask the PM for a new invite.
 - The Sheet keeps everything. **Records → Load older records** shows what the phone no longer keeps, without storing it.
 - The hub key stays on the phone it was typed on. A backup leaves it out: after a restore, a crew or superintendent phone opens its invite;
-  a PM phone reconnects in Settings with the PM key. A backup made on a hub also notes what the hub had then, so restoring it does not roll back work that
-  reached the hub later. Invite links carry a crew or superintendent key, so send each only to its person.
+  a PM phone reconnects in Settings with the PM key. Restoring its own backup may retain a matching key already on that phone; a file never supplies the key.
+  The backup's sync baseline helps merge later Hub work with restored unsynced edits. Conflicting retained copies still need owner review.
+  Invite links carry a crew or superintendent key, so send each only to its person.
 - Each role changes only its own part: crews their results, ticks and hours; the office the assignment, the review and
   messages; only the PM edits hours, deletes records (from every phone at once: the delete can be undone for 6 seconds,
   then it leaves the hub, even if the app was closed meanwhile; on another phone, Delete on a sheet or report the hub
@@ -303,6 +304,7 @@ Do not treat a public health reply or a green status dot as a substitute for all
 - **Fill from task sheets** on the Daily report tab rolls the day's task sheets (on the same phone) into the floor and crew sections. It fills only empty text fields; the work hours and labor-hours follow the sheets on every fill.
 - **⋯ → Settings → Download backup** saves everything on that phone to a file.
 - Backups contain work records and settings, including the upload code if configured, and this phone's device secret (so a phone restored from it keeps its own hours). They never contain the hub key: after a restore, open a new hub invite. Keep backups private.
+- Restore publishes a staged copy and retains the original physical data. An older tab changing that original pauses the restored copy for review. Jobs offers retained-copy export and return to the original behind office authorization; paused or damaged copies require an existing office PIN for recovery only. Raw recovery downloads can include credentials, so keep them private. No automatic journal replay overwrites current data. See HUB.md, Local restore and recovery, for identity, storage and compatibility limits.
 
 ## Things to know
 

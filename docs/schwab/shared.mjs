@@ -6,6 +6,9 @@
 import ES from './es.mjs';
 import { jobScope, jobKey } from './jobs.mjs';
 export { jobScope, jobKey } from './jobs.mjs';
+// Restored copies have their own storage generation. Older tabs retain their original physical keys;
+// publishing a restore never overwrites them, and a late old-tab save pauses the restored copy.
+const localStorage = jobScope.storage;
 
 // The passcode also keeps a key of its own: a tab still running the version before it (phones keep old
 // tabs open for days) rewrites settings without it, and an old backup has none. hours: this phone's own
@@ -14,6 +17,9 @@ export { jobScope, jobKey } from './jobs.mjs';
 // their ids, kept apart for the same reason (see normSettings). Backups and restores carry every key here (a backup
 // leaves out the hub key).
 export const KEYS = Object.fromEntries(['settings', 'tasks', 'reports', 'pin', 'hours', 'crewHours', 'device', 'roster', 'hub'].map(k => [k, jobKey('schwab.' + k)]));
+// Messages to the office (NOTE_TPL) are a key each, and so is each fact about one (sync.mjs, notes storage): never lost, so a backup
+// carries every one of these keys too.
+export const NOTE_KEY = () => jobKey('schwab.note/'), NOTE_FACT = () => jobKey('schwab.noteFact/');
 export const HUB_FIELDS = ['hubUrl', 'hubKey', 'hubRole', 'hubCrew'];
 export const COMPANY = 'H.A. Sack-Electrical', COMPANY_ALT = 'Sack Company-Electrical', COMPANIES = `${COMPANY} · ${COMPANY_ALT}`;
 // The top lines of every PDF: who did the work, then the job.
@@ -54,6 +60,20 @@ export function shape(tpl, src) {
   return typeof src === typeof tpl ? src : tpl;
 }
 
+// The sync record's canonical fingerprint, shared with restore so an unscanned edit is still recognized as unsent.
+export const syncCanonical = x => (Array.isArray(x) ? `[${x.map(syncCanonical)}]` : x && typeof x === 'object' ? `{${Object.keys(x).sort().map(k => JSON.stringify(k) + ':' + syncCanonical(x[k]))}}` : JSON.stringify(x));
+// ponytail: the existing 53-bit cyrb53 change detector; keeping it here preserves every already-stored sync hash.
+export const syncHash = x => {
+  const s = syncCanonical(x);
+  let a = 0xdeadbeef, b = 0x41c6ce57;
+  for (let i = 0; i < s.length; i++) { const c = s.charCodeAt(i); a = Math.imul(a ^ c, 2654435761); b = Math.imul(b ^ c, 1597334677); }
+  a = Math.imul(a ^ (a >>> 16), 2246822507) ^ Math.imul(b ^ (b >>> 13), 3266489909);
+  b = Math.imul(b ^ (b >>> 16), 2246822507) ^ Math.imul(a ^ (a >>> 13), 3266489909);
+  return (4294967296 * (2097151 & b) + (a >>> 0)).toString(36);
+};
+// A worker's shift is the phone's own words; a PM-ruled shift also includes the office's edit/removal flags.
+export const shiftPart = (s, full) => [s.id, s.device, s.who, s.pid, s.date, s.in, s.out, s.crew, s.crewId, s.tasks, ...(full ? [s.edited.who, s.edited.in, s.edited.out, s.gone] : [])];
+
 export const uid = () => Date.now().toString(36) + Math.random().toString(36).slice(2, 7);
 
 export function load(key, fallback) {
@@ -63,12 +83,46 @@ export function load(key, fallback) {
 // ponytail: everything lives in localStorage (~5 MB per site), roughly a year of daily sheets.
 // Past that, move to IndexedDB or a shared backend; Backup keeps a copy until then.
 // Settings with a roster also write it to its own key, wherever they are saved from.
-export function save(key, val) {
+const RESTORE_LOG = jobKey('schwab.restoreLog');
+// Another tab (or a tab still on an older version) may have saved since this page read its copies: its storage event can
+// come late, or never to a suspended phone tab. So every save of a store the page holds in memory is checked against the
+// text the page last read or wrote (fresh); a stale one is refused and the page reloads (onStale). merged: the caller read
+// the store from storage in this same step (the hub sync, a restore), so nothing it holds can be stale.
+// SCHEMA: the stored shape this build writes; bump it whenever a stored template gains or changes a field. A tab of an
+// older build that sees a newer SCHEMA stops writing (it would drop the fields it does not know) and asks for a reload.
+// Never lower it, not even in a rollback: every phone that ran the higher build keeps its marker, and a lower build there
+// would refuse every save for good. A rollback ships the old code with the highest SCHEMA released.
+// The roster goes first and the settings last: settings with people are what loadSettings trusts (it rewrites the roster
+// from them), so a refused settings write puts the old roster back and a tab killed between the two heals on the next load.
+// A retained in-place journal from an unreleased build holds saves for owner review; current restores publish staged copies.
+export const SCHEMA = 20, SCHEMA_KEY = 'fieldHub.schema';
+const seen = new Map(); // store key -> the text this page's in-memory copy came from (empty until the page calls fresh)
+const HELD = () => [KEYS.tasks, KEYS.reports, KEYS.hours, KEYS.crewHours, KEYS.settings];
+let stale = () => {}, lastStale = '', reads = 0; // reads: a page that reloaded (fresh) before a refusal's notice ran needs no second reload
+export function fresh() { reads++; for (const k of HELD()) seen.set(k, localStorage.getItem(k)); }
+export const schemaAhead = () => { try { return Number(localStorage.getItem(SCHEMA_KEY)) > SCHEMA; } catch { return false; } };
+export const onStale = f => { stale = f; };
+export const staleSave = () => lastStale; // '' | 'tab' | 'update', for the save just refused
+export function save(key, val, { merged = false } = {}) {
+  lastStale = '';
   try {
     jobScope.assertWritable();
     key = jobKey(key);
-    localStorage.setItem(key, JSON.stringify(val));
-    if (key === KEYS.settings && Array.isArray(val?.people) && Array.isArray(val.crews)) localStorage.setItem(KEYS.roster, JSON.stringify(rosterOf(val)));
+    if (localStorage.getItem(RESTORE_LOG) !== null) return false;
+    const was = localStorage.getItem(key);
+    if (seen.size && schemaAhead()) lastStale = 'update';
+    else if (!merged && seen.has(key) && was !== seen.get(key)) lastStale = 'tab';
+    if (lastStale) { const why = lastStale, at = reads; queueMicrotask(() => (why === 'update' || at === reads) && stale(why)); return false; }
+    // The marker goes first: data in this build's shape never sits in storage unmarked (a full phone refuses both).
+    if (seen.size && !(Number(localStorage.getItem(SCHEMA_KEY)) >= SCHEMA)) localStorage.setItem(SCHEMA_KEY, String(SCHEMA));
+    const text = JSON.stringify(val), roster = key === KEYS.settings && Array.isArray(val?.people) && Array.isArray(val.crews) ? JSON.stringify(rosterOf(val)) : null;
+    if (roster === null) localStorage.setItem(key, text);
+    else {
+      const old = localStorage.getItem(KEYS.roster);
+      localStorage.setItem(KEYS.roster, roster);
+      try { localStorage.setItem(key, text); } catch (e) { try { localStorage.removeItem(KEYS.roster); if (old !== null) localStorage.setItem(KEYS.roster, old); } catch {} throw e; }
+    }
+    if (seen.has(key) && seen.get(key) === was) seen.set(key, text); // a merged write keeps a stale copy stale
   } catch { return false; }
   jobScope.remember();
   saved(key);
@@ -223,7 +277,8 @@ const ITEM = { id: '', text: '', done: false, at: 0 };
 // crew and members are the names it was made with. aLangs and cLangs: the language each office and crew text was typed in, by
 // its field ('scope', 'remain') or a step's id (typedIn, langOf); aLang and cLang: each part's first one, for text typed before those.
 // reply: the office's message to the crew. assignAt and crewAt: when the office part and the crew part last changed (the hub's merge stamps).
-// news (this phone only): an office message or follow-up reached this crew phone through the hub; the board marks it until the sheet is opened.
+// news (this phone only): an office message or follow-up reached this crew phone through the hub (true), or the office changed
+// the sheet's work after this phone had it ('update', HUB.md "Updates reach crew phones by themselves"); the board marks it until the sheet is opened.
 export const TASK_TPL = {
   uid: '', origin: '', from: '', id: '', date: '', by: '', floor: '', area: '', crew: '', crewId: '', lead: '', members: [''], memberIds: [''], size: 0,
   scope: '', refs: '', items: [ITEM], checks: [ITEM], aLang: '', aLangs: {},
@@ -241,6 +296,7 @@ const langsOf = m => Object.fromEntries(Object.entries(m && typeof m === 'object
 export function normTask(t) {
   const n = shape(TASK_TPL, t);
   for (const k of ['aLangs', 'cLangs']) n[k] = langsOf(t?.[k]);
+  if (t?.news === 'update') n.news = 'update'; // the one word news may hold besides true and false
   if (!FORMAT.uid.test(n.uid)) n.uid = '';
   if (!FORMAT.uid.test(n.crewId)) n.crewId = '';
   n.memberIds = n.members.map((_, i) => (isId(n.memberIds[i]) ? n.memberIds[i] : ''));
@@ -278,7 +334,7 @@ export function mergeTask(local, inc, part) {
     for (const it of keep) { const m = take.find(x => x.id === it.id); if (m) { it.done = m.done; it.at = m.at; } }
     local[list] = keep;
   }
-  for (const k of ['updatedAt', 'sentAt']) local[k] = Math.max(local[k], inc[k]); // newest send seen, so an older link can't revert it
+  for (const k of ['updatedAt', 'sentAt', 'assignAt']) local[k] = Math.max(local[k], inc[k] || 0); // newest send seen (assignAt: a sent hub sheet's later change), so an older link can't revert it
   return local;
 }
 
@@ -331,6 +387,15 @@ export function renumberClashes(tasks, inc, onHub = () => false) {
 }
 // Both already sent with the same date and number: each shows a warning until someone changes one's Task ID.
 export const sameNumber = (tasks, t) => !!(t.id && t.sentAt) && tasks.some(x => x.uid !== t.uid && x.date === t.date && x.id === t.id && x.sentAt);
+// Send all to crews (a hub phone's day menu, HUB.md "Send once"): every office sheet of the day with a crew and work (a scope or
+// steps) is published; those not sent yet are stamped sentAt now. Returns { ready: the publishable sheets, stamped: the ones
+// stamped here, missing: the ones that need a crew and work first }. The caller saves.
+export const canSend = t => !!(t.crew && (t.scope || t.items.length)); // as Send to crew asks
+export function sendAll(tasks, day, at = Date.now()) {
+  const mine = tasks.filter(t => t.date === day && t.origin !== 'link'), ready = mine.filter(canSend), stamped = ready.filter(t => !t.sentAt);
+  for (const t of stamped) t.sentAt = at;
+  return { ready, stamped, missing: mine.filter(t => !canSend(t)) };
+}
 
 export const CREW_TPL = { name: '', na: true, lead: '', workers: 0, labor: 0, laborFromTasks: false, members: '', area: '', ref: '', start: '', stop: '', done: '', quality: '', holdups: '', good: '' };
 export const REPORT_TPL = {
@@ -373,6 +438,31 @@ export function normShift(x) {
   for (const k of ['in', 'out']) if (!FORMAT.time.test(n[k])) n[k] = '';
   for (const k of ['device', 'pid', 'crewId']) if (!FORMAT.uid.test(n[k])) n[k] = '';
   return FORMAT.uid.test(n.id) && isDay(n.date) && n.in ? n : null; // no id, day or clock-in: nothing to log
+}
+// A note: a permanent message from a phone to the office about a sheet (task: its uid, tid: its number as a label) or about
+// the day (both empty), HUB.md "Note". The uid is the phone's own ('wn-', 12 characters of its device id, '-', 10 random), so
+// a phone only ever writes its own. Once the hub has it nothing changes it. seen (this phone only, never sent): when an office
+// phone showed it, so the board and Live can say a message is new.
+// The one lock every writer of a job's notes and their acks holds, across tabs (sync.mjs withNotes, restore below).
+export const notesLock = notesPrefix => 'fieldhub-notes:' + notesPrefix;
+const withNotesLock = fn => (globalThis.navigator?.locks?.request ? navigator.locks.request(notesLock(NOTE_KEY()), () => fn()) : fn());
+// The keys of this origin that start with prefix (the notes' own keys), and a key removed as save writes one (never during a restore).
+export function keysWith(prefix) { try { return Array.from({ length: localStorage.length }, (_, i) => localStorage.key(i)).filter(k => typeof k === 'string' && k.startsWith(prefix)); } catch { return []; } }
+export function drop(key) {
+  try { jobScope.assertWritable(); if (localStorage.getItem(RESTORE_LOG) !== null) return false; localStorage.removeItem(jobKey(key)); return true; } catch { return false; }
+}
+export const NOTE_TPL = { uid: '', date: '', device: '', pid: '', who: '', crewId: '', crew: '', task: '', tid: '', body: '', lang: '', at: 0, seen: 0 };
+export const NOTE_UID = /^wn-[0-9a-f]{12}-[a-z0-9]{10}$/;
+export const NOTE_MAX = 1000; // as the office's Message (live.mjs MSG_MAX)
+export function normNote(x) {
+  const n = shape(NOTE_TPL, x);
+  // control characters as the hub turns them (Code.gs shape_): a message of nothing else is empty here too, not sent forever
+  for (const k of ['who', 'crew']) n[k] = n[k].replace(/[\u0000-\u001f\u007f]/g, ' ').trim().slice(0, 60);
+  for (const k of ['device', 'pid', 'crewId', 'task']) if (!FORMAT.uid.test(n[k])) n[k] = '';
+  n.tid = n.tid.replace(/[\u0000-\u001f\u007f]/g, ' ').trim().slice(0, 20);
+  n.body = n.body.replace(/[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f]/g, ' ').trim().slice(0, NOTE_MAX).trim();
+  if (!['en', 'es'].includes(n.lang)) n.lang = '';
+  return NOTE_UID.test(n.uid) && isDay(n.date) && n.body ? n : null; // no uid, day or words: nothing to keep
 }
 export const blank = list => shape(REPORT_TPL[list][0], {});
 export const newFloor = (floor, crewNames) => ({ floor, crews: crewNames.map(name => ({ ...CREW_TPL, name })) });
@@ -482,9 +572,16 @@ async function makeDevice() {
 
 const OPEN_MS = 12 * 36e5, TRIES = 5, WAIT_MS = 60e3; // signed in for a work shift; 5 wrong codes, then a 1 minute wait
 const lockState = () => shape({ until: 0, fails: 0, wait: 0 }, load(UNLOCK, {}));
-export const unlocked = (now = Date.now()) => lockState().until > now;
-export const signIn = (now = Date.now()) => save(UNLOCK, { until: now + OPEN_MS, fails: 0, wait: 0 });
-export const signOut = () => save(UNLOCK, { until: 0, fails: 0, wait: 0 });
+const signedOutHere = new WeakSet(); // a failed storage write cannot keep this realm's office session open
+const officeStorage = () => { try { return jobScope.rawStorage; } catch { return null; } };
+export const unlocked = (now = Date.now()) => { const raw = officeStorage(); return !!raw && !signedOutHere.has(raw) && lockState().until > now; };
+export const signIn = (now = Date.now()) => {
+  const raw = officeStorage();
+  const ok = save(UNLOCK, { until: now + OPEN_MS, fails: 0, wait: 0 });
+  if (ok && raw) signedOutHere.delete(raw);
+  return ok;
+};
+export const signOut = () => { const raw = officeStorage(); if (raw) signedOutHere.add(raw); lockRecovery(); return save(UNLOCK, { until: 0, fails: 0, wait: 0 }); };
 export const waitLeft = (now = Date.now()) => Math.max(0, lockState().wait - now);
 // 'ok' (signed in), 'wrong', 'wait' (too many wrong codes; waitLeft() says how long), or 'unsaved' (the right code, but a full
 // phone could not record the sign-in: never reported as a wrong code).
@@ -495,6 +592,92 @@ export async function tryPin(s, pin, now = Date.now()) {
   const fails = st.fails + 1, out = fails >= TRIES;
   save(UNLOCK, { until: st.until, fails: out ? 0 : fails, wait: out ? now + WAIT_MS : 0 }); // a wrong code never signs anyone out
   return out ? 'wait' : 'wrong';
+}
+
+// Recovery never relaxes a data hold. A verified existing office code grants only
+// recovery actions in this realm; reloads discard it. Only retry/revocation state
+// lives outside the data namespace, so signing in cannot alter a retained copy.
+const RECOVERY_LOCK = 'fieldHub.recoveryLock.' + encodeURIComponent(jobKey('schwab.'));
+let recoveryGrant = null, recoveryRequest = 0;
+function recoveryContext() {
+  try {
+    const raw = jobScope.rawStorage, rawPin = raw.getItem(KEYS.pin), rawSettings = raw.getItem(KEYS.settings);
+    const read = value => { try { return JSON.parse(value); } catch { return null; } };
+    const selected = load(KEYS.pin, null), settings = load(KEYS.settings, null);
+    const validPin = values => values.find(p => typeof p === 'string' && PIN_FORMAT.test(p));
+    const pinIn = map => validPin([read(map.get(KEYS.pin)), read(map.get(KEYS.settings))?.pin]);
+    const selectedPin = validPin([selected, settings?.pin]);
+    let pin = validPin([read(rawPin), read(rawSettings)?.pin]);
+    // Export includes the original private copy: an imported selected PIN cannot
+    // authorize it. On an initially blank phone, retain the first protected
+    // ancestor's credential through later imports, rather than trusting the newest.
+    if (!pin) {
+      const prefix = jobKey('schwab.'), scope = encodeURIComponent(prefix), head = raw.getItem('fieldHub.restoreHead.' + scope);
+      const generations = new Map(jobScope.storage.listGenerations().map(g => [g.id, g])), chain = [], visited = new Set();
+      for (let id = head; id !== null;) {
+        const info = generations.get(id);
+        if (!info || info.error || visited.has(id)) return null;
+        visited.add(id);
+        const snapshot = jobScope.storage.generationSnapshot(id); // validate metadata and scoped overlay keys
+        const payload = JSON.parse(raw.getItem('fieldHub.restoreGeneration.' + scope + '.' + id));
+        chain.push({ snapshot, payload });
+        id = info.parent;
+      }
+      for (const { payload, snapshot } of chain.reverse()) {
+        const before = new Map(Object.entries(payload.before)), initial = new Map(before);
+        for (const [key, value] of Object.entries(payload.data)) value === null ? initial.delete(key) : initial.set(key, value);
+        pin = pinIn(before) || pinIn(initial) || pinIn(snapshot);
+        if (pin) break;
+      }
+    }
+    if (!pin) return null; // no code creation or credentials from another job
+    return { raw, pin, selectedPin, stamp: JSON.stringify([pin, selectedPin, rawPin, rawSettings, raw.getItem(UNLOCK), load(UNLOCK, null), raw.getItem('fieldHub.restoreHead.' + encodeURIComponent(jobKey('schwab.')))]) };
+  } catch { return null; }
+}
+function recoveryLockState(raw) {
+  const text = raw.getItem(RECOVERY_LOCK);
+  if (text === null) return { fails: 0, wait: 0, rev: '' };
+  const s = JSON.parse(text);
+  if (!s || !Number.isInteger(s.fails) || s.fails < 0 || s.fails >= TRIES || !Number.isFinite(s.wait) || s.wait < 0 || typeof s.rev !== 'string') throw Error('recovery_lock_invalid');
+  return s;
+}
+export const recoveryPinAvailable = () => !!recoveryContext();
+export function recoveryUnlocked(now = Date.now()) {
+  const g = recoveryGrant, c = recoveryContext();
+  if (c && c.selectedPin === c.pin && !jobScope.status() && unlocked(now)) return true;
+  if (!g || !c || g.raw !== c.raw || g.stamp !== c.stamp || g.until <= now) return false;
+  try { return recoveryLockState(c.raw).rev === g.rev; } catch { return false; }
+}
+export function lockRecovery() {
+  recoveryRequest++;
+  recoveryGrant = null;
+  try {
+    const raw = jobScope.rawStorage;
+    if (raw.getItem(RECOVERY_LOCK) !== null) {
+      const s = recoveryLockState(raw);
+      try { raw.setItem(RECOVERY_LOCK, JSON.stringify({ ...s, rev: crypto.randomUUID() })); }
+      catch { try { raw.removeItem(RECOVERY_LOCK); } catch { /* storage denied: this realm is still locked */ } }
+    }
+  } catch { /* this realm is locked even when storage is denied */ }
+}
+export async function tryRecoveryPin(pin, now = Date.now()) {
+  const request = ++recoveryRequest;
+  recoveryGrant = null;
+  const c = recoveryContext();
+  if (!c) return 'missing';
+  try {
+    const st = recoveryLockState(c.raw);
+    if (st.wait > now) return 'wait';
+    const correct = /^\d{4}$/.test(pin) && await pinHash(pin, c.pin.slice(0, 16)) === c.pin;
+    const current = recoveryContext();
+    if (request !== recoveryRequest || !current || current.raw !== c.raw || current.stamp !== c.stamp || JSON.stringify(recoveryLockState(c.raw)) !== JSON.stringify(st)) return 'unsaved';
+    const fails = correct ? 0 : st.fails + 1, out = fails >= TRIES;
+    const next = { fails: out ? 0 : fails, wait: out ? now + WAIT_MS : 0, rev: st.rev || crypto.randomUUID() };
+    c.raw.setItem(RECOVERY_LOCK, JSON.stringify(next));
+    if (!correct) return out ? 'wait' : 'wrong';
+    recoveryGrant = { raw: c.raw, stamp: c.stamp, until: now + OPEN_MS, rev: next.rev };
+    return 'ok';
+  } catch { return 'unsaved'; }
 }
 
 // ---------- link codec ----------
@@ -788,30 +971,30 @@ export const ask = async (msg, yes, tone = 'primary') => (await choose(msg, [[tr
 // The share sheet: the message, then one big row per way to send it (Share, Text message, Email, Copy link). The link
 // itself sits quietly at the bottom, for when copying is refused and it has to be selected by hand. The title's hyphens
 // don't break (T1019-01 stays on one line).
-export function sendSheet({ title, text, url, note = L('The work details are inside the link itself.') }) { // note: the line under the ways to send it
-  const msg = `${text}\n${url}`, way = (ic, label) => `${icon(ic)}<span>${label}</span>`;
+export function sendSheet({ title, text, url, note = L('The work details are inside the link itself.') }) { // note: the line under the ways to send it; no url: the message alone
+  const msg = url ? `${text}\n${url}` : text, way = (ic, label) => `${icon(ic)}<span>${label}</span>`;
   const d = sheet(`<h3>${esc(title).replace(/(\w)-(\w)/g, '$1\u2011$2')}</h3><p class="preview">${esc(text)}</p>
     <div class="btns share-acts">
       ${navigator.share ? `<button class="btn" data-s="share">${way('share', L('Share…'))}</button>` : ''}
       <a class="btn" href="sms:?&body=${encodeURIComponent(msg)}">${way('message', L('Text message'))}</a>
       <a class="btn" href="mailto:?subject=${encodeURIComponent(title)}&body=${encodeURIComponent(msg)}">${way('mail', L('Email'))}</a>
-      <button class="btn" data-s="copy">${way('link', L('Copy link'))}</button>
+      <button class="btn" data-s="copy">${url ? way('link', L('Copy link')) : way('message', L('Copy message'))}</button>
     </div>
     <p class="hint">${url.length > 1800 ? L('Long link: send by iMessage, WhatsApp or email. Some plain SMS apps cut long links.') + ' ' : ''}${note}</p>
-    <textarea class="linkbox" readonly rows="2" aria-label="${L('Link')}">${esc(url)}</textarea>`);
+    <textarea class="linkbox" readonly rows="2" aria-label="${url ? L('Link') : L('Message')}">${esc(url || text)}</textarea>`);
   d.classList.add('share');
   d.addEventListener('click', e => {
     const b = e.target.closest('[data-s]');
     if (b) busy(b, async () => { // a double tap can't open the share sheet twice
       try {
-        if (b.dataset.s === 'share') await navigator.share({ title, text, url });
-        else { await navigator.clipboard.writeText(msg); toast(L('Link copied. Paste it into a text or email.')); }
+        if (b.dataset.s === 'share') await navigator.share(url ? { title, text, url } : { title, text });
+        else { await navigator.clipboard.writeText(msg); toast(url ? L('Link copied. Paste it into a text or email.') : L('Message copied. Paste it into a text or email.')); }
         d.close();
       } catch (err) {
         if (err.name === 'AbortError') return;
         const box = d.querySelector('.linkbox');
         box.focus(); box.select();
-        toast(L('Select the link below and copy it'));
+        toast(url ? L('Select the link below and copy it') : L('Select the message below and copy it'));
       }
     });
   });
@@ -1029,7 +1212,7 @@ export function retryUploads(s) {
 // ---------- settings (office only: behind the passcode) ----------
 
 // Everything this app keeps on the phone, the hub sync's record and the translation cache included (they are as large as the records they describe).
-const storedChars = () => { let n = 0; try { for (let i = 0; i < localStorage.length; i++) { const k = localStorage.key(i); if (k.startsWith('schwab.') || k.startsWith('fieldHub.')) n += (localStorage.getItem(k) || '').length; } } catch {} return n; };
+const storedChars = () => { let n = 0; try { const raw = jobScope.rawStorage; for (let i = 0; i < raw.length; i++) { const k = raw.key(i); if (k.startsWith('schwab.') || k.startsWith('fieldHub.')) n += (raw.getItem(k) || '').length; } } catch {} return n; };
 // hub: the Settings > Hub group (live.mjs hubSettingsView), between the checks and the review folder.
 export function settingsView(s, hub = '') {
   const roles = ['Crew member', 'Superintendent', 'Project manager']; // a crew phone (set on its first run) shows no office words
@@ -1171,47 +1354,144 @@ export async function settingsAct(act, s, el, change = f => { f(s); save(KEYS.se
 // Everything this phone keeps, including pending PDFs, as stored, except the hub key: a backup file gets passed around, and the PM can send a
 // new invite. The device secret goes along, so a restored phone keeps its own hours.
 const SYNC = jobKey('schwab.hubSync'); // sync.mjs keeps it, and restoreData below says why it travels with a backup
-export function backupData() {
-  const data = Object.fromEntries([...Object.values(KEYS), OUTBOX, SYNC, ...(jobScope.id ? [jobKey('schwab.hubPending'), jobKey('schwab.hubInstance')] : [])].map(k => [k, load(k, null)]));
+export function backupData(source = localStorage) {
+  const listed = Array.from({ length: source.length }, (_, i) => source.key(i)).filter(k => typeof k === 'string');
+  const data = Object.fromEntries([...Object.values(KEYS), OUTBOX, SYNC, ...(jobScope.id ? [jobKey('schwab.hubPending'), jobKey('schwab.hubInstance')] : []), ...listed.filter(k => k.startsWith(NOTE_KEY()) || k.startsWith(NOTE_FACT()))].map(k => { const v = source.getItem(k); return [k, v === null ? null : JSON.parse(v)]; }));
   if (jobScope.id) data.__fieldHub = { v: 2, jobId: jobScope.id };
   for (const k of [KEYS.settings, KEYS.hub]) if (data[k] && typeof data[k] === 'object') data[k] = { ...data[k], hubKey: '' };
   return data;
+}
+// A conflict never destroys either copy. Export the original and every staged/restored generation for owner review.
+export function restoreRecoveryData() {
+  const view = jobScope.storage, copies = [], errors = [], rawCopies = Object.fromEntries(view.recoverySnapshot());
+  const from = map => backupData({ get length() { return map.size; }, key: i => [...map.keys()][i] ?? null, getItem: k => map.get(k) ?? null });
+  const add = g => { try { copies.push({ ...g, data: from(view.generationSnapshot(g.id === 'original' ? null : g.id)) }); } catch { errors.push({ id: g.id, error: 'copy_could_not_be_parsed' }); } };
+  add({ id: 'original' });
+  for (const g of view.listGenerations()) add(g);
+  // An old, unreleased in-place journal can contain the only pre-restore copy. Keep it verbatim for recovery, never replay it.
+  return { __fieldHubRecovery: { v: 1, jobId: jobScope.id, at: new Date().toISOString(), privatePhoneData: true }, copies, errors, rawCopies, previousJournal: jobScope.rawStorage.getItem(RESTORE_LOG) };
 }
 export const isBackup = data => {
   if (!data || typeof data !== 'object' || (data.__fieldHub?.jobId || '') !== jobScope.id || !Object.values(KEYS).some(k => k in data)) return false;
   const own = jobScope.id && load(jobKey('schwab.hubInstance'), null), incoming = data[jobKey('schwab.hubInstance')];
   return !own || !incoming || (own.url === incoming.url && own.instanceId === incoming.instanceId);
 };
-// Writes every key the backup has; false if the phone ran out of space part way. A backup's settings bring their own
-// roster (or, from before people had ids, none), never this phone's old one. The hub sync's record of what the hub had of
-// each record (sync.mjs schwab.hubSync) comes along and is written last: it describes the restored records, so only what
-// was unsynced at backup time goes up and what the hub got since comes back. This phone's own record described the old
-// stores, so it goes first; with none in the backup (or a restore cut short) the next round merges pull-first.
+// A backup's roster and sync baseline travel together in the staged copy. The restoredAt marker travels in that same
+// atomic publication, so a round which described the earlier stores cannot acknowledge into the restored copy.
 // This phone's own hub key, when the backup names the hub and role this phone is on: the key never comes from a file (backupData
 // leaves it out; README, Backups), but a phone restoring its own backup stays connected. '' for another hub, another role, or none.
 const ownKeyFor = data => { const own = load(KEYS.hub, null), h = data[KEYS.hub]; return own?.hubKey && h && typeof h === 'object' && h.hubUrl === own.hubUrl && h.hubRole === own.hubRole ? own.hubKey : ''; };
+// Publish a complete restored copy with one pointer write. The original physical keys are never replaced: even an older
+// tab which knows no restore lock keeps its saves. A later change there pauses the restored copy for reconciliation.
+// Quota or a kill before the pointer leaves the original selected; afterwards the complete restored copy is selected.
+const RESTORED = jobKey('schwab.restoredAt');
+const restoreKeys = () => [...Object.values(KEYS), OUTBOX, SYNC, ...(jobScope.id ? [jobKey('schwab.hubPending'), jobKey('schwab.hubInstance')] : [])];
+// Notes (HUB.md, Notes; Codex C1): the backup's, then this phone's own that the backup does not have. Where each stands (noteAcks)
+// is merged for every note kept, from the backup and from this phone, and only ever grows (kept, sent once, texted): an older backup
+// of this phone never makes a note sent since look unsent. The hub takes a note only from the phone its uid names. When the backup
+// is another phone's, one of this phone's own that the hub kept stays as kept; one never sent anywhere goes on as the restored
+// phone's (its uid and device follow the device id, nothing else changes); one sent but not confirmed may already be on the hub
+// (a lost reply), so it cannot take a new uid and could not go up as the other phone: stuck counts those, and the restore waits.
+const NOTE_FACTS = ['s', 'x', 'old', 'a', 't', 'seen'];
+// A note's key or one of its facts' keys, for this job: what a staged restore may include.
+const noteKeyOk = k => {
+  const N = NOTE_KEY(), F = NOTE_FACT();
+  if (k.startsWith(N)) return NOTE_UID.test(k.slice(N.length));
+  if (!k.startsWith(F)) return false;
+  const [uid, fact, ...more] = k.slice(F.length).split('/');
+  return !more.length && NOTE_UID.test(uid) && NOTE_FACTS.includes(fact);
+};
+// Notes (HUB.md, Notes; Codex C1): a restore writes the backup's note and fact keys and takes none away, so every note this phone
+// has stays, with every fact it knows of it (an older backup of this phone never makes a note sent since look unsent: its a stays).
+// The hub takes a note only from the phone its uid names. When the backup is another phone's (its device id replaces this one), each
+// of this phone's own notes, here or in the backup: one the hub kept (s) stays as kept; one never sent goes on as the restored
+// phone's (uid and device follow the device id, its facts move with it, nothing else changes); one sent but not confirmed (a, no
+// s) may already be on the hub after a lost reply, so it cannot take a new uid and could not go up as the other phone: stuck counts
+// those, and the restore waits. plan: the writes that move the re-keyed ones, after the backup's own keys.
+export function restoreNotes(data) {
+  const N = NOTE_KEY(), F = NOTE_FACT(), me = load(KEYS.device, null)?.id || '', d = data[KEYS.device], next = /^[0-9a-f]{32}$/.test(d?.id) ? d.id : me;
+  const fact = (uid, x) => data[F + uid + '/' + x] ?? load(F + uid + '/' + x, null), plan = [];
+  let stuck = 0;
+  if (next === me) return { stuck, plan };
+  const mine = new Map();
+  for (const k of keysWith(N)) { const n = load(k, null); if (n?.device === me) mine.set(k.slice(N.length), n); }
+  for (const k of Object.keys(data)) if (k.startsWith(N) && data[k]?.device === me) mine.set(k.slice(N.length), data[k]);
+  for (const [uid, n] of mine) {
+    if (fact(uid, 's') !== null) continue;
+    if (fact(uid, 'a') !== null) { stuck++; continue; }
+    const nu = `wn-${next.slice(0, 12)}-${String(uid).slice(-10)}`;
+    plan.push([N + nu, { ...n, uid: nu, device: next }], [N + uid, null]);
+    for (const x of NOTE_FACTS) { const v = fact(uid, x); if (v !== null) plan.push([F + nu + '/' + x, v]); plan.push([F + uid + '/' + x, null]); }
+  }
+  // A device change must not strand a clock-out saved before the next sync scan. Judge the actual normalized shift, including
+  // one also in the backup, against the exact hash the sync engine acknowledged. No acknowledgment is uncertain: a legacy
+  // push may have reached the Hub with its reply lost. Keep that device and its punches until the open/unsent work is settled.
+  const rec = load(SYNC, null), h = rec && typeof rec.h === 'object' && rec.h ? rec.h : {};
+  let shifts = 0;
+  for (const s of [].concat(load(KEYS.hours, []))) {
+    if (!s || s.device !== me) continue;
+    const current = normShift(s), pr = h[s.id]?.v;
+    if (!current || !current.out || pr?.s !== syncHash(shiftPart(current, false))) shifts++;
+  }
+  return { stuck: stuck + shifts, notes: stuck, shifts, plan };
+}
 export const restoreData = data => {
   if (jobScope.status() || (jobScope.id ? !isBackup(data) : data?.__fieldHub?.jobId)) return false;
-  if (jobScope.id && load(jobKey('schwab.hubPending'), null)) return false; // recover an uncertain write before replacing its source records
-  const hubKey = ownKeyFor(data);
-  for (const k of [KEYS.settings, KEYS.hub]) if (data[k] && typeof data[k] === 'object') data[k] = { ...data[k], hubKey }; // a file never connects a phone to a hub
-  try { localStorage.removeItem(SYNC); } catch {}
-  return (data[KEYS.settings] == null || save(KEYS.roster, null)) && [...Object.values(KEYS), OUTBOX, SYNC, ...(jobScope.id ? [jobKey('schwab.hubPending'), jobKey('schwab.hubInstance')] : [])].every(k => data[k] == null || save(k, k === OUTBOX ? clean(data[k]) : data[k]));
+  if (load(jobKey('schwab.hubPending'), null)) return false; // recover an uncertain write before replacing its source records
+  try {
+    if (localStorage.getItem(RESTORE_LOG) !== null) return false;
+    const hubKey = ownKeyFor(data), plan = new Map([[SYNC, null]]); // with none in the file, this phone's record of the hub goes (it described the old stores)
+    for (const k of [KEYS.settings, KEYS.hub]) if (data[k] && typeof data[k] === 'object') data[k] = { ...data[k], hubKey }; // a file never connects a phone to a hub
+    const kept = restoreNotes(data);
+    if (kept.stuck) return false; // restore says why first
+    const s = data[KEYS.settings]; // a backup's settings bring their own roster (or none), never this phone's old one
+    if (s != null) plan.set(KEYS.roster, JSON.stringify(Array.isArray(s.people) && Array.isArray(s.crews) ? rosterOf(s) : null));
+    for (const k of restoreKeys()) if (data[k] != null) plan.set(k, JSON.stringify(k === OUTBOX ? clean(data[k]) : data[k]));
+    for (const k of Object.keys(data)) if (noteKeyOk(k) && data[k] != null) plan.set(k, JSON.stringify(data[k])); // added to what is here; a key of another shape is not a note
+    for (const [k, v] of kept.plan) plan.set(k, v === null ? null : JSON.stringify(v));
+    plan.set(RESTORED, JSON.stringify(Math.max(Date.now(), Number(load(RESTORED, 0)) + 1 || 0)));
+    if (!localStorage.stage(plan)) return false;
+  } catch { return false; }
+  jobScope.remember();
+  return true;
 };
+// Unreleased RC1–RC5 builds used an in-place journal. Replaying it can erase a concurrent old-tab save, so retain both
+// copies and hold for reviewed recovery. Current staged restores never create this journal or need a put-back.
+export function recoverRestore() {
+  try { return localStorage.getItem(RESTORE_LOG) === null ? '' : 'held'; } catch { return 'failed'; }
+}
 
+// restoreData holding the notes lock (sync.mjs withNotes): no tab adds a message, or marks one sent, between the merge of this
+// phone's notes and the write. 'stuck': a message sent but not confirmed would be stranded (restoreNotes).
+export const restoreLocked = data => withNotesLock(() => (restoreNotes(data).stuck ? 'stuck' : restoreData(data)));
 export async function restore(file) {
-  if (jobScope.id && load(jobKey('schwab.hubPending'), null)) return toast(L('Finish syncing the saved push before restoring a backup.'), 'bad');
+  if (load(jobKey('schwab.hubPending'), null)) return toast(L('Finish syncing the saved push before restoring a backup.'), 'bad');
   let data;
   try { data = JSON.parse(await file.text()); } catch { return toast(L("That file isn't a field app backup"), 'bad'); }
   if (!isBackup(data)) return toast(L("That file isn't a field app backup"), 'bad');
   const leaves = load(KEYS.hub, null)?.hubKey && data[KEYS.hub] && !ownKeyFor(data); // on a hub, and the file names another hub or role (or none): say what that costs, as Disconnect does
+  const stuckSay = r => (r.notes ? L('Messages on this phone have not reached the hub yet: {n}. Connect so they finish sending, then restore.', { n: r.notes })
+    : L('A shift on this phone is still open, or its last change has not reached the hub: {n}. Clock out and connect so it finishes sending, then restore.', { n: r.shifts }));
+  if (restoreNotes(data).stuck) return toast(stuckSay(restoreNotes(data)), 'bad');
   if (!await ask(leaves ? L('Replace everything on this phone with this backup? It is from another hub or role, so this phone leaves its hub: to connect again you need the PM key or a new invite.') : L('Replace everything on this phone with this backup?'), L('Replace'), 'danger')) return;
-  if (!restoreData(data)) { toast(L('Restore stopped: this phone is out of space. Free space and restore again.'), 'bad'); return 'partial'; } // the keys before the full one are written: the page reloads what it shows from storage
+  const done = await restoreLocked(data);
+  if (done === 'stuck') return toast(stuckSay(restoreNotes(data)), 'bad');
+  if (!done) { if (jobScope.status()) return location.reload(); return toast(L('Restore stopped. The original data is kept. Check other tabs and free storage, then try again.'), 'bad'); }
   location.reload();
 }
 
 export function registerSW() {
   if ('serviceWorker' in navigator && isSecureContext) navigator.serviceWorker.register('sw.js').catch(() => {});
+}
+// Reload onto the newest build: a waiting worker (sw.js) only takes over once every tab of the old one closes, so a
+// reload alone would bring this old build back. Asked for by a tap, after this page has stopped writing (schemaAhead).
+export async function updateApp() {
+  try {
+    const sw = navigator.serviceWorker, reg = await sw?.getRegistration();
+    await reg?.update();
+    if (reg?.waiting) await new Promise(r => { sw.addEventListener('controllerchange', r, { once: true }); reg.waiting.postMessage('skipWaiting'); setTimeout(r, 4000); });
+  } catch { /* offline: the reload below brings this build back, which says so again */ }
+  location.reload();
 }
 
 // ---------- Quick Find (Things 3): search everything on this phone ----------

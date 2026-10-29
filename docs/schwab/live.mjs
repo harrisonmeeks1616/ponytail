@@ -10,7 +10,7 @@
 //   reports()    the touched daily reports (normReport), as an array or as the date-keyed object
 //   role         'pm' | 'super' | 'crew': the office role of this phone. Only 'pm' deletes what the hub has, exports, sees hours and administers the hub
 //   day          'YYYY-MM-DD' the app is on (the Live board always shows the real today, from now())
-//   sync         the sync.mjs API: hubStatus, liveData, cycle, connect, disconnect, joinFrom, invite, translate, records, stats, purge, purgeLater, onHub, replyOnHub, rotate, archive, selftest
+//   sync         the sync.mjs API: hubStatus, liveData, cycle, connect, disconnect, joinFrom, invite, translate, records, stats, purge, purgeLater, onHub, replyOnHub, rotate, archive, selftest, notes (crew messages; optional)
 //   go(hash)     navigate, hash without '#' (go('clock/2026-10-12'))
 //   render()     redraw the current screen after this file changed its own state
 //   toast(msg, tone)
@@ -201,6 +201,7 @@ export const openShifts = shifts => shifts.filter(s => !s.gone && !s.out).map(s 
 export function eventLine(e, l = getLang()) {
   const x = (en, v) => L(en, v, l), who = (e.who && e.who === e.role ? roleName(e.role, l) : e.who) || '', ref = e.ref || '', text = e.text || '';
   const end = words => words.find(w => text.endsWith(' ' + w));
+  const named = said => (who && who !== 'a worker' ? who : said === 'A worker' ? x('A worker') : said); // a log or note from a phone with no name: the hub says "A worker"
   switch (e.kind) {
     case 'task.created': return who ? x('{who} created {ref}', { who, ref }) : x('New task {ref}', { ref });
     case 'task.started': return who ? x('{who} started {ref}', { who, ref }) : x('Started {ref}', { ref });
@@ -223,6 +224,13 @@ export function eventLine(e, l = getLang()) {
     }
     case 'key.rotated': return /^Crew /.test(text) ? x('The crew key was replaced') : /^Superintendent /.test(text) ? x('The superintendent key was replaced') : text;
     case 'archive': { const m = /^Archived (\d+) rows older than (\d{4}-\d{2}-\d{2})$/.exec(text); return m ? x('{n} rows older than {date} archived', { n: m[1], date: niceDate(m[2], l) }) : text; }
+    case 'log.created': { const m = /^(.*) started a daily log for (\d{4}-\d{2}-\d{2})$/.exec(text); return m ? x('{who} started a daily log for {date}', { who: named(m[1]), date: niceDate(m[2], l) }) : text; }
+    case 'note.created': { // the hub: "Dana R to the office on T1019-02: <the first 120 characters>", or "... about 2026-10-19: ..." for the day
+      const m = /^(.*?) to the office (?:on (.+?)|about (\d{4}-\d{2}-\d{2})): ([\s\S]*)$/.exec(text);
+      if (!m) return text;
+      const v = { who: named(m[1]), text: m[4] };
+      return m[3] ? x('{who} to the office about {date}: {text}', { ...v, date: niceDate(m[3], l) }) : x('{who} to the office on {ref}: {text}', { ...v, ref: m[2] === 'a sheet' ? x('a task sheet') : m[2] });
+    }
     default: return text || e.kind || '';
   }
 }
@@ -335,6 +343,8 @@ export function liveView(ctx) {
   if (ctx.role !== 'pm' && ctx.role !== 'super') return `<div class="empty"><h2>${L('The live board is for the office')}</h2></div>`;
   const now = nowOf(ctx), day = dayOf(now), st = hub(ctx), live = { events: [], onsite: [], at: 0, info: {}, ...ctx.sync?.liveData?.() }, S = ctx.S;
   const sheets = ctx.tasks().filter(t => t.date === day), here = onSite([...openShifts(shiftsOf(ctx)), ...live.onsite], now, S);
+  const notesOf = new Map(); // each sheet's crew messages, newest first (sync.mjs notes)
+  for (const n of arrOf(ctx.sync?.notes?.()).filter(n => n.task).sort((a, b) => b.at - a.at)) (notesOf.get(n.task) || notesOf.set(n.task, []).get(n.task)).push(n);
   const sheetOf = sheetFinder(ctx.tasks()), shiftOf = new Map(shiftsOf(ctx).map(s => [s.id, s])), dup = duplicateShortIds(sheets);
   const updated = Math.max(live.at || 0, st.at || 0); // live.at moves only when something changed; st.at at every good round trip
   // A quiet line on top: where the hub stands and one tap to ask it now (or, with none, the way to set it up).
@@ -349,7 +359,7 @@ export function liveView(ctx) {
   const groups = groupByCrew(sheets, S.crews.map(c => c.name));
   const board = sheets.length ? groups.map(g => `<h4 class="live-crew" style="${crewVar(S, g.crew)}"><span><i class="dot"></i> ${esc(g.crew || L('No crew yet'))}</span>
       <small>${esc(L('{d} of {n} done', { d: g.sheets.filter(finished).length, n: g.sheets.length }))}</small></h4>
-      <div class="live-list">${g.sheets.map(t => (rank(t) === 6 ? doneRow(t) : sheetCard(ctx, t, now, dup.has(t.uid)))).join('')}</div>`).join('')
+      <div class="live-list">${g.sheets.map(t => (rank(t) === 6 ? doneRow(t) : sheetCard(ctx, t, now, dup.has(t.uid), notesOf.get(t.uid)))).join('')}</div>`).join('')
     : `<div class="empty">${icon('today', 'empty-ic')}<h2>${L('No task sheets for today yet')}</h2><button class="btn" data-go="day/${day}">${L('Open the Tasks tab')}</button></div>`;
   // The PM's shift adds from one sync (a week typed in) fold into one line a person; ten lines, then Show all.
   const addedFor = e => { const s = shiftOf.get(e.ref); return s ? personNow(S, s).name : /^PM added a shift for (.*), /.exec(e.text || '')?.[1] || ''; };
@@ -365,7 +375,7 @@ export function liveView(ctx) {
   // than it keeps) is "a task sheet", since its reference is a uid; a number some sheet here has is shown as it is.
   const ids = new Set(ctx.tasks().map(t => t.id).filter(Boolean));
   const lineOf = (e, n) => {
-    const task = String(e.kind).startsWith('task.'), t = task ? sheetOf(e.ref) : undefined, s = !task && shiftOf.get(e.ref);
+    const task = String(e.kind).startsWith('task.') || e.kind === 'note.created', t = task ? sheetOf(e.ref) : undefined, s = !task && shiftOf.get(e.ref); // a note's ref is its sheet: the line opens it
     const p = s ? personNow(S, s) : personNow(S, { who: e.who }), crew = t ? crewById(S, t.crewId)?.name || t.crew : p.crew;
     const ref = !task ? e.ref : t ? t.id || L('New task') : ids.has(e.ref) ? e.ref : L('a task sheet');
     const words = n > 1 ? L('PM added {n} shifts for {who}', { n, who: addedFor(e) || L('a worker') }) : eventLine({ ...e, who: p.name || e.who, name: s ? p.name : '', ref });
@@ -402,8 +412,8 @@ const doneRow = t => `<a class="live-done" href="#task/${esc(t.uid)}/assign"><sp
   <b class="tid">${esc(t.id || L('New task'))}</b><span>${esc([t.floor, t.area].filter(Boolean).join(' · '))}</span>${icon('chev', 'chev')}</a>`;
 
 // A sheet as a row: the pie, the number and where, then where it stands and the last sign of life; the crew's note under
-// it, and Review (once the crew has sent results) and Message.
-function sheetCard(ctx, t, now, dup) {
+// it, then its crew messages (how many, the newest in the reader's language), and Review (once the crew has sent results) and Message.
+function sheetCard(ctx, t, now, dup, notes = []) {
   const [label, tone] = stage(t), { d, n } = progress(t), la = lastActivity(t), need = t.status && !t.review;
   const where = [t.floor, t.area].filter(Boolean).join(' · ') || L('Floor not set');
   const last = la ? L('Last activity {ago}', { ago: ago(la, now) }) : !t.sentAt ? L('Not started')
@@ -415,6 +425,8 @@ function sheetCard(ctx, t, now, dup) {
         <span class="row-sub meta">${n ? `${esc(L('{d} of {n} steps done', { d, n }))} · ` : ''}<span class="stage" data-tone="${tone || ''}">${esc(label)}</span>${dup ? ` ${sameNo()}` : ''}</span>
         <span class="row-sub meta">${esc([last, t.reply && t.replyAt ? msgLine(ctx, t, now) : ''].filter(Boolean).join(' · '))}</span></span>${icon('chev', 'chev')}</a>
     ${note ? `<div class="live-note"><span class="caption">${L('Crew notes')}</span>${txView(ctx, clip(note, 240), langOf(t, nk))}</div>` : ''}
+    ${notes.length ? `<div class="live-note"><span class="caption">${esc(L('Messages from the crew: {n}', { n: notes.length }))}${notes.some(n => !n.seen) ? ' ' + pill(L('New'), 'info') : ''}</span>
+      <small>${esc([notes[0].who, ago(notes[0].at, now)].filter(Boolean).join(' · '))}</small>${txView(ctx, clip(notes[0].body, 240), notes[0].lang)}</div>` : ''}
     <div class="live-acts">${need ? `<button class="btn" data-act="liveReview" data-u="${esc(t.uid)}">${L('Review')}</button>` : ''}<button class="btn" data-act="liveMsg" data-u="${esc(t.uid)}">${L('Message')}</button></div></div>`;
 }
 

@@ -29,7 +29,7 @@
 <script type="module">
 import {
   KEYS, checkLabel, defaultCheck, chooseLang, esc, uid, load, save, loadSettings, nameKey, cleanName, people, findPerson, personById, crewById, addPerson, normTask, newItem, mergeTask, cloneTask, pack, unpack, linkTo, langOf, typedIn,
-  nextId, renumberClashes, sameNumber, ensureDevice,
+  nextId, renumberClashes, sameNumber, sendAll, ensureDevice, deviceId,
   today, addDays, niceDate, weekday, nowHM, span, fmtMin, t12, stamp, hrs, timeOf, field, datalist, seg, setPath, getPath, readInput, dateBar, daySummary,
   toast, sheet, ask, sendSheet, pasteSheet, makePdf, savePdf, fileAway, retryUploads, settingsView, settingsAct, restore,
   registerSW, crewVar as cv, L, setLang, getLang, COMPANY, COMPANY_ALT, COMPANIES, letterhead, icon, screenHead, busy,
@@ -39,11 +39,13 @@ import {
 import { renderOffice, reportAct, reportInput, openReport, openHours, hoursInput, workerChange, fileReportIfChanged, reloadReports, sectionToggle, hasReports, attachShifts,
   reportsNow, crewNow, dropReport, setTextField } from './report.mjs';
 import * as sync from './sync.mjs';
+import { fresh, onStale, staleSave, schemaAhead, SCHEMA_KEY, updateApp } from './shared.mjs';
 import { jobsView, jobsAct, openShiftLinks } from './jobs-ui.mjs';
 import { liveView, recordsView, hubSettingsView, statusDot, joinSheet, crewKeyNote, txView, txField, after as liveAfter, owns as liveOwns, act as liveAct, onInput as liveInput, deleteRecord, txCached } from './live.mjs';
 
 window.appStarted = true; // every file loaded (see the fallback above)
 registerSW();
+fresh(); // what every save is checked against (shared.mjs save); report.mjs read its copies in this same step
 const app = document.getElementById('app'), bar = document.getElementById('bar');
 const S = loadSettings(); // one object for the life of the page: reloads copy into it, so report.mjs, live.mjs and the hub sync share it
 setLang(S.lang);
@@ -51,9 +53,9 @@ ensureDevice(); // this phone's hub identity; the time clock uses the older devi
 attachShifts(S);
 const loadTasks = () => load(KEYS.tasks, []).map(normTask).filter(t => t.uid); // a sheet with no usable id can't be opened or told apart
 let T = loadTasks();
-let day = today(), crewFilter = '', view = { v: 'board' }, openedFrom = null; // openedFrom: the Live or Records screen a sheet was opened from
+let day = today(), crewFilter = '', view = { v: 'board' }, openedFrom = null, oldBuild = false; // openedFrom: the Live or Records screen a sheet was opened from
 
-const persist = () => save(KEYS.tasks, T) || toast(L("This phone wouldn't save. Open Settings and download a backup."), 'bad');
+const persist = () => save(KEYS.tasks, T) || staleSave() || toast(L("This phone wouldn't save. Open Settings and download a backup."), 'bad');
 const said = ok => ok || toast(L("This phone wouldn't save. Open Settings and download a backup."), 'bad'); // a full phone says so, as a sheet does
 const keepSettings = () => said(save(KEYS.settings, S)); // Settings and roster edits say so too, not only sheets
 const find = u => T.find(t => t.uid === u);
@@ -179,8 +181,10 @@ async function openCode(code) {
   // An older text opened after a newer one (a re-sent sheet on the crew phone, results on the office phone) changes nothing.
   // On a hub the text is a copy of what the hub delivers: it is merged only when newer than the hub copy here (sync.mjs fromText).
   const merges = data.kind === 'task' ? t?.origin === 'link' : !!t && t.origin !== 'link';
-  const older = merges && (data.kind === 'task' ? inc.sentAt && t.sentAt && inc.sentAt < t.sentAt : t.resultAt && inc.resultAt < t.resultAt);
-  const held = merges && !older && !sync.fromText('t', t.uid, data.kind === 'task' ? 'assign' : 'crew', data.kind === 'task' ? inc.sentAt : inc.resultAt, data.skew);
+  // A sheet's text is as old as its office part (assignAt, hub time, from a version with Send once) or else its send.
+  const sent = x => Math.max(x.sentAt || 0, x.assignAt || 0);
+  const older = merges && (data.kind === 'task' ? sent(inc) && sent(t) && sent(inc) < sent(t) : t.resultAt && inc.resultAt < t.resultAt);
+  const held = merges && !older && !(data.kind === 'task' && inc.assignAt ? sync.fromText('t', t.uid, 'assign', inc.assignAt, 0) : sync.fromText('t', t.uid, data.kind === 'task' ? 'assign' : 'crew', data.kind === 'task' ? inc.sentAt : inc.resultAt, data.skew));
   if (older || held) {
     toast(older ? L('This is an older copy of this sheet. The newer one is kept.') : L('This phone already has the newest copy of this sheet from the hub.'));
     return location.replace(`#task/${t.uid}/${data.kind === 'result' ? 'review' : 'assign'}`);
@@ -282,10 +286,13 @@ function header() {
 
 let drawnOn = today(); // the day the screen was last drawn, to notice midnight
 let dups = null; // with a hub: sheets sharing a day and a short id (sync.mjs duplicateShortIds), for the "Same number" pill
+let unseen = null; // signed in: the sheets (uids) with a crew message this phone has not shown yet, for the "Crew message" pill
 const dayLabel = d => (d === today() ? L('Today') : niceDate(d)); // a Back to a board says its day, as the board's title does
 function render() {
+  if (oldBuild) return; // a newer build has saved: this page stops writing (shared.mjs SCHEMA)
   drawnOn = today();
   dups = hubOn() ? sync.duplicateShortIds(T) : null;
+  unseen = office() ? new Set(sync.notes().filter(n => n.task && !n.seen && n.device !== deviceId()).map(n => n.task)) : null;
   header();
   screenHead(''); // each screen sets its own title
   bar.hidden = ['settings', 'live', 'records', 'hub'].includes(view.v);
@@ -380,15 +387,17 @@ const pieOf = t => {
     : n ? `<span class="pie" style="--p:${(d / n).toFixed(3)}" role="img" aria-label="${esc(L('{d} of {n} steps done', { d, n }))}"></span>`
       : '<span class="pie none" aria-hidden="true"></span>';
 };
+// The pills under it: a crew phone's news (an office message, or the work changed by itself: sync.mjs marks both), an office
+// phone's new crew message (which opens the sheet where its messages are).
 function row(t) {
-  const [label, tone] = stage(t), lead = pieOf(t);
+  const [label, tone] = stage(t), lead = pieOf(t), heard = !!unseen?.has(t.uid);
   const when = t12(t.pStart);
-  return `<a class="row tcard${!isOpen(t) ? ' is-done' : ''}" href="#task/${esc(t.uid)}/${t.status && !t.review ? 'review' : 'assign'}" style="${crewVar(t.crew, t.crewId)}">
+  return `<a class="row tcard${!isOpen(t) ? ' is-done' : ''}" href="#task/${esc(t.uid)}/${t.status && !t.review ? 'review' : heard ? 'results' : 'assign'}" style="${crewVar(t.crew, t.crewId)}">
     <span class="row-lead">${lead}</span>
     <span class="row-main"><span class="row-title">${t.area ? `<span class="area">${esc(t.area)}</span> ` : ''}<span class="tid">${esc(t.id || L('New task'))}</span></span>
       <span class="row-sub">${[`<span class="who"><i class="dot"></i> ${esc(t.crew || L('No crew yet'))}</span>`, when && `<span class="nw">${esc(when)}</span>`,
         `<span class="stage" data-tone="${tone}">${esc(label)}</span>`].filter(Boolean).join('&nbsp;· ')}</span>
-      ${same(t) ? `<span class="pill" data-tone="warn">${L('Same number as another sheet')}</span>` : ''}${t.news ? `<span class="pill news" data-tone="info">${L('New message')}</span>` : ''}</span>
+      ${same(t) ? `<span class="pill" data-tone="warn">${L('Same number as another sheet')}</span>` : ''}${t.news ? `<span class="pill news" data-tone="info">${t.news === 'update' ? L('Updated') : L('New message')}</span>` : ''}${heard ? `<span class="pill news" data-tone="info">${L('Crew message')}</span>` : ''}</span>
     ${t.est ? `<span class="row-end">${esc(L('{n} hrs', { n: t.est }))}</span>` : ''}${icon('chev', 'chev')}
   </a>`;
 }
@@ -407,15 +416,41 @@ function renderTask(t) {
     back: openedFrom ? { go: openedFrom.v + (openedFrom.sub ? '/' + openedFrom.sub : ''), label: { live: L('Live'), upcoming: L('Upcoming') }[openedFrom.v] || L('Records') } : { go: `day/${t.date}`, label: dayLabel(t.date) },
   });
   app.innerHTML = `<div class="tsheet">${crewSide
-    ? banner(t, true) + clash(t) + brief(t, false) + results(t, info(t)) // the checkboxes first; the details under them, before Time & status
+    ? banner(t, true) + notesTo(t) + clash(t) + brief(t, false) + results(t, info(t)) // the checkboxes first; the details under them, before Time & status
     : `<nav class="tabs" aria-label="${L('Task sheet')}">${tabs.map(([k, l]) => `<a href="#task/${esc(t.uid)}/${k}" data-act="tab" data-v="${k}"${k === view.tab ? ' aria-current="page"' : ''}>${l}</a>`).join('')}</nav>`
       + banner(t, false) + clash(t, ' ' + L('Change the Task ID on one of them.'))
-      + (view.tab === 'results' ? brief(t) + results(t) : view.tab === 'review' ? review(t) : assign(t))}
+      + (view.tab === 'results' ? brief(t) + notesFrom(t) + results(t) : view.tab === 'review' ? review(t) : assign(t))}
     <p class="hint saved">${L('Changes save on this phone as you type.')}</p></div>`;
+  if (!crewSide && ['results', 'review'].includes(view.tab)) sync.seeNotes(t.uid); // its crew messages are on screen: no longer new on this phone
+  // On a hub a sent sheet needs no resend: every change goes by itself (HUB.md "Send once"); the button says so and shows where it stands.
+  const sentHub = hubOn() && !!t.sentAt;
   bar.innerHTML = !crewSide && view.tab === 'review' ? '' : `<div class="bar-in">${crewSide
     ? `<button class="btn primary big" data-act="sendResults">${L('Send results')}</button>`
-    : `<button class="btn primary big" data-act="sendTask">${t.sentAt ? L('Resend to crew') : L('Send to crew')}</button>`}</div>`;
+    : `<button class="btn${sentHub ? '' : ' primary'} big" data-act="sendTask">${sentHub ? L('Sent · changes go by themselves') : t.sentAt ? L('Resend to crew') : L('Send to crew')}</button>`}</div>`;
 }
+
+// Messages to the office (a crew sheet, HUB.md "Messages to the office"): this sheet's notes, oldest first, each with its time and
+// where it stands, then a box and Send message. A sent message never changes. What is typed in the box survives a redraw (drafts).
+const drafts = new Map(); // sheet uid -> the message being typed
+function notesTo(t) {
+  const on = hubOn(), ns = sync.notes().filter(n => n.task === t.uid).sort((a, b) => a.at - b.at);
+  const state = n => (!on ? L('Kept on this phone') : { hub: L('Kept on the hub'), waiting: L('Saved on this phone, not sent yet'), 'old-hub': L('The hub needs an update to keep messages'),
+    refused: L('The hub did not accept this message') }[sync.noteState(n.uid)]);
+  return `<section class="card notes-out"><h2>${L('Messages to the office')}</h2>
+    ${ns.length ? `<dl class="kv info">${ns.map(n => `<dt class="long">${esc(`${stamp(n.at)} · ${state(n)}`)}</dt><dd class="long">${esc(n.body)}</dd>`).join('')}</dl>` : ''}
+    <label class="field wide"><span>${L('Message the office')}</span><textarea data-note="${esc(t.uid)}" rows="3" maxlength="1000">${esc(drafts.get(t.uid) || '')}</textarea></label>
+    <button class="btn wide" data-act="sendNote">${L('Send message')}</button>
+    <p class="hint">${on ? L('Messages are kept on the hub and cannot be changed after sending.') : L('Messages are kept on this phone and cannot be changed after sending. Send message also opens a text to the office.')}</p></section>`;
+}
+// Messages from the crew (office side, Crew results and Review): the sheet's notes, newest first, in the reader's language. One this
+// phone has not shown yet says New this once (renderTask then marks it seen).
+function notesFrom(t) {
+  const ns = sync.notes().filter(n => n.task === t.uid).sort((a, b) => b.at - a.at), cx = ctx();
+  return ns.length ? `<section class="card notes-in"><h2>${L('Messages from the crew')}</h2><dl class="kv info">${ns.map(n => `<dt class="long">${esc([n.who, n.crew, stamp(n.at)].filter(Boolean).join(' · '))}${n.seen ? '' : ` <span class="pill news" data-tone="info">${L('New')}</span>`}</dt>
+    <dd class="long">${txView(cx, n.body, n.lang)}</dd>`).join('')}</dl></section>` : '';
+}
+// The words a message to the office travels in as a text, when there is no hub (sendNote).
+const noteMsg = (t, body, l) => L('Message from {who} about task {id}: {text}', { who: S.worker || t.crew, id: t.id, text: body }, l);
 
 // The calm note at the top of a sheet: on a crew phone, the office's message; on the office phone, where review stands.
 // The office's words show in the reader's language on a hub (live.mjs txView; as typed without one).
@@ -424,10 +459,12 @@ function banner(t, crewSide) {
   const cx = ctx(), tx = k => t[k] && txView(cx, t[k], langOf(t, k));
   const reviewed = () => (t.review ? box(t.review === 'Accepted' ? 'good' : 'warn', L(t.review), tx('followUp'), t.reviewer && L('by {name}', { name: t.reviewer })) : '');
   if (crewSide) return (t.reply ? box('info', L('Message from the office'), tx('reply'), [t.replyBy, t.replyAt && stamp(t.replyAt)].filter(Boolean).join(' · ')) : '') + reviewed(); // the review reaches a crew phone through the hub
-  if (t.review) return reviewed();
-  if (t.status && view.tab !== 'review') return box('info', L('Finished · ready for review'), '', [L(t.status), t.gotAt && stamp(t.gotAt)].filter(Boolean).join(' · '),
+  // a crew message not shown yet, on the Assign tab: one tap to where the messages are
+  const heard = view.tab === 'assign' && unseen?.has(t.uid) ? box('info', L('New message from the crew'), '', '', `<button class="link" data-act="tab" data-v="results">${L('See messages')}${icon('chev')}</button>`) : '';
+  if (t.review) return heard + reviewed();
+  if (t.status && view.tab !== 'review') return heard + box('info', L('Finished · ready for review'), '', [L(t.status), t.gotAt && stamp(t.gotAt)].filter(Boolean).join(' · '),
     `<button class="link" data-act="tab" data-v="review">${L('Review')}${icon('chev')}</button>`);
-  return '';
+  return heard;
 }
 
 function crewHrsLine(t) {
@@ -548,6 +585,7 @@ function review(t) {
       ${row(L('Delays'), t.delay && esc(L('{n} min', { n: t.delay })))}${row(L('Completed'), tx('doneText'), long)}${row(L('Remaining'), tx('remain'), long)}${row(L('Crew notes'), tx('comments'), long)}
       ${row(L('Received'), esc(stamp(t.gotAt)))}</dl>`
     : `<p class="hint">${L("No results from the crew yet. They'll show here when the crew sends them, or fill them in yourself on the Crew results tab.")}</p>`}</section>`
+  + notesFrom(t)
   + group(L('Lead / superintendent review'), `
     <div class="field wide">${seg('t.review', t.review, [['Accepted', 'good', L('Accepted')], ['Follow-up needed', 'warn', L('Follow-up needed')]], L('Review'))}</div>
     ${field(L('Reviewed by'), 't.reviewer', t.reviewer)}
@@ -817,9 +855,11 @@ function taskMsg(t, l) {
 // delivers the sheet to the crew's connected phones on their next pull (HUB.md, pull), and "Send results" saves the crew part the same
 // way. The texted link is the fallback for a phone that is not on the hub or has no signal: offered as a choice, not opened every time.
 // Without a hub the text is the whole transport, as before. A day plan is still shared by link (it has no hub record of its own).
+// Send once (HUB.md): a sheet a hub phone already sent keeps its sentAt. Its later changes reach the crew by themselves, so the
+// button only shows where it stands (sentSheet) and offers the link.
 async function send(kind, t) {
-  if (kind === 'task') { t.sentAt = Date.now(); persist(); render(); }
-  const payload = { v: 1, kind, pin: S.pin, skew: sync.hubStatus().skew, ...(kind === 'day' ? { date: day, tasks: dayTasks().map(x => ({ ...x, assignAt: sync.officeAt(x) })) } : { task: t }) }; // skew: this phone's hub time offset, only from a phone on a hub (sync.mjs fromText)
+  if (kind === 'task' && !(hubOn() && t.sentAt)) { t.sentAt = Date.now(); persist(); render(); }
+  const payload = { v: 1, kind, pin: S.pin, skew: sync.hubStatus().skew, ...(kind === 'day' ? { date: day, tasks: dayTasks().map(x => ({ ...x, assignAt: sync.officeAt(x) })) } : { task: kind === 'task' ? { ...t, assignAt: sync.officeAt(t) } : t }) }; // assignAt: when the office part last changed (a sent sheet's sentAt stays, Send once) // skew: this phone's hub time offset, only from a phone on a hub (sync.mjs fromText)
   const url = linkTo('tasks.html', await pack(payload));
   if (kind === 'task') {
     // A crew that has answered in Spanish before gets the message in both languages.
@@ -854,6 +894,31 @@ async function sentSheet(kind, t, share) {
   line.textContent = kind === 'task'
     ? (ok ? L('Sent to {crew} through the hub. Their connected phones get it on their next refresh.', { crew: t.crew }) : L('Saved on this phone. It goes to {crew} through the hub when the connection returns.', { crew: t.crew }))
     : (ok ? L('Results saved to the hub. The office sees them on its next refresh.') : L('Results saved on this phone. They go to the hub when the connection returns.'));
+  if (kind === 'task' && ok) line.textContent += ' ' + L('Later changes go to them by themselves.');
+}
+
+// Send all to crews (a hub phone's day menu, HUB.md "Send once"): every sheet of the day with a crew and work is published at once
+// (shared.mjs sendAll stamps those not sent yet), then one sheet lists each crew with where its sheets stand, as the hub answers
+// (sync.confirmed for each, side by side; nothing waits on it), the sheets that need a crew and work first, and the day plan link.
+function sendAllSheet() {
+  const { ready, stamped, missing } = sendAll(T, day);
+  if (stamped.length) persist();
+  render();
+  const crews = [...new Set(ready.map(t => t.crew))], ids = ts => ts.map(t => t.id || L('New task')).join(', ');
+  const d = sheet(`<h3>${L('Send all to crews')}</h3><dl class="kv info">
+    ${crews.map((c, i) => `<dt>${esc(c)}</dt><dd data-crew="${i}">${esc(`${ids(ready.filter(t => t.crew === c))} · ${L('Sending…')}`)}</dd>`).join('')}
+    ${missing.map(t => `<dt>${esc(t.id || L('New task'))}</dt><dd>${esc(L('Not sent: needs a crew and work'))}</dd>`).join('')}</dl>
+    ${ready.length ? '' : `<p class="hint">${L('No sheet of this day has a crew and work yet.')}</p>`}
+    <div class="acts"><button class="btn primary" data-a="done">${L('Done')}</button><button class="btn" data-a="share">${L('Share the day plan link')}</button></div>`);
+  d.classList.add('action');
+  d.addEventListener('click', e => { const b = e.target.closest('[data-a]'); if (!b) return; d.close(); if (b.dataset.a === 'share') send('day'); });
+  crews.forEach((c, i) => {
+    const ts = ready.filter(t => t.crew === c);
+    Promise.all(ts.map(t => sync.confirmed('t', t.uid, 'assign').catch(() => false))).then(oks => {
+      const el = d.querySelector(`[data-crew="${i}"]`);
+      if (el) el.textContent = `${ids(ts)} · ${oks.every(Boolean) ? L('Sent through the hub') : L('Waiting to send')}`;
+    });
+  });
 }
 
 async function act(a, el) {
@@ -872,7 +937,7 @@ async function act(a, el) {
     case 'find': return quickFind();
     case 'toggleLang': return act('lang', { dataset: { v: getLang() === 'es' ? 'en' : 'es' } });
     case 'lockBtn':
-      if (office()) { signOut(); toast(L('Office screens locked')); return needsOffice(view) ? go('day/' + day) : render(); } // a worker's time clock stays open
+      if (office()) { const remembered = signOut(); toast(remembered ? L('Office screens locked') : L('Office screens are locked here, but this phone could not remember the lock. Close other app tabs and keep this phone private until it can save again.'), remembered ? '' : 'bad'); return needsOffice(view) ? go('day/' + day) : render(); } // a worker's time clock stays open
       return (await passcode()) && go('day/' + day);
     case 'changePin': return passcode('change');
     case 'lang': // on a full phone the choice still stays on screen for this visit (shared.mjs chooseLang), and the toast says why it may not next time
@@ -961,11 +1026,23 @@ async function act(a, el) {
       await send('result', t);
       return fileTask(t);
     }
-    case 'sendDay': return send('day');
+    case 'sendDay': return hubOn() ? sendAllSheet() : send('day'); // on a hub, publish the day's sheets; without one, the day plan text
+    case 'sendNote': { // Messages to the office (notesTo): kept on this phone at once, then the hub takes it; with no hub, a text too
+      const box = app.querySelector('[data-note]'), body = (box ? box.value : drafts.get(t.uid) || '').trim();
+      if (!body) { box?.focus(); return toast(L('Type a message first')); }
+      const r = await sync.addNote({ task: t.uid, tid: t.id, body });
+      if (!r.ok) return toast(r.message, 'bad'); // a full phone: the words stay in the box
+      drafts.delete(t.uid);
+      render();
+      if (!hubOn()) await sync.noteTexted(r.note.uid); // it reaches the office by this text: on a hub later it is kept there, not news
+      if (!hubOn()) return sendSheet({ title: L('Message about task {id}', { id: t.id }), url: '', note: L('This message is also kept on this phone.'),
+        text: getLang() === 'es' ? `${noteMsg(t, body, 'es')}\n\n${noteMsg(t, body, 'en')}` : noteMsg(t, body, 'en') });
+      return void sync.confirmed('n', r.note.uid, 'v').then(() => current()?.uid === t.uid && drawSoon()); // its line says "Kept on the hub" once the hub has it
+    }
     case 'boardMenu': {
       const prev = prevDay();
       return menu(office()
-        ? [['upcoming', L('Upcoming')], dayTasks().length && ['sendDay', L('Send day plan')], prev &&['carryDay', L('Copy unfinished work from {date}', { date: niceDate(prev) })], ['paste', L('Open a link someone sent you')],
+        ? [['upcoming', L('Upcoming')], dayTasks().length && ['sendDay', hubOn() ? L('Send all to crews') : L('Send day plan')], prev &&['carryDay', L('Copy unfinished work from {date}', { date: niceDate(prev) })], ['paste', L('Open a link someone sent you')],
           dayTasks().length && ['pdfDay', L("Save this day's sheets as one PDF")], ['settings', L('Settings, crews and backup')]]
         : [['paste', L('Open a link someone sent you')], dayTasks().length && ['pdfDay', L("Save this day's sheets as one PDF")], !crewPhone() && ['lockBtn', L('Office sign-in')]]);
     }
@@ -1123,6 +1200,7 @@ function stale() {
 
 document.addEventListener('input', e => {
   const el = e.target, k = el.dataset.k;
+  if (el.dataset.note) return void drafts.set(el.dataset.note, el.value); // a message to the office being typed: kept through a redraw, saved only by Send message
   if (!k) { if (el.dataset.lv && !stale()) liveInput(ctx(), el); return; } // the Records search box
   if (stale()) return;
   const t = current();
@@ -1145,7 +1223,13 @@ document.addEventListener('input', e => {
   const tm = /^t\.(?:(scope|refs|area|allotNote|estNote|followUp|doneText|remain|comments)|(items|checks)\.(\d+)\.text)$/.exec(k), tk = tm && (tm[1] || t[tm[2]][+tm[3]]?.id);
   if (tk) typedIn(t, tk, getLang());
   t.updatedAt = Date.now();
-  persist();
+  if (persist() === 'tab') { // another tab saved first: reloaded here (no second reload follows), the field's whole text goes onto
+    reloadData(); // the same sheet and the same step or check (its id, as the guard above checks), or the screen redraws and says so
+    const u = current();
+    if (u && (!li || getPath({ t: u, s: S }, li[1])?.[+li[2]]?.id === el.dataset.id)) el.dispatchEvent(new Event('input', { bubbles: true }));
+    else { render(); toast(L('This app is open in another tab or window. This screen now shows its newest changes: check your last one.'), 'bad'); }
+    return;
+  }
   for (const o of app.querySelectorAll('[data-out]')) o.textContent = OUT[o.dataset.out](t);
   liveInput(ctx(), el); // a translated preview under the field asks again
 });
@@ -1168,6 +1252,7 @@ document.addEventListener('keydown', e => {
 
 // The other app (or another tab, or the hub sync) changed shared data: reload so a stale copy here never overwrites it.
 function reloadData() {
+  fresh();
   Object.assign(S, loadSettings()); setLang(S.lang); T = loadTasks(); reloadReports(); attachShifts(S);
   if (view.v === 'task' && !current()) view = { v: 'board' };
 }
@@ -1235,7 +1320,22 @@ sync.initHub({ S, toast, onChange: () => { const k = typing() ? document.activeE
 onSave(k => SYNCED.has(k) && sync.poke()); // after every save; the sync's own timer and wake-ups catch anything else
 setTextField((label, k, v, o, lang) => txField(ctx(), label, k, v, o, lang)); // the daily report's typed text
 new MutationObserver(() => liveAfter(ctx(), app)).observe(app, { childList: true }); // after every draw: translate the typed text on screen
-addEventListener('storage', e => [...Object.values(KEYS), UNLOCK].includes(e.key) && reload());
+addEventListener('storage', e => {
+  if (jobScope.storage.affectsKey(e.key) || e.key === UNLOCK) {
+    if (jobScope.status()) render(); else reload();
+  }
+});
+// Another tab saved first (its storage event came late), or a newer build has written: see shared.mjs save.
+function stopForUpdate() {
+  if (oldBuild) return;
+  oldBuild = true;
+  document.querySelectorAll('dialog[open]').forEach(d => d.close());
+  app.innerHTML = `<div class="empty"><h2>${esc(L('This app was updated in another tab or window. Reload to keep working.'))}</h2><button class="btn primary" data-update>${esc(L('Reload'))}</button></div>`;
+  app.querySelector('[data-update]').onclick = updateApp;
+}
+onStale(why => (why === 'update' ? stopForUpdate() : (reload(), toast(L('This app is open in another tab or window. This screen now shows its newest changes: check your last one.'), 'bad'))));
+addEventListener('storage', e => e.key === SCHEMA_KEY && schemaAhead() && stopForUpdate());
+if (schemaAhead()) stopForUpdate();
 addEventListener('storage', e => { if (e.key?.startsWith('schwab.') || e.key?.startsWith('fieldHub.legacyMigration') || e.key === 'fieldHub.jobs.v1') { if (jobScope.status() || view.v === 'jobs') render(); } });
 addEventListener('pageshow', e => e.persisted && reload());
 addEventListener('hashchange', route);

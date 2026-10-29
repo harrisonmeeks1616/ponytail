@@ -5,7 +5,7 @@
 // tasks.html routes here for #report/<day> and #clock/<day>.
 
 import {
-  KEYS, COMPANIES, esc, uid, load, save, normTask, normReport, normShift, blank, newFloor, fillFromTasks, mergeAnswers, CREW_TPL, pack, linkTo,
+  KEYS, COMPANIES, esc, uid, load, save, staleSave, normTask, normReport, normShift, blank, newFloor, fillFromTasks, mergeAnswers, CREW_TPL, pack, linkTo,
   today, addDays, niceDate, nowHM, span, fmtMin, t12, stamp, hrs, field, datalist, seg, setPath, getPath, readInput,
   toast, sheet, ask, sendSheet, pasteSheet, makePdf, savePdf, download, fileAway, dateBar, crewVar, letterhead, L, getLang, unlocked,
   nameKey, cleanName, people, findPerson, personById, crewById, addPerson, renamePerson, assignmentFor, taskLinks, deviceId, choose, screenHead, icon,
@@ -35,8 +35,10 @@ let tf = (label, k, v, o) => field(label, k, v, o);
 export const setTextField = f => { tf = f; };
 const unsaved = () => toast(L("This phone wouldn't save. Open Settings and download a backup."), 'bad');
 // Only reports someone has touched get stored; browsing an empty day leaves nothing behind.
-const persist = () => save(KEYS.reports, Object.fromEntries(Object.entries(R).filter(([, r]) => r.updatedAt))) || unsaved();
-const keep = (key, list) => save(key, list) || unsaved();
+// A save refused because another tab saved first (staleSave) is not a full phone: the page reloads and says so (tasks.html onStale).
+// true only when stored: a refusal is said, by its reload when another tab saved first (shared.mjs onStale), else as a full phone
+const persist = () => save(KEYS.reports, Object.fromEntries(Object.entries(R).filter(([, r]) => r.updatedAt))) || (staleSave() || unsaved(), false);
+const keep = (key, list) => save(key, list) || (staleSave() || unsaved(), false);
 const isPM = S => S.role === 'Project manager';
 // A connected hub owns PM answers by its authenticated role; text-link-only phones keep their local workflow.
 const canEditPM = () => { const h = hubStatus(); return h.state === 'off' || h.role === 'pm'; };
@@ -91,13 +93,13 @@ const total = ss => ss.reduce((n, s) => n + cents(s), 0);
 const h2 = c => (c / 100).toFixed(2);
 // The shift this phone is clocked in on. One open longer than any real shift (16 hours) was a missed
 // clock-out: the next tap starts a new shift, and the PM fills in the missing time.
-const onShift = (now = Date.now()) => MY.filter(s => !s.out && now - started(s) < 16 * 36e5).sort(byTime).at(-1);
+const onShift = (now = Date.now()) => { const l = MY.filter(s => now - started(s) < 16 * 36e5).sort(byTime).at(-1); return l && !l.out ? l : undefined; }; // only the latest shift: one a PM clear reopened under a later one stays a missed clock-out
 // The hub may answer, so a clock tap waits for its own round instead of opening a text: the last round went through, one is
 // running (the first one after the app opens too, while the last good time stored is from yesterday), or none has run yet.
 // After a round that failed (no signal, busy, a refused key) the text opens at once.
 const hubAnswers = () => { const h = hubStatus(); return h.state === 'live' || h.state === 'syncing' || (h.state === 'offline' && !h.message); };
 // The id the hub derives from this phone's secret (HUB.md, Identity); the older random id only until that exists.
-const deviceOf = S => deviceId() || S.device || ((S.device = uid()), save(KEYS.settings, S), S.device);
+const deviceOf = S => { const existing=deviceId() || S.device; if (existing) return existing; S.device=uid(); if (!keep(KEYS.settings,S)) { S.device=''; return ''; } return S.device; };
 const sheetsHere = () => load(KEYS.tasks, []).map(normTask).filter(t => t.uid);
 // The names this phone knows, one spelling each: its office people and crew lists first, then the names on its task sheets.
 function knownNames(S) {
@@ -132,10 +134,11 @@ export function workerChange(S) {
   if (match && match !== S.worker) { S.worker = match; $('app').querySelector('[data-k="s.worker"]').value = match; }
   const ts = twins(S);
   S.workerId = ts.length ? (ts.some(p => p.id === S.workerId) ? S.workerId : '') : findPerson(S, S.worker)?.id || '';
-  keep(KEYS.settings, S);
+  if (!keep(KEYS.settings, S)) return false;
   $('nameHint').innerHTML = nameHint(S, known);
   const who = `${nameKey(S.worker)}|${S.workerId}`;
   if (card.dataset.name !== who) { card.dataset.name = who; card.innerHTML = todayCard(S); }
+  return true;
 }
 
 // The hero: the time now, where the shift stands, and one big round button. It sits above everything that redraws
@@ -208,7 +211,7 @@ export function importShifts(log, shifts, at = 0, hub = false) {
       // removal here would reach the hub and take the real punches off the worker's own clock: they stay as a
       // second row, flagged on Crew hours (byHand), for the PM to settle.
       const twin = !hub && byHand(log, s);
-      log.push({ ...s, at, edited: { who: false, in: false, out: false }, gone: twin });
+      log.push({ ...s, out: s.edited.out ? '' : s.out, at, edited: { who: false, in: false, out: false }, gone: twin });
       if (twin) skipped++; else added++;
       continue;
     }
@@ -216,7 +219,7 @@ export function importShifts(log, shifts, at = 0, hub = false) {
     const before = JSON.stringify([m.who, m.in, m.out, m.pid, m.crew, m.crewId, m.tasks]);
     if (!m.edited.who && at > m.at) Object.assign(m, { who: s.who, at }); // an older text opened late keeps the newer name
     if (!m.edited.in) m.in = s.in;
-    if (!m.edited.out && s.out) m.out = s.out; // and never undoes a clock-out
+    if (!m.edited.out && s.out && !s.edited.out) m.out = s.out; // and never undoes a clock-out; a PM time that phone had pulled is not its punch
     if (!m.edited.who) m.pid = s.pid || m.pid; // the person follows the name: a PM's rename (or merge) stands
     if (s.crew) Object.assign(m, { crew: s.crew, crewId: s.crewId });
     m.tasks = taskLinks([...m.tasks, ...s.tasks]);
@@ -229,9 +232,10 @@ export function openHours(data, S) {
   if (!canEditPM()) { toast(hoursReadOnly(), 'bad'); return ''; }
   const inc = (Array.isArray(data.shifts) ? data.shifts : []).slice(0, 200).map(normShift).filter(Boolean);
   if (!inc.length) { toast(L('That link has no hours in it'), 'bad'); return ''; }
+  const before = structuredClone(CREW);
   const { added, updated, skipped } = importShifts(CREW, inc, Number.isFinite(data.at) ? data.at : 0, hubStatus().state !== 'off');
   if (S) attachPeople(S, CREW);
-  keep(KEYS.crewHours, CREW);
+  if (!keep(KEYS.crewHours, CREW)) { CREW = before; return ''; }
   const who = inc.at(-1).who || L('the crew');
   toast((added || updated ? L('Hours from {who}: {added} new, {updated} updated', { who, added, updated }) : L('Hours from {who} were already logged', { who }))
     + (skipped ? `. ${L('{n} skipped: you already added that day by hand', { n: skipped })}` : ''), skipped ? 'bad' : '');
@@ -360,14 +364,17 @@ export function hoursInput(el, S, day) {
   if (!canEditPM()) return toast(hoursReadOnly(), 'bad');
   const [, id, f] = el.dataset.k.split('.'), s = CREW.find(x => x.id === id);
   if (!s || !['in', 'out'].includes(f)) return;
-  // A worker's punch is never blanked from here: the hub would store the blank over their clock-out (its two-PM-device merge
-  // takes a changed field as sent), and their phone would pull it. The box goes back to the time; remove the shift instead.
-  if (!el.value && (f === 'in' || s.device)) { el.value = s[f]; return toast(L('Type a time, or remove the shift'), 'bad'); }
+  // A worker's punch is never blanked from here: the box goes back to the time; remove the shift instead. A clock-out the PM
+  // typed (edited) can be cleared: that takes the PM's time back, and the clock-out is the worker's again (HUB.md, PM rules).
+  if (!el.value && (f === 'in' || (s.device && !s.edited.out))) { el.value = s[f]; return toast(L('Type a time, or remove the shift'), 'bad'); }
+  if (!el.value && s.device && CREW.some(x => x.device === s.device && x.id !== s.id && !x.gone && started(x) > started(s))) { el.value = s[f]; return toast(L('They clocked in again after this shift. Type the time they left.'), 'bad'); }
+  const before = structuredClone(s);
   s[f] = el.value;
   s.edited[f] = !!el.value; // a clock-out box cleared again is the worker's clock-out to fill, not the PM's
   el.closest('.field')?.classList.toggle('edited', s.edited[f]); // the dot on the box the PM changed
   el.closest('.shift')?.classList.toggle('open', !s.out);
-  keep(KEYS.crewHours, CREW);
+  if (!keep(KEYS.crewHours, CREW)) { Object.assign(s, before); el.closest('.field')?.classList.toggle('edited',before.edited[f]); el.closest('.shift')?.classList.toggle('open',!before.out); el.setAttribute?.('aria-invalid','true'); return; }
+  el.removeAttribute?.('aria-invalid');
   const week = weekOf(day), people = byPerson(week, undefined, S); // the same order as the cards' data-i
   for (const o of $('app').querySelectorAll('[data-out]')) {
     if (o.dataset.out === 'shift') o.innerHTML = shiftLine(CREW.find(x => x.id === o.dataset.id));
@@ -395,7 +402,7 @@ function addShift(S, day, key = '') {
       date: v('date'), in: v('in'), out: v('out'), edited: { who: true, in: true, out: true } });
     if (!s?.who) return toast(L('Add the name, the date and the clock-in time'), 'bad');
     CREW.push(s);
-    keep(KEYS.crewHours, CREW);
+    if (!keep(KEYS.crewHours, CREW)) { CREW.pop(); return; } // retain typed input for retry
     d.close();
     go('clock/' + s.date);
   };
@@ -742,7 +749,7 @@ export async function reportAct(a, el, S, day, v) {
     // time clock: a worker's own phone
     case 'hTap': {
       if (!S.worker.trim()) { toast(L('Type your name first'), 'bad'); return $('app').querySelector('[data-k="s.worker"]')?.focus(); }
-      workerChange(S); // a name saved before this phone knew its spelling takes it now, before it goes to the PM
+      if (!workerChange(S)) return; // a tap cannot proceed when the worker name did not save
       const shown = val || '', now = onShift() ? `out:${onShift().id}` : 'in';
       if (shown && shown !== now) { // the screen was out of date: do nothing, show the truth, say why
         const was = shown.startsWith('out:') && MY.find(x => x.id === shown.slice(4));
@@ -750,7 +757,9 @@ export async function reportAct(a, el, S, day, v) {
         return toast(was && !was.out ? L('Your shift from {date} passed 16 hours and counts as a missed clock-out. Tap Clock in to start a new shift.', { date: niceDate(was.date) })
           : L('This screen was out of date. Check it and tap again.'), 'bad');
       }
-      const on = onShift(), s = on || normShift({ id: uid(), device: deviceOf(S), who: S.worker, pid: S.workerId, date: today(), in: nowHM() });
+      const on = onShift(), dev = on ? '' : deviceOf(S);
+      if (!on && !dev) return; // never send a shift whose phone identity could not be saved
+      const before = structuredClone(MY), s = on || normShift({ id: uid(), device: dev, who: S.worker, pid: S.workerId, date: today(), in: nowHM() });
       // A shift keeps the name it was clocked in with (README): another person's name in the box cannot clock it out and take its hours.
       // A spelling fix stays a fix: the same roster id, or the same name as the lists match it.
       if (on && (on.pid && S.workerId ? S.workerId !== on.pid : nameKey(S.worker) !== nameKey(on.who))) {
@@ -762,7 +771,8 @@ export async function reportAct(a, el, S, day, v) {
       // crew from the roster); a clock-out adds sheets assigned since and fills a crew still missing.
       const a = assignmentFor(sheetsHere(), S.worker, s.date, s.pid), me = personById(S, s.pid), from = s.crew ? s : a.crew ? a : { crew: me?.crew || '', crewId: me?.crewId || '' };
       Object.assign(s, normShift({ ...s, crew: from.crew, crewId: from.crewId, tasks: [...s.tasks, ...a.tasks] }));
-      keep(KEYS.hours, MY);
+      // Not stored (another tab saved first, or a full phone): no "Saved", no text to the PM for a tap this phone does not hold.
+      if (!save(KEYS.hours, MY)) { MY = before; if (!staleSave()) unsaved(); return renderOffice(v, S, day); }
       navigator.vibrate?.(12);
       renderOffice(v, S, day);
       // At once, not after the usual short wait. The text to the PM opens unless the tap's own round got through (signal gone, hub busy,
@@ -786,10 +796,10 @@ export async function reportAct(a, el, S, day, v) {
     case 'hDel': { // gone at once (and a later text won't bring it back); Undo restores it for 6 seconds
       const s = CREW.find(x => x.id === el.dataset.id);
       if (!s) return;
-      s.gone = true;
-      keep(KEYS.crewHours, CREW);
+      const before = s.gone; s.gone = true;
+      if (!keep(KEYS.crewHours, CREW)) { s.gone = before; return; }
       renderOffice(v, S, day);
-      return toast(L('Shift removed'), '', { undo: undoTo(v, S, day, () => { if (!canEditPM()) return toast(hoursReadOnly(), 'bad'); const x = CREW.find(y => y.id === s.id); if (x) { x.gone = false; keep(KEYS.crewHours, CREW); } }) });
+      return toast(L('Shift removed'), '', { undo: undoTo(v, S, day, () => { if (!canEditPM()) return toast(hoursReadOnly(), 'bad'); const x = CREW.find(y => y.id === s.id); if (x) { const old=x.gone; x.gone = false; if (!save(KEYS.crewHours, CREW)) { x.gone=old; queueMicrotask(unsaved); } } }) });
     }
     case 'hPmMenu': return menu([canEditPM() && ['hAdd', L('Add a shift')], ['paste', L('Open a link someone sent you')], ['settings', L('Settings, crews and backup')]]);
     default: return;

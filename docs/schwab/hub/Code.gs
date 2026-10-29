@@ -4,8 +4,10 @@
 // ACTIONS (POST, JSON in a text/plain body):  whoami  pull  push  translate  records
 //                                             purge  stats  keys  rotate  archive  selftest
 // ROLES (a phone holds one key; whoami says which):
-//   crew  : pull tasks + config + own shifts + own daily log; push the crew part of tasks, own shifts and own daily log; translate
-//   super : crew, plus office part of tasks, config, report super part, pull reports + events, records (tasks, reports)
+//   crew  : pull tasks + config + own shifts + own daily log + own notes; push the crew part of tasks, own shifts, own daily log
+//           and own notes (messages to the office); translate
+//   super : crew, plus office part of tasks, config, report super part, pull reports + events + every note, records (tasks,
+//           reports, logs, notes)
 //   pm    : everything, including shifts with PM rules, report PM part, purge, stats, keys, rotate, archive, selftest
 //
 // ONE-TIME DEPLOY (same flow and posture as review-folder.gs):
@@ -24,7 +26,7 @@
 //
 // DETAILS BEYOND HUB.md (the contract says the rest):
 //   - purge sends the record's key as `target`: `key` is already the request's own credential. A push can also carry deleted:[{kind,key}].
-//   - kinds are 'tasks' | 'shifts' | 'reports' | 'logs' (records also 'events'); the singular is accepted on input.
+//   - kinds are 'tasks' | 'shifts' | 'reports' | 'logs' | 'notes' (records also 'events'); the singular is accepted on input.
 //   - every push result carries `i`, its index in the request; `key` is '' when the sent key had an unsafe shape. A refusal
 //     has status 'rejected' and a reason: forbidden | invalid | too_large | device | deleted | archived. Config answers with
 //     configStatus / configReason. Both limits of 200 entities apply per kind.
@@ -63,15 +65,17 @@ const TABS = {
   events: { title: 'Activity', head: ['When', 'Who', 'What', 'Ref', 'key', 'rev', 'data'], width: [130, 120, 380, 110, 70, 50, 60] },
   deleted: { title: 'Deleted', head: ['key', 'kind', 'rev', 'when'], width: [120, 70, 60, 130] },
   config: { title: 'Config', head: ['Project', 'Site', 'Superintendent', 'Project manager', 'Updated', 'key', 'rev', 'data'], width: [180, 140, 140, 140, 120, 70, 50, 60] },
-  // Last: the live Sheet gets this tab appended by its first log push (ensureLogsTab_), so a new install matches that order.
+  // Last: the live Sheet gets this tab appended by its first log push (ensureTab_), so a new install matches that order.
   logs: { title: 'Daily log', head: ['Date', 'Name', 'Crew', 'Hours', 'Entry', 'Updated', 'key', 'rev', 'data'], width: [85, 140, 90, 60, 420, 120, 90, 50, 60] },
+  // After it: the crew's messages to the office, appended by the first note push (ensureTab_) on a Sheet made before them.
+  notes: { title: 'Messages', head: ['When', 'Date', 'Name', 'Crew', 'Task', 'Message', 'key', 'rev', 'data'], width: [120, 85, 140, 90, 85, 420, 90, 50, 60] },
 };
 Object.keys(TABS).forEach(function (n) {
   const t = TABS[n];
   t.key = t.head.indexOf('key'); t.rev = t.head.indexOf('rev'); t.data = t.head.indexOf('data');
   if (n === 'deleted') { t.key = 0; t.rev = 2; }
 });
-const KINDS = { task: 'tasks', tasks: 'tasks', shift: 'shifts', shifts: 'shifts', report: 'reports', reports: 'reports', log: 'logs', logs: 'logs' };
+const KINDS = { task: 'tasks', tasks: 'tasks', shift: 'shifts', shifts: 'shifts', report: 'reports', reports: 'reports', log: 'logs', logs: 'logs', note: 'notes', notes: 'notes' };
 
 // ---------- entity templates (what a stored entity looks like) ----------
 // 's' = short text (200 chars), 't' = long text (8000), 0 = number >= 0, false/true = boolean (the default is kept).
@@ -100,6 +104,9 @@ function langs_(m) {
 const SHIFT = { id: 's', device: 's', who: 's', pid: 's', date: 's', in: 's', out: 's', crew: 's', crewId: 's', tasks: [{ uid: 's', id: 's' }], edited: { who: false, in: false, out: false }, gone: false, at: 0 };
 // A worker's daily log: one entry per phone per day, keyed by the phone and the day (logUid_), so only that phone writes it.
 const LOG = { uid: 's', date: 's', device: 's', pid: 's', who: 's', crewId: 's', crew: 's', body: 't', hours: 0, at: 0 };
+// A message a phone sends to the office, about a sheet (task = its uid, tid = its short id as a label) or about the day (both
+// empty). Permanent: keyed by the phone and a random part (NOTE_UID), so only that phone writes it, and once stored never changed.
+const NOTE = { uid: 's', date: 's', device: 's', pid: 's', who: 's', crewId: 's', crew: 's', task: 's', tid: 's', body: 't', lang: 's', at: 0, texted: false };
 const CREW_BLOCK = { name: 's', na: true, lead: 's', workers: 0, labor: 0, laborFromTasks: false, members: 't', area: 't', ref: 't', start: 's', stop: 's', done: 't', quality: 't', holdups: 't', good: 't' }; // area and ref are filled from the day's sheets: long text, never clipped at 200
 const REPORT = {
   date: 's', super: 's', shiftStart: 's', shiftEnd: 's', submittedAt: 0, status: 's', results: 't', wins: 't', issues: 't', notified: 't',
@@ -246,18 +253,20 @@ function formatTabs_(ctx, id, names) {
   apiValuesBatchUpdate_(id, heads);
   apiBatch_(id, reqs);
 }
-// The Daily log tab came after the live Sheet was made, and setupHub is not rerun there: the first log push adds it, under
-// the write lock. Until the job's LOGS_TAB property says it is there, every read of its index treats it as empty
-// (readIndex_, readAllIndex_, stats_), so a pull never asks Google for a tab that does not exist.
-function ensureLogsTab_(ctx) {
-  if (ctx.P.LOGS_TAB === '1') return;
-  if (sheetIds_(ctx, ctx.id)[TABS.logs.title] === undefined) {
-    apiBatch_(ctx.id, [addSheetReq_('logs')]);
+// The Daily log and Messages tabs came after the live Sheet was made, and setupHub is not rerun there: the first push of that
+// kind adds its tab, under the write lock. Until the job's property (LATE_TABS) says it is there, every read of its index treats
+// it as empty (readIndex_, readAllIndex_, stats_, archive_), so a pull never asks Google for a tab that does not exist.
+const LATE_TABS = { logs: 'LOGS_TAB', notes: 'NOTES_TAB' };
+function hasTab_(ctx, name) { return !own_(LATE_TABS, name) || ctx.P[LATE_TABS[name]] === '1'; }
+function ensureTab_(ctx, name) {
+  if (hasTab_(ctx, name)) return;
+  if (sheetIds_(ctx, ctx.id)[TABS[name].title] === undefined) {
+    apiBatch_(ctx.id, [addSheetReq_(name)]);
     delete ctx.memo['ids:' + ctx.id]; // the new tab's sheetId
   }
-  formatTabs_(ctx, ctx.id, ['logs']); // also finishes a run that stopped between addSheet and the property
-  ctx.props.setProperty('LOGS_TAB', '1');
-  ctx.P.LOGS_TAB = '1';
+  formatTabs_(ctx, ctx.id, [name]); // also finishes a run that stopped between addSheet and the property
+  ctx.props.setProperty(LATE_TABS[name], '1');
+  ctx.P[LATE_TABS[name]] = '1';
 }
 
 // ---------- setup (run by the owner in the editor) ----------
@@ -270,7 +279,8 @@ function withScriptLock_(ms, fn) {
 function setupHub() {
   return withScriptLock_(30000, function () {
     const props = PropertiesService.getScriptProperties(), ctx = { memo: {} }, P = props.getProperties();
-    const names = Object.keys(TABS);
+    // The single-job Sheet gets Messages from its first note push (ensureTab_); a repair puts it back only once it was there.
+    const names = Object.keys(TABS).filter(function (n) { return n !== 'notes' || P.NOTES_TAB === '1'; });
     let id = P.SHEET_ID, first = false;
     if (!id) {
       id = apiCreate_(sheetSpec_(names, 'Schwab field hub')).spreadsheetId;
@@ -282,7 +292,7 @@ function setupHub() {
       if (add.length) apiBatch_(id, add.map(addSheetReq_));
     }
     formatTabs_(ctx, id, names);
-    props.setProperty('LOGS_TAB', '1'); // every tab is there now, the Daily log too (ensureLogsTab_)
+    props.setProperty('LOGS_TAB', '1'); // every tab is there now, the Daily log too (ensureTab_)
     const out = { sheetUrl: sheetUrl_(id) };
     if (!P.PM_KEY_SHA256) {
       const pm = newKey_();
@@ -390,10 +400,14 @@ function configureFieldHubJob() {
       props.setProperty(dk, JSON.stringify(job));
     }
     if (!job.ready) {
-      if (!job.legacy) formatTabs_({ memo: {} }, job.id, Object.keys(TABS));
+      if (!job.legacy) {
+        const have = sheetIds_({ memo: {} }, job.id), add = Object.keys(TABS).filter(function (n) { return !own_(have, TABS[n].title); });
+        if (add.length) apiBatch_(job.id, add.map(addSheetReq_)); // a creation begun by an older version has no Messages tab
+        formatTabs_({ memo: {} }, job.id, Object.keys(TABS));
+      }
       operationTab_(job.id);
       if (job.legacy) props.setProperties({ LEGACY_JOB_ID: job.jobId, LEGACY_INSTANCE_ID: job.instanceId });
-      else propertyStore_(jobPrefix_(job)).setProperties({ SHEET_ID: job.id, REV: '0', LOGS_TAB: '1' }); // a new job's Sheet has every tab; the legacy one gets the Daily log lazily
+      else propertyStore_(jobPrefix_(job)).setProperties({ SHEET_ID: job.id, REV: '0', LOGS_TAB: '1', NOTES_TAB: '1' }); // a new job's Sheet has every tab; the legacy one gets the Daily log and Messages lazily
       job.ready = true; props.setProperty(dk, JSON.stringify(job));
     }
     roles.forEach(function (role, i) { props.setProperty(authKey_(keys[i]), JSON.stringify({ hash: digestHex_(keys[i]), jobId: job.jobId, role: role })); });
@@ -433,6 +447,7 @@ const ACTIONS = {
   whoami: { roles: ALL, run: whoami_ },
   pull: { roles: ALL, run: pull_ },
   push: { roles: ALL, run: push_, write: true },
+  fence: { roles: PM, run: receiptedPush_, write: true }, // v2 bridge only: invalidate earlier expected revisions without changing source rows
   translate: { roles: ALL, run: translate_ },
   records: { roles: OFFICE, run: records_ },
   purge: { roles: PM, run: purge_, write: true },
@@ -481,13 +496,14 @@ function handle_(e) {
   if (!own_(ACTIONS, req.action)) fail_('bad_request');
   const rule = ACTIONS[req.action];
   if (rule.roles.indexOf(role) < 0) fail_('forbidden');
-  if (auth.principal === 'bridge' && ['whoami', 'pull', 'push', 'records'].indexOf(req.action) < 0) fail_('forbidden');
+  if (auth.principal === 'bridge' && ['whoami', 'pull', 'push', 'records', 'fence'].indexOf(req.action) < 0) fail_('forbidden');
+  if (req.action === 'fence' && (req.v !== 2 || auth.principal !== 'bridge')) fail_('forbidden');
   if (req.v === 2 && ['keys', 'rotate'].indexOf(req.action) >= 0) fail_('forbidden');
   if (req.action !== 'whoami' && !auth.id) fail_('not_ready');
   // The phone is what its secret proves, never what it says: a `dev` in the request is ignored.
   const dev = typeof req.devSecret === 'string' && FORMAT.key.test(req.devSecret) ? digestHex_(req.devSecret).slice(0, 32) : '';
   const ctx = Object.assign({ req: req, dev: dev, now: now, P: P, props: props, cache: scopedCache_(cache, auth.id), memo: {}, state: { rev: Number(P.REV) || 0 } }, auth);
-  if (req.action === 'push' && (bump_(ctx.cache, 'pk:' + auth.principal, now) > PUSH_CAP_KEY || bump_(ctx.cache, 'pd:' + auth.principal + ':' + dev, now) > PUSH_CAP_DEV)) fail_('busy');
+  if ((req.action === 'push' || req.action === 'fence') && (bump_(ctx.cache, 'pk:' + auth.principal, now) > PUSH_CAP_KEY || bump_(ctx.cache, 'pd:' + auth.principal + ':' + dev, now) > PUSH_CAP_DEV)) fail_('busy');
   const run = req.v === 2 && req.action === 'push' ? receiptedPush_ : rule.run;
   const out = rule.write || P.OP_PENDING ? locked_(ctx, req.key, run) : run(ctx);
   if (req.v === 2) { out.jobId = ctx.jobId; out.instanceId = ctx.instanceId; if (out.rev === undefined) out.rev = ctx.state.rev; }
@@ -521,7 +537,7 @@ function nextRev_(ctx) { return ++ctx.state.rev; } // one revision per row writt
 function whoami_(ctx) {
   // dev: the device id this request's devSecret proves ('' without a valid one), so a phone can check it is the one it labels its shifts with
   const out = { role: ctx.role, rev: ctx.state.rev, now: ctx.now, tz: HUB_TZ, version: HUB_VERSION, dev: ctx.dev };
-  if (ctx.principal === 'bridge') { out.role = 'bridge'; out.capabilities = ['pull', 'push', 'records']; }
+  if (ctx.principal === 'bridge') { out.role = 'bridge'; out.capabilities = ['pull', 'push', 'records', 'fence']; }
   else if (ctx.role === 'pm' && ctx.id) out.sheetUrl = sheetUrl_(ctx.id);
   return out;
 }
@@ -535,6 +551,7 @@ TABS.events.idx = { key: TABS.events.key, rev: TABS.events.rev, date: 0 };
 TABS.config.idx = { key: TABS.config.key, rev: TABS.config.rev };
 TABS.deleted.idx = { key: 0, kind: 1, rev: 2 };
 TABS.logs.idx = { key: TABS.logs.key, rev: TABS.logs.rev, date: 0 };
+TABS.notes.idx = { key: TABS.notes.key, rev: TABS.notes.rev, date: 1 };
 
 function indexRanges_(name) { const t = TABS[name]; return Object.keys(t.idx).map(function (n) { return a1_(t, t.idx[n], 2, t.idx[n]); }); }
 function parseIndex_(name, cols) { // [{row, key, rev, date?, crew?, kind?}] in sheet order, from this tab's index columns
@@ -554,16 +571,16 @@ function parseIndex_(name, cols) { // [{row, key, rev, date?, crew?, kind?}] in 
 }
 // A writer always reads the Sheet itself (it must see exact row numbers). A pull primes ctx.memo.ixAll first.
 function readIndex_(ctx, name) {
-  if (name === 'logs' && ctx.P.LOGS_TAB !== '1') return []; // not on the Sheet yet (ensureLogsTab_): no rows, no request
+  if (!hasTab_(ctx, name)) return []; // not on the Sheet yet (ensureTab_): no rows, no request
   if (ctx.memo.ixAll) return ctx.memo.ixAll[name] || [];
   return parseIndex_(name, apiValuesBatchGet_(ctx.id, indexRanges_(name)));
 }
 // ponytail: one pass over every index column per revision, O(rows); archive keeps the Sheet small.
 // Upgrade: keep the index in the cache and patch it from each write.
 function readAllIndex_(ctx) { // every tab's index columns in ONE request: Google allows few requests a minute per user
-  const names = Object.keys(TABS).filter(function (n) { return TABS[n].idx && (n !== 'logs' || ctx.P.LOGS_TAB === '1'); }), ranges = [];
+  const names = Object.keys(TABS).filter(function (n) { return TABS[n].idx && hasTab_(ctx, n); }), ranges = [];
   names.forEach(function (n) { indexRanges_(n).forEach(function (r) { ranges.push(r); }); });
-  const vr = apiValuesBatchGet_(ctx.id, ranges), all = { logs: [] };
+  const vr = apiValuesBatchGet_(ctx.id, ranges), all = { logs: [], notes: [] };
   let at = 0;
   names.forEach(function (n) { const k = Object.keys(TABS[n].idx).length; all[n] = parseIndex_(n, vr.slice(at, at + k)); at += k; });
   return all;
@@ -742,6 +759,8 @@ function reportRow_(r, rev, now, json) {
 }
 function configRow_(c, rev, now, json) { return rowBase_(TABS.config, [c.project, c.site, c.super, c.pm, stampText_(now)], 'config', rev, json); }
 function logRow_(l, rev, now, json) { return rowBase_(TABS.logs, [l.date, l.who, l.crew, l.hours || '', l.body, stampText_(now)], l.uid, rev, json); }
+// When: the phone's stamp (when it was written), else when the hub got it.
+function noteRow_(n, rev, now, json) { return rowBase_(TABS.notes, [stampText_(n.at || now), n.date, n.who, n.crew, n.tid, n.body], n.uid, rev, json); }
 
 // Server-written, append only. label: what the readable Ref cell shows when the ref is not for people (a task's uid).
 function addEvent_(ctx, b, kind, who, text, ref, label) {
@@ -821,6 +840,11 @@ function normShift_(raw, now) {
   ['in', 'out'].forEach(function (k) { if (!FORMAT.time.test(s[k])) s[k] = ''; });
   s.at = clampStamp_(s.at, now);
   s.pmAt = clampStamp_(raw.pmAt, now); // the hub's own merge stamp for PM edits (mergeShift_); phones do not keep it
+  // Clock-out provenance, the hub's own (mergeShift_ recomputes both from the stored row; a phone's copy is never read): punch,
+  // the worker's last own clock-out; pmOuts, the clock-outs a PM typed on this shift. tapped: a push's out is that phone's tap.
+  s.punch = typeof raw.punch === 'string' && FORMAT.time.test(raw.punch) ? raw.punch : '';
+  s.pmOuts = (Array.isArray(raw.pmOuts) ? raw.pmOuts : []).filter(function (t) { return typeof t === 'string' && FORMAT.time.test(t); }).slice(-20);
+  if (raw.tapped === true) s.tapped = true;
   if (isObj_(raw.base)) s.base = normShift_(Object.assign({}, raw.base, { id: s.id, base: null }), now); // a PM push's base: read like a shift, never stored
   return FORMAT.uid.test(s.id) && isDay_(s.date) && s.in ? s : null; // no id, day or clock-in: nothing to log
 }
@@ -835,6 +859,23 @@ function normLog_(raw, now) {
   l.hours = Math.round(Math.min(l.hours, 24) * 100) / 100; // shape_ made it a finite number >= 0 (else 0): a day at most, in hundredths
   l.at = clampStamp_(l.at, now);
   return l;
+}
+// A note's key is its phone and a random part: 'wn-' + 12 characters of the device id + '-' + 10 of [a-z0-9] (26 characters).
+// Its body is a message like the office's (MSG_MAX in live.mjs): trimmed, 1 to 1,000 characters, a longer one clipped.
+const NOTE_UID = /^wn-[0-9a-f]{12}-[a-z0-9]{10}$/, NOTE_MAX = 1000;
+function noteUidPrefix_(dev) { return 'wn-' + dev.slice(0, 12) + '-'; }
+function normNote_(raw, now) {
+  if (!isObj_(raw)) return null;
+  const n = shape_(NOTE, raw);
+  n.body = n.body.trim().slice(0, NOTE_MAX).trim();
+  if (!NOTE_UID.test(n.uid) || !isDay_(n.date) || n.body === '') return null; // an empty message is no message
+  n.who = n.who.trim().slice(0, 60); n.crew = n.crew.trim().slice(0, 60); n.tid = n.tid.trim().slice(0, 20);
+  ['device', 'pid', 'crewId', 'task'].forEach(function (k) { if (!FORMAT.uid.test(n[k])) n[k] = ''; });
+  if (n.lang !== 'en' && n.lang !== 'es') n.lang = '';
+  n.at = clampStamp_(n.at, now);
+  const day = n.at ? stampText_(n.at).slice(0, 10) : today_(); // the day it was written, script time zone
+  if (n.date < addDays_(day, -1) || n.date > addDays_(day, 1)) n.date = day;
+  return n;
 }
 function normReport_(raw, now) {
   if (!isObj_(raw)) return null;
@@ -958,8 +999,13 @@ const noEdits_ = { who: false, in: false, out: false };
 function edited_(s) { return s.edited.who || s.edited.in || s.edited.out; }
 function mergeShift_(ctx, stored, inc) {
   // Own clock taps carry no pmAt; a timesheet edit does, including Undo with every flag clear.
-  const plain = ctx.dev !== '' && inc.device === ctx.dev && !inc.pmAt && !inc.gone && !edited_(inc), base = stored && inc.base;
-  delete inc.base; // read, never stored
+  const plain = ctx.dev !== '' && inc.device === ctx.dev && !inc.pmAt && !inc.gone && !edited_(inc), base = stored && inc.base, tapped = inc.tapped === true;
+  ['base', 'tapped', 'punch', 'pmOuts'].forEach(function (k) { delete inc[k]; }); // read, never stored; provenance is the hub's own
+  // A row from before provenance: an unflagged out is the worker's punch, a flagged one a PM time. An out a PM typed that comes
+  // back from a worker phone without tapped is an older phone repeating what it pulled (an echo), never a punch.
+  let punch = stored ? stored.punch || (stored.edited.out ? '' : stored.out) : '';
+  const pmOuts = stored ? stored.pmOuts.concat(stored.edited.out && stored.out && stored.pmOuts.indexOf(stored.out) < 0 ? [stored.out] : []) : [];
+  const echo = function (t) { return !tapped && pmOuts.indexOf(t) >= 0; };
   const ev = [], line = function (verb, s) { return verb + ' ' + (s.who || 'a worker') + ', ' + s.date; };
   let s;
   if (ctx.role !== 'pm' || plain) { // worker rules
@@ -968,13 +1014,18 @@ function mergeShift_(ctx, stored, inc) {
     if (stored && stored.device !== ctx.dev) return { reason: 'device' };  // a key only speaks for the phone it came from
     if (!stored) { // added even when the PM has entered that day by hand: these are the real punches, for the PM to see and settle
       s = Object.assign({}, inc, { device: ctx.dev, edited: clone_(noEdits_), gone: false, pmAt: 0 }); // the client never sets edited, gone or pmAt for itself
+      punch = s.out;
       ev.push([inc.out ? 'clock.out' : 'clock.in', s.who, s.who + (inc.out ? ' clocked out at ' + t12_(s.out) : ' clocked in at ' + t12_(s.in)) + ', ' + s.date, s.id]);
     } else {
       s = clone_(stored);
       if (!s.gone) { // a removed shift is never revived
         if (!s.edited.who && inc.at > s.at) { s.who = inc.who; s.at = inc.at; } // an older text keeps the newer name
         if (!s.edited.in) s.in = inc.in;
-        if (!s.edited.out && inc.out) s.out = inc.out;                            // and never undoes a clock-out
+        // a phone on a version before provenance closing a shift a PM clear reopened, after a later shift of that phone began (the
+        // clear came while the later one was still on the phone, so the clear's own guard could not see it): refused, or those
+        // hours would count twice. The shift stays a missed clock-out for the PM to type (HUB.md, Worker rules).
+        if (inc.out && !echo(inc.out) && !stored.out && stored.pmOuts.length && laterShift_(ctx, s, inc.out)) return { reason: 'later_shift' };
+        if (inc.out && !echo(inc.out)) { punch = inc.out; if (!s.edited.out) s.out = inc.out; } // never undoes a clock-out; under a PM time the punch is kept for when the PM takes it back
         if (!edited_(s)) ['pid', 'crew', 'crewId', 'tasks'].forEach(function (k) { s[k] = inc[k]; }); // once the PM has touched a shift, these stay
         if (s.out && !stored.out) ev.push(['clock.out', s.who, s.who + ' clocked out at ' + t12_(s.out) + ', ' + s.date, s.id]);
       }
@@ -988,7 +1039,10 @@ function mergeShift_(ctx, stored, inc) {
     if (base) {
       s = clone_(stored);
       ['who', 'in', 'out'].forEach(function (f) {
-        if (f === 'out' && !inc.out && !inc.edited.out && s.out && s.device) return; // a blank unflagged out is never a change to a worker's punch: a PM phone must not erase a clock-out (as without a base, below); a shift the PM added (no device) is the PM's to clear
+        if (f === 'out' && !inc.out && !inc.edited.out && s.device) { // a blank unflagged out is never a change to a worker's punch (a PM phone must not erase a clock-out, as without a base, below)
+          if (base.edited.out && takes_(base, newer, ['', false], [base.out, true], [s.out, s.edited.out])) { s.out = punch; s.edited.out = false; } // but the PM taking back its own time hands the clock-out back to the worker
+          return; // a shift the PM added (no device) is the PM's to clear
+        }
         if (takes_(base, newer, [inc[f], inc.edited[f]], [base[f], base.edited[f]], [s[f], s.edited[f]])) { s[f] = inc[f]; s.edited[f] = inc.edited[f]; }
       });
       ['pid', 'crew', 'crewId', 'tasks', 'date', 'gone'].forEach(function (k) { if (takes_(base, newer, inc[k], base[k], s[k])) s[k] = inc[k]; });
@@ -998,9 +1052,17 @@ function mergeShift_(ctx, stored, inc) {
         s.device = stored.device;                                    // a shift never changes phones
         if (!s.out && !s.edited.out && stored.out) s.out = stored.out; // a PM phone that has not pulled the clock-out yet must not erase it
         if (!s.edited.who && stored.at > inc.at) s.who = stored.who;   // nor undo a newer name from the worker's phone
+        if (stored.edited.out && !s.edited.out) { s.out = stored.out; s.edited.out = true; } // nor take back a PM time it never had
       }
     } else s = clone_(stored);
     if (stored) { s.at = Math.max(stored.at, inc.at); s.pmAt = Math.max(stored.pmAt, inc.pmAt); }
+    if (s.device && s.edited.out && !s.out) { s.out = punch; s.edited.out = false; } // a blank PM time (the PM app clearing the box) is a clear too
+    // A clear that would reopen a shift its phone has clocked in again after: a phone still on an older version clocks out "the
+    // latest open shift" and would close this one after the later shift, counting those hours twice. The PM time stays; the PM
+    // types the time they left instead (HUB.md, PM rules). Whatever cleared it (a PM phone, the PM app bridge) is told so.
+    if (stored && stored.out && s.device && !s.gone && !s.out && laterShift_(ctx, s)) return { reason: 'later_shift' };
+    if (s.device && s.edited.out) { if (s.out && pmOuts.indexOf(s.out) < 0) pmOuts.push(s.out); }
+    else if (s.device && s.out !== punch) { if (s.out && pmOuts.indexOf(s.out) < 0) punch = s.out; else s.out = punch; } // an unflagged out is the worker's (a relayed hours text), never a PM time
     if (!stored && inc.device !== '' && !edited_(inc) && !inc.gone) { // a worker's own punch relayed by the PM phone (an hours text opened there): the worker's event, as from their phone
       ev.push([s.out ? 'clock.out' : 'clock.in', s.who, s.who + (s.out ? ' clocked out at ' + t12_(s.out) : ' clocked in at ' + t12_(s.in)) + ', ' + s.date, s.id]);
     } else {
@@ -1008,7 +1070,18 @@ function mergeShift_(ctx, stored, inc) {
         line(!stored ? 'PM added a shift for' : s.gone && !stored.gone ? 'PM removed a shift for' : 'PM edited', s), s.id]);
     }
   }
+  s.punch = punch; s.pmOuts = pmOuts.slice(-20);
   return { obj: s, events: ev };
+}
+
+// Whether the phone of shift s clocked in again after it, within the next day (a phone counts a shift open for 16 hours).
+// out: only a later shift that began before that clock-out (closing s there would overlap it).
+function laterShift_(ctx, s, out) {
+  if (!ctx.id) return false;
+  const until = addDays_(s.date, 1), start = startedMs_(s);
+  const end = out ? new Date((out < s.in ? until : s.date) + 'T' + out).getTime() : Infinity;
+  const rows = readIndex_(ctx, 'shifts').filter(function (x) { return x.key !== s.id && x.date >= s.date && x.date <= until; });
+  return rows.length > 0 && fetchEntities_(ctx, 'shifts', rows, normShift_, function (o) { return o.id; }, function (o) { const t = startedMs_(o); return o.device === s.device && !o.gone && t > start && t < end; }).length > 0;
 }
 
 // Log. Any key, but only for the phone it came from (ctx.dev): the uid names that phone and the day, so a device can never
@@ -1021,6 +1094,20 @@ function mergeLog_(ctx, stored, inc) {
   if (stored && inc.at < stored.at) return { obj: stored, events: [] };
   const l = Object.assign({}, inc, { device: ctx.dev });
   return { obj: l, events: stored ? [] : [['log.created', l.who || 'a worker', (l.who || 'A worker') + ' started a daily log for ' + l.date, l.uid, l.who]] }; // Ref cell: the name, else the uid
+}
+
+// Note. Any key but the bridge, and only for the phone it came from (ctx.dev): the uid starts with that phone's id, so a device
+// can never write another's message. A note is permanent: a uid the hub already has changes nothing, and the reply carries the
+// stored copy, so a resend after a lost reply is harmless. One event per new note (ref the sheet's uid, Ref cell its short id).
+function mergeNote_(ctx, stored, inc) {
+  if (ctx.principal === 'bridge') return { reason: 'forbidden' };
+  if (ctx.dev === '') return { reason: 'device' };
+  if (inc.uid.indexOf(noteUidPrefix_(ctx.dev)) !== 0) return { reason: 'forbidden' };
+  if (stored) return stored.device === ctx.dev ? { obj: stored, events: [] } : { reason: 'device' };
+  const n = Object.assign({}, inc, { device: ctx.dev });
+  const about = n.task || n.tid ? ' on ' + (n.tid || 'a sheet') : ' about ' + n.date; // a day note has no sheet
+  const text = (n.who || 'A worker') + ' to the office' + about + ': ' + n.body.replace(/\s+/g, ' ').slice(0, 120);
+  return { obj: n, events: [['note.created', n.who || 'a worker', text, n.task, n.tid || (n.task ? '' : n.date)]] };
 }
 
 // A report's superintendent part three ways (supBase), as takes_ and list3_ do a sheet's assignBase: a value this phone
@@ -1097,6 +1184,7 @@ const PUSH_KINDS = {
   shifts: { norm: normShift_, key: function (o) { return o.id; }, rawKey: 'id', merge: mergeShift_, row: shiftRow_, out: 'shift', horizon: 'ARCHIVED_HOURS' },
   reports: { norm: normReport_, key: function (o) { return o.date; }, rawKey: 'date', merge: mergeReport_, row: reportRow_, out: 'report', horizon: 'ARCHIVED_BEFORE' },
   logs: { norm: normLog_, key: function (o) { return o.uid; }, rawKey: 'uid', merge: mergeLog_, row: logRow_, out: 'log', horizon: 'ARCHIVED_BEFORE' },
+  notes: { norm: normNote_, key: function (o) { return o.uid; }, rawKey: 'uid', merge: mergeNote_, row: noteRow_, out: 'note' }, // no archive cut: a note never changes, so a resend brings nothing back
 };
 function echoKey_(K, raw) { // a key is echoed only when it has a safe format; invalid input is never reflected back
   const v = isObj_(raw) ? raw[K.rawKey] : '';
@@ -1179,15 +1267,17 @@ function keepRoster_(n, stored, raw) {
 
 function preparePush_(ctx) {
   const r = ctx.req, b = newBatch_(), out = {};
-  const lists = { tasks: arr_(r.tasks), shifts: arr_(r.shifts), reports: arr_(r.reports), logs: arr_(r.logs), deleted: arr_(r.deleted) };
+  const lists = { tasks: arr_(r.tasks), shifts: arr_(r.shifts), reports: arr_(r.reports), logs: arr_(r.logs), notes: arr_(r.notes), deleted: arr_(r.deleted) };
   Object.keys(lists).forEach(function (k) { if (lists[k].length > MAX_PER_KIND) fail_('too_large'); });
   if (r.config !== undefined && r.config !== null && !isObj_(r.config)) fail_('bad_request');
   out.deleted = deleteMany_(ctx, b, lists.deleted); // first, so a purged key cannot be written back in the same push
   out.tasks = pushKind_(ctx, b, 'tasks', lists.tasks);
   out.shifts = pushKind_(ctx, b, 'shifts', lists.shifts);
   out.reports = pushKind_(ctx, b, 'reports', lists.reports);
-  if (lists.logs.length) ensureLogsTab_(ctx); // before the rows are prepared: a v2 batch needs the tab's sheetId
+  if (lists.logs.length) ensureTab_(ctx, 'logs'); // before the rows are prepared: a v2 batch needs the tab's sheetId
   out.logs = pushKind_(ctx, b, 'logs', lists.logs);
+  if (lists.notes.length) ensureTab_(ctx, 'notes');
+  out.notes = pushKind_(ctx, b, 'notes', lists.notes); // always listed: a phone reads a reply without notes as an older hub
   if (isObj_(r.config)) Object.assign(out, pushConfig_(ctx, b, r.config));
   out.rev = ctx.state.rev;
   return { batch: b, result: out };
@@ -1256,10 +1346,12 @@ function receiptedPush_(ctx) {
   const r = ctx.req;
   if (!OP_ID.test(r.opId || '') || !Number.isSafeInteger(r.expectedRev) || r.expectedRev < -1) fail_('bad_request');
   const n = function (k) { return arr_(r[k]).length; };
+  const fence = r.action === 'fence';
+  if (fence && (r.expectedRev < 0 || r.expectedRev >= Number.MAX_SAFE_INTEGER || !ctx.dev || Object.keys(r).some(function (k) { return ['v', 'jobId', 'key', 'action', 'opId', 'expectedRev', 'devSecret'].indexOf(k) < 0; }))) fail_('bad_request');
   // expectedRev -1 skips the revision check, only for one log and nothing else: the entry is its author's alone and ordered by its own stamp
-  if (r.expectedRev === -1 && (n('logs') !== 1 || n('tasks') || n('shifts') || n('reports') || n('deleted') || r.config !== undefined)) fail_('bad_request');
-  if (ctx.principal === 'bridge') {
-    if (r.config !== undefined || n('deleted')) fail_('forbidden');
+  if (r.expectedRev === -1 && (n('logs') !== 1 || n('tasks') || n('shifts') || n('reports') || n('notes') || n('deleted') || r.config !== undefined)) fail_('bad_request');
+  if (ctx.principal === 'bridge' && !fence) {
+    if (r.config !== undefined || n('deleted') || n('notes')) fail_('forbidden'); // notes are a phone's own words, never relayed
     if (n('tasks') + n('shifts') + n('reports') + n('logs') !== 1) fail_('bad_request');
   }
   const principal = ctx.principal + ':' + ctx.dev, key = digestHex_(principal + ':' + r.opId), payload = clone_(r);
@@ -1267,7 +1359,9 @@ function receiptedPush_(ctx) {
   const digest = digestHex_(stableJson_(payload)), old = operationRow_(ctx, key);
   if (old.key) { if (old.digest !== digest) fail_('conflict'); return finishOperation_(ctx, old); }
   if (r.expectedRev !== -1 && r.expectedRev !== ctx.state.rev) fail_('conflict');
-  const sub = Object.assign({}, ctx, { state: { rev: ctx.state.rev } }), prepared = preparePush_(sub);
+  const sub = Object.assign({}, ctx, { state: { rev: ctx.state.rev } });
+  if (fence) nextRev_(sub); // the recovery receipt records this increment even when no source row exists
+  const prepared = preparePush_(sub);
   const data = { result: prepared.result, hours: prepared.batch.hours, requests: atomicRequests_(sub, prepared.batch, old.row) }, json = JSON.stringify(data);
   if (json.length > OP_CHUNK * (OP_COLS - 3)) fail_('too_large');
   const cells = [key, digest, 'prepared'];
@@ -1401,7 +1495,7 @@ function pullOnce_(ctx, since) {
   const r = ctx.req, role = ctx.role, rev = ctx.state.rev, office = role !== 'crew', pm = role === 'pm';
   const days = Math.min(90, Math.max(1, Math.floor(Number(r.days)) || 14)), today = today_(), cutoff = addDays_(today, -days);
   const crews = Array.isArray(r.crews) ? r.crews.filter(function (c) { return typeof c === 'string'; }).slice(0, 50) : null;
-  const out = { rev: rev, now: ctx.now, tasks: [], shifts: [], reports: [], logs: [], events: [], deleted: [] };
+  const out = { rev: rev, now: ctx.now, tasks: [], shifts: [], reports: [], logs: [], notes: [], events: [], deleted: [] };
   let limit = rev;
   const cut = function (list) { // at most 500 per list; a cut list lowers the rev the phone may claim, so the rest comes next pull
     list.sort(function (a, b) { return a.rev - b.rev; });
@@ -1416,11 +1510,11 @@ function pullOnce_(ctx, since) {
   const taskRows = fresh(readIndex_(ctx, 'tasks'));
   const hoursIdx = readIndex_(ctx, 'shifts'), shiftRows = fresh(hoursIdx);
   const reportRows = office ? fresh(readIndex_(ctx, 'reports')) : [];
-  const logRows = fresh(readIndex_(ctx, 'logs'));
+  const logRows = fresh(readIndex_(ctx, 'logs')), noteRows = readIndex_(ctx, 'notes').filter(function (x) { return x.rev > since && (since > 0 || x.date >= cutoff); }); // a note that arrived late is new to every phone: by revision
   const eventRows = office ? readIndex_(ctx, 'events').filter(function (x) { return x.rev > since; }).slice(since ? -100 : -50) : [];
   const openRows = office ? hoursIdx.filter(function (x) { return x.date >= addDays_(today, -1) && x.date <= today; }) : []; // who is on site now
   const cfgAll = readIndex_(ctx, 'config'), cfgRows = cfgAll.filter(function (x) { return x.rev > since; });
-  prefetch_(ctx, { tasks: taskRows, shifts: shiftRows.concat(openRows), reports: reportRows, logs: logRows, events: eventRows, config: crews ? cfgAll : cfgRows });
+  prefetch_(ctx, { tasks: taskRows, shifts: shiftRows.concat(openRows), reports: reportRows, logs: logRows, notes: noteRows, events: eventRows, config: crews ? cfgAll : cfgRows });
   const cfgOf = function (rows) { return fetchEntities_(ctx, 'config', rows, normConfig_, function () { return 'config'; })[0]; };
 
   const pid = typeof r.pid === 'string' && FORMAT.uid.test(r.pid) ? r.pid : ''; // the person a crew phone is: a sheet that lists them comes too, whatever its crew
@@ -1431,6 +1525,7 @@ function pullOnce_(ctx, since) {
   const mine = function (o) { return pm || (ctx.dev !== '' && o.device === ctx.dev); }; // crew and super see their own phone's hours only
   out.shifts = cut(fetchEntities_(ctx, 'shifts', shiftRows, normShift_, function (o) { return o.id; }, mine));
   out.logs = cut(fetchEntities_(ctx, 'logs', logRows, normLog_, function (o) { return o.uid; }, function (o) { return office || mine(o); })); // the office reads every log; a crew phone its own
+  out.notes = cut(fetchEntities_(ctx, 'notes', noteRows, normNote_, function (o) { return o.uid; }, function (o) { return office || mine(o); })); // and every note the same way
   if (office) {
     out.reports = cut(fetchEntities_(ctx, 'reports', reportRows, normReport_, function (o) { return o.date; }));
     out.events = fetchEntities_(ctx, 'events', eventRows, normEvent_, function (o) { return String(o.rev); });
@@ -1547,11 +1642,12 @@ const RECORD_FIELDS = {
   reports: { norm: normReport_, key: function (o) { return o.date; }, who: function (o) { return o.super + ' ' + o.preparedBy; } },
   events: { norm: normEvent_, key: function (o) { return String(o.rev); }, who: function (o) { return o.who; } },
   logs: { norm: normLog_, key: function (o) { return o.uid; }, who: function (o) { return [o.who, o.pid, o.device].join(' '); } }, // one phone's entries: who = its device id
+  notes: { norm: normNote_, key: function (o) { return o.uid; }, who: function (o) { return [o.who, o.pid, o.device].join(' '); } }, // by name, person id or device id
 };
 function records_(ctx) {
   const r = ctx.req, name = typeof r.kind === 'string' && own_(RECORD_KINDS, r.kind) ? RECORD_KINDS[r.kind] : '';
   if (!name) fail_('bad_request');
-  if (ctx.role === 'super' && ['tasks', 'reports', 'logs'].indexOf(name) < 0) fail_('forbidden'); // hours and the feed are the PM's
+  if (ctx.role === 'super' && ['tasks', 'reports', 'logs', 'notes'].indexOf(name) < 0) fail_('forbidden'); // hours and the feed are the PM's
   if (!isDay_(r.from) || !isDay_(r.to) || r.from > r.to) fail_('bad_request');
   const text = function (v) { return typeof v === 'string' ? v.trim().toLowerCase().slice(0, 100) : ''; };
   const who = text(r.who), q = text(r.q), cursor = Math.floor(Number(r.cursor)) || 0, F = RECORD_FIELDS[name];
@@ -1587,7 +1683,7 @@ function purge_(ctx) {
 function stats_(ctx) {
   let cells = 0;
   apiGet_(ctx.id, 'sheets.properties(title,gridProperties)').sheets.forEach(function (s) { cells += s.properties.gridProperties.rowCount * s.properties.gridProperties.columnCount; });
-  const names = ['tasks', 'shifts', 'reports', 'events'].concat(ctx.P.LOGS_TAB === '1' ? ['logs'] : []);
+  const names = ['tasks', 'shifts', 'reports', 'events', 'logs', 'notes'].filter(function (n) { return hasTab_(ctx, n); }); // a late tab once it is there
   const vr = apiValuesBatchGet_(ctx.id, names.map(function (n) { return a1_(TABS[n], TABS[n].key, 2, TABS[n].key); })), rows = {};
   names.forEach(function (n, i) { rows[n] = (vr[i].values || []).filter(function (r) { return r.length && r[0] !== ''; }).length; });
   return { rows: rows, cells: cells, cellLimit: CELL_LIMIT, sheetUrl: sheetUrl_(ctx.id) };
@@ -1612,12 +1708,13 @@ function archive_(ctx) {
   if (!isDay_(before) || before > today_()) fail_('bad_request');
   const hoursCut = monday_(before), cuts = { tasks: before, shifts: hoursCut, reports: before, events: before, logs: before };
   const moved = { tasks: 0, shifts: 0, reports: 0, events: 0, logs: 0 }, plan = {};
+  if (hasTab_(ctx, 'notes')) { cuts.notes = before; moved.notes = 0; } // notes once the Sheet has its Messages tab, with the logs' cut
   Object.keys(cuts).forEach(function (n) {
     plan[n] = readIndex_(ctx, n).filter(function (x) { return x.date && x.date < cuts[n]; }).map(function (x) { return x.row; });
     moved[n] = plan[n].length;
   });
-  if (!moved.tasks && !moved.shifts && !moved.reports && !moved.events && !moved.logs) return { sheetUrl: '', moved: moved };
-  const names = ['tasks', 'shifts', 'weekly', 'reports', 'events', 'logs'];
+  if (!moved.tasks && !moved.shifts && !moved.reports && !moved.events && !moved.logs && !moved.notes) return { sheetUrl: '', moved: moved };
+  const names = ['tasks', 'shifts', 'weekly', 'reports', 'events', 'logs'].concat(cuts.notes ? ['notes'] : []);
   const aid = apiCreate_(sheetSpec_(names, 'Schwab field hub archive, before ' + before)).spreadsheetId;
   formatTabs_({ memo: {} }, aid, names);
   let hours = [];
@@ -1641,13 +1738,14 @@ function archive_(ctx) {
 function finishArchive_(ctx, pending) {
   const before = pending.before, moved = pending.moved, hoursCut = pending.hoursCut;
   const cuts = { tasks: before, shifts: hoursCut, reports: before, events: before, logs: before };
+  if (own_(moved, 'notes')) cuts.notes = before; // only what the archive copied: a receipt from before notes leaves them
   const b = newBatch_();
   b.hours = moved.shifts > 0;
   Object.keys(cuts).forEach(function (n) {
     readIndex_(ctx, n).filter(function (x) { return x.date && x.date < cuts[n]; }).forEach(function (x) { delRow_(b, n, x.row); });
   });
   pruneTombstones_(ctx, b);
-  addEvent_(Object.assign({}, ctx, { role: 'pm' }), b, 'archive', 'PM', 'Archived ' + (moved.tasks + moved.shifts + moved.reports + moved.events + (moved.logs || 0)) + ' rows older than ' + before, before); // a receipt from before logs has none
+  addEvent_(Object.assign({}, ctx, { role: 'pm' }), b, 'archive', 'PM', 'Archived ' + (moved.tasks + moved.shifts + moved.reports + moved.events + (moved.logs || 0) + (moved.notes || 0)) + ' rows older than ' + before, before); // a receipt from before logs (or notes) has none
   flush_(ctx, b);
   if (moved.shifts) rewriteWeekly_(ctx);
   const props = ctx.props || propertyStore_(''), url = pending.url, list = JSON.parse(ctx.P.ARCHIVES || '[]');

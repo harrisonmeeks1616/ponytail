@@ -16,7 +16,7 @@
 // and crews by their ids in the shared settings, and task sheets by uid. Short task ids are labels that two office phones
 // working offline can both hand out.
 
-import { KEYS as APP_KEYS, jobScope, HUB_FIELDS, load, save, shape, L, normTask, normShift, normReport, normSettings, mergeAnswers, pack, linkTo, PIN_FORMAT, ensureDevice, nextId, nameKey, findPerson, personById, crewById } from './shared.mjs';
+import { KEYS as APP_KEYS, jobScope, HUB_FIELDS, load, save, shape, L, getLang, normTask, normShift, normReport, normNote, NOTE_TPL, notesLock, keysWith, drop, normSettings, mergeAnswers, pack, linkTo, PIN_FORMAT, ensureDevice, nextId, nameKey, findPerson, personById, crewById, syncCanonical as canon, syncHash as hs, shiftPart } from './shared.mjs';
 
 const ROLES = ['crew', 'super', 'pm'];
 const URL_OK = /^https:\/\/script\.google\.com\/(?:a\/macros\/[\w.-]+|macros)\/s\/[\w-]+\/exec$/;
@@ -50,9 +50,14 @@ const pmPart = r => ({ pmReview: r.pmReview, pmLang: r.pmLang, answers: r.decisi
 const sBase = r => { const { pmReview, pmLang, pmAt, updatedAt, filedAt, decisions, supBase, pmBase, ...rest } = r; return { ...rest, decisions: decisions.map(d => ({ q: d.q, rec: d.rec, by: d.by })) }; };
 const pBase = r => ({ pmReview: r.pmReview, pmLang: r.pmLang, decisions: r.decisions.map(d => ({ q: d.q, pm: d.pm, pmNote: d.pmNote })) }); // the PM part the same way (pmBase): two PM devices
 const RPARTS = [['sup', supPart, 'updatedAt', sBase], ['pm', pmPart, 'pmAt', pBase]];
-const PARTS = { t: TPARTS, r: RPARTS, g: [['v', s => cfgPart(s), 'at', s => cfgPart(s)]] };
-// A worker's shift is the phone's own words (never edited or gone); a PM-ruled one is everything.
-const shiftPart = (s, full) => [s.id, s.device, s.who, s.pid, s.date, s.in, s.out, s.crew, s.crewId, s.tasks, ...(full ? [s.edited.who, s.edited.in, s.edited.out, s.gone] : [])];
+// A note goes up whole and once (HUB.md, Note): everything but this phone's own seen mark.
+const NOTE_WIRE = Object.keys(NOTE_TPL).filter(k => k !== 'seen');
+const notePart = n => pick(n, NOTE_WIRE);
+const PARTS = { t: TPARTS, r: RPARTS, g: [['v', s => cfgPart(s), 'at', s => cfgPart(s)]], n: [['v', notePart, 'at']] };
+// The office part a crew reads as its work (HUB.md, "Updates reach crew phones by themselves"): a change to any of it after the
+// crew phone had the sheet marks it updated there. The office's review, follow-up and message are news of their own (news: true).
+const WORK_KEYS = ['date', 'floor', 'area', 'crew', 'members', 'scope', 'refs', 'est', 'allot', 'pStart', 'pStop', 'checkIn'];
+const workOf = t => [...WORK_KEYS.map(k => t[k]), t.items.map(i => [i.id, i.text]), t.checks.map(i => [i.id, i.text])];
 // The roster always goes normalized, every crew and person with an id. A tab still on an older version saves settings with
 // no people; pushing that would empty the roster on every phone. A config with member lists and no people was written by
 // such a phone, so normSettings takes the people back from this phone's own roster key (shared.mjs KEYS.roster), ids and all.
@@ -67,16 +72,6 @@ const isObj = x => !!x && typeof x === 'object' && !Array.isArray(x);
 const obj = x => (isObj(x) ? x : {});
 const dict = x => Object.assign(Object.create(null), obj(x)); // keys come from the hub: "__proto__" must be an ordinary key
 const pick = (o, ks) => { const r = {}; for (const k of ks) r[k] = o[k]; return r; };
-const canon = x => (Array.isArray(x) ? `[${x.map(canon)}]` : x && typeof x === 'object' ? `{${Object.keys(x).sort().map(k => JSON.stringify(k) + ':' + canon(x[k]))}}` : JSON.stringify(x));
-// ponytail: a 53-bit string hash (cyrb53) tells "changed since the hub last had it"; a collision (about 1 in 9e15) would only delay one push until its next edit.
-const hs = x => {
-  const s = canon(x);
-  let a = 0xdeadbeef, b = 0x41c6ce57;
-  for (let i = 0; i < s.length; i++) { const c = s.charCodeAt(i); a = Math.imul(a ^ c, 2654435761); b = Math.imul(b ^ c, 1597334677); }
-  a = Math.imul(a ^ (a >>> 16), 2246822507) ^ Math.imul(b ^ (b >>> 13), 3266489909);
-  b = Math.imul(b ^ (b >>> 16), 2246822507) ^ Math.imul(a ^ (a >>> 13), 3266489909);
-  return (4294967296 * (2097151 & b) + (a >>> 0)).toString(36);
-};
 const pad = n => String(n).padStart(2, '0');
 const dayOf = ms => { const d = new Date(ms); return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`; };
 const cutoff = (ms, days) => { const d = new Date(ms); d.setDate(d.getDate() - days); return dayOf(d.getTime()); };
@@ -95,10 +90,10 @@ const pmSide = s => [s.who, s.date, s.in, s.out, s.edited, s.gone];
 export function makeSync(o = {}) {
   const scope = o.scope || jobScope; // captured once; never reads a mutable active-job selector
   const KEYS = Object.fromEntries(Object.keys(APP_KEYS).map(k => [k, scope.key('schwab.' + k)]));
-  const ST = scope.key('schwab.hubSync'), TR = scope.key('schwab.tr'), PENDING = scope.key('schwab.hubPending'), INSTANCE = scope.key('schwab.hubInstance');
+  const ST = scope.key('schwab.hubSync'), TR = scope.key('schwab.tr'), PENDING = scope.key('schwab.hubPending'), INSTANCE = scope.key('schwab.hubInstance'), RESTORED = scope.key('schwab.restoredAt');
   const fetchImpl = o.fetchImpl || ((...a) => globalThis.fetch(...a));
   const now = o.now || Date.now;
-  const store = o.storage || { get: load, set: save };
+  const store = o.storage || { get: load, set: (k, v) => save(k, v, { merged: true }), keys: keysWith, del: drop }; // read and written in one step: never stale (shared.mjs save)
   const norm = { task: normTask, shift: normShift, report: normReport, ...o.norm };
   const tm = o.timers || { set: (f, ms) => setTimeout(f, ms), clear: id => clearTimeout(id) };
   const hidden = o.hidden || (() => typeof document !== 'undefined' && document.hidden === true);
@@ -131,17 +126,67 @@ export function makeSync(o = {}) {
   function person(s) {
     const R = { crews: arr(s.crews).filter(isObj), people: arr(s.people).filter(isObj) }, joined = str(s.hubCrew, 60), byId = personById(R, s.workerId);
     const me = byId && nameKey(byId.name) === nameKey(s.worker) ? byId : findPerson(R, s.worker, R.crews.find(c => c.name === joined)?.id);
-    return { crew: str(crewById(R, me?.crewId)?.name, 60) || joined, pid: str(me?.id, 40) };
+    const mine = crewById(R, me?.crewId), c = mine || R.crews.find(x => x.name === joined); // c: the crew's id, for a note (addNote)
+    return { crew: str(mine?.name, 60) || joined, pid: str(me?.id, 40), crewId: str(c?.id, 40) };
   }
   const sigOf = c => [c.role, c.crew, winDays(c.role), ...(c.pid ? [c.pid] : [])].join('|'); // a new one: the next pull is a full one
   function loadState() {
     // url and away: the hub this phone was disconnected from, and true until the first scan after (disconnect)
     const s = obj(store.get(ST, null)), st = { rev: num(s.rev), sig: String(s.sig || ''), skew: num(s.skew), ok: num(s.ok), url: String(s.url || ''), away: s.away === true };
     for (const k of ['t', 'h', 'm', 'r', 'g', 'told', 'del', 'held']) st[k] = dict(s[k]); // held: the hub's copy of a sheet or report deleted here while its Undo is offered (mergePull, release)
+    st.n = {}; // notes by uid: { v: { s, x, old, a, t } }, read from their fact keys (notes storage, below)
+    for (const [uid, fs] of Object.entries(readFacts())) { const { seen, ...v } = fs; if (Object.keys(v).length) st.n[uid] = { v }; }
+    factsRead.set(st, canon(st.n));
     return st;
   }
   let meta = null, pushRev = null; // push head is separate from the pull cursor: a push must not skip unseen remote changes
-  const saveState = st => { const ok = store.set(ST, st); if (ok) meta = pick(st, ['rev', 'ok', 'skew']); return ok; };
+  // A state writes only the note facts it added (putFacts), never one it merely read: a round's clock offset, a disconnect or a
+  // texted sheet saving its state writes none.
+  const factsRead = new WeakMap(); // state -> its note facts as read
+  const saveState = st => {
+    const { n, ...rest } = st, ok = (canon(n) === factsRead.get(st) || putFacts(n)) && store.set(ST, rest);
+    if (ok) { meta = pick(st, ['rev', 'ok', 'skew']); factsRead.set(st, canon(n)); }
+    return ok;
+  };
+
+  // ---------- notes storage ----------
+  // One key per note and one per fact about it, never a list. Each tab reads its own copy of localStorage and other tabs' writes
+  // reach it later, so a key that two tabs both read, change and write back can lose one of their writes, under Web Locks too
+  // (real Chrome, 2026-10-28: a counter updated 300 times from each of two tabs under navigator.locks ended at 595; Codex C2).
+  // A note's key is written once: by the phone that wrote it, or by the pull that brought it (the same words: a note never
+  // changes). A fact is a key of its own that one value fills and nothing reads back to change: s the hub kept it, x it refused it,
+  // old an older hub answered, a it went up at least once, t it went by text, seen this phone showed it. s outranks x and old.
+  // So no tab can undo another's write, with Web Locks or without. A note leaves with all its keys (a purge, the window).
+  const NOTE = scope.key('schwab.note/'), FACT = scope.key('schwab.noteFact/'), FACTS = ['s', 'x', 'old', 'a', 't', 'seen'];
+  const keysOf = p => (store.keys ? store.keys(p) : []);
+  const del = k => (store.del ? store.del(k) : store.set(k, null));
+  function readFacts() {
+    const out = {};
+    for (const k of keysOf(FACT)) { const [uid, fact] = k.slice(FACT.length).split('/'), v = store.get(k, null); if (FACTS.includes(fact) && v !== null) ent(out, uid)[fact] = v; }
+    return out;
+  }
+  // The facts of a state that are not stored yet, for notes still on this phone; false when the phone would not save.
+  function putFacts(n) {
+    const was = readFacts();
+    for (const [uid, rec] of Object.entries(obj(n))) {
+      if (store.get(NOTE + uid, null) === null) continue;
+      for (const [fact, v] of Object.entries(obj(obj(rec).v))) if (FACTS.includes(fact) && v !== undefined && v !== null && was[uid]?.[fact] !== v && !store.set(FACT + uid + '/' + fact, v)) return false;
+    }
+    return true;
+  }
+  const rawNotes = () => keysOf(NOTE).map(k => store.get(k, null)).filter(isObj);
+  function readNotes() { const fs = readFacts(); return rawNotes().map(n => normNote(fs[n.uid]?.seen ? { ...n, seen: fs[n.uid].seen } : n)).filter(Boolean); }
+  // add: notes to have (one already stored stays as it is); drop: uids that leave, with every fact; see: uids this phone showed now.
+  function putNotes({ add = [], drop = [], see = [] } = {}) {
+    for (const n of add) if (store.get(NOTE + n.uid, null) === null && !store.set(NOTE + n.uid, n)) return false;
+    for (const uid of drop) { del(NOTE + uid); for (const fact of FACTS) del(FACT + uid + '/' + fact); }
+    const ts = now();
+    for (const uid of see) if (!store.set(FACT + uid + '/seen', ts)) return false;
+    return true;
+  }
+  // Web Locks (where there are some) still order this job's tabs around one note and a restore; nothing depends on them.
+  const locks = o.locks !== undefined ? o.locks : o.storage ? null : globalThis.navigator?.locks || null;
+  const withNotes = async fn => (locks?.request ? locks.request(notesLock(NOTE), () => fn()) : fn()); // never nested: fn is synchronous
   const inT = raw => {
     const t = norm.task(raw);
     for (const l of ['items', 'checks']) { const seen = new Set(); t[l] = t[l].filter(i => i.id && !seen.has(i.id) && seen.add(i.id)); }
@@ -152,11 +197,13 @@ export function makeSync(o = {}) {
   function readLocal(c) {
     const rawR = c.role === 'crew' ? {} : obj(store.get(KEYS.reports, {})), reports = [], other = {}, rawT = arr(store.get(KEYS.tasks, []));
     for (const [d, r] of Object.entries(rawR)) { const n = inR(r, d); if (n) reports.push(n); else other[d] = r; }
+    const notes = readNotes();
     return {
       tasks: rawT.map(inT).filter(t => t.uid),
       older: new Set(rawT.filter(x => isObj(x) && !('assignAt' in x)).map(x => x.uid)), // sheets a tab of a version before the hub saved
       hours: arr(store.get(KEYS.hours, [])).map(inS).filter(Boolean),
       crewH: c.role === 'pm' ? arr(store.get(KEYS.crewHours, [])).map(inS).filter(Boolean) : [], // only the PM's phone keeps (and pushes) the timesheet
+      notes, noteUids: new Set(notes.map(n => n.uid)), // this phone's own, and on an office phone every one pulled; noteUids: as read (flush drops only what left)
       reports, other,
     };
   }
@@ -282,7 +329,7 @@ export function makeSync(o = {}) {
 
   // Returns the pushable items; stamps new edits and forgets records of things no longer here. Pure bookkeeping: no network, no store writes.
   function scan(st, c, lc) {
-    const items = [], seen = { t: new Set(), h: new Set(), m: new Set(), r: new Set() };
+    const items = [], seen = { t: new Set(), h: new Set(), m: new Set(), r: new Set(), n: new Set() };
     const tw = c.role === 'crew' ? ['crew'] : ['assign', 'crew'], rw = c.role === 'pm' ? ['sup', 'pm'] : c.role === 'super' ? ['sup'] : [];
     const parts = (k, key, doc, defs, writes, edited, wire) => {
       const rec = ent(st[k], key), sent = {};
@@ -318,12 +365,23 @@ export function makeSync(o = {}) {
         else if (pr.s === h) delete pr.p;
         else if (pr.x !== h) {
           if (pr.p !== h) Object.assign(pr, { p: h, at: Math.max(skewed(st), num(pr.at) + 1) });
-          items.push({ k, key: s.id, sent: { v: { h, at: pr.at } }, wire: { ...wireShift(s, full, pr.at), ...(full && { pmAt: pr.at, base: pr.b }) } }); // the PM's edit stamp and base (HUB.md, PM rules)
+          const own = !full && !s.edited.out ? s.out : ''; // a worker's clock sends its own clock-out only, never a PM time it pulled (HUB.md, Worker rules)
+          items.push({ k, key: s.id, sent: { v: { h, at: pr.at } }, wire: { ...wireShift(s, full, pr.at), ...(full ? { pmAt: pr.at, base: pr.b } : { out: own, ...(own && { tapped: true }) }) } }); // the PM's edit stamp and base (HUB.md, PM rules)
         }
       }
     };
     shifts('h', lc.hours, s => c.dev && s.device === c.dev, false);
     shifts('m', lc.crewH, (s, pr) => !(c.dev && s.device === c.dev) || s.gone || Object.values(s.edited).some(Boolean) || (pr.b && !sameDoc(pmSide(pr.b), pmSide(s))), true); // own punches go from the clock; corrections made in Crew hours go from its hub base
+    // This phone's own notes go up until the hub answers for them (ack): kept (s) or refused (x), never again, since a note
+    // never changes. One an older hub without notes answered (old) is asked again every 10 minutes, not every round.
+    let later = 0; // those: not sent this round, still not on the hub (the dot counts them)
+    for (const n of lc.notes) {
+      const pr = ent(ent(st.n, n.uid), 'v');
+      seen.n.add(n.uid);
+      if (!c.dev || n.device !== c.dev || pr.s !== undefined || pr.x !== undefined) continue;
+      if (pr.old && now() - pr.old < HALT_MS) { later++; continue; }
+      items.push({ k: 'n', key: n.uid, sent: { v: { h: hs(notePart(n)), at: n.at } }, wire: { ...notePart(n), ...(pr.t && { texted: true }) } }); // texted: it went by text first (no hub then), so it is not new to the office
+    }
     const pr = ent(ent(st.g, 'c'), 'v'), cp = cfgPart(cfg()), h = hs(cp);
     if (c.role === 'crew') { /* never sends settings: left as the hub last had them, as an office part is above */ } else if (pr.s === h) { delete pr.p; delete pr.at; } else if (pr.x !== h) {
       if (pr.p !== h) Object.assign(pr, { p: h, at: Math.max(skewed(st), num(pr.v) + 1, num(pr.at) + 1) }); // the hub orders two office phones' settings by this stamp
@@ -331,7 +389,7 @@ export function makeSync(o = {}) {
     }
     for (const k of Object.keys(seen)) for (const key of Object.keys(st[k])) if (!seen[k].has(key)) delete st[k][key];
     st.away = false; // every change made while disconnected now has its stamp
-    pending = items.length;
+    pending = items.length + later;
     return items;
   }
 
@@ -346,27 +404,43 @@ export function makeSync(o = {}) {
     return cur1.length ? [...out, cur1] : out;
   };
   const wireBody = batch => ({ tasks: batch.filter(i => i.k === 't').map(i => i.wire), shifts: batch.filter(i => i.k === 'h' || i.k === 'm').map(i => i.wire),
-    reports: batch.filter(i => i.k === 'r').map(i => i.wire), deleted: [], ...(batch.some(i => i.k === 'g') && { config: batch.find(i => i.k === 'g').wire }) });
+    reports: batch.filter(i => i.k === 'r').map(i => i.wire), deleted: [], ...(batch.some(i => i.k === 'g') && { config: batch.find(i => i.k === 'g').wire }),
+    ...(batch.some(i => i.k === 'n') && { notes: batch.filter(i => i.k === 'n').map(i => i.wire) }) }); // notes only when there are some: a reply's missing list then means an older hub
+  // v18 replays the exact body, but its ack cannot read a future kind ('n'). An empty config ack changes no fields and lets even
+  // a note-only replay finish its journal. Keep every actual item for this build; local notes and immutable uids recover receipts
+  // when this build returns. This is local journal metadata: no configuration is added to the wire body.
+  const rollbackAttempt = attempt => attempt.batch.some(it => it.k === 'n') ? { ...attempt, modernBatch: attempt.batch,
+    batch: [...attempt.batch.filter(it => it.k !== 'n'), { k: 'g', key: 'c', sent: {} }] } : attempt;
   // One request; a request the hub calls malformed or too big is halved until the one bad entity is alone and can be set aside.
-  async function sendBatch(batch, ep, out) {
+  // sent: { restored } the restore marker when the batch was read (pushPhase); sendBatch sets the one of the batch that actually
+  // went (a saved attempt carries its own) and its opId, so its acknowledgments are judged against the stores it was read from.
+  async function sendBatch(batch, ep, out, sent = {}) {
     try {
       let body = wireBody(batch);
       if (scope.id) {
         const c = hub(), saved = store.get(PENDING, null);
         if (saved && (saved.url !== c.url || saved.credential !== hs(c.key) || saved.device !== hs(c.secret))) throw err('pending_connection');
-        if (saved) { batch = saved.batch; body = saved.body; }
+        if (saved) {
+          batch = saved.modernBatch || saved.batch; body = saved.body; sent.restored = saved.restored; // older attempts have no restore marker
+          const compatible = rollbackAttempt(saved); // an existing pre-envelope attempt must also survive a lost replay reply and rollback
+          if (compatible !== saved && !store.set(PENDING, compatible)) throw err('space');
+        }
         else {
           body = { ...body, opId: crypto.randomUUID().replace(/-/g, ''), expectedRev: pushRev ?? loadState().rev };
-          if (!store.set(PENDING, { url: c.url, credential: hs(c.key), device: hs(c.secret), body, batch })) throw err('space');
+          if (!store.set(PENDING, rollbackAttempt({ url: c.url, credential: hs(c.key), device: hs(c.secret), body, batch, ...(sent.restored !== undefined && { restored: sent.restored }) }))) throw err('space');
         }
+        sent.opId = body.opId;
       }
       const rep = await call('push', body);
       if (ep !== epoch) throw err('aborted');
-      const by = new Map([...arr(rep.tasks).map(x => ['t', x]), ...arr(rep.shifts).map(x => ['s', x]), ...arr(rep.reports).map(x => ['r', x])].map(([k, x]) => [k + ':' + obj(x).key, obj(x)]));
-      const lists = { t: rep.tasks, s: rep.shifts, r: rep.reports };
+      const by = new Map([...arr(rep.tasks).map(x => ['t', x]), ...arr(rep.shifts).map(x => ['s', x]), ...arr(rep.reports).map(x => ['r', x]), ...arr(rep.notes).map(x => ['n', x])].map(([k, x]) => [k + ':' + obj(x).key, obj(x)]));
+      const lists = { t: rep.tasks, s: rep.shifts, r: rep.reports, n: rep.notes };
+      // a note the hub could not read at all comes back with no key, by its place in the request's notes (i): refused, never sent forever
+      const noteAt = new Map(arr(rep.notes).filter(x => obj(x).key === '' && Number.isInteger(obj(x).i)).map(x => [x.i, x])), nIdx = new Map(batch.filter(i => i.k === 'n').map((it, i) => [it, i]));
       for (const it of batch) { // a kind the hub did not list at all is taken as accepted (its ok:true); one it listed without this entity stays unsynced
         const kind = it.k === 'h' || it.k === 'm' ? 's' : it.k;
-        out.push([it, kind === 'g' ? { status: rep.configStatus === 'rejected' ? 'rejected' : 'ok', reason: rep.configReason, config: rep.config } : !Array.isArray(lists[kind]) ? { status: 'ok' } : by.get(kind + ':' + it.key) || null]);
+        // but notes the hub did not list at all were never kept: an older hub that does not know them (HUB.md, Note)
+        out.push([it, kind === 'g' ? { status: rep.configStatus === 'rejected' ? 'rejected' : 'ok', reason: rep.configReason, config: rep.config } : !Array.isArray(lists[kind]) ? { status: kind === 'n' ? 'old-hub' : 'ok' } : by.get(kind + ':' + it.key) || (kind === 'n' && noteAt.get(nIdx.get(it))) || null]);
       }
     } catch (e) {
       if (scope.id && ['bad_request', 'too_large', 'conflict', 'forbidden'].includes(e.code) && !store.set(PENDING, null)) throw err('space');
@@ -379,19 +453,45 @@ export function makeSync(o = {}) {
       await sendBatch(batch.slice(mid), ep, out);
     }
   }
-  function applyAcks(c, ep, done) {
+  // A restore went through since the batch was read (sent.restored, its saved attempt's on a replay): its acknowledgments describe
+  // the stores the restore replaced, so none is recorded. The hub has answered that attempt, so it is over and leaves too: replayed
+  // later, its acknowledgments would land on the restored record (RC4 review: the backup's older copy would then go up as an edit
+  // over the hub's newer one). What the hub keeps comes back with the next pull, merged with the restored records.
+  const overtaken = sent => sent.restored !== undefined && store.get(RESTORED, 0) !== sent.restored;
+  async function applyAcks(c, ep, done, sent = {}) {
     if (ep !== epoch || !done.length) return 0;
-    const st = loadState(), back = { more: true, tasks: [], reports: [] };
+    return withNotes(() => {
+      if (ep !== epoch) return 0;
+      if (!overtaken(sent)) return ackAll(c, done);
+      if (scope.id && sent.opId && store.get(PENDING, null)?.body?.opId === sent.opId && !store.set(PENDING, null)) throw err('space');
+      return 0;
+    });
+  }
+  function ackAll(c, done) {
+    const st = loadState(), back = { more: true, tasks: [], reports: [], shifts: [] };
     let fresh = 0;
     for (const [it, res] of done) fresh += ack(st, it, res, back);
-    if (back.tasks.length || back.reports.length || back.config) applyPull(c, back, st.sig, st);
+    if (back.tasks.length || back.reports.length || back.shifts.length || back.config) applyPull(c, back, st.sig, st);
     else if (!saveState(st)) throw err('space');
     if (scope.id && !store.set(PENDING, null)) throw err('space');
+    if (back.noteAck) notify(new Set(['notes'])); // "Kept on the hub" shows without waiting for some other redraw (no store changed)
     return fresh;
   }
   function ack(st, it, res, back) { // back: the hub's merged copies that differ from what went up (pushPhase merges them)
     const rec = ent(st[it.k], it.key);
     if (!res) return 0;
+    if (it.k === 'n') { // a note: kept by the hub (never sent again), refused (said once, kept here), or an older hub (kept here, asked again later)
+      const pr = ent(rec, 'v'), { h } = it.sent.v, tk = `n:${it.key}:v`;
+      if (back) back.noteAck = true; // where it stands changed: the screen showing it redraws (applyAcks)
+      if (res.status === 'old-hub') pr.old = now();
+      else if (res.status === 'ok') { pr.s = h; delete pr.old; } // the reply's stored copy is the same note: the one here never changes
+      else if (res.status === 'rejected') {
+        pr.x = h;
+        if (res.reason === 'deleted') return 0; // the PM purged it (a resend after a lost reply): its tombstone takes it off this phone, nothing to say
+        if (st.told[tk] !== h) { st.told[tk] = h; for (const k of Object.keys(st.told).slice(0, -200)) delete st.told[k]; return 1; }
+      }
+      return 0;
+    }
     // archived: the hub keeps it in its archive sheet, as good as synced for a copy; a part changed since the hub's copy (its base) is a
     // real edit that will never land, so it is refused like any other: kept here, said once, never pruned. A copy with no base (a
     // restored phone) is not an edit the hub lost.
@@ -403,6 +503,8 @@ export function makeSync(o = {}) {
       return fresh;
     }
     if (res.status !== 'ok' && res.reason !== 'archived') return 0; // archived: the hub already keeps it in its archive sheet, which is as good as synced
+    // a timesheet correction the hub merged with another PM device's newer one: its stored copy comes back as a pull's (HUB.md, Merging)
+    if (it.k === 'm' && res.status === 'ok' && isObj(res.shift) && inS(res.shift) && hs(shiftPart(inS(res.shift), true)) !== it.sent.v.h) back.shifts.push(res.shift);
     const inc = it.k === 't' && res.task ? inT(res.task) : it.k === 'r' && res.report ? inR(res.report, it.key) : it.k === 'g' && isObj(res.config) ? inC(res.config) : null;
     if (inc && Object.keys(it.sent).some(p => hs(PARTS[it.k].find(x => x[0] === p)[1](inc)) !== it.sent[p].h)) { if (it.k === 'g') back.config = res.config; else back[it.k === 't' ? 'tasks' : 'reports'].push(it.k === 't' ? res.task : res.report); }
     for (const p in it.sent) {
@@ -419,6 +521,7 @@ export function makeSync(o = {}) {
   }
   async function pushPhase(c, ep, hold = false) {
     let st = loadState(), fresh = 0, held = false;
+    const restored = store.get(RESTORED, 0);
     const items = scan(st, c, readLocal(c)), send = [];
     for (const it of items) { // a single entity over the hub's cap can never be accepted
       if (it.k === 't' && !it.sent.assign && st.t[it.key]?.assign?.v === undefined) continue; // a sheet the hub never had goes with its office part, never as a blank one (a crew phone: a texted sheet the hub never sent stays counted as not sent)
@@ -426,18 +529,21 @@ export function makeSync(o = {}) {
       it.len = JSON.stringify(it.wire).length + 1;
       if (it.len > CAP.entity) { for (const p in it.sent) delete it.sent[p].b; for (const k of ['assignBase', 'crewBase', 'base', 'supBase', 'pmBase']) if (it.wire[k]) delete it.wire[k]; it.len = JSON.stringify(it.wire).length + 1; } // too big with its bases: the whole part goes by its stamp, as before (a supBase of null is no copy and stays)
       if (it.len > CAP.entity) fresh += ack(st, it, { status: 'rejected' }); else send.push(it);
+      if (it.k === 'n') ent(ent(st.n, it.key), 'v').a = 1; // it may be on a hub from now on (a reply can be lost): a restore never gives it a new uid (shared.mjs)
     }
     // nothing goes up before its stamp is saved: sent again later, it would be stamped again (D4S-01)
     // ponytail: a shift's or the settings' stamp is still the time this phone noticed the change; their own edit time would close that too.
-    if (!saveState(st)) throw err('space');
+    // st was read before the lock: a restore that went through meanwhile wrote its backup's record, and saving st over it would leave
+    // the replaced stores' record beside the restored ones (their older copies would go up as edits, RW7's harm). Start over instead.
+    await withNotes(() => { if (store.get(RESTORED, 0) !== restored) throw err('aborted'); if (!saveState(st)) throw err('space'); }); // the notes' sent marks (a) with it
     try {
       for (const batch of chunks(send)) {
-        const done = [];
-        try { await sendBatch(batch, ep, done); } finally { // what the hub did accept is recorded even if a later request fails
+        const done = [], sent = { restored };
+        try { await sendBatch(batch, ep, done, sent); } finally { // what the hub did accept is recorded even if a later request fails
           // the hub's copies that differ from what went up are merged as a pull's, saved before their acks are (applyPull)
-          fresh += applyAcks(c, ep, done);
+          fresh += await applyAcks(c, ep, done, sent);
           // A record the PM deleted: the hub says so here, and its tombstone may never come in a pull (this phone can be past it), so it leaves now.
-          const gone = ep === epoch ? done.filter(([, res]) => res?.reason === 'deleted') : [];
+          const gone = ep === epoch && !overtaken(sent) ? done.filter(([it, res]) => res?.reason === 'deleted' && it.k !== 'n') : []; // a note is never taken off the phone by a refusal
           if (gone.length) try { const s2 = loadState(), lc = readLocal(c), dirty = {}, kinds = new Set(); for (const [it] of gone) dropKey(lc, s2, dirty, { t: 'task', r: 'report' }[it.k] || 'shift', it.key); flush(lc, dirty, kinds); saveState(s2); notify(kinds); } catch { /* a full phone: it stays here, refused */ }
         }
       }
@@ -505,11 +611,14 @@ export function makeSync(o = {}) {
   }
   // Keep my unsynced words where I own them. full: the PM's timesheet (my flags decide, and so does my removal or its Undo,
   // which may land while the removal's own echo is on the wire); else a worker's own clock (the hub's flags decide).
-  function blend(l, i, full) {
+  function blend(l, i, full, base) {
     const flags = full ? { who: l.edited.who || i.edited.who, in: l.edited.in || i.edited.in, out: l.edited.out || i.edited.out } : i.edited;
     const r = { ...i, edited: { ...flags }, gone: full ? l.gone : i.gone, at: Math.max(l.at, i.at) };
     const [a, b] = full ? [l, i] : [i, l]; // a: wins when flagged; b: otherwise
     for (const k of ['who', 'in', 'out']) r[k] = (full ? l.edited : i.edited)[k] ? a[k] : k === 'out' ? b.out || a.out : b[k]; // a clock-out is never undone
+    // my own clock-out not on the hub yet stays shown, and unflagged, until it is: it goes up as mine, and the PM time comes after
+    if (!full && i.edited.out && l.out && !l.edited.out) { r.out = l.out; r.edited = { ...r.edited, out: false }; }
+    if (full && base?.edited?.out && !l.edited.out && !l.out && i.edited.out && i.out === base.out) { r.out = ''; r.edited.out = false; } // my clear of the PM time the hub still has is on its way
     // who it is and what they were on (pid, crew, task links) follow the phone until the PM has touched the shift
     if (full || !(i.edited.who || i.edited.in || i.edited.out)) Object.assign(r, { pid: l.pid, crew: l.crew, crewId: l.crewId, tasks: l.tasks });
     return r;
@@ -523,10 +632,10 @@ export function makeSync(o = {}) {
     let next = inc;
     if (loc) {
       const mine = hs(shiftPart(loc, full));
-      if (mine !== pr.s && mine !== hs(shiftPart(inc, full))) next = blend(loc, inc, full);
+      if (mine !== pr.s && mine !== hs(shiftPart(inc, full))) next = blend(loc, inc, full, pr.b);
     }
     if (next === inc) pr.s = hs(shiftPart(inc, full));
-    if (full) pr.b = structuredClone(inc); // the PM's base: with it the hub takes only what this phone changes since (two PM devices)
+    if (full && (next === inc || !pr.b)) pr.b = structuredClone(inc); // the PM's base: with it the hub takes only what this phone changes since (two PM devices); an edit kept here keeps the base it was made on, so a value both changed still goes to the newer pmAt
     if (loc && sameDoc(loc, next)) return false;
     list[i < 0 ? list.length : i] = next;
     return true;
@@ -556,6 +665,7 @@ export function makeSync(o = {}) {
     if (kind === 'task') cutOut(lc.tasks, t => t.uid === key, st.t, 'tasks');
     if (kind === 'report') cutOut(lc.reports, r => r.date === key, st.r, 'reports');
     if (kind === 'shift') { cutOut(lc.hours, s => s.id === key, st.h, 'hours'); cutOut(lc.crewH, s => s.id === key, st.m, 'crewHours'); }
+    if (kind === 'note') cutOut(lc.notes, n => n.uid === key, st.n, 'notes'); // only the PM's purge removes a note (HUB.md)
   }
   // Save the stores that changed. A store that will not save (phone full) stops the merge before anything is recorded as synced.
   function flush(lc, dirty, kinds) {
@@ -563,6 +673,7 @@ export function makeSync(o = {}) {
     put('tasks', KEYS.tasks, lc.tasks);
     put('hours', KEYS.hours, lc.hours);
     put('crewHours', KEYS.crewHours, lc.crewH);
+    if (dirty.notes) { const left = new Set(lc.notes.map(n => n.uid)); if (!putNotes({ add: lc.notes, drop: [...lc.noteUids].filter(u => !left.has(u)) })) throw err('space'); kinds.add('notes'); } // by uid, on the list as stored now (putNotes)
     put('reports', KEYS.reports, { ...lc.other, ...Object.fromEntries(lc.reports.map(r => [r.date, r])) });
   }
 
@@ -571,6 +682,9 @@ export function makeSync(o = {}) {
   // if any part will not save (a full phone), every store goes back as it was and the whole reply is taken again later.
   // ponytail: localStorage has no transactions, so a phone too full to write even the old values back keeps the merge
   // without its record; moving the stores to IndexedDB (one transaction for stores and record) closes that.
+  // Notes are not put back: they are only added or dropped by uid, so a merge kept without its record is harmless (one of this
+  // phone's own goes up again and the hub answers with its copy; another phone's is never sent), and putting the list back as it
+  // was read would drop a note another tab added meanwhile (Codex C2).
   const MERGED = [KEYS.tasks, KEYS.hours, KEYS.crewHours, KEYS.reports, KEYS.settings, KEYS.hub, KEYS.pin];
   function applyPull(c, rep, sig, st = loadState()) { // st: a push's acks not saved yet (pushPhase)
     const was = MERGED.map(k => [k, store.get(k, null)]), S0 = o.S && { ...o.S };
@@ -584,11 +698,11 @@ export function makeSync(o = {}) {
     const kinds = new Set(), ts = now();
     const win = winDays(c.role), cut = cutoff(ts, win);
     let moved = [];
-    const news = []; // sheets an office message or follow-up just reached (a crew phone)
+    const news = [], updated = []; // sheets an office message or follow-up just reached, and sheets whose work the office changed (a crew phone)
     if (rep.same !== true) {
       const lc = readLocal(c), tw = c.role === 'crew' ? ['crew'] : ['assign', 'crew'], rw = c.role === 'pm' ? ['sup', 'pm'] : c.role === 'super' ? ['sup'] : [];
       scan(st, c, lc);
-      const dirty = { tasks: false, hours: false, crewHours: false, reports: false };
+      const dirty = { tasks: false, hours: false, crewHours: false, reports: false, notes: false };
       const at = new Map(lc.tasks.map((t, i) => [t.uid, i]));
       for (const raw of arr(rep.tasks).slice(0, 500)) {
         const inc = inT(raw);
@@ -600,6 +714,9 @@ export function makeSync(o = {}) {
         if (next === loc) continue;
         // an office message or follow-up reaching a crew phone is said, and marked on the board until the sheet is opened
         if (c.role === 'crew' && ((next.reply && (next.reply !== loc?.reply || next.replyAt !== loc?.replyAt)) || (next.followUp && next.followUp !== loc?.followUp))) { next.news = true; news.push(next.id); }
+        // and a sheet this phone already had whose work the office changed is marked updated: nothing has to be sent again
+        // (an unread message stays the stronger mark)
+        else if (c.role === 'crew' && loc && !sameDoc(workOf(loc), workOf(next))) { if (next.news !== true) next.news = 'update'; updated.push(next.id); }
         if (loc) lc.tasks[i] = next; else { at.set(inc.uid, lc.tasks.length); lc.tasks.push(next); }
         dirty.tasks = true;
       }
@@ -625,6 +742,23 @@ export function makeSync(o = {}) {
         if (c.dev && inc.device === c.dev && upsert(lc.hours, st.h, inc, false)) dirty.hours = true;
         if (c.role === 'pm' && upsert(lc.crewH, st.m, inc, true)) dirty.crewHours = true;
       }
+      // Notes merge by uid: one this phone has stays exactly as stored (the hub never changes a note); a new one comes in unseen.
+      // Either way the hub has it, so this phone's own is never sent again (a reply lost on the way, ack).
+      const nAt = new Map(lc.notes.map(n => [n.uid, n])), nIn = arr(rep.notes);
+      for (const raw of nIn.slice(0, 500)) {
+        const inc = normNote(raw);
+        if (!inc) continue;
+        let n = nAt.get(inc.uid);
+        if (!n) {
+          if (inc.date < cut && (c.role === 'crew' || raw.texted === true || inc.device === c.dev)) continue; // an office phone takes a late one: unread, it is news
+          nAt.set(inc.uid, n = { ...inc, seen: raw.texted === true || inc.device === c.dev ? inc.at : 0 }); // it went by text first, or it is this phone's own: not new here
+          lc.notes.push(n);
+          dirty.notes = true;
+        }
+        const pr = ent(ent(st.n, n.uid), 'v');
+        if (pr.s === undefined && c.dev && n.device === c.dev) kinds.add('notes'); // one of mine the hub has (its reply was lost): the screen says so now
+        pr.s = hs(notePart(n)); delete pr.x; delete pr.old;
+      }
       for (const d of arr(rep.deleted).slice(0, 500)) {
         const key = String(obj(d).key), t = obj(d).moved === true && lc.tasks.find(x => x.uid === key);
         if (t && !(st.t[key]?.assign?.v !== undefined && taskClean(st, t, tw))) continue; // moved to another crew: one only texted here, or with work not sent yet, stays
@@ -637,6 +771,7 @@ export function makeSync(o = {}) {
       prune(lc.reports, r => r.date < cut, r => reportClean(st, r, rw), st.r, r => r.date, 'reports');
       prune(lc.hours, s => s.date < cut, s => shiftClean(st.h, s, false), st.h, s => s.id, 'hours');
       prune(lc.crewH, s => s.date < cut, s => shiftClean(st.m, s, true), st.m, s => s.id, 'crewHours');
+      if (Array.isArray(rep.notes)) prune(lc.notes, n => n.date < cut, n => st.n[n.uid]?.v?.s !== undefined && !!n.seen, st.n, n => n.uid, 'notes'); // a note the hub has not kept yet never leaves, nor one not shown yet
       // the shared settings: the hub is the project's record. First contact adopts them; an office phone's newer unsynced edit stays and is pushed.
       if (isObj(rep.config)) {
         const inc = inC(rep.config), s0 = cfg(), pr = ent(ent(st.g, 'c'), 'v'), vh = hs(cfgPart(inc)), mine = hs(cfgPart(s0));
@@ -665,7 +800,7 @@ export function makeSync(o = {}) {
       }
       flush(lc, dirty, kinds);
       if (moved.length) toast(moved.map(m => L('Your sheet {old} is now {id}: another sheet has that number.', m)).join(' '));
-      if (news.length) toast(L('Message from the office on sheet {id}', { id: news.join(', ') }));
+      if (news.length || updated.length) toast([news.length && L('Message from the office on sheet {id}', { id: news.join(', ') }), updated.length && L('The office updated sheet {id}', { id: updated.join(', ') })].filter(Boolean).join(' ')); // one toast: a second would hide the first
       if (arr(rep.events).length) live.events = [...shape([EV_TPL], rep.events), ...live.events].filter((e, i, a) => a.findIndex(x => x.rev === e.rev && x.ts === e.ts) === i).sort((a, b) => b.rev - a.rev).slice(0, 50);
       if (Array.isArray(rep.onsite)) live.onsite = shape([ON_TPL], rep.onsite).slice(0, 100);
       live.at = ts;
@@ -683,9 +818,10 @@ export function makeSync(o = {}) {
       const st = loadState();
       const req = { since: st.sig !== sig ? 0 : st.rev, days: winDays(c.role), ...(c.role === 'crew' && c.crew && { crews: [c.crew] }), ...(c.role === 'crew' && c.pid && { pid: c.pid }) };
       const rep = await call('pull', req);
-      if (ep !== epoch) throw err('aborted');
-      applyPull(c, rep, sig);
-      if (rep.more !== true) return;
+      // what changed since req.since: when this phone's record moved meanwhile (a restore wrote its backup's, another tab pulled)
+      // it is the wrong increment, so it is dropped and asked again from where the record stands now (the 20 pages still bound it)
+      const moved = await withNotes(() => { if (ep !== epoch) throw err('aborted'); const now = loadState(); if ((now.sig !== sig ? 0 : now.rev) !== req.since) return true; applyPull(c, rep, sig, now); return false; });
+      if (!moved && rep.more !== true) return;
     }
   }
 
@@ -718,9 +854,9 @@ export function makeSync(o = {}) {
     if (!c.role) { const rep = await whoami(c); if (ep !== epoch) throw err('aborted'); patchSettings({ hubRole: rep.role }); c = hub(); }
     if (scope.id && store.get(PENDING, null)) {
       // Recover the exact durable attempt before any new scan or pull; edits made while offline remain unsent edits.
-      const done = [];
-      await sendBatch(store.get(PENDING, null).batch, ep, done);
-      applyAcks(c, ep, done);
+      const done = [], sent = {};
+      await sendBatch(store.get(PENDING, null).batch, ep, done, sent);
+      await applyAcks(c, ep, done, sent); // by the saved attempt's own restore marker (sendBatch)
     }
     for (const [k, due] of Object.entries(loadState().del)) if (due <= now() && !mine.has(k)) { // a delete whose Undo ran out with the app closed
       const [kind, key] = k.split('|'), r = await purge(kind, key);
@@ -730,7 +866,15 @@ export function makeSync(o = {}) {
     // First contact (or a new role, crew or window): merge what the hub has before pushing anything, so old local copies cannot overwrite newer ones.
     const first = loadState().sig !== sigOf(c);
     if (first) await pullPhase(c, ep);
-    const held = await pushPhase(c, ep, !first && c.role !== 'crew'); // else an office phone's sheet the hub has never had goes after the pull, which renumbers it if a synced sheet has its day and number
+    let held;
+    try { held = await pushPhase(c, ep, !first && c.role !== 'crew'); } // else an office phone's sheet the hub has never had goes after the pull, which renumbers it if a synced sheet has its day and number
+    catch (e) {
+      // v2: another phone wrote since this one's last reply (a stale expectedRev, HUB.md). sendBatch already dropped the attempt, so
+      // rebase now, pull then push again under a new opId, instead of failing the round: an online phone is never told it is offline.
+      if (e.code !== 'conflict' || ep !== epoch) throw e;
+      await pullPhase(c, ep);
+      held = await pushPhase(c, ep); // a second conflict fails the round as before (reload and back off)
+    }
     await pullPhase(c, ep);
     if (held) { await pushPhase(c, ep); await pullPhase(c, ep); }
   }
@@ -805,7 +949,9 @@ export function makeSync(o = {}) {
     // A round that starts pull-first keeps a part changed since its base until its push (mergeTask, keeps): the hub merges
     // its changed fields, rather than a newer part replacing unrelated offline work. A part without a base follows its stamp.
     const same = url === (s.hubUrl || loadState().url);
-    if (!same && !store.set(ST, keepHashes())) return bad('space'); // a full phone stays on its old hub, unchanged: the new one's first pull would start at the old one's place (D4S-03)
+    const kept = same ? null : keepHashes();
+    // what the old hub refused or could not take is asked of this one again; what it kept stays kept (keepHashes)
+    if (!same && !(await withNotes(() => { for (const k of keysOf(FACT)) if (/\/(x|old)$/.test(k)) del(k); return store.set(ST, kept && { ...kept, n: undefined }); }))) return bad('space'); // a full phone stays on its old hub, unchanged: the new one's first pull would start at the old one's place (D4S-03)
     if (!patchSettings({ hubUrl: url, hubKey: key, hubRole: rep.role, hubCrew: typeof extra.crew === 'string' ? extra.crew : same ? String(s.hubCrew || '') : '' })) return bad('space');
     if (scope.needsConnection?.()) {
       const st = loadState(); st.rev = 0; st.sig = ''; st.away = true;
@@ -832,8 +978,8 @@ export function makeSync(o = {}) {
   // its history nor what it refused: a phone moving to another hub address does not upload the records it already synced, and
   // its first round there merges pull-first, with changes not yet sent stamped by their edit time (away). Later edits still go up.
   function keepHashes() {
-    const st = loadState(), out = { t: {}, h: {}, m: {}, r: {} };
-    for (const k of Object.keys(out)) for (const [key, rec] of Object.entries(st[k])) for (const [p, pr] of Object.entries(obj(rec))) if (obj(pr).s !== undefined) { const { x, tx, ...kept } = pr; ent(out[k], key)[p] = kept; }
+    const st = loadState(), out = { t: {}, h: {}, m: {}, r: {}, n: {} }; // n: a note the old hub kept is not sent to the new one
+    for (const k of Object.keys(out)) for (const [key, rec] of Object.entries(st[k])) for (const [p, pr] of Object.entries(obj(rec))) if (obj(pr).s !== undefined || (k === 'n' && (pr.t || pr.a))) { const { x, tx, old, ...kept } = obj(pr); ent(out[k], key)[p] = kept; } // a note keeps that it went by text, or out once
     return Object.values(out).some(x => Object.keys(x).length) ? { ...out, away: true } : null;
   }
   function disconnect() {
@@ -859,7 +1005,7 @@ export function makeSync(o = {}) {
     } catch (e) { return lost(e); }
   }
 
-  // Send to crew / Send results (tasks.html sentSheet): is this part, as it is on this phone now, acknowledged by the hub? Runs a round
+  // Send to crew / Send results (tasks.html sentSheet), and a note (kind 'n', part 'v'): is this part, as it is on this phone now, acknowledged by the hub? Runs a round
   // now (and one more when a round already under way may have scanned before the save), then compares the hash the hub acknowledged
   // (hubSync .s, applyAcks) with the part's hash here. Never read off the global dot: a live dot says the last round got through, not
   // that this record did (Codex review of 672cc6b). False means saved on this phone only: no signal, the hub busy, a refused key, or a
@@ -870,7 +1016,7 @@ export function makeSync(o = {}) {
     const check = () => {
       const pr = loadState()[kind]?.[key]?.[part];
       if (!pr || pr.s === undefined) return false;
-      const lc = readLocal(c), doc = kind === 't' ? lc.tasks.find(t => t.uid === key) : kind === 'r' ? lc.reports.find(r => r.date === key) : null;
+      const lc = readLocal(c), doc = kind === 't' ? lc.tasks.find(t => t.uid === key) : kind === 'r' ? lc.reports.find(r => r.date === key) : kind === 'n' ? lc.notes.find(n => n.uid === key) : null;
       const fn = PARTS[kind]?.find(x => x[0] === part)?.[1];
       return !!doc && !!fn && pr.s === hs(fn(doc));
     };
@@ -912,6 +1058,49 @@ export function makeSync(o = {}) {
     return Math.max(num(t.assignAt), pr?.s === undefined ? num(t.updatedAt) : pr.s === h ? num(pr.v) : pr.p === h ? num(pr.at) : skewed(st));
   }
 
+  // ---------- notes: messages to the office (HUB.md, Note and "Notes") ----------
+
+  // A message about a sheet (task: its uid, tid: its number) or the day (both empty). Saved on this phone first, with or without
+  // signal or a hub, then a round is asked for; the cycle sends it until the hub keeps it. It never changes after. Resolves to
+  // { ok: true, note }, or { ok: false } with why: nothing typed ('empty'), or a full phone ('space', said as every save says it).
+  const NOTE_ABC = 'abcdefghijklmnopqrstuvwxyz0123456789';
+  async function addNote({ task = '', tid = '', body = '' } = {}) {
+    try { await ensure(); } catch { /* no device id: said below as a save that did not happen */ }
+    const s = cfg(), d = device(), w = person(s), ts = now();
+    let rand = '';
+    while (rand.length < 10) for (const b of crypto.getRandomValues(new Uint8Array(16))) if (b < 252 && rand.length < 10) rand += NOTE_ABC[b % 36]; // 252 = 7 x 36: every character as likely
+    const n = normNote({ uid: `wn-${d.id.slice(0, 12)}-${rand}`, date: dayOf(ts), device: d.id, pid: w.pid, who: s.worker || s.me, crewId: w.crewId, crew: w.crew,
+      task, tid, body: String(body ?? ''), lang: getLang(), at: ts, seen: ts }); // seen: never new on the phone that wrote it
+    const unsaved = { ok: false, error: 'space', message: L("This phone wouldn't save. Open Settings and download a backup.") };
+    if (!normNote({ ...NOTE_TPL, uid: 'wn-000000000000-0000000000', date: '2000-01-01', body: String(body ?? '') })) return { ok: false, error: 'empty', message: L('Type a message first') }; // nothing but spaces or control characters (as the hub reads it)
+    if (!n || !(await withNotes(() => putNotes({ add: [n] })))) return unsaved; // no device id yet: it could not be kept as this phone's
+    poke();
+    return { ok: true, note: n };
+  }
+  // Where a note stands: 'hub' (the hub keeps it), 'waiting' (on this phone, not sent yet), 'old-hub' (the hub answered without
+  // notes: it needs its update), 'refused'.
+  function noteState(uid) {
+    const pr = loadState().n[uid]?.v;
+    return pr?.s !== undefined ? 'hub' : pr?.x !== undefined ? 'refused' : pr?.old ? 'old-hub' : 'waiting';
+  }
+  // Every note on this phone: its own, and on an office phone every one pulled.
+  const notes = () => readNotes();
+  // An office phone showed a sheet's notes (task: its uid): they are no longer new here. Local only, never sent. True when one was.
+  async function seeNotes(task) {
+    const ids = readNotes().filter(x => x.task === task && !x.seen).map(x => x.uid);
+    return ids.length > 0 && withNotes(() => putNotes({ see: ids }));
+  }
+  // A note that went by text because there was no hub (tasks.html sendNote): when this phone joins a hub it still goes up, marked
+  // texted, so the office has it kept without it showing as new (HUB.md, Notes). False when the phone would not save.
+  async function noteTexted(uid) {
+    return withNotes(() => {
+      const st = loadState();
+      if (store.get(NOTE + uid, null) === null) return false;
+      ent(ent(st.n, uid), 'v').t = now();
+      return saveState(st);
+    });
+  }
+
   // ---------- thin wrappers ----------
 
   const act = async (action, extra) => { try { return await call(action, extra); } catch (e) { return lost(e); } };
@@ -945,11 +1134,13 @@ export function makeSync(o = {}) {
     const c = r.ok && hub();
     if (c) { // the tombstone comes back on the next pull; the sheet leaves this phone now, before a push could bring it back
       purgeLater(kind, key, 0);
-      const st = loadState(), lc = readLocal(c), dirty = {}, kinds = new Set();
-      delete st.held[`${kind}|${key}`]; // the copy held during the Undo goes with it
-      dropKey(lc, st, dirty, kind, str(key, 60));
-      try { flush(lc, dirty, kinds); saveState(st); } catch { /* full phone: the pull's tombstone retries it */ }
-      notify(kinds);
+      await withNotes(() => {
+        const st = loadState(), lc = readLocal(c), dirty = {}, kinds = new Set();
+        delete st.held[`${kind}|${key}`]; // the copy held during the Undo goes with it
+        dropKey(lc, st, dirty, kind, str(key, 60));
+        try { flush(lc, dirty, kinds); saveState(st); } catch { /* full phone: the pull's tombstone retries it */ }
+        notify(kinds);
+      });
     }
     return r.ok ? { ok: true, rev: num(r.rev) } : r;
   }
@@ -1048,6 +1239,7 @@ export function makeSync(o = {}) {
   }
 
   return { hubStatus, poke, cycle, wake, start, joinFrom, connect, disconnect, invite, translate, records, stats, purge, purgeLater, release, rotate, archive, selftest, fromText, officeAt, confirmed,
+    addNote, noteState, notes, seeNotes, noteTexted,
     liveData: () => ({ ...live, info }), onHub: (key, kind = 'task') => (kind === 'report' ? loadState().r[key]?.sup : loadState().t[key]?.assign)?.v !== undefined, // onHub: the hub has this sheet (so its number is known) or report
     replyOnHub: t => { const b = loadState().t[t?.uid]?.assign?.b; return !!b && b.reply === t.reply && b.replyAt === t.replyAt; } }; // the hub took this sheet's message as it is here (the office part as last had from the hub)
 }
@@ -1097,3 +1289,8 @@ export const replyOnHub = t => get().replyOnHub(t);
 export const fromText = (kind, key, part, at, skew, copy, parts) => get().fromText(kind, key, part, at, skew, copy, parts);
 export const officeAt = t => get().officeAt(t);
 export const confirmed = (kind, key, part) => get().confirmed(kind, key, part);
+export const addNote = n => get().addNote(n);
+export const noteState = uid => get().noteState(uid);
+export const notes = () => get().notes();
+export const seeNotes = task => get().seeNotes(task);
+export const noteTexted = uid => get().noteTexted(uid);

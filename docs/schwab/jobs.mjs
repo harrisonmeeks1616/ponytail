@@ -1,4 +1,5 @@
 // A page owns one immutable job. Navigation creates another realm; late work retains this scope.
+import { createRestoreStorage } from './restore-store.mjs';
 export const JOB_ID = /^[A-Za-z0-9][A-Za-z0-9_-]{0,79}$/;
 export const JOBS_KEY = 'fieldHub.jobs.v1', MIGRATION_KEY = 'fieldHub.legacyMigration.v1';
 export const PM_ORIGIN = 'https://harrison-electrical-pm.harrison-meeks-pm.workers.dev';
@@ -14,10 +15,11 @@ export function storageKey(id, key) {
 const rawLegacy = s => Object.fromEntries(Array.from({ length: s.length }, (_, i) => s.key(i)).filter(k => k?.startsWith('schwab.') && k !== 'schwab.unlock').sort().map(k => [k, s.getItem(k)]));
 const same = (a, b) => JSON.stringify(a) === JSON.stringify(b);
 const browserStorage = () => { try { return globalThis.localStorage; } catch { return undefined; } };
-export function createJobScope({ href = 'https://local.invalid/tasks.html', storage = browserStorage(), navigate = url => globalThis.location.assign(url) } = {}) {
+export function createJobScope({ href = 'https://local.invalid/tasks.html', storage = browserStorage, navigate = url => globalThis.location.assign(url) } = {}) {
   const page = new URL(href), rawId = page.searchParams.get('jobId');
   const id = rawId === null ? '' : JOB_ID.test(rawId) ? rawId : null;
   const key = k => storageKey(id, k);
+  storage = createRestoreStorage(storage, id === null ? 'schwab.' : key('schwab.'));
   function list() {
     const rows = parse(storage, JOBS_KEY, []);
     const jobs = new Map((Array.isArray(rows) ? rows : []).filter(j => j && JOB_ID.test(j.id) && typeof j.label === 'string').map(j => [j.id, { id: j.id, label: j.label }]));
@@ -35,6 +37,9 @@ export function createJobScope({ href = 'https://local.invalid/tasks.html', stor
   }
   function status() {
     if (id === null) return 'invalid_job';
+    const restored = storage.status();
+    if (restored) return restored;
+    try { if (storage.getItem(key('schwab.restoreLog')) !== null) return 'restore_recovery_hold'; } catch { return 'storage_unavailable'; }
     const m = parse(storage, MIGRATION_KEY, null);
     if (id && m?.jobId === id) {
       if (m.phase !== 'committed') return 'migration_incomplete';
@@ -72,6 +77,7 @@ export function createJobScope({ href = 'https://local.invalid/tasks.html', stor
     if (old && old.jobId !== jobId) fail('original_already_bound');
     const source = rawLegacy(storage), keys = Object.keys(source);
     if (!keys.length) fail('no_legacy_data');
+    if ('schwab.restoreLog' in source) fail('restore_pending'); // a restore cut short on the original page: only that page puts it back (shared.mjs recoverRestore)
     const targetKeys = Array.from({ length: storage.length }, (_, i) => storage.key(i)).filter(k => k?.startsWith(prefix(jobId)));
     // Recopy is explicit and permitted only when nobody edited the first copy. Both-side edits need reviewed reconciliation.
     if (old) {
@@ -92,13 +98,14 @@ export function createJobScope({ href = 'https://local.invalid/tasks.html', stor
     const migrated = parse(storage, MIGRATION_KEY, null);
     const includeLegacy = !migrated || migrated.phase !== 'committed' || !same(rawLegacy(storage), migrated.source);
     return [...(includeLegacy ? [{ id: '', label: '' }] : []), ...list()].flatMap(j => {
-      const shifts = parse(storage, storageKey(j.id, 'schwab.hours'), []);
+      const view = createRestoreStorage(storage.raw, storageKey(j.id, 'schwab.'));
+      const shifts = parse(view, storageKey(j.id, 'schwab.hours'), []);
       return (Array.isArray(shifts) ? shifts : []).filter(s => s && !s.gone && s.in && !s.out).map(s => ({ jobId: j.id, label: j.label, shiftId: s.id, date: s.date, url: url(j.id, '#clock/' + s.date) }));
     });
   }
   const needsConnection = () => { const m = parse(storage, MIGRATION_KEY, null); return !!id && m?.jobId === id && !m.connected; };
   const connected = () => { const m = parse(storage, MIGRATION_KEY, null); if (id && m?.jobId === id) storage.setItem(MIGRATION_KEY, JSON.stringify({ ...m, connected: true })); };
-  return Object.freeze({ id, key, status, assertWritable, list, register, remember, migrate, openShifts, url, needsConnection, connected, switchTo: (jobId, hash) => navigate(url(jobId, hash)),
+  return Object.freeze({ id, key, status, assertWritable, storage, get rawStorage() { return storage.raw; }, list, register, remember, migrate, openShifts, url, needsConnection, connected, switchTo: (jobId, hash) => navigate(url(jobId, hash)),
     label: () => list().find(j => j.id === id)?.label || id || '', pmUrl: () => id === null ? '' : `${PM_ORIGIN}/projects/${encodeURIComponent(id || LEGACY_PM_JOB_ID)}/pm-records` });
 }
 export const jobScope = createJobScope({ href: globalThis.location?.href });
