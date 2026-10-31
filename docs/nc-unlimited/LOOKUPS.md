@@ -13,7 +13,7 @@ Generated from `data-nec.js`. Facts marked verified were read directly in NFPA L
 ## Partly resolved (6)
 - **G04**: still needed: 250.122(F) parallel-conductor text; 250.120 installation restrictions
 - **G05**: still needed: Which electrodes must be connected when both a rod and a qualifying concrete-encased electrode are present (250.50, 250.52, 250.53 text)
-- **G08**: still needed: Table 250.66 aluminum-ungrounded rows and aluminum GEC cells; 250.102(C) bonding-jumper sizing if the function is bonding
+- **G08**: still needed: 250.102(C) bonding-jumper sizing if the function is bonding
 - **O07**: still needed: 430.32 overload text (the separate overload rule); The 430.52 and 240.4(G) relationship wording; 430.6(A)(1) current basis (table FLC vs nameplate)
 - **L08**: still needed: 220.52 small-appliance and laundry; 220.53 fixed appliances; 220.54 dryer; 220.55 and Table 220.55 range; 220.82 optional method and the HVAC and motor inputs
 - **L09**: still needed: Table 220.12 VA per square foot for the stated occupancy; Receptacle demand (220.14(I), 220.44, 220.14(K)); Motor contribution (220.50, 430.24)
@@ -21,9 +21,6 @@ Generated from `data-nec.js`. Facts marked verified were read directly in NFPA L
 ## Still unresolved, by reference
 ### 250.66 (remainder) and 250.102(C)
 Questions: G08, G07
-- Table 250.66 aluminum-ungrounded rows: seven (size band -> copper GEC, aluminum GEC) tuples
-- Table 250.66 aluminum GEC cells for each copper-ungrounded row
-- Exact table-note wording on parallel sets
 - 250.102(C)(1) supply-side and main/system bonding-jumper sizing and the 12.5% rule
 
 ### 250.122 (A) and (F), 250.120
@@ -43,7 +40,7 @@ Questions: G05, G03, G06, G07, G10, G11
 Questions: W05, W10
 - Table 310.4 and 310.10 wet-location markings (THHN vs THWN-2)
 - 110.14(D) torque and aluminum termination marking
-- App reference rows only (no question blocked): Table 310.16 copper 600 to 2000 kcmil and every aluminum row; 110.14(C)(1) 60 vs 75 C detail; 310.15(B)(1) rows at or below 30 C and above 60 C; 310.15(C)(1) 24 in condition and mixed-system sentence
+- App reference rows only (no question blocked): Table 310.16 copper 600 to 2000 kcmil; 110.14(C)(1) 60 vs 75 C detail; 310.15(B)(1) rows at or below 30 C and above 60 C; 310.15(C)(1) 24 in condition and mixed-system sentence
 
 ### 314.16(B) remainder, 314.28, 314.16(C), 300.14
 Questions: B05, B06, B07

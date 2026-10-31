@@ -286,7 +286,7 @@ test('handbook facts relayed from the July 2026 Board PDF are present and attrib
   const h = NC.exam.handbook; assert.match(h.url, /psi-exam-book-2026-002-2/); assert.match(h.note, /Harrison\/Codex/);
   const by = Object.fromEntries(h.facts); assert.match(by['Printed p3'], /100 questions, six hours/); assert.match(by['Printed p6'], /70%/); assert.match(by['Printed p7'], /\.5-up/); assert.match(by['Printed p26'], /1,000 V/);
   assert.doesNotMatch(JSON.stringify([NC.verification, NC.exam, NC.keyDates]), /Dec 9/, 'the old Dec 9 inference must not appear');
-  assert.match(NC.cards.find((c) => c[0] === 2)[3], /do not treat 600 V as uncontested statute/);
+  assert.match(NC.cards.find((c) => c[0] === 2)[3], /not verified law/i);
 });
 
 // ---- date sanity: independent of Notion, so a drifted date fails loudly ----
@@ -467,4 +467,27 @@ test('240.4(B) and 110.3(B) rules read in NFPA LiNK are conditional, not shortcu
   assert.match(a, /ONLY if all three conditions/); assert.match(a, /more than one receptacle for cord-and-plug/); assert.match(a, /800 A or less/); assert.match(a, /Do not promote 36 A to 40 A/);
   assert.equal(N.nextStd(36), 40); assert.equal(N.nextStd(35), 35); assert.match(rule('o1'), /ONLY if all three/);
   assert.match(NC.nec.lookups.D03.answer, /no terminal clearance or torque value can be stated/); assert.match(rule('d1'), /instructions included in its listing or labeling/);
+});
+
+test('aluminum cells read in NFPA LiNK on Oct 31 match: Table 250.66 (all 7 aluminum rows, both GEC columns) and Table 310.16 aluminum 12 AWG to 2000 kcmil', () => {
+  const N = NC.nec;
+  // [largest ungrounded Al, Cu GEC, Al GEC] for sizes inside each row band, plus both edges
+  for (const [sz, cu, al] of [['1/0', '8', '6'], ['1', '8', '6'], ['2/0', '6', '4'], ['3/0', '6', '4'], ['4/0', '4', '2'], ['250', '4', '2'], ['300', '2', '1/0'], ['500', '2', '1/0'], ['600', '1/0', '3/0'], ['900', '1/0', '3/0'], ['1000', '2/0', '4/0'], ['1750', '2/0', '4/0'], ['2000', '3/0', '250']]) {
+    assert.equal(L.nec.gec(sz, 'al', 'cu'), cu, 'Al ' + sz + ' Cu GEC');
+    assert.equal(L.nec.gec(sz, 'al', 'al'), al, 'Al ' + sz + ' Al GEC');
+  }
+  assert.equal(L.nec.gec('500', 'al', 'cu'), '2'); // two parallel 250 kcmil Al sets = 500 kcmil equivalent (G08)
+  const t = '12:15/20/25;10:25/30/35;8:35/40/45;6:40/50/55;4:55/65/75;3:65/75/85;2:75/90/100;1:85/100/115;1/0:100/120/135;2/0:115/135/150;3/0:130/155/175;4/0:150/180/205;250:170/205/230;300:195/230/260;350:210/250/280;400:225/270/305;500:260/310/350;600:285/340/385;700:315/375/425;750:320/385/435;800:330/395/445;900:355/425/480;1000:375/445/500;1250:405/485/545;1500:435/520/585;1750:455/545/615;2000:470/560/630'.split(';');
+  assert.equal(t.length, 27);
+  assert.equal(Object.keys(N.t31016.al).length, 27);
+  for (const row of t) { const [sz, v] = row.split(':'); assert.deepEqual(N.t31016.al[sz], v.split('/').map(Number), 'Al 310.16 ' + sz); }
+  assert.equal(N.lookups.G08.status, 'partial');
+  assert.deepEqual(N.lookups.G08.needs, ['250.102(C) bonding-jumper sizing if the function is bonding']);
+});
+
+test('Limited voltage cap card is disputed, shown but never scored, and the evidence is kept apart', () => {
+  assert.ok(NC.disputedCards && NC.disputedCards[2]);
+  const c2 = NC.cards.find((c) => c[0] === 2)[3];
+  for (const need of [/600 V/, /1,000 V/, /2024-49/, /87-43\.3\(a\)\(2\)/, /Intermediate/, /not verified law/i, /handbook p26/]) assert.match(c2, need);
+  assert.equal(NC.cards.length, 60);
 });

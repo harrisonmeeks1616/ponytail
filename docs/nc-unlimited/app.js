@@ -17,7 +17,8 @@
   const blank = () => ({ done: {}, log: [], attempts: {}, ver: {}, errs: [], mocks: [], cards: {}, check: {}, auth: { start: "", expiry: "" }, strong: {}, lookups: [], theme: "", examTimer: null, examElapsed: 0, verif: {}, sc: {}, nav: {}, necv: {}, books: { nec: "", nfpa: "", nascla: "" } });
   let S = blank(); // real state is loaded (and sanitized) just before the first render, below
   let storageOK = true; // false when the browser blocks storage (embedded or private copies); progress then lasts only until the page closes
-  const save = () => { try { localStorage.setItem(KEY, JSON.stringify(S)); } catch (e) { if (storageOK) { storageOK = false; toast("This copy cannot save progress here. Use Progress, Backup before you close the page."); } } };
+  const storageBanner = () => `<div class="notice red" id="storageBanner" role="status" style="margin-bottom:14px"><b>Progress is not being saved.</b> This browser is blocking or has filled storage for this page (an embedded or private window, or storage is full). Everything you enter lasts only until you close it. Open the file in a normal browser window, or use Progress, Backup to export before you leave.</div>`;
+  const save = () => { try { localStorage.setItem(KEY, JSON.stringify(S)); } catch (e) { if (storageOK) { storageOK = false; const v = document.getElementById("view"); if (v && !document.getElementById("storageBanner")) v.insertAdjacentHTML("afterbegin", storageBanner()); toast("This copy cannot save progress here. Use Progress, Backup before you close the page."); } } };
   const toast = (m) => { const d = document.createElement("div"); d.className = "toast"; d.setAttribute("role", "status"); d.setAttribute("aria-live", "polite"); d.textContent = m; document.body.appendChild(d); setTimeout(() => d.remove(), 2600); };
   const applyTheme = () => { if (S.theme) document.documentElement.dataset.theme = S.theme; else delete document.documentElement.dataset.theme; };
 
@@ -37,6 +38,7 @@
   const ring = (p, color) => { const R = 38, Cc = 2 * Math.PI * R; return `<div class="ring"><svg width="92" height="92" viewBox="0 0 92 92"><circle cx="46" cy="46" r="${R}" fill="none" stroke="var(--line)" stroke-width="9"/><circle cx="46" cy="46" r="${R}" fill="none" stroke="${color || "var(--amber)"}" stroke-width="9" stroke-linecap="round" stroke-dasharray="${Cc}" stroke-dashoffset="${Cc * (1 - Math.min(p, 100) / 100)}"/></svg><b>${Math.round(p)}%</b></div>`; };
   const bar = (p, cls) => `<div class="bar ${cls || ""}"><i style="width:${Math.max(0, Math.min(100, p))}%"></i></div>`;
   const chip = (txt, c) => `<span class="chip ${c || ""}">${t(txt)}</span>`;
+  const DISP = NC.disputedCards || {}, scoredIds = () => NC.cards.filter((c) => !DISP[c[0]]).map((c) => c[0]);
   const sect = (title, sub, right) => `<div class="top"><div><h2>${t(title)}</h2>${sub ? `<p>${t(sub)}</p>` : ""}</div>${right || ""}</div>`;
   const det = (title, body, open) => `<details ${open ? "open" : ""}><summary>${title}</summary><div class="body">${body}</div></details>`;
   const link = (u, txt) => `<a href="${esc(u)}" target="_blank" rel="noopener">${t(txt)}</a>`;
@@ -65,7 +67,7 @@
   function render(opts) {
     const fk = !(opts && opts.focusMain) && focusKey(document.activeElement), y = window.scrollY;
     if (typeof V[view] !== "function") view = "today";
-    renderNav(); $("#view").innerHTML = V[view](); linkLabels(); if (V["after_" + view]) V["after_" + view]();
+    renderNav(); $("#view").innerHTML = (storageOK ? "" : storageBanner()) + V[view](); linkLabels(); if (V["after_" + view]) V["after_" + view]();
     let target = null;
     if (fk) { try { target = document.querySelector(fk); } catch (e) { target = null; } }
     if (target) { target.focus({ preventScroll: true }); window.scrollTo(0, y); }
@@ -80,7 +82,7 @@
     const d = today(), ex = NC.exam, cd = L.countdown(new Date(), ex.startISO);
     const todays = NC.sessions.find((x) => x[1] === d), next = L.nextSession(NC.sessions, S.done), hrs = L.hours(NC.sessions, S.done);
     const behind = behindList(d);
-    const due = dueCount(), cardsDue = L.dueCards(NC.cards.map((c) => c[0]), S.cards, d).length;
+    const due = dueCount(), cardsDue = L.dueCards(scoredIds(), S.cards, d).length;
     const keyed = bank.filter((b) => !b.lookup), tried = keyed.filter((b) => S.attempts[b.id]), right = tried.filter((b) => S.attempts[b.id].ok);
     const cut = L.countdown(new Date(), ex.cutoffISO);
     const authLeft = S.auth.expiry ? L.diffDays(d, S.auth.expiry) : null;
@@ -96,8 +98,8 @@
       <div class="count" data-clockbox><div><b data-cd="d">${cd.days}</b><span>days</span></div><div><b data-cd="h">${cd.hours}</b><span>hours</span></div><div><b data-cd="m">${cd.minutes}</b><span>min</span></div></div>
       <p class="mut sm">Open book. 100 questions, 6 hours, 70% to pass. Your coaching gate is stricter: two fresh full mocks at ${NC.gates.mockPct}%+. ${t(ex.cutoffText)}${!cut.over ? ` Cutoff is in ${cut.days}d ${cut.hours}h.` : ""}</p></div>
 
-    ${storageOK ? "" : `<div class="notice red" style="margin-top:14px"><b>Progress is not being saved.</b> This browser is blocking storage for this page (an embedded or private window, or storage is full). Everything you enter lasts only until you close it. Open the file from your computer in a normal browser window, or use Progress, Backup to export before you leave.</div>`}
     ${bookIssues().filter((x) => x[0] === "red").slice(0, 1).map(([, m]) => `<div class="notice red" style="margin-top:14px"><b>Books:</b> ${t(m)}</div>`).join("")}
+    <div class="notice amber sm" style="margin-top:14px"><b>Unlimited focus:</b> the Limited voltage cap and what only Unlimited covers (past 600 V historically, past 1,000 V in current statute) are on <button class="btn sm" data-act="unlGo">Study, Unlimited and high voltage</button>. Law card 2 is disputed and not scored.</div>
     <div class="grid g2" style="margin-top:14px">
       <div class="card glow stack"><div class="row between"><h3>${todays ? "Today: Day " + todays[0] + " of 37" : "Today"}</h3>${chip(fmtD(d), "amber")}</div>
         ${todays ? `<div><b>${t(todays[5])}</b><div class="row" style="margin:6px 0">${chip(NC.catNames[todays[4]], catColor[todays[4]])}${chip(todays[3] + "h")}${S.done[todays[0]] ? chip("done", "green") : ""}</div><p class="mut sm">${t(todays[6])}</p><div class="row"><button class="btn pri" data-act="openSession" data-n="${todays[0]}">Open session</button></div></div>` : `<p class="mut">${t(mode || "No session scheduled today.")}</p>`}
@@ -252,7 +254,7 @@
   let lawTab = "drill", lawQ = null, lawGroup = -1;
   V.law = () => {
     const d = today();
-    const tabs = [["drill", "Recall drill"], ["browse", "All 60 cards"], ["cases", "15 scenarios"]];
+    const tabs = [["drill", "Recall drill"], ["browse", "All 60 cards (1 disputed, unscored)"], ["cases", "15 scenarios"]];
     const head = sect("Law and business", "Actor + trigger + action + deadline + exception. Recall first, then verify, then page-key your NASCLA 14th.") + `<div class="tabs">${tabs.map(([k, n]) => `<button data-act="lawTab" data-k="${k}" aria-pressed="${lawTab === k}">${n}</button>`).join("")}</div>`;
     if (lawTab === "drill") {
       if (lawQ && lawQ.i < lawQ.ids.length) {
@@ -260,7 +262,7 @@
         return head + `<div class="row between"><span class="chip">${t(NC.lawGroups[c[1]])}</span><span class="mono mut">${lawQ.i + 1}/${lawQ.ids.length}</span></div>${bar((lawQ.i / lawQ.ids.length) * 100, "amber")}
         <div class="card flash" style="margin-top:12px"><div class="mut xs">CARD ${c[0]}</div><div class="q">${t(c[2])}</div>${lawQ.show ? `<div class="a">${t(c[3])}<p class="xs dim" style="margin:8px 0 0">${t(c[4])}</p></div><div class="row"><button class="btn ok" data-act="lawRes" data-ok="1">Got it, complete</button><button class="btn bad" data-act="lawRes" data-ok="0">Missed a piece</button></div>` : `<p class="mut sm">Say the full answer aloud: number, trigger, exception. Then reveal.</p><button class="btn pri" data-act="lawShow">Reveal</button>`}</div>`;
       }
-      const ids = NC.cards.map((c) => c[0]), due = L.dueCards(ids, S.cards, d), seen = ids.filter((i) => S.cards[i]).length;
+      const ids = scoredIds(), due = L.dueCards(ids, S.cards, d), seen = ids.filter((i) => S.cards[i]).length;
       const boxes = [1, 2, 3, 4, 5].map((b) => ids.filter((i) => S.cards[i] && S.cards[i].box === b).length);
       return head + `<div class="card stack"><div class="row"><div class="stat"><b>${due.length}</b><span>due or new</span></div><div class="stat"><b>${seen}/60</b><span>seen</span></div><div class="stat"><b>${boxes[3] + boxes[4]}</b><span>in boxes 4-5</span></div></div>
         <div><label class="f">Group</label><select id="lawGroup"><option value="-1">All groups</option>${NC.lawGroups.map((g, i) => `<option value="${i}" ${lawGroup == i ? "selected" : ""}>${esc(g)}</option>`).join("")}</select></div>
@@ -268,7 +270,7 @@
         <p class="mut sm">Plan target: the first 15 cards at 12/15 on the first scored recall pass. Right answers climb the boxes (1, 3, 7, 14, 30 days); a miss drops to box 1.</p></div>`;
     }
     if (lawTab === "browse") {
-      return head + `<input type="text" id="lawSearch" placeholder="Search cards (e.g. lien, five days, QI, 1099)" aria-label="Search law cards" style="margin-bottom:12px">` + NC.lawGroups.map((g, gi) => `<h3 style="margin:14px 0 8px">${t(g)}</h3>` + NC.cards.filter((c) => c[1] === gi).map((c) => `<details data-s="${esc((c[2] + " " + c[3]).toLowerCase())}"><summary><span class="mono dim">${String(c[0]).padStart(2, "0")}</span> ${t(c[2])}</summary><div class="body"><p class="sm">${t(c[3])}</p><p class="xs dim">${t(c[4])}</p></div></details>`).join("")).join("");
+      return head + `<input type="text" id="lawSearch" placeholder="Search cards (e.g. lien, five days, QI, 1099)" aria-label="Search law cards" style="margin-bottom:12px">` + NC.lawGroups.map((g, gi) => `<h3 style="margin:14px 0 8px">${t(g)}</h3>` + NC.cards.filter((c) => c[1] === gi).map((c) => `<details data-s="${esc((c[2] + " " + c[3]).toLowerCase())}"><summary><span class="mono dim">${String(c[0]).padStart(2, "0")}</span> ${t(c[2])}${DISP[c[0]] ? " " + chip("disputed, unscored", "red") : ""}</summary><div class="body">${DISP[c[0]] ? `<div class="notice red sm"><b>Not scored.</b> ${t(DISP[c[0]])}</div>` : ""}<p class="sm">${t(c[3])}</p><p class="xs dim">${t(c[4])}</p></div></details>`).join("")).join("");
     }
     return head + NC.scenarios.map((s, i) => `<details><summary><span class="mono dim">${String(i + 1).padStart(2, "0")}</span> ${t(s[0])} ${S.sc[i] ? chip("solved", "green") : ""}</summary><div class="body"><p class="sm">${t(s[1])}</p><details style="background:var(--bg2)"><summary class="sm">Solution (solve first)</summary><div class="body sm">${t(s[2])}<div class="row" style="margin-top:8px"><button class="btn sm ok" data-act="scSolved" data-i="${i}">I solved it before looking</button></div></div></details></div></details>`).join("") + `<p class="mut sm" style="margin-top:12px">Explain the denominator, trigger and assumption; then change an input and solve again. Round at the final step, and round whole quantities up when the question needs sufficient units.</p>`;
   };
@@ -280,7 +282,7 @@
   // ===== STUDY =====
   let studyTab = "cats";
   V.study = () => {
-    const tabs = [["cats", "11 categories"], ["nec", "NEC 2020 tables"], ["nav", "Article map"], ["nfpa", "NFPA 72 and plans"], ["unl", "Unlimited additions"], ["worked", "Worked examples"], ["research", "Research and sources"]];
+    const tabs = [["cats", "11 categories"], ["unl", "Unlimited and high voltage"], ["nec", "NEC 2020 tables"], ["nav", "Article map"], ["nfpa", "NFPA 72 and plans"], ["worked", "Worked examples"], ["research", "Research and sources"]];
     let body = "";
     if (studyTab === "cats") {
       body = `<p class="mut sm">Board counts are approximate and total 100. Move a strong area to maintenance after two separated sets at 80%+, then keep occasional fresh questions. Study explanations only: confirm numbers in the 2020 NEC.</p>` + NC.categories.map((c) => det(`<span class="chip violet">${c.q}q</span> ${c.id}. ${t(c.name)} ${S.strong[c.id] ? chip("maintenance", "green") : ""}`, `<p>${t(c.purpose)}</p><h4>Key definitions</h4><ul class="sm">${c.defs.map((x) => `<li>${t(x)}</li>`).join("")}</ul><p class="sm"><b>Covers:</b> ${t(c.sections)}</p><p class="sm"><b>Lookup path:</b> ${t(c.path)}</p><div class="notice red sm"><b>Common mistake:</b> ${t(c.mistake)}</div><p class="sm" style="margin-top:8px"><b>Demonstrate:</b> ${t(c.demo)}</p><div class="row"><button class="btn sm" data-act="drillDomain" data-d="${c.id}">Drill this domain</button><label class="row sm"><input type="checkbox" data-act="strong" data-k="${c.id}" ${S.strong[c.id] ? "checked" : ""}> Two separated sets at 80%+</label></div>`)).join("") + `<h3 style="margin:18px 0 8px">Before you call a topic mastered</h3>` + NC.masteryChecks.map((m) => `<div class="card" style="margin-bottom:8px"><b>${t(m[0])}</b><p class="sm" style="margin:4px 0 0">${t(m[1])}</p></div>`).join("");
@@ -294,7 +296,9 @@
       <h4>${t(NC.plans.q2.title)}</h4><p class="xs dim">${t(NC.plans.q2.note)}</p><div class="scroll"><table><tr><th>Fixture</th><th>Count</th><th>Lamp W each</th><th>Extension</th></tr>${NC.plans.q2.rows.map((r) => `<tr><td>${r[0]}</td><td class="mono">${r[1]}</td><td class="mono">${r[2]}</td><td class="mono">${r[1] * r[2]} W</td></tr>`).join("")}</table></div><p class="sm"><b>${t(NC.plans.q2.total)}</b>. The miss was an incomplete circuit inventory.</p>
       <h4>Official sample: corrected methods</h4>${NC.plans.sample.map((s) => det(`<b>${s[0]}</b>`, `<p class="sm">${t(s[1])}</p>`)).join("")}`;
     } else if (studyTab === "unl") {
-      body = `<p class="sm">The official outline adds topics and difficulty beyond Limited. Aircraft hangars are marked for Unlimited alone. These are topics inside the existing categories, not extra guaranteed question counts.</p><div class="scroll"><table><tr><th>Area</th><th>Adds beyond Limited</th></tr>${[["Grounding/bonding", "High-voltage specifications"], ["Overcurrent protection", "High-voltage provisions"], ["Wiring methods", "Traveling cables/controls and high voltage"], ["Special occupancies", "Emergency systems, health care, assembly/theaters, hazardous locations"], ["Unlimited-specific", "Aircraft hangars (Art. 513)"], ["Load calculations", "High-voltage protection cases"], ["Equipment", "Machine room (elevator applications)"]].map((r) => `<tr><td><b>${r[0]}</b></td><td>${r[1]}</td></tr>`).join("")}</table></div>
+      body = `<div class="notice amber"><b>Harrison's rule: Limited tops out at 600 V; only Unlimited goes past it.</b> Reconciled with the evidence, not dropped. The 600 V figure is the historical value and is still on the Board's licensing landing page. Current statute differs: S.L. 2024-49 section 3.2(a) replaced 600 with 1,000 V for Limited and section 3.2(b) took effect Jan 1, 2025 (read by Harrison/Codex; the app's author could not open ncleg.gov); G.S. 87-43.3(a)(2) gives Intermediate a project value limit and no voltage cap; the July 2026 handbook p26 says 1,000 V. So "only Unlimited is past 600 V" is not verified law today. What does hold: Unlimited has no value limit, and nothing above 1,000 V is Limited work. Law card 2 carries this and is not scored.</div>
+      <div class="card stack" style="margin:12px 0"><h4>Where an Unlimited exam goes past Limited, by voltage</h4><ul class="sm"><li><b>Up to 1,000 V:</b> ordinary Articles 210 to 430 and Table 310.16 (verified rows above). State the actual voltage in every answer.</li><li><b>Over 1,000 V:</b> Article 490 (equipment), 250 Part X (grounding), 110 Part III (over 1,000 V), and the 225 and 230 over-1,000 V parts. These are the lookups still open here: W08, O08 and G10 in LOOKUPS.md. They are never scored.</li><li><b>Practice:</b> run the Category 1, 2 and 7 packets, then the lookup items above with the 90 second stopwatch.</li></ul></div>
+      <p class="sm">The official outline adds topics and difficulty beyond Limited. Aircraft hangars are marked for Unlimited alone. These are topics inside the existing categories, not extra guaranteed question counts.</p><div class="scroll"><table><tr><th>Area</th><th>Adds beyond Limited</th></tr>${[["Grounding/bonding", "High-voltage specifications"], ["Overcurrent protection", "High-voltage provisions"], ["Wiring methods", "Traveling cables/controls and high voltage"], ["Special occupancies", "Emergency systems, health care, assembly/theaters, hazardous locations"], ["Unlimited-specific", "Aircraft hangars (Art. 513)"], ["Load calculations", "High-voltage protection cases"], ["Equipment", "Machine room (elevator applications)"]].map((r) => `<tr><td><b>${r[0]}</b></td><td>${r[1]}</td></tr>`).join("")}</table></div>
       <div class="notice sm"><b>Higher voltage:</b> the handbook uses 'high-voltage' as a scope label, not one numerical threshold for every rule. Workflow: state the actual voltage, find the 2020 article/part for that range, then check grounding, protection, conductor, clearance and equipment rules. The saved 2023 book reorganizes some of this: do not use its headings as a 2020 map.</div>
       <h4 style="margin-top:14px">Hazardous locations: identify the hazard before the rule</h4><p class="sm">Class/Division and Zone describe the material and the circumstances of a hazardous atmosphere. Groups and temperature ratings concern suitability. Sealing limits flame/gas communication where required. Intrinsic safety limits circuit energy. Never infer boundary, wiring method, seal distance or equipment rating from a building label; there is no universal hazardous distance.</p>
       <div class="scroll"><table><tr><th>Article</th><th>Label</th><th>Key question</th></tr>${[["500-506", "Classified-location frameworks", "Which system and protection method?"], ["511", "Commercial garages", "What operations and classified areas?"], ["513", "Aircraft hangars", "Where do hangar-specific areas and equipment rules apply?"], ["514", "Motor fuel dispensing", "Circuits, disconnecting, seals, boundaries?"], ["515", "Bulk storage plants", "Where is storage/transfer; how is it classified?"], ["516", "Spray, dipping, coating", "How do process and ventilation change classification?"], ["517", "Health care", "Patient-care context, grounding reliability, essential electrical systems."], ["518", "Assembly", "Identify the actual assembly occupancy."], ["520", "Theaters", "Stage/audience equipment and wiring conditions."], ["550", "Mobile homes and parks", "Home supply equipment, service/feeder, park context."], ["680", "Pools", "Equipotential bonding, grounding, GFCI, underwater lighting each differ."], ["700", "Emergency systems", "Legally required life safety; contrast 701 standby and 702 optional standby."], ["620", "Elevators", "Traveling cables, controllers, disconnects, machine rooms."]].map((r) => `<tr><td class="mono">${r[0]}</td><td>${r[1]}</td><td class="mut">${r[2]}</td></tr>`).join("")}</table></div>
@@ -495,6 +499,7 @@
     tick: (el) => { S.check[el.dataset.k] = el.checked; save(); },
     necTick: (el) => { const k = el.dataset.k; S.necv[k] = Object.assign({ page: "" }, S.necv[k], { ok: el.checked }); save(); const c = $("#necCount"); if (c) c.textContent = Object.values(S.necv).filter((x) => x && x.ok).length + " of " + necTotal() + " verified by you"; },
     necPage: (el) => { const k = el.dataset.k; S.necv[k] = Object.assign({ ok: false }, S.necv[k], { page: el.value }); save(); },
+    unlGo: () => { studyTab = "unl"; go("study"); },
     necGo: () => { studyTab = "nec"; go("study"); },
     bookSet: (el) => { S.books[el.dataset.k] = el.value; save(); render(); },
     tickV: (el) => { S.verif[el.dataset.k] = el.checked; save(); },
@@ -525,8 +530,8 @@
     logMiss: () => { const it = byId[P.queue[P.i]]; P.logged = P.logged || {}; if (P.logged[it.id]) return; if (S.errs.some((e) => !e.mastered && (e.ref || "").startsWith("Bank " + it.id))) { P.logged[it.id] = true; toast("Already in the error log."); return render(); } P.logged[it.id] = true; S.errs.push(L.newError({ concept: it.id + " " + domName[it.d] + ": " + it.q.slice(0, 70), wrong: P.pick ? "Chose " + P.pick + ": " + it.opts[P.pick] : (P.ans || ""), rule: it.why || it.hint || "", source: it.lookup ? (it.book === "2013 NFPA 72" ? "2013 NFPA 72" : it.book === "2020 NEC" ? "2020 NEC" : "NASCLA") : (it.kind === "law" ? "NC Board Rules" : "2020 NEC"), ref: "Bank " + it.id + (it.ref ? ". " + it.ref : P.cite ? ". " + P.cite : ""), type: it.kind === "calc" ? "Setup Error" : "Code Lookup Miss" }, today())); save(); toast("Added to the error log. Retest tomorrow."); render(); },
     endPractice: () => { P = null; render(); },
     // law
-    lawStart: (el) => { lawTab = "drill"; const g = $("#lawGroup"); if (g) lawGroup = +g.value; else if (el && el.dataset && el.dataset.reset) lawGroup = -1; const ids = NC.cards.filter((c) => lawGroup < 0 || c[1] === lawGroup).map((c) => c[0]); lawQ = { ids: shuffle(L.dueCards(ids, S.cards, today())).slice(0, 15), i: 0, show: false }; if (!lawQ.ids.length) { toast("Nothing due in that group."); lawQ = null; } go("law"); },
-    lawStartAll: () => { const g = $("#lawGroup"); lawGroup = +g.value; lawQ = { ids: shuffle(NC.cards.filter((c) => lawGroup < 0 || c[1] === lawGroup).map((c) => c[0])), i: 0, show: false }; render(); },
+    lawStart: (el) => { lawTab = "drill"; const g = $("#lawGroup"); if (g) lawGroup = +g.value; else if (el && el.dataset && el.dataset.reset) lawGroup = -1; const ids = NC.cards.filter((c) => !DISP[c[0]] && (lawGroup < 0 || c[1] === lawGroup)).map((c) => c[0]); lawQ = { ids: shuffle(L.dueCards(ids, S.cards, today())).slice(0, 15), i: 0, show: false }; if (!lawQ.ids.length) { toast("Nothing due in that group."); lawQ = null; } go("law"); },
+    lawStartAll: () => { const g = $("#lawGroup"); lawGroup = +g.value; lawQ = { ids: shuffle(NC.cards.filter((c) => !DISP[c[0]] && (lawGroup < 0 || c[1] === lawGroup)).map((c) => c[0])), i: 0, show: false }; render(); },
     lawShow: () => { lawQ.show = true; render(); },
     lawRes: (el) => { const id = lawQ.ids[lawQ.i]; S.cards[id] = L.review(S.cards[id], el.dataset.ok === "1", today()); lawQ.i++; lawQ.show = false; save(); render(); },
     scSolved: (el) => { S.sc[el.dataset.i] = true; save(); render(); },
@@ -559,7 +564,9 @@
   setInterval(() => { tickClock(); if (P && P.queue && !P.nav && P.i < P.queue.length && byId[P.queue[P.i]] && byId[P.queue[P.i]].lookup && !P.commit) tickLk(); const swEl = $("#sw"); if (swEl && sw) swEl.textContent = ((Date.now() - sw) / 1000).toFixed(1) + "s";
     const cd = L.countdown(new Date(), NC.exam.startISO), q = (k) => $("[data-cd=" + k + "]"); if (q("d")) { q("d").textContent = cd.days; q("h").textContent = cd.hours; q("m").textContent = cd.minutes; } }, 1000);
   const sanCtx = () => ({ views: NAV.map((n) => n[0]), books: Object.fromEntries(BOOKS.map(([k, , o]) => [k, o])) });
-  try { S = L.sanitize(JSON.parse(localStorage.getItem(KEY) || "{}"), blank(), sanCtx()); } catch (e) { S = blank(); }
+  let raw = "{}";
+  try { raw = localStorage.getItem(KEY) || "{}"; localStorage.setItem(KEY + ".probe", "1"); localStorage.removeItem(KEY + ".probe"); } catch (e) { storageOK = false; } // read or write blocked: say so from the first render
+  try { S = L.sanitize(JSON.parse(raw), blank(), sanCtx()); } catch (e) { S = blank(); }
   applyTheme(); view = S.nav.view || "today";
   render();
 })();
