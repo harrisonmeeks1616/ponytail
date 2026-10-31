@@ -2,7 +2,7 @@
 
 Study, practice and readiness tracking for the North Carolina Unlimited Electrical Contractor exam (booked Monday, Dec 7, 2026, 10:00 AM ET, PSI Charlotte Tyvola). Built from the Harrison OS Notion plan under **NC Unlimited**, as rebuilt on Oct 31, 2026 (Day 01 is Oct 31). One static page, no build step, no accounts, works offline.
 
-Exam reference set: **2020 NEC**, **2013 NFPA 72**, **NASCLA North Carolina Electrical 14th edition**. 100 questions, six hours, 70% to pass.
+Exam reference set: **2020 NEC**, **2013 NFPA 72**, **NASCLA North Carolina Electrical (current edition; the publisher offers the 14th, confirm your copy)**. 100 questions, six hours, 70% to pass.
 
 | File | What it is |
 | --- | --- |

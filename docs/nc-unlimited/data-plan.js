@@ -15,7 +15,7 @@
     books: [
       ["2020 NEC (complete bound)", "Required and permitted. Timed navigation, exact 2020 provisions, calculations, exceptions."],
       ["2013 NFPA 72 (complete bound)", "Required and permitted for Unlimited. Chapter navigation plus system-specific numbers."],
-      ["NASCLA North Carolina Electrical, 14th edition", "Admitted under the current handbook. Only the 14th edition is allowed from June 16, 2026. Recall first, then verify and page-key it."],
+      ["NASCLA North Carolina Electrical, current edition (the publisher offers the 14th, ISBN 978-1-948558-50-1)", "Admitted reference. NASCLA's store page says both the 13th and 14th were allowed in testing centers through June 15, 2026 and only the 14th from June 16, 2026. Your Notion plan now says only 'current edition, confirm your copy'. Confirm in the current NCBEEC handbook or your PSI confirmation; if your copy is the 13th, plan on the 14th. Recall first, then verify and add page references in your own book."],
       ["G.S. 87 Art. 4 and 21 NCAC 18B", "STUDY sources only. Separate law/rules documents are not on the admitted list. Content inside NASCLA can be consulted."],
       ["Official Lighting and Power Plans", "Tested. Study drawings are at the back of the NCBEEC/PSI handbook (printed pp. 69-70). No personal plan packet is authorized."],
       ["2023 NEC (saved copy)", "Supporting explanation only. NOT the exam edition. Article 220 and higher-voltage layout differ from 2020."]
