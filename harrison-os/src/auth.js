@@ -184,6 +184,20 @@ function getHeader(request, name) {
 // ---------------------------------------------------------------------------
 // Public API
 
+export const MCP_PATH = '/api/mcp';
+
+function audValue(v) {
+  return typeof v === 'string' ? v.trim() : '';
+}
+
+// The MCP client's Access application audience. Blank, or equal to the owner's or the Shortcut's audience
+// (a configuration mistake that would let one token act as the other), means MCP is not configured.
+export function mcpAudience(env = {}) {
+  const aud = audValue(env.ACCESS_AUD_MCP);
+  if (!aud || aud === audValue(env.ACCESS_AUD) || aud === audValue(env.ACCESS_AUD_SHORTCUT)) return '';
+  return aud;
+}
+
 export async function authenticate(request, env = {}, { fetchImpl = fetch, nowMs = Date.now() } = {}) {
   // 1. Local development bypass, loopback only.
   if (env.DEV_ALLOW_UNAUTH === '1') {
@@ -193,11 +207,11 @@ export async function authenticate(request, env = {}, { fetchImpl = fetch, nowMs
 
   // 2. Fail closed when Access isn't configured.
   const team = normaliseTeamDomain(env.ACCESS_TEAM_DOMAIN);
-  // Two Access applications, two audiences: the owner's (whole Worker) and the
-  // Shortcut's (path app with a Service Auth policy). Each identity kind is only
-  // accepted with its own audience.
-  const ownerAud = typeof env.ACCESS_AUD === 'string' ? env.ACCESS_AUD.trim() : '';
-  const shortcutAud = typeof env.ACCESS_AUD_SHORTCUT === 'string' ? env.ACCESS_AUD_SHORTCUT.trim() : '';
+  // Three Access applications, three audiences: the owner's (whole Worker), the Shortcut's and the MCP
+  // client's (path apps with a Service Auth policy). Each identity is only accepted with its own audience.
+  const ownerAud = audValue(env.ACCESS_AUD);
+  const shortcutAud = audValue(env.ACCESS_AUD_SHORTCUT);
+  const mcpAud = mcpAudience(env);
   if (!team || !ownerAud) throw new AuthError(503, 'not_configured');
 
   // 3. The assertion header.
@@ -229,7 +243,8 @@ export async function authenticate(request, env = {}, { fetchImpl = fetch, nowMs
   const auds = Array.isArray(payload.aud) ? payload.aud : [payload.aud];
   const hasOwnerAud = auds.some((a) => typeof a === 'string' && a === ownerAud);
   const hasShortcutAud = !!shortcutAud && auds.some((a) => typeof a === 'string' && a === shortcutAud);
-  if (!hasOwnerAud && !hasShortcutAud) throw new AuthError(401, 'invalid', 'bad_aud');
+  const hasMcpAud = !!mcpAud && auds.some((a) => typeof a === 'string' && a === mcpAud);
+  if (!hasOwnerAud && !hasShortcutAud && !hasMcpAud) throw new AuthError(401, 'invalid', 'bad_aud');
   if (typeof payload.exp !== 'number' || !Number.isFinite(payload.exp)) throw new AuthError(401, 'invalid', 'missing_exp');
   const expMs = payload.exp * 1000;
   if (!(expMs > nowMs)) throw new AuthError(401, 'expired');
@@ -251,9 +266,12 @@ export async function authenticate(request, env = {}, { fetchImpl = fetch, nowMs
   }
   const commonName = typeof payload.common_name === 'string' ? payload.common_name.trim() : '';
   if (commonName) {
-    // A service token is only accepted through the Shortcut's application.
+    // A service token is only accepted through the Shortcut's or the MCP client's application, and must
+    // name exactly one of them: the audience decides which single route it may call.
+    if (hasShortcutAud && hasMcpAud) throw new AuthError(401, 'invalid', 'service_ambiguous_aud');
+    if (hasMcpAud) return { kind: 'service', audience: 'mcp', commonName, expMs };
     if (!hasShortcutAud) throw new AuthError(401, 'invalid', 'service_wrong_aud');
-    return { kind: 'service', commonName, expMs };
+    return { kind: 'service', audience: 'shortcut', commonName, expMs };
   }
   throw new AuthError(401, 'invalid', 'no_identity');
 }
@@ -261,8 +279,16 @@ export async function authenticate(request, env = {}, { fetchImpl = fetch, nowMs
 export function authorizeRoute(identity, method, pathname) {
   if (!identity || typeof pathname !== 'string') return false;
   const m = typeof method === 'string' ? method.toUpperCase() : '';
-  if (identity.kind === 'service') return m === 'POST' && pathname === '/api/shortcut/capture';
-  if (identity.kind === 'owner' || identity.kind === 'dev') return pathname === '/api' || pathname.startsWith('/api/');
+  // The MCP client reaches only its endpoint (every method, so GET is answered 405 by the route table, as
+  // MCP's HTTP transport expects). Any other service token is the Shortcut's.
+  if (identity.kind === 'service') {
+    if (identity.audience === 'mcp') return pathname === MCP_PATH;
+    return m === 'POST' && pathname === '/api/shortcut/capture';
+  }
+  const underApi = pathname === '/api' || pathname.startsWith('/api/');
+  // The owner's browser session is never an MCP channel. dev (loopback only) keeps every route for local tests.
+  if (identity.kind === 'owner') return underApi && pathname !== MCP_PATH;
+  if (identity.kind === 'dev') return underApi;
   return false;
 }
 
