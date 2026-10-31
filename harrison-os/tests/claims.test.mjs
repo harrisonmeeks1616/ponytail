@@ -93,3 +93,28 @@ test('extractClaims: atomic fields, verbatim text, no upgrade without a cue', ()
   assert.deepEqual(extractClaims('Mike said it is done.').map((x) => x.status), ['reported_complete']);
   assert.deepEqual(extractClaims('The panel was inspected.').map((x) => x.status), ['verified']);
 });
+
+test('greetings, sign-offs and headings never hide a claim', () => {
+  const S = 'We requested 2 lifts from Sunbelt for Monday.';
+  assert.ok(types(compareClaims(S, `Hi Dana, Sunbelt confirmed 2 lifts for Monday.\n${S}`)).includes('status_upgraded'));
+  assert.ok(types(compareClaims(S, `${S} Thanks to Sunbelt, the lifts are confirmed for Monday.`)).includes('status_upgraded'));
+  assert.ok(types(compareClaims(S, `Thanks, Sunbelt confirmed 2 lifts for Monday!\n${S}`)).includes('status_upgraded'));
+  assert.ok(types(compareClaims(S, `${S}\nSunbelt confirmed 4 lifts for Monday:`)).includes('changed_quantity'));
+  assert.ok(compareClaims('Order 12 sheets of drywall.', 'Order 12 sheets of drywall. Best case we need 40 sheets by Friday.').length > 0);
+  only(compareClaims('Best case we pour Thursday if the inspector passes it.', 'We pour Thursday.'), 'condition_omitted');
+  // Plain framing, and labels with numbers in them, stay silent.
+  assert.deepEqual(compareClaims(S, `Hey team, quick update:\n${S}\n\nBest, Sam`), []);
+  assert.deepEqual(compareClaims(S, `Lot 12 update for Unit 4 crew:\n${S}`, { labels: ['Lot 12', 'Unit 4 crew'] }), []);
+  assert.deepEqual(compareClaims(S, `Hi Dana Smith, Project Manager,\n${S}`, { labels: ['Dana Smith, Project Manager'] }), []);
+  assert.ok(compareClaims(S, `Hi Dana, Sunbelt confirmed 2 lifts for Monday.\n${S}`, { labels: ['Dana'] }).length > 0);
+});
+
+test('dropping requested or proposed states it as settled', () => {
+  const S = 'We requested 2 lifts from Sunbelt for Monday.';
+  const f = only(compareClaims(S, 'Sunbelt has delivered 2 lifts for Monday.'), 'status_upgraded');
+  assert.equal(f.source_value, 'requested');
+  for (const d of ['2 lifts from Sunbelt are booked for Monday.', 'Sunbelt is sending 2 lifts for Monday.']) {
+    only(compareClaims(S, d), 'status_upgraded');
+  }
+  assert.equal(compareClaims('We could pour Thursday.', 'We pour Thursday.')[0].message, 'Your notes say proposed; the draft states it as settled.');
+});

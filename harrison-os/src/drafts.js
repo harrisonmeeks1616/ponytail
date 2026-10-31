@@ -155,7 +155,12 @@ function sourceTextOf(facts, sections) {
   const parts = [];
   if (facts) parts.push(factLines(facts).map(sentence).join('\n'));
   for (const s of sections) parts.push(s.lines.join('\n'));
-  return parts.filter(Boolean).join('\n').slice(0, MAX_SOURCE_TEXT);
+  return parts.filter(Boolean).join('\n');
+}
+
+// Names the template's greeting and headings carry; the claim check does not treat them as claims.
+function labelsOf(draft) {
+  return [draft.recipient_label, draft.project_name].filter(Boolean);
 }
 
 /**
@@ -279,6 +284,7 @@ function draftOut(row) {
     kind: row.kind,
     title: row.title,
     recipient_label: row.recipient_label,
+    project_name: row.project_name,
     facts: row.facts,
     source_refs: parse(row.source_refs),
     source_text: row.source_text,
@@ -321,8 +327,13 @@ export async function createDraft(env, input, { nowMs, aiImpl, signal } = {}) {
   const src = await resolveSources(database, scope, input.source_refs);
   if (!facts && !src.sections.length) throw new HttpError(400, 'nothing_to_draft', 'Add some facts or a source to draft from');
 
+  // One bound for the baseline and the template, so an untouched draft always matches its baseline and saves.
   const material = sourceTextOf(facts, src.sections);
   let body = templateDraft({ kind, facts, recipient, sections: src.sections, project: src.project });
+  if (material.length > MAX_SOURCE_TEXT || body.length > MAX_BODY) {
+    throw new HttpError(400, 'sources_too_long', 'The notes and sources are too long for one draft. Cite fewer sources.');
+  }
+  const projectName = src.project ? src.project.name : null;
   let generatedBy = 'template';
   const ai = { requested: input.use_ai === true, used: false };
   if (ai.requested) {
@@ -335,7 +346,7 @@ export async function createDraft(env, input, { nowMs, aiImpl, signal } = {}) {
       ai.reason = res.reason;
     }
   }
-  const flags = compareClaims(material, body);
+  const flags = compareClaims(material, body, { labels: labelsOf({ recipient_label: recipient, project_name: projectName }) });
   const title =
     titleIn ||
     [KIND_TITLE[kind], src.project ? src.project.name : null, recipient ? `for ${recipient}` : null].filter(Boolean).join(' · ').slice(0, MAX_TITLE);
@@ -343,10 +354,10 @@ export async function createDraft(env, input, { nowMs, aiImpl, signal } = {}) {
   const now = iso(nowMs);
   await database
     .prepare(
-      'INSERT INTO drafts (id, scope, kind, title, recipient_label, facts, source_refs, source_text, body, generated_by, flags, state, created_at, updated_at, sample) ' +
-        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'draft', ?, ?, ?)",
+      'INSERT INTO drafts (id, scope, kind, title, recipient_label, project_name, facts, source_refs, source_text, body, generated_by, flags, state, created_at, updated_at, sample) ' +
+        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'draft', ?, ?, ?)",
     )
-    .bind(id, scope, kind, title, recipient, facts, JSON.stringify(src.refs), material, body, generatedBy, JSON.stringify(flags), now, now, src.sample)
+    .bind(id, scope, kind, title, recipient, projectName, facts, JSON.stringify(src.refs), material, body, generatedBy, JSON.stringify(flags), now, now, src.sample)
     .run();
   await logEvent(database, now, 'draft_created', id, { scope, kind, generated_by: generatedBy, flags: flags.length, refs: src.refs.length, ai: ai.requested ? ai.reason || 'used' : 'off' });
   return { draft: await getDraft(database, id, scope), ai };
@@ -358,19 +369,19 @@ export async function updateDraft(database, id, scope, patch, nowMs) {
   const current = await getDraft(database, id, s);
   if (!current) throw new HttpError(404, 'not_found', 'No such draft');
   const next = { ...current };
+  if (patch.recipient_label !== undefined) next.recipient_label = optString(patch.recipient_label, 'recipient_label', MAX_RECIPIENT);
   if (patch.body !== undefined) {
     if (typeof patch.body !== 'string' || !patch.body.trim() || patch.body.length > MAX_BODY) {
       throw new HttpError(400, 'invalid_body', `body must be 1 to ${MAX_BODY} characters`);
     }
     if (patch.body !== current.body) {
       next.body = patch.body;
-      next.flags = compareClaims(current.source_text, patch.body);
+      next.flags = compareClaims(current.source_text, patch.body, { labels: [...labelsOf(current), ...labelsOf(next)] });
       // A material change invalidates an earlier review.
       if (current.state === 'reviewed') next.state = 'draft';
     }
   }
   if (patch.title !== undefined) next.title = optString(patch.title, 'title', MAX_TITLE) || current.title;
-  if (patch.recipient_label !== undefined) next.recipient_label = optString(patch.recipient_label, 'recipient_label', MAX_RECIPIENT);
   if (patch.state !== undefined) {
     if (!STATES.has(patch.state)) throw new HttpError(400, 'invalid_state', 'state must be draft, reviewed or archived');
     next.state = patch.state;
@@ -388,7 +399,7 @@ export async function checkDraft(database, id, scope, nowMs) {
   const s = requireScope(scope);
   const current = await getDraft(database, id, s);
   if (!current) throw new HttpError(404, 'not_found', 'No such draft');
-  const flags = compareClaims(current.source_text, current.body);
+  const flags = compareClaims(current.source_text, current.body, { labels: labelsOf(current) });
   await database.prepare('UPDATE drafts SET flags = ?, updated_at = ? WHERE id = ? AND scope = ?').bind(JSON.stringify(flags), iso(nowMs), id, s).run();
   return getDraft(database, id, s);
 }

@@ -238,7 +238,9 @@ async function create(form, { scope, project, kindSel, recipient, facts, status 
         ? 'Add some facts first.'
         : code === 'source_not_found'
           ? 'That project is not available here any more. Leave it out and try again.'
-          : failWords(r, 'make the draft');
+          : code === 'sources_too_long'
+            ? 'That is too much material for one draft. Shorten the facts or leave the project out.'
+            : failWords(r, 'make the draft');
     status.hidden = false;
     return;
   }

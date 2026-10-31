@@ -39,14 +39,22 @@ words, numbers and dates) and returns flags:
 | `changed_quantity` | numbers or units differ (12 sheets vs 14 sheets; "two" equals "2") |
 | `changed_date` | date phrases differ (Friday vs Thursday) |
 | `changed_actor` | who acts changed and the new actor is not mentioned in the note (Mike will send -> We will send) |
-| `status_upgraded` | the draft reaches confirmed / reported done / verified when the note does not (requested -> confirmed, even with the same names and numbers) |
+| `status_upgraded` | the draft reaches confirmed / reported done / verified when the note does not (requested -> confirmed, even with the same names and numbers), or drops a requested/proposed status and states the thing as settled ("Sunbelt has delivered 2 lifts") |
 | `certainty_removed` | the note hedges (probably, maybe, about 5) and the draft does not |
 | `commitment_added` | the draft promises (will, guarantee, make sure) where the note does not, or adds a promise with no source |
 | `condition_omitted` | the note's if/unless/once/pending condition is missing from the draft |
 | `fact_omitted` | a fact in the notes has no counterpart in the draft |
 | `unsupported_claim` | a draft statement has no counterpart in the notes, or states as fact what the notes ask as a question |
 
-Headings ending in `:`, greetings and sign-offs, and lines with nothing checkable are not claims.
+A greeting prefix ("Hi Dana, ...") is cut off and the rest of the line is checked. A greeting, a sign-off
+standing alone ("Thanks,", "Best, Sam") or a heading ending in `:` is framing only when it carries nothing
+checkable (no number, date, status, promise, hedge or condition) once the recipient label and project name are
+removed; "Best case we need 40 sheets by Friday" or "Sunbelt confirmed 4 lifts:" are checked like any claim.
+Lines with nothing checkable at all are not claims.
+
+The material a draft is built from (facts plus resolved sources) is capped at 12,000 characters and the template
+at 20,000; anything longer is refused with 400 `sources_too_long` rather than cut, so an untouched template always
+matches its baseline and can be saved.
 
 **This is a tripwire, not proof.** It is deterministic word matching. It catches the common meaning changes
 listed above; it cannot prove a draft true, can miss a rephrased invention, and can flag harmless rewording.

@@ -4,7 +4,8 @@
 --   'project:<id>'); a cited project expands to the items and captures it pulled in, so deleting any of
 --   them deletes the draft (drafts.purgeRef).
 -- source_text: the facts and resolved source lines the draft was built from; the claim check compares the
---   body against it. flags: JSON list from claims.compareClaims for the current body.
+--   body against it (at most 12000 characters; longer material is refused, never cut). project_name and
+--   recipient_label are the labels the template's greeting and headings carry. flags: JSON list from claims.compareClaims for the current body.
 -- No sending: drafts are copied out by the user.
 
 CREATE TABLE drafts (
@@ -13,6 +14,7 @@ CREATE TABLE drafts (
   kind TEXT NOT NULL CHECK (kind IN ('email', 'materials', 'update', 'handoff', 'call_brief')),
   title TEXT NOT NULL,
   recipient_label TEXT,
+  project_name TEXT,
   facts TEXT,
   source_refs TEXT NOT NULL DEFAULT '[]',
   source_text TEXT NOT NULL DEFAULT '',

@@ -1,7 +1,7 @@
 // Claim checking for drafts. Pure and deterministic: no I/O, no clock, no model.
 //
 // extractClaims(text)            -> atomic claims { text, actor, action, quantities, dates, status, conditions, hedges }
-// compareClaims(source, draft)   -> flags [{ type, message, source_quote, draft_quote, source_value?, draft_value? }]
+// compareClaims(source, draft, { labels }) -> flags [{ type, message, source_quote, draft_quote, source_value?, draft_value? }]
 //
 // This is a tripwire, not proof. It catches the common ways a rewrite changes meaning (a requested lift
 // becoming a confirmed one, 12 sheets becoming 14, Mike's job becoming ours, a dropped "if", a dropped
@@ -31,6 +31,8 @@ const STATUS_WORDS = {
 const EXTRA_CUES = [
   [/\b(?:need|needs|needed|please)\b/i, 'requested'],
   [/\b(?:could|propose|proposes|suggest|suggests)\b/i, 'proposed'],
+  [/\b(?:booked|approved|scheduled|locked in)\b/i, 'confirmed'],
+  [/\b(?:delivered|arrived)\b/i, 'reported_complete'],
 ];
 
 const HEDGE_RE =
@@ -39,8 +41,11 @@ const CONDITION_RE =
   /\b(?:if|unless|once|provided(?: that)?|as long as|assuming|pending|subject to|weather permitting|depending on|only after)\b[^,;.]*/gi;
 const COMMITMENT_RE =
   /\b(?:will|shall|won't|we'll|i'll|they'll|he'll|she'll|promise[sd]?|guarantee[sd]?|commit(?:s|ted)?|going to|definitely|for sure|make sure|ensure)\b/i;
-const GREETING_RE =
-  /^(?:hi|hello|hey|dear|good (?:morning|afternoon|evening)|thanks|thank you|best|regards|best regards|kind regards|cheers|sincerely|talk soon)\b[^.!?]*[,!.]?$/i;
+// Greeting prefix ("Hi Dana, ...") is stripped and the rest of the line is checked. A sign-off counts as
+// framing only when it stands alone ("Thanks," / "Best, Sam"), never as a prefix ("Best case we ...").
+const GREETING_RE = /^(?:hi|hello|hey|dear|good (?:morning|afternoon|evening))\b[^,!:;.?]{0,40}(?:[,!:]\s*|$)/i;
+const SIGNOFF_RE =
+  /^(?:thanks|thank you|many thanks|best|regards|best regards|kind regards|warm regards|cheers|sincerely|talk soon)(?:\s*,\s*[^,.!?:;]{1,40})?\s*[,!.]?$/i;
 
 const DAYS = ['monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday', 'sunday'];
 const DAY_ABBR = { mon: 'monday', tue: 'tuesday', tues: 'tuesday', wed: 'wednesday', thu: 'thursday', thur: 'thursday', thurs: 'thursday', fri: 'friday', sat: 'saturday', sun: 'sunday' };
@@ -264,11 +269,41 @@ function isQuestion(claim) {
   return /\?\s*$/.test(claim.text);
 }
 
-// Headings ("Waiting on:"), greetings and sign-offs, and lines with nothing checkable are not claims.
-function isFraming(claim, keys) {
-  if (/:\s*$/.test(claim.text)) return true;
-  if (GREETING_RE.test(claim.text.trim())) return true;
-  return keys.size === 0;
+function escapeRe(s) {
+  return s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+// Anything that could carry meaning: a number, a date, a status, a promise, a hedge or a condition.
+function checkable(text) {
+  const dates = findDates(text);
+  return dates.length > 0 || findQuantities(text, dates).length > 0 || claimStatusOf(text) !== 'unspecified' ||
+    COMMITMENT_RE.test(text) || new RegExp(HEDGE_RE.source, 'i').test(text) || new RegExp(CONDITION_RE.source, 'i').test(text);
+}
+
+// Greetings, sign-offs and headings ("Waiting on:", "Riverside update for Dana:") are framing, not claims,
+// but only when they carry nothing checkable once the known labels (recipient, project name) are removed.
+// A greeting prefix is cut off and the rest of the line is checked as a claim.
+// ponytail: labels are trusted (the user typed them); a heading that only repeats a label is never checked.
+function prepClaims(text, labels) {
+  const out = [];
+  const strip = (t) => labels.reduce((acc, l) => acc.replace(new RegExp(`(?<![A-Za-z0-9])${escapeRe(l)}(?![A-Za-z0-9])`, 'gi'), ' '), t).replace(/\s+([,!:])/g, '$1').trim();
+  for (const c of extractClaims(text)) {
+    let claim = c;
+    const bare = strip(c.text);
+    const whole = GREETING_RE.exec(bare);
+    const greetingOnly = !!whole && whole[0].length >= bare.length;
+    const g = GREETING_RE.exec(c.text);
+    if (!greetingOnly && g && g[0].length < c.text.length) {
+      claim = extractClaims(c.text.slice(g[0].length))[0];
+      if (!claim) continue;
+    }
+    const keys = matchKeys(claim);
+    if (keys.size === 0) continue;
+    const shaped = greetingOnly || SIGNOFF_RE.test(claim.text) || /:\s*$/.test(claim.text);
+    if (shaped && !checkable(strip(claim.text))) continue;
+    out.push({ claim, keys });
+  }
+  return out;
 }
 
 function score(a, b) {
@@ -339,6 +374,9 @@ function pairFlags(src, dft) {
   if (dft.status !== src.status && FIRM.has(dft.status)) {
     const said = src.status === 'unspecified' ? "Your notes don't say it is settled" : `Your notes say ${STATUS_WORDS[src.status]}`;
     out.push(flag('status_upgraded', `${said}; the draft says ${STATUS_WORDS[dft.status]}.`, src, dft, { source_value: src.status, draft_value: dft.status }));
+  } else if (dft.status === 'unspecified' && (src.status === 'requested' || src.status === 'proposed')) {
+    // Dropping "requested"/"proposed" states the thing as fact ("Sunbelt has delivered 2 lifts").
+    out.push(flag('status_upgraded', `Your notes say ${STATUS_WORDS[src.status]}; the draft states it as settled.`, src, dft, { source_value: src.status, draft_value: dft.status }));
   }
   if (src.hedges.length && !dft.hedges.length) {
     out.push(flag('certainty_removed', `Your notes say "${src.hedges.join('", "')}"; the draft states it as certain.`, src, dft, { source_value: src.hedges.join(', ') }));
@@ -359,12 +397,13 @@ function pairFlags(src, dft) {
  * Compares a draft against the notes it was written from. Returns flags, each with the source quote and
  * the draft quote it is about. Matching pairs each draft claim with its most similar source claim (shared
  * key words, numbers and dates); unmatched source facts are fact_omitted and unmatched draft statements
- * are unsupported_claim (or commitment_added when they promise something).
+ * are unsupported_claim (or commitment_added when they promise something). labels are names the draft's
+ * greeting and headings may carry without them counting as claims (recipient label, project name).
  */
-export function compareClaims(sourceText, draftText) {
-  const prep = (c) => ({ claim: c, keys: matchKeys(c) });
-  const source = extractClaims(sourceText).map(prep).filter((e) => !isFraming(e.claim, e.keys));
-  const draft = extractClaims(draftText).map(prep).filter((e) => !isFraming(e.claim, e.keys));
+export function compareClaims(sourceText, draftText, { labels = [] } = {}) {
+  const known = labels.filter((l) => typeof l === 'string' && l.trim()).map((l) => l.trim());
+  const source = prepClaims(sourceText, known);
+  const draft = prepClaims(draftText, known);
   const flags = [];
   const seen = new Set();
   const push = (f) => {

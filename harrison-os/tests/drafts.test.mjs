@@ -259,3 +259,23 @@ test('every kind builds a template whose own framing raises no flags', () => {
     assert.deepEqual(compareClaims(material, body), [], `${kind}:\n${body}`);
   }
 });
+
+test('material is bounded once: a template at the cap has no flags and saves; over the cap is refused', async () => {
+  const { DB, call } = setup();
+  const line = (i) => `Order ${i} sheets of drywall for unit ${i}.`;
+  const text = (from, n) => Array.from({ length: n }, (_, i) => line(from + i)).join('\n');
+  // Each capture is about 9,000 characters: one fits, two exceed the 12,000-character baseline cap.
+  await db.saveCapture(DB, { id: 'cap-long-0001', text: text(100, 220), scope: 'work' }, NOW_ISO);
+  await db.saveCapture(DB, { id: 'cap-long-0002', text: text(400, 220), scope: 'work' }, NOW_ISO);
+  const ok = await call('POST', '/api/drafts', { scope: 'work', kind: 'update', source_refs: ['capture:cap-long-0001'], recipient_label: 'Lot 12 crew' });
+  assert.equal(ok.status, 201, ok.text);
+  const d = ok.data.draft;
+  assert.ok(d.source_text.length > 8000 && d.source_text.length <= 12000);
+  assert.deepEqual(d.flags, []);
+  const saved = await call('PATCH', `/api/drafts/${d.id}`, { scope: 'work', body: `${d.body} ` });
+  assert.equal(saved.status, 200, saved.text);
+  assert.deepEqual(saved.data.draft.flags, []);
+  const tooLong = await call('POST', '/api/drafts', { scope: 'work', kind: 'update', source_refs: ['capture:cap-long-0001', 'capture:cap-long-0002'] });
+  assert.equal(tooLong.status, 400);
+  assert.equal(tooLong.data.error.code, 'sources_too_long');
+});
