@@ -27,5 +27,5 @@ Baseline commit `c9cf526`: 207/207 unit, 11/11 local browser (F1-F10, X1) rerun 
 | A19 | not started | | injection case across Ask/drafts/MCP |
 | A20 | partial (delete + export) | F6, db tests | restore path, attachments, outbox-retry resurrection test (T1) |
 | A21 | partial (390px, 0 console/CSP errors) | F9 | 360-430px, 200% zoom, reduced motion, screen-reader labels audit; real phone |
-| A22 | in progress | root CI untouched; app isolated in harrison-os/ | final diff/resource/privacy inspection |
+| A22 | in progress | app isolated in harrison-os/; root `test` job was already red at seed c9cf526 (114 fail, identical before and after) | final diff/resource/privacy inspection |
 | A23 | in progress | path-scoped CI job added | deploy runbook, guarded resources; actual deploy needs Cloudflare account steps |

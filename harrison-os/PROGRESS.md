@@ -10,3 +10,6 @@
 - Feature modules plug in through registries instead of editing api.js/app.js so seven tracks can run in parallel without merge conflicts. Cost: one small seam each side.
 - Feature modules may own SQL for their own tables (relaxes "db.js only" for new tables); core-table writes still go through db.js.
 - CI uses the runner's preinstalled Google Chrome via Playwright `channel: 'chrome'`; no browser download.
+- 11:35 Track briefs committed (`docs/build/TRACKS.md`, `5a69126`). Four workflows launched: T1a+T1b, T2+T3, T4+T5, T6+T7, each implement (own worktree) -> independent adversarial review -> fix.
+- 11:45 README (fresh checkout), docs/DEPLOY.md, docs/PHONE_TEST.md, e2e `E2E_CHROME_PATH` override (`b2276d4`).
+- 11:50 GitHub: new `harrison-os` CI job green on `5a69126` (unit + browser on a hosted runner). Root `test` job red with 114 fail / 40 cancelled; reproduced identically on the untouched seed `c9cf526` locally (319 pass / 114 fail / 40 cancelled), failures in toolkit/field-app tests (e.g. tests/schwab-sync.test.js). Pre-existing, outside harrison-os; left alone per the handoff (do not change separate field apps). Flagged for Harrison.
