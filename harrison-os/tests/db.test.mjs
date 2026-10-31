@@ -790,3 +790,15 @@ test('static: the receiver rule still catches database calls', () => {
   for (const ok of ['DATE_RE', 'const m = TIME_RE', 'x = /a+/g', 'timeRe', 'const m = re', 'dateRegex']) assert.ok(regexReceiver.test(ok), ok);
   for (const bad of ['env.DB', 'db', 'await db', 'this.store', 'd1']) assert.equal(regexReceiver.test(bad), false, bad);
 });
+
+test('project nextItem: a deferred task is startable on its local start date, not by the UTC date', async () => {
+  const d = createTestDb();
+  const T = '2026-10-29T12:00:00.000Z';
+  await db.createProject(d, { id: 'proj-next-01', name: 'Sample project' }, 'work', T);
+  const mk = (id, extra) => db.createItem(d, { id, kind: 'task', title: id, projectId: 'proj-next-01', ...extra }, 'work', T);
+  await mk('task-deferred-01', { dueOn: '2026-10-30', startOn: '2026-10-30' });
+  await mk('task-later-0001', { dueOn: '2026-11-05' });
+  const next = async (todayOn) => (await db.getProject(d, 'proj-next-01', 'work', todayOn)).nextItem.id;
+  assert.equal(await next('2026-10-29'), 'task-later-0001', 'still deferred on the 29th (local), though UTC may already say the 30th');
+  assert.equal(await next('2026-10-30'), 'task-deferred-01');
+});

@@ -740,7 +740,7 @@ async function postProject(ctx) {
 
 async function getProjectRoute(ctx, id) {
   const scope = queryScope(ctx);
-  const res = await db.getProject(ctx.env.DB, id, scope);
+  const res = await db.getProject(ctx.env.DB, id, scope, instantToZonedParts(ctx.nowMs, 'America/New_York').date);
   if (!res) throw new HttpError(404, 'not_found', 'No such project');
   return json(200, res);
 }

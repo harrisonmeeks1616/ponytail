@@ -15,7 +15,7 @@
 // System functions (reminder cron, deliveries, push subscriptions, kv, events) are at the bottom. They serve
 // the cron and the spike-derived push routes, which are not per-scope by nature; each is marked SYSTEM.
 
-import { zonedWallTimeToInstant, nextDailyOccurrence } from './time.js';
+import { zonedWallTimeToInstant, nextDailyOccurrence, instantToZonedParts } from './time.js';
 
 // ---------------------------------------------------------------- errors
 
@@ -1252,15 +1252,18 @@ export async function listProjects(db, scope) {
   );
 }
 
-async function nextItemFor(db, projectId, scope) {
+// todayOn: the local date (YYYY-MM-DD) a task's start_on is compared with; a task deferred to tomorrow is not
+// startable today. Defaults to the New York date, the app's home zone (the same default the calendar uses).
+const nyToday = (nowMs = Date.now()) => instantToZonedParts(nowMs, 'America/New_York').date;
+
+async function nextItemFor(db, projectId, scope, todayOn = nyToday()) {
   const row = await firstOf(
     db,
-    // ponytail: "deferred" compares start_on with the UTC date; a task deferred to tomorrow can count as
-    // startable for the last hours of the evening in New York. Pass the local date in if that matters.
     "SELECT * FROM items WHERE project_id = ? AND scope = ? AND kind = 'task' AND state = 'open' " +
-      "ORDER BY (start_on IS NOT NULL AND start_on > date('now')), (due_on IS NULL), due_on, today_pick DESC, created_at, rowid LIMIT 1",
+      "ORDER BY (start_on IS NOT NULL AND start_on > ?), (due_on IS NULL), due_on, today_pick DESC, created_at, rowid LIMIT 1",
     projectId,
     scope,
+    todayOn,
   );
   return row ? canon(row, ITEM_COLS) : null;
 }
@@ -1282,7 +1285,7 @@ async function projectCaptures(db, projectId, scope, limit) {
   );
 }
 
-export async function getProject(db, id, scope) {
+export async function getProject(db, id, scope, todayOn) {
   const s = oneScope(scope);
   const row = await firstOf(db, 'SELECT * FROM projects WHERE id = ? AND scope = ?', id, s);
   if (!row) return null;
@@ -1300,7 +1303,7 @@ export async function getProject(db, id, scope) {
   );
   return {
     project: canon(row, PROJECT_COLS),
-    nextItem: await nextItemFor(db, id, s),
+    nextItem: await nextItemFor(db, id, s, todayOn),
     waiting: waiting.map((r) => canon(r, ITEM_COLS)),
     decisions: decisions.map((r) => ({ ...canon(r, ITEM_COLS), superseded: r.superseded_by_id != null })),
     checkpoint: await latestCheckpoint(db, id, s),

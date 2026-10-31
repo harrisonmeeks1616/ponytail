@@ -1164,6 +1164,110 @@ const scenarios = [
       }
     },
   },
+  {
+    id: 'F11',
+    name: 'drafts: an invented confirmation is flagged beside the notes; "Nothing flagged." is not shown',
+    async run() {
+      const { context, page } = await openApp('F11', { offlineExpected: true });
+      try {
+        const made = await apiOk('POST', '/api/drafts', { scope: 'work', kind: 'update', facts: 'The sample inspector requested 2 lifts for Monday.' });
+        const id = made.draft.id;
+        await apiOk('PATCH', `/api/drafts/${id}`, { scope: 'work', body: 'The sample inspector confirmed 5 lifts for Monday.' });
+        await start(page, `#/drafts/${id}`);
+        await page.waitForSelector('.drafts-check', { timeout: 15000 });
+        const flags = await page.locator('.drafts-flag').count();
+        const text = await page.textContent('.drafts-check');
+        check(flags >= 1, `no flag shown for requested->confirmed edit: ${text.slice(0, 200)}`);
+        check(!text.includes('Nothing flagged.'), 'says Nothing flagged next to a flag');
+        check(/tripwire|not proof|cannot catch|may miss/i.test(text), 'the check does not say it is only a tripwire');
+        return `draft ${id.slice(0, 8)}: ${flags} flag(s) shown with the quoted notes; tripwire wording present; no "Nothing flagged."`;
+      } finally {
+        await context.close();
+      }
+    },
+  },
+  {
+    id: 'F12',
+    name: 'weekly review: "Not this week" moves when a task shows up, never its due date',
+    async run() {
+      const { context, page } = await openApp('F12', { offlineExpected: true });
+      try {
+        const rev = await apiOk('GET', `/api/review/weekly?scope=work&tz=${encodeURIComponent(TZ)}`);
+        const nextMonday = rev.next_monday;
+        check(/^\d{4}-\d{2}-\d{2}$/.test(nextMonday), `next_monday ${nextMonday}`);
+        const title = 'Sample weekly-review task, order lobby labels';
+        const made = await apiOk('POST', '/api/items', { scope: 'work', kind: 'task', title, due_on: nextMonday });
+        await start(page, '#/weekly');
+        const btn = page.getByRole('button', { name: `Not this week: ${title}` });
+        await btn.waitFor({ timeout: 15000 });
+        await btn.click();
+        await page.waitForSelector('#toast:not([hidden])', { timeout: 10000 });
+        const toastText = await waitFor(async () => (await page.textContent('#toast-text')) || false, { what: 'toast text' });
+        const item = (await itemsOf('work', 'task')).find((i) => i.id === made.item.id);
+        check(item.due_on === nextMonday, `due date changed to ${item.due_on}`);
+        check(item.start_on === nextMonday, `start_on ${item.start_on}, expected ${nextMonday}`);
+        return `task due ${nextMonday}: "Not this week" -> start_on ${item.start_on}, due_on unchanged; toast "${toastText}"`;
+      } finally {
+        await context.close();
+      }
+    },
+  },
+  {
+    id: 'F13',
+    name: 'sample calendar: the other scope\'s events show as Busy only on Today; PM sample digest links to the company system',
+    async run() {
+      const { context, page } = await openApp('F13', { offlineExpected: true });
+      try {
+        await apiOk('POST', '/api/calendar/sample', { scope: 'personal' });
+        await apiOk('POST', '/api/pm/sample', { scope: 'work' });
+        await start(page, '#/today');
+        await setScopeSwitch(page, 'work');
+        // The first render may be for the previous scope: reload and wait for the Work-scoped events response.
+        const workEvents = page.waitForResponse((r) => r.url().includes('/api/calendar/events') && r.url().includes('scope=work'), { timeout: 15000 });
+        await page.reload({ waitUntil: 'load' });
+        await waitAppReady(page);
+        await workEvents;
+        await page.waitForSelector('.cal-row', { timeout: 15000 });
+        const rows = await page.$$eval('.cal-row', (els) => els.map((e) => ({ busy: e.classList.contains('cal-busy'), text: e.textContent })));
+        const todayText = await page.textContent('#today-body');
+        check(rows.some((r) => r.busy && /Busy/.test(r.text)), `no Busy row in work Today: ${JSON.stringify(rows).slice(0, 300)}`);
+        for (const personalTitle of ['Morning run', 'Pick up the bike from the shop', 'Library books due', 'Neighbourhood open house']) {
+          check(!todayText.includes(personalTitle), `personal event "${personalTitle}" leaked into work Today: ${JSON.stringify(rows).slice(0, 600)}`);
+        }
+        await gotoRoute(page, '#/pm');
+        const link = page.locator('a.pm-open').first();
+        await link.waitFor({ timeout: 15000 });
+        const attrs = await link.evaluate((a) => ({ href: a.href, target: a.target, rel: a.rel, text: a.textContent }));
+        check(/^https:/.test(attrs.href) && attrs.target === '_blank' && /noopener/.test(attrs.rel), `PM link ${JSON.stringify(attrs)}`);
+        const pmText = await page.textContent('body');
+        check(/official record/i.test(pmText), 'the PM screen does not say the company system is the official record');
+        return `work Today: ${rows.length} calendar row(s), Busy rows ${rows.filter((r) => r.busy).length}, no personal titles; PM sample: "${attrs.text}" opens ${new URL(attrs.href).host} in a new tab (noopener), "official record" shown`;
+      } finally {
+        await context.close();
+      }
+    },
+  },
+  {
+    id: 'F14',
+    name: 'Memory > connections: honest states for Ask, MCP and Shortcut when nothing is configured',
+    async run() {
+      const { context, page } = await openApp('F14', { offlineExpected: true });
+      try {
+        await start(page, '#/memory');
+        await page.getByText('AI clients (MCP)').first().waitFor({ timeout: 15000 });
+        const rows = await page.$$eval('.conn-head', (els) => els.map((e) => e.textContent.replace(/\s+/g, ' ').trim()));
+        const find = (name) => rows.find((r) => r.startsWith(name));
+        check(/Ask with AI.*Not set up/.test(find('Ask with AI') || ''), `Ask row: ${find('Ask with AI')}`);
+        check(/AI clients \(MCP\).*Not set up/.test(find('AI clients') || ''), `MCP row: ${find('AI clients')}`);
+        const shortcut = find('iPhone Shortcut') || '';
+        check(/Not set up|Not checked here/.test(shortcut), `Shortcut row: ${shortcut}`);
+        check(!rows.some((r) => /Connected|Working|OK\b/i.test(r)), `a state claims more than was checked: ${rows.join(' | ')}`);
+        return `connection rows: ${rows.join(' | ')}`;
+      } finally {
+        await context.close();
+      }
+    },
+  },
 ];
 
 // After the scenarios: no sample text in server output or events.
