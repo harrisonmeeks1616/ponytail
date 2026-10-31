@@ -1083,6 +1083,14 @@ export async function reviewCapture(db, captureId, { accept = [], drop = [], kee
 
 // ---------------------------------------------------------------- undo
 
+// True when before and after (each null or a row) both name the change's entity (by idKey) and scope.
+function sidesMatch(change, before, after, idKey) {
+  if (before == null && after == null) return false;
+  return [before, after].every(
+    (v) => v == null || (typeof v === 'object' && !Array.isArray(v) && String(v[idKey]) === String(change.entity_id) && v.scope === change.scope),
+  );
+}
+
 export async function undoChange(db, changeId, nowIso, scope) {
   requireNow(nowIso);
   const change = await firstOf(db, 'SELECT * FROM changes WHERE id = ?', Number(changeId));
@@ -1098,6 +1106,8 @@ export async function undoChange(db, changeId, nowIso, scope) {
   const current = currentRow ? canon(currentRow, spec.cols) : null;
   const matches = after == null ? current == null : current != null && sameRow(after, current, spec.cols);
   if (!matches) throw new ConflictError('This has changed since; undo would overwrite newer edits', 'state_moved_on');
+  // History can arrive in a restore file: each side must be this very row, in the change's scope.
+  if (!sidesMatch(change, before, after, 'id')) throw new ValidationError('This change cannot be undone');
 
   const id = change.entity_id;
   const entityScope = (current || before).scope;
@@ -1134,6 +1144,7 @@ export async function undoChange(db, changeId, nowIso, scope) {
       statements.push(ftsDelete(db, entityScope, `project:${id}`));
     }
   } else if (current == null) {
+    if (change.entity === 'item' && (await itemTombstoned(db, id))) throw new GoneError();
     statements.push(insertStmt(db, spec.table, spec.cols, before), markUndone);
     statements.push(...(change.entity === 'item' ? ftsItemSync(db, before.scope, id) : ftsProjectSync(db, before.scope, id)));
   } else {
@@ -1862,6 +1873,7 @@ async function undoPreference(db, change, nowIso) {
   const current = row ? canon(row, PREFERENCE_COLS) : null;
   const matches = after == null ? current == null : current != null && sameRow(after, current, PREFERENCE_COLS);
   if (!matches) throw new ConflictError('This has changed since; undo would overwrite newer edits', 'state_moved_on');
+  if (!sidesMatch(change, before, after, 'key')) throw new ValidationError('This change cannot be undone');
   const restore = before ? canon(before, PREFERENCE_COLS) : null;
   const first = restore
     ? preferenceWrite(db, restore, current ? current.updated_at : null)
@@ -1971,6 +1983,7 @@ export async function restoreData(db, data, scope, nowIso) {
   const deletedRef = (ref) =>
     typeof ref === 'string' && ((ref.startsWith('capture:') && deletedCapture(ref.slice(8))) || (ref.startsWith('item:') && deletedItem(ref.slice(5))));
   const skippedReminders = new Set();
+  const accepted = { captures: new Map(), items: new Map() }; // id -> scope of rows this restore inserted
   const scrubSource = (row) =>
     row && deletedCapture(row.source_capture_id) ? { ...row, source_capture_id: null, source_quote: null, source_deleted: 1 } : row;
 
@@ -1987,7 +2000,13 @@ export async function restoreData(db, data, scope, nowIso) {
       // (source_capture_id may name a work capture for a personal item: review allows the narrower scope.)
       if (crossScope('projects', r.project_id, r.scope)) return ['rejected'];
       if (crossScope('items', r.supersedes_id, r.scope) || crossScope('items', r.superseded_by_id, r.scope)) return ['rejected'];
-      const row = scrubSource(r);
+      let row;
+      try {
+        // The same field and cross-field rules as a create or edit.
+        row = checkItemRow(validateItemValues(scrubSource(canon(r, ITEM_COLS))));
+      } catch {
+        return ['rejected'];
+      }
       return ['ok', { ...row, supersedes_id: deletedItem(r.supersedes_id) ? null : r.supersedes_id, superseded_by_id: deletedItem(r.superseded_by_id) ? null : r.superseded_by_id }];
     },
     checkpoints: (r) => (crossScope('projects', r.project_id, r.scope) ? ['rejected'] : ['ok', { ...r, source_ref: deletedRef(r.source_ref) ? null : r.source_ref }]),
@@ -2012,16 +2031,24 @@ export async function restoreData(db, data, scope, nowIso) {
       return ['ok', row];
     },
     deliveries: (r) => (skippedReminders.has(String(r.reminder_id)) ? ['deleted'] : known.reminders.get(String(r.reminder_id)) !== r.scope ? ['rejected'] : ['ok', r]),
-    attachments: (r) => {
+    attachments: async (r) => {
       if (deletedCapture(r.capture_id) || deletedItem(r.item_id)) return ['deleted'];
-      if (crossScope('captures', r.capture_id, r.scope) || crossScope('items', r.item_id, r.scope)) return ['rejected'];
+      // Exactly one parent, which exists (already, or restored above) in the same scope.
+      if ((r.capture_id == null) === (r.item_id == null)) return ['rejected'];
+      const [t, pid] = r.capture_id != null ? ['captures', String(r.capture_id)] : ['items', String(r.item_id)];
+      if ((existing[t].get(pid) ?? accepted[t].get(pid)) !== r.scope) return ['rejected'];
       const bytes = b64decode(r.data_b64);
       if (!bytes || bytes.length < 1 || bytes.length > MAX_ATTACHMENT_BYTES || !ATTACHMENT_MIMES.includes(r.mime)) return ['rejected'];
-      return ['ok', { ...r, size: bytes.length, bytes }];
+      return ['ok', { ...r, size: bytes.length, sha256: await sha256Hex(bytes), bytes }];
     },
     preferences: (r) => (typeof r.key === 'string' && PREF_KEY_RE.test(r.key) && typeof r.value === 'string' && r.value.length <= 500 ? ['ok', r] : ['rejected']),
     changes: (r) => {
       if (r.entity === 'item' && deletedItem(r.entity_id)) return ['deleted'];
+      // Undo replays before/after: each side must be the named row in the row's scope (see undoChange).
+      if (!['item', 'project', 'preference'].includes(r.entity)) return ['rejected'];
+      const [b, a] = [parseJson(r.before_json), parseJson(r.after_json)];
+      if ([b, a].some((v) => v?.deleted === true && v.id === undefined)) return ['deleted']; // scrubbed by deleteItem
+      if (!sidesMatch(r, b, a, r.entity === 'preference' ? 'key' : 'id')) return ['rejected'];
       const scrub = (j) => {
         const v = parseJson(j);
         return v && deletedCapture(v.source_capture_id) ? JSON.stringify(scrubSource(v)) : j ?? null;
@@ -2044,7 +2071,7 @@ export async function restoreData(db, data, scope, nowIso) {
         out.skipped_existing++;
         continue;
       }
-      const [verdict, row] = rules[table](r);
+      const [verdict, row] = await rules[table](r);
       if (verdict !== 'ok') {
         if (table === 'reminders') skippedReminders.add(String(r.id));
         out[verdict === 'deleted' ? 'skipped_deleted' : 'rejected']++;
@@ -2082,6 +2109,7 @@ export async function restoreData(db, data, scope, nowIso) {
         if (table === 'reminders') skippedReminders.add(String(row.id));
       } else if (changesOf(res) === 1) {
         n++;
+        accepted[table]?.set(String(row.id), row.scope);
         if (table === 'items') ftsRefresh.push(...ftsItemSync(db, row.scope, row.id));
         if (table === 'projects') ftsRefresh.push(...ftsProjectSync(db, row.scope, row.id));
         if (table === 'captures') ftsRefresh.push(...ftsCaptureSync(db, row.scope, row.id));

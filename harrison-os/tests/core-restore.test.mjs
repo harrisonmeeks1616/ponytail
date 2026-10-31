@@ -173,3 +173,52 @@ test('POST /api/restore: counts in the response, scope rules, large bodies accep
   // The same document again as 'all': the work rows are already there and are not overwritten.
   assert.equal((await post({ scope: 'all', data: doc })).data.skipped_existing > 0, true);
 });
+
+test('restored undo history cannot revive a deleted item or cross scopes', async () => {
+  const d = createTestDb();
+  const made = (await db.createItem(d, { id: 'item-canary-01', kind: 'task', title: 'PCANARY secret' }, 'personal', T0)).item;
+  await db.deleteItem(d, made.id, 'personal', T1);
+  const crafted = (over) => ({
+    id: 999, at: T1, entity: 'item', entity_id: 'innocent-id', op: 'update', before_json: JSON.stringify(made), after_json: null, undone_at: null, scope: 'work', ...over,
+  });
+  const doc = (rows) => ({ format: 'harrison-os-export', version: 2, tables: { changes: rows } });
+  const res = await db.restoreData(d, doc([crafted(), crafted({ id: 998, entity: 'capture' }), crafted({ id: 997, entity_id: made.id })]), 'work', T2);
+  assert.deepEqual(res.inserted, {});
+  assert.equal(res.skipped_deleted + res.rejected, 3);
+  assert.equal((await d.prepare('SELECT COUNT(*) AS n FROM changes WHERE id >= 997').first()).n, 0);
+
+  // Even a history row already in the database cannot do it: a mismatched side is refused, a tombstoned id is gone.
+  const put = (over) => {
+    const r = crafted(over);
+    return d.prepare('INSERT INTO changes (id, at, entity, entity_id, op, before_json, after_json, scope) VALUES (?, ?, ?, ?, ?, ?, ?, ?)')
+      .bind(r.id, r.at, r.entity, r.entity_id, r.op, r.before_json, r.after_json, r.scope).run();
+  };
+  await put({});
+  await assert.rejects(db.undoChange(d, 999, T2, 'work'), db.ValidationError);
+  await put({ id: 996, entity_id: made.id, scope: 'personal' });
+  await assert.rejects(db.undoChange(d, 996, T2, 'personal'), db.GoneError);
+  assert.equal((await d.prepare('SELECT COUNT(*) AS n FROM items WHERE id = ?').bind(made.id).first()).n, 0);
+});
+
+test('restore applies the item rules and attachment parent and hash rules', async () => {
+  const d = createTestDb();
+  const cap = 'cap-w-0001';
+  await db.saveCapture(d, { id: cap, text: 'Sample capture', scope: 'work', timeZone: TZ }, T0);
+  const item = (over) => ({ id: 'it-ok', kind: 'decision', scope: 'work', title: 'Sample', state: 'open', origin: 'user', created_at: T0, updated_at: T0, sample: 0, source_deleted: 0, today_pick: 0, ...over });
+  const att = (over) => ({ id: 'att-ok-0001', scope: 'work', capture_id: cap, item_id: null, name: 'a.txt', mime: 'text/plain', size: 3, sha256: 'bogus', created_at: T0, sample: 0, data_b64: 'YWJj', ...over });
+  const res = await db.restoreData(d, {
+    format: 'harrison-os-export', version: 2,
+    tables: {
+      items: [item({ options_json: '["A"," B "]' }), item({ id: 'it-bad-opt', options_json: 'not json' }), item({ id: 'it-bad-rec', recurrence: 'weekly' }), item({ id: 'it-no-title', title: '' })],
+      attachments: [att(), att({ id: 'att-orph-0001', capture_id: 'nonexistent-cap' }), att({ id: 'att-x-scope1', scope: 'personal' }), att({ id: 'att-on-item1', capture_id: null, item_id: 'it-ok' }), att({ id: 'att-on-bad01', capture_id: null, item_id: 'it-bad-opt' })],
+    },
+  }, 'all', T1);
+  assert.deepEqual(res.inserted, { items: 1, attachments: 2 });
+  assert.equal(res.rejected, 6);
+  assert.equal((await db.getItem(d, 'it-ok', 'work')).options_json, '["A","B"]');
+  for (const id of ['it-bad-opt', 'it-bad-rec', 'it-no-title']) assert.equal(await db.getItem(d, id, 'work'), null);
+  assert.equal(await db.getAttachment(d, 'att-orph-0001', 'work'), null);
+  // The stored hash is the bytes' own, so the same upload again is a duplicate, not a conflict.
+  const again = await db.saveAttachment(d, { id: 'att-ok-0001', captureId: cap, name: 'a.txt', mime: 'text/plain', bytes: bytes('abc') }, 'work', T2);
+  assert.equal(again.duplicate, true);
+});

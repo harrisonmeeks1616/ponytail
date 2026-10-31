@@ -121,6 +121,12 @@ reviewing or correcting a capture never does.
   history (`skipped_deleted`); items and undo history citing a deleted capture are scrubbed as delete does.
 - Rejects rows outside the requested scope, rows linked across scopes, and rows the schema refuses
   (`rejected`). `meta` is restored only with scope `all`.
+- Restore content is untrusted, so it passes the same checks as the API (`rejected` otherwise): items go
+  through the create/edit field and cross-field rules (options, recurrence only on a dated task, decision-only
+  fields); an attachment needs its one parent to exist (already, or restored in the same request) in its
+  scope, and its `sha256` is recomputed from the bytes; an undo-history row must be an item, project or
+  preference change whose `before`/`after` both name its `entity_id` and its scope. Undo itself enforces
+  the same match (`400`) and never re-inserts a deleted item (`410 gone`).
 - Keeps relationships (proposals, items -> projects, checkpoints, reminders -> items, deliveries, supersede
   links, attachments with bytes) and rebuilds search rows for inserted rows.
 - Active reminders are rescheduled from now: a daily one gets its next occurrence after now; a one-off whose
