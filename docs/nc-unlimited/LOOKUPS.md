@@ -2,9 +2,11 @@
 
 Generated from `data-nec.js`. Facts marked verified were read directly in NFPA LiNK (2020 NFPA 70) by Harrison/Codex on 2026-10-31 and relayed to the app; nothing here was read by the app's author. A lookup is never scored by the app.
 
-## Resolved (4)
+## Resolved (6)
 - **G02**: No. A 200 A service label is not enough. You need the size and material of the largest ungrounded conductor (Table 250.66), the arrangement of any parallel sets (use equivalent area per the table notes), and the electrode types the GEC serves (rod/pipe/plate only, concrete-encased only, ring), because each exception applies only if the connection does not continue to another electrode requiring a larger conductor. [Table 250.66 and its exceptions (verified, NFPA LiNK, Oct 31 2026)]
 - **B02**: Six entering EGCs/bonding jumpers count 1 allowance for the first four (based on the largest) plus 1/4 for each additional one: 1 + 2 x 1/4 = 1.5 allowances at the largest conductor's Table 314.16(B) volume (for example 12 AWG: 1.5 x 2.25 = 3.375 in3). The old shortcut that all grounds count as one is not the 2020 rule. [314.16(B)(5) and Table 314.16(B) (verified, NFPA LiNK, Oct 31 2026)]
+- **O04**: The next higher standard rating above 36 A is 40 A (240.6(A) lists 35 A then 40 A), but 240.4(B) permits using it ONLY if all three conditions hold: the protected conductors are not part of a branch circuit supplying more than one receptacle for cord-and-plug-connected portable loads; the 36 A ampacity does not correspond with the standard rating of a fuse or fixed-trip circuit breaker; and the next standard rating is 800 A or less. A general branch-circuit description does not establish the receptacle condition, so state it as an assumption you must confirm. 240.4(D) small-conductor limits are separate and still apply. Do not promote 36 A to 40 A as an unconditional answer. [240.4(B) and 240.6(A) (verified, NFPA LiNK, Oct 31 2026)]
+- **D03**: 110.3(B): listed or labeled equipment must be installed and used in accordance with the instructions included in its listing or labeling. The governing instructions are the ones actually included with the listed assembly (terminals, working arrangement, torque and so on), not generic manufacturer recommendations. 110.3(A) lists the examination factors: suitability, mechanical strength, wire-bending and connection space, heating and others. Evidence to preserve: the listing or label, the instruction sheet that came with the equipment, and the exact clause relied on. The question gives no model or instructions, so no terminal clearance or torque value can be stated. [110.3(A) and 110.3(B) (verified, NFPA LiNK, Oct 31 2026)]
 - **W04**: Conditional on the load facts. A neutral carrying only the unbalanced current need not be counted. The neutral DOES count on a 4-wire, 3-phase wye circuit where a MAJOR PORTION of the load is nonlinear, and on a 3-wire circuit of two phase conductors plus the neutral from a 4-wire wye system. 'Substantial nonlinear load' does not by itself prove the major-portion condition, so state what fraction of the load is nonlinear before counting the neutral. Grounding and bonding conductors are not counted (310.15(F)). [310.15(E) and (F) (verified, NFPA LiNK, Oct 31 2026)]
 - **W01**: Use the 90 C column ampacity as the starting point for correction and adjustment, because 310.15(A) permits correction and adjustment factors to be applied to the ampacity for the conductor temperature rating. Then apply the separate termination check: the corrected or adjusted result may not exceed the ampacity for the 75 C termination rating (the 75 C column value for the same size and material) under 110.14(C). This is a qualified rule, not a universal 90 C shortcut. [310.15(A) (verified, NFPA LiNK, Oct 31 2026); Table 310.16 copper 14 to 500 kcmil and Table 310.15(B)(1) rows 31 to 60 C (verified)]
 
@@ -71,13 +73,13 @@ Questions: L07, L08, L09, L10
 - 220.50 motors
 
 ### 240 and 110.9/110.10
-Questions: O01, O02, O04, O05, O06, O08, O09
+Questions: O01, O02, O05, O06, O08, O09
 - 110.9 interrupting rating and 110.10 short-circuit suitability
-- 240.4(B) next-size rule conditions and 240.4(D) small conductors
+- 240.4(D) small-conductor limits (not required for O04, which is resolved)
 - 240.21(B) feeder taps (10 ft, 25 ft)
 - 240 Parts for breakers, plug and cartridge fuses
 - 240 Part IX and 490 over 1000 V protection
-- 240.6(A)(B) standard ratings and adjustable-trip rule
+- 240.6(A) remainder of the standard list and the adjustable-trip rule
 
 ### 230 and 225
 Questions: S01, S03, S04, S05, S06, S07, S08, S09
@@ -113,14 +115,14 @@ Questions: W06, W09
 - Tables 8 and 9 resistance and AC impedance (and the wireway article fill)
 
 ### Equipment, general and definitions
-Questions: E03, E04, E05, E06, D01, D02, D03
+Questions: E03, E04, E05, E06, D01, D02
 - Article 440 (440.4, 440.22, 440.32, MCA and MOCP)
 - 450.3(B) transformer protection and 240.21(C) secondary conductors
 - Articles 410 and 424 relevant provisions
 - Article 90 and Article 100 definitions (accessible, readily accessible)
-- 110.3(B) listing and instruction relationship
 
 ### 2013 NFPA 72 and NASCLA
 Questions: P11, P13, P14, P15
 - 2013 NFPA 72 Chapter 3 and 10 definitions; Chapter 14 table rows; Chapter 17 door-release placement
 - NASCLA NC Electrical page for contract-change documentation (edition on your cover)
+

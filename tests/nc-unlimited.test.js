@@ -256,8 +256,8 @@ test('NEC rules data: every rule has a tag; V rows carry NFPA LiNK provenance; n
 test('lookup resolutions: only resolved or partial, partial ones say what is still needed, none is scored or auto-verified', () => {
   const ids = new Set(NC.bank.filter((b) => b.lookup).map((b) => b.id));
   for (const [id, r] of Object.entries(NC.nec.lookups)) { assert.ok(ids.has(id), id + ' is not a lookup item'); assert.ok(['resolved', 'partial'].includes(r.status), id); assert.ok(r.answer && r.refs.length, id); assert.equal(r.status === 'resolved', r.needs.length === 0, id + ': resolved means nothing is still needed'); }
-  assert.deepEqual(Object.keys(NC.nec.lookups).sort(), ['B02', 'G02', 'G04', 'G05', 'G08', 'L08', 'L09', 'O07', 'W01', 'W04']);
-  assert.deepEqual(Object.entries(NC.nec.lookups).filter(([, r]) => r.status === 'resolved').map(([id]) => id).sort(), ['B02', 'G02', 'W01', 'W04']);
+  assert.deepEqual(Object.keys(NC.nec.lookups).sort(), ['B02', 'D03', 'G02', 'G04', 'G05', 'G08', 'L08', 'L09', 'O04', 'O07', 'W01', 'W04']);
+  assert.deepEqual(Object.entries(NC.nec.lookups).filter(([, r]) => r.status === 'resolved').map(([id]) => id).sort(), ['B02', 'D03', 'G02', 'O04', 'W01', 'W04']);
   assert.match(NC.nec.lookups.W01.answer, /not a universal 90 C shortcut/); assert.match(NC.nec.lookups.W04.answer, /MAJOR PORTION/); assert.match(NC.nec.lookups.W04.answer, /'Substantial nonlinear load' does not by itself prove/); assert.match(NC.nec.lookups.G04.answer, /TABLE MINIMUM/);
   assert.match(NC.nec.lookups.B02.answer, /1\.5 allowances/);
 });
@@ -460,4 +460,11 @@ test('Table 430.52 and Table 220.42 cells read in NFPA LiNK match the app; pendi
   for (const id of pendingIds) assert.ok(lookupIds.includes(id), id + ' is pending but is not a lookup question');
   for (const g of N2.pending) assert.ok(g.needs.length > 0 && g.ids.length > 0);
   assert.match(N2.rules.find((r) => r[0] === 'w1')[3], /not a universal 90 C shortcut/); assert.match(N2.rules.find((r) => r[0] === 'w6')[3], /MAJOR PORTION/); assert.match(N2.rules.find((r) => r[0] === 'g7')[3], /qualified person/);
+});
+
+test('240.4(B) and 110.3(B) rules read in NFPA LiNK are conditional, not shortcuts', () => {
+  const a = NC.nec.lookups.O04.answer, rule = (id) => NC.nec.rules.find((r) => r[0] === id)[3];
+  assert.match(a, /ONLY if all three conditions/); assert.match(a, /more than one receptacle for cord-and-plug/); assert.match(a, /800 A or less/); assert.match(a, /Do not promote 36 A to 40 A/);
+  assert.equal(N.nextStd(36), 40); assert.equal(N.nextStd(35), 35); assert.match(rule('o1'), /ONLY if all three/);
+  assert.match(NC.nec.lookups.D03.answer, /no terminal clearance or torque value can be stated/); assert.match(rule('d1'), /instructions included in its listing or labeling/);
 });

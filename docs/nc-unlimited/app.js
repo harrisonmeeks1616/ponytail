@@ -16,7 +16,8 @@
   // ---------- state ----------
   const blank = () => ({ done: {}, log: [], attempts: {}, ver: {}, errs: [], mocks: [], cards: {}, check: {}, auth: { start: "", expiry: "" }, strong: {}, lookups: [], theme: "", examTimer: null, examElapsed: 0, verif: {}, sc: {}, nav: {}, necv: {}, books: { nec: "", nfpa: "", nascla: "" } });
   let S = blank(); // real state is loaded (and sanitized) just before the first render, below
-  const save = () => { try { localStorage.setItem(KEY, JSON.stringify(S)); } catch (e) { toast("Could not save: storage is full or blocked. Use Backup now."); } };
+  let storageOK = true; // false when the browser blocks storage (embedded or private copies); progress then lasts only until the page closes
+  const save = () => { try { localStorage.setItem(KEY, JSON.stringify(S)); } catch (e) { if (storageOK) { storageOK = false; toast("This copy cannot save progress here. Use Progress, Backup before you close the page."); } } };
   const toast = (m) => { const d = document.createElement("div"); d.className = "toast"; d.setAttribute("role", "status"); d.setAttribute("aria-live", "polite"); d.textContent = m; document.body.appendChild(d); setTimeout(() => d.remove(), 2600); };
   const applyTheme = () => { if (S.theme) document.documentElement.dataset.theme = S.theme; else delete document.documentElement.dataset.theme; };
 
@@ -41,7 +42,7 @@
   const link = (u, txt) => `<a href="${esc(u)}" target="_blank" rel="noopener">${t(txt)}</a>`;
   const catColor = { S: "cyan", P: "cyan", W: "cyan", C: "violet", R: "amber", L: "amber", G: "green", M: "violet", V: "violet", H: "red", O: "red", F: "amber", X: "red" };
 
-  const NECT = [["t240.6", "Table 240.6(A) standard ampere ratings", "R"], ["t250.66", "Table 250.66 GEC sizes", "V"], ["t250.122", "Table 250.122 EGC sizes", "V"], ["t310.16", "Table 310.16 ampacities (copper and aluminum)", "V"], ["t310.15C", "Table 310.15(C)(1) adjustment factors", "V"], ["t310.15B", "Table 310.15(B)(1) ambient correction", "V"], ["t314.16", "Table 314.16(B) volume per conductor", "V"], ["tch9", "Chapter 9 Table 1 percent fill", "R"], ["t430.52", "Table 430.52 motor branch protection maximums", "V"], ["t220.12", "Table 220.12 general lighting VA per square foot", "R"], ["t220.42", "Table 220.42 lighting demand factors", "V"]];
+  const NECT = [["t240.6", "Table 240.6(A) standard ampere ratings", "V"], ["t250.66", "Table 250.66 GEC sizes", "V"], ["t250.122", "Table 250.122 EGC sizes", "V"], ["t310.16", "Table 310.16 ampacities (copper and aluminum)", "V"], ["t310.15C", "Table 310.15(C)(1) adjustment factors", "V"], ["t310.15B", "Table 310.15(B)(1) ambient correction", "V"], ["t314.16", "Table 314.16(B) volume per conductor", "V"], ["tch9", "Chapter 9 Table 1 percent fill", "R"], ["t430.52", "Table 430.52 motor branch protection maximums", "V"], ["t220.12", "Table 220.12 general lighting VA per square foot", "R"], ["t220.42", "Table 220.42 lighting demand factors", "V"]];
   const necTotal = () => NECT.length + NC.nec.rules.length;
   const necTick = (id, label) => { const v = S.necv[id]; return `<div class="row sm" style="margin-top:8px"><label class="row"><input type="checkbox" data-act="necTick" data-k="${esc(id)}" aria-label="Verified in my 2020 book: ${esc(label)}" ${v && v.ok ? "checked" : ""}> Verified in my 2020 book</label><input type="text" data-act="necPage" data-k="${esc(id)}" value="${esc((v && v.page) || "")}" placeholder="page" aria-label="Page number in my 2020 book for ${esc(label)}" style="width:90px"></div>`; };
 
@@ -95,6 +96,7 @@
       <div class="count" data-clockbox><div><b data-cd="d">${cd.days}</b><span>days</span></div><div><b data-cd="h">${cd.hours}</b><span>hours</span></div><div><b data-cd="m">${cd.minutes}</b><span>min</span></div></div>
       <p class="mut sm">Open book. 100 questions, 6 hours, 70% to pass. Your coaching gate is stricter: two fresh full mocks at ${NC.gates.mockPct}%+. ${t(ex.cutoffText)}${!cut.over ? ` Cutoff is in ${cut.days}d ${cut.hours}h.` : ""}</p></div>
 
+    ${storageOK ? "" : `<div class="notice red" style="margin-top:14px"><b>Progress is not being saved.</b> This browser is blocking storage for this page (an embedded or private window, or storage is full). Everything you enter lasts only until you close it. Open the file from your computer in a normal browser window, or use Progress, Backup to export before you leave.</div>`}
     ${bookIssues().filter((x) => x[0] === "red").slice(0, 1).map(([, m]) => `<div class="notice red" style="margin-top:14px"><b>Books:</b> ${t(m)}</div>`).join("")}
     <div class="grid g2" style="margin-top:14px">
       <div class="card glow stack"><div class="row between"><h3>${todays ? "Today: Day " + todays[0] + " of 37" : "Today"}</h3>${chip(fmtD(d), "amber")}</div>
