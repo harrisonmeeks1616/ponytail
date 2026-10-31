@@ -5,6 +5,7 @@
 // local log. User text only lives in the outbox, the draft store and on screen.
 import { createSyncEngine, createOutboxItem, newClientId, classifyResponse, isPending } from './outbox-core.js';
 import { openStores } from './idb.js';
+import { VIEW_MODULES } from './views/index.js';
 
 const CLIENT_BUILD = 'ui-2';
 const IDB_NAME = 'harrison-os';
@@ -26,6 +27,8 @@ const CHANGE_ID_RE = /^[A-Za-z0-9_-]{1,80}$/;
 const ON_RE = /^(\d{4})-(\d{2})-(\d{2})$/;
 const SCOPES = ['all', 'work', 'personal'];
 const ROUTES = new Set(['today', 'capture', 'review', 'waiting', 'tasks', 'projects', 'project', 'memory']);
+// Screens, Today blocks, project blocks, Memory cards and top-bar actions added by public/views/*.js.
+const EXT = { routes: new Map(), today: [], project: [], memory: [], topbar: [] };
 
 const KIND_LABEL = {
   task: 'Task',
@@ -706,7 +709,7 @@ function titleFor(route) {
     case 'memory':
       return 'Memory';
     default:
-      return 'Today';
+      return EXT.routes.has(route.name) ? EXT.routes.get(route.name).title : 'Today';
   }
 }
 
@@ -723,8 +726,13 @@ function loadRoute(route) {
     case 'project':
       return loadProject(route.id);
     case 'memory':
+      renderExtBlocks(EXT.memory, 'memory-extra', null);
       return rerunSearch();
     default:
+      if (EXT.routes.has(route.name)) {
+        const r = EXT.routes.get(route.name);
+        return r.load(route, $(`${route.name}-body`));
+      }
       return loadToday();
   }
 }
@@ -898,6 +906,7 @@ function renderToday() {
   const openCount = countOf(t.tasks && t.tasks.openCount);
   links.append(linkCard('#/tasks', `All open tasks · ${openCount}`, 'Tasks', false));
   body.append(links);
+  body.append(extSlot(EXT.today, t));
 
   const resume = listFrom(t.resume);
   if (resume.length) {
@@ -2136,6 +2145,7 @@ function renderProject() {
     }
     body.append(section('Recent captures', ul, 'project-captures'));
   }
+  body.append(extSlot(EXT.project, pd));
   restoreFocus(body, key);
 }
 
@@ -3207,7 +3217,74 @@ function loadLocalPrefs() {
   }
 }
 
+// ---------------------------------------------------------------------------
+// View modules (public/views/*.js). Each exports register(kit) and adds its own screens and blocks.
+// A block renderer returns a Node, null, or a Promise of either; a failing block never breaks its screen.
+
+function extSlot(list, arg) {
+  const slot = h('div', { class: 'ext-slot' });
+  for (const render of list) {
+    Promise.resolve()
+      .then(() => render(arg, state.scope))
+      .then((node) => {
+        if (node) slot.append(node);
+      })
+      .catch(() => slot.append(h('p', { class: 'subtle', text: 'One section could not load. Pull to refresh or try again later.' })));
+  }
+  return slot;
+}
+
+function renderExtBlocks(list, containerId, arg) {
+  const el = $(containerId);
+  if (el) el.replaceChildren(extSlot(list, arg));
+}
+
+function addRoute(name, { title, load, tab = null }) {
+  if (ROUTES.has(name) || !/^[a-z][a-z-]{1,30}$/.test(name)) throw new Error(`bad route ${name}`);
+  ROUTES.add(name);
+  EXT.routes.set(name, { title, load, tab });
+  const sec = h(
+    'section',
+    { id: `screen-${name}`, class: 'screen', 'aria-labelledby': `${name}-title`, hidden: true },
+    h('div', { class: 'screen-head' }, h('a', { href: '#/today', class: 'back-link', text: 'Back to Today' }), h('h1', { id: `${name}-title`, tabindex: '-1', text: title })),
+    h('div', { id: `${name}-body`, class: 'stack' }),
+  );
+  $('main').append(sec);
+}
+
+function addTopbarButton({ label, onClick, id }) {
+  const btn = h('button', { type: 'button', class: 'btn btn-ghost topbar-action', id, text: label });
+  btn.addEventListener('click', onClick);
+  const holder = document.querySelector('.topbar-inner');
+  holder.insertBefore(btn, holder.querySelector('.scope-switch'));
+  return btn;
+}
+
+const kit = Object.freeze({
+  h, api, state, go, section, chip, scopeChip, sampleChip, statusChip, kindChip, noticeBlock, showNotice, showToast,
+  setStatus, guarded, failWords, formatOn, formatAt, formatTimeOfDay, excerpt, enc, qs, plural, localOn, deviceTimeZone,
+  sourceWords, isScope, PATH_ID_RE, STATUS_LABEL, KIND_LABEL, reloadCurrent,
+  addRoute,
+  addTodayBlock: (fn) => EXT.today.push(fn),
+  addProjectBlock: (fn) => EXT.project.push(fn),
+  addMemoryBlock: (fn) => EXT.memory.push(fn),
+  addTopbarButton,
+  // The scope new content should be written to when the switch shows All: the capture default.
+  writeScope: () => (state.scope === 'all' ? preferredCaptureScope() : state.scope),
+});
+
+function registerViews() {
+  for (const mod of VIEW_MODULES) {
+    try {
+      mod.register(kit);
+    } catch (e) {
+      logEvent({ kind: 'view_register_failed', name: e && e.name });
+    }
+  }
+}
+
 async function init() {
+  registerViews();
   loadLocalPrefs();
   bindHandlers();
   renderScopeSwitch();

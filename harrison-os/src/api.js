@@ -19,6 +19,13 @@ import { buildToday } from './today.js';
 import { authenticate, authorizeRoute } from './auth.js';
 import { instantToZonedParts, nextDailyOccurrence, formatLocal } from './time.js';
 import { isAllowedPushEndpoint, sendWebPush, b64urlDecode } from './webpush.js';
+import {
+  HttpError, json, apiError, iso, clampInt, readJson, readJsonLenient, requireText, requireScope, queryScope, validTimeZone,
+  MAX_TEXT, DATE_RE,
+} from './http.js';
+import { FEATURE_ROUTES } from './features.js';
+
+export { HttpError, json, apiError, requireScope };
 
 // ---------------------------------------------------------------- constants
 
@@ -27,16 +34,11 @@ const CLIENT_REF_RE = /^[A-Za-z0-9_-]{6,60}$/;
 const CHANGE_ID_RE = /^[0-9]{1,15}$/;
 const ID = '[A-Za-z0-9_.:-]{1,120}';
 const CAP = '[A-Za-z0-9_-]{8,80}';
-const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
 const TIME_RE = /^([01]\d|2[0-3]):[0-5]\d$/;
-const SCOPES = new Set(['work', 'personal']);
 const RECURRENCES = new Set(['none', 'daily']);
 const ACK_VIA = new Set(['notification', 'in_app']);
 
-const MAX_TEXT = 10000;
 const MAX_QUERY = 500;
-const MAX_BODY_CHARS = 64 * 1024;
-const MAX_TZ_LEN = 64;
 const DAY_MS = 86_400_000;
 // The spike measured about 1 ms CPU per send against the Free plan's 10 ms; Slice 1 caps a run at 3.
 export const CRON_BATCH_CAP = 3;
@@ -60,37 +62,6 @@ const KV_JWT_PREFIX = 'vapid_jwt:';
 const DEFAULT_QUIET_HOURS = { enabled: false, start: '22:00', end: '07:00', time_zone: 'America/New_York' };
 const QUIET_HOURS_LABEL = 'TEST quiet hours. Not Harrison policy.';
 
-// ---------------------------------------------------------------- small helpers
-
-export class HttpError extends Error {
-  constructor(status, code, message) {
-    super(message || code);
-    this.status = status;
-    this.code = code;
-  }
-}
-
-function apiHeaders(extra) {
-  return {
-    'Content-Type': 'application/json; charset=utf-8',
-    'Cache-Control': 'no-store',
-    'X-Content-Type-Options': 'nosniff',
-    'Referrer-Policy': 'no-referrer',
-    'Content-Security-Policy': "default-src 'none'; frame-ancestors 'none'",
-    ...(extra || {}),
-  };
-}
-
-export function json(status, body, extraHeaders) {
-  return new Response(JSON.stringify(body), { status, headers: apiHeaders(extraHeaders) });
-}
-
-export function apiError(status, code, message, extra) {
-  const error = { code, message: message || code };
-  if (extra && typeof extra === 'object') Object.assign(error, extra);
-  return json(status, { error });
-}
-
 function isLoopbackHostname(hostname) {
   const h = String(hostname || '').toLowerCase();
   return h === '127.0.0.1' || h === 'localhost' || h === '[::1]' || h === '::1';
@@ -100,9 +71,6 @@ function testHooksEnabled(env, url) {
   return env.SPIKE_TEST_HOOKS === '1' && isLoopbackHostname(url.hostname);
 }
 
-function iso(ms) {
-  return new Date(ms).toISOString();
-}
 
 function randomHex(bytes) {
   const b = globalThis.crypto.getRandomValues(new Uint8Array(bytes));
@@ -122,11 +90,6 @@ async function sha256Hex(str) {
   return s;
 }
 
-function clampInt(value, { min, max, fallback }) {
-  const n = Number.parseInt(value, 10);
-  if (!Number.isFinite(n)) return fallback;
-  return Math.min(max, Math.max(min, n));
-}
 
 function safeFormatLocal(instantMs, timeZone) {
   try {
@@ -141,70 +104,11 @@ function truncateChars(text, max) {
   return chars.length > max ? chars.slice(0, max - 1).join('') + '…' : text;
 }
 
-async function readJson(request) {
-  const declared = Number(request.headers.get('content-length') || '0');
-  if (declared > MAX_BODY_CHARS * 4) throw new HttpError(413, 'too_large', 'Request body is too large');
-  const text = await request.text();
-  if (text.length > MAX_BODY_CHARS) throw new HttpError(413, 'too_large', 'Request body is too large');
-  if (!text.trim()) return {};
-  let body;
-  try {
-    body = JSON.parse(text);
-  } catch {
-    throw new HttpError(400, 'bad_json', 'Body must be JSON');
-  }
-  if (!body || typeof body !== 'object' || Array.isArray(body)) {
-    throw new HttpError(400, 'bad_json', 'Body must be a JSON object');
-  }
-  return body;
-}
 
-async function readJsonLenient(request) {
-  try {
-    return await readJson(request);
-  } catch {
-    return {};
-  }
-}
 
-function requireText(value, field = 'text', max = MAX_TEXT) {
-  if (typeof value !== 'string') throw new HttpError(400, `invalid_${field}`, `${field} must be a string`);
-  const t = value.trim();
-  if (t.length < 1 || t.length > max) {
-    throw new HttpError(400, `invalid_${field}`, `${field} must be 1 to ${max} characters after trim`);
-  }
-  return t;
-}
 
-/**
- * The scope rule. Missing gives 400 scope_required (never a default of 'all'), 'all' where it is not
- * allowed gives 400 scope_all_not_allowed, anything else unknown gives 400 invalid_scope.
- */
-export function requireScope(value, { allowAll = false } = {}) {
-  if (value === undefined || value === null || value === '') {
-    throw new HttpError(400, 'scope_required', allowAll ? "scope must be 'work', 'personal' or 'all'" : "scope must be 'work' or 'personal'");
-  }
-  if (value === 'all') {
-    if (allowAll) return 'all';
-    throw new HttpError(400, 'scope_all_not_allowed', "scope 'all' is not allowed here; use 'work' or 'personal'");
-  }
-  if (!SCOPES.has(value)) throw new HttpError(400, 'invalid_scope', "scope must be 'work' or 'personal'");
-  return value;
-}
 
-function queryScope(ctx, opts) {
-  return requireScope(ctx.url.searchParams.get('scope'), opts);
-}
 
-function validTimeZone(value, nowMs) {
-  if (typeof value !== 'string' || !value || value.length > MAX_TZ_LEN) return null;
-  try {
-    instantToZonedParts(nowMs, value);
-    return value;
-  } catch {
-    return null;
-  }
-}
 
 function requireTimeZone(value, nowMs) {
   const tz = validTimeZone(value, nowMs);
@@ -1131,6 +1035,7 @@ export const ROUTES = [
   ['PUT', r('/api/settings/test-quiet-hours'), putQuietHours],
   ['POST', r('/api/test/chaos'), postChaos],
   ['POST', r('/api/test/auth-mode'), postAuthMode],
+  ...FEATURE_ROUTES,
 ];
 
 /**

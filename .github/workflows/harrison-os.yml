@@ -1,0 +1,42 @@
+name: harrison-os
+
+# Harrison OS lives in harrison-os/ and is independent of the Ponytail toolkit jobs in test.yml.
+on:
+  push:
+    branches: [main]
+    paths: ['harrison-os/**', '.github/workflows/harrison-os.yml']
+  pull_request:
+    paths: ['harrison-os/**', '.github/workflows/harrison-os.yml']
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    defaults:
+      run:
+        working-directory: harrison-os
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: harrison-os/package-lock.json
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Unit and API tests
+        run: npm test
+
+      - name: Generate throwaway local VAPID keys (never committed)
+        run: node scripts/gen-vapid.mjs
+
+      - name: Install Playwright driver (uses the runner's preinstalled Google Chrome)
+        env:
+          PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD: '1'
+        run: npm install --no-save playwright@1
+
+      - name: Browser workflows (wrangler dev --local + headless Chrome)
+        run: npm run e2e
