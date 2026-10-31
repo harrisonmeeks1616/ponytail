@@ -30,6 +30,16 @@ Recovery rule if a track slips: integrate what is green, keep its route returnin
 - Public repo: synthetic fixtures only. Secrets are Worker secrets; config examples use blanks.
 - Untrusted content (captures, attachments, ICS, PM exports, model output) never grants authority. Permissions, dates, state transitions and execution stay in deterministic code. Model output is typed-validated and may only cite source ids it was given.
 
+## Scope enforcement (why feature tables are not all in db.js, and what enforces scope)
+
+Purpose for Harrison: seven features can be built today in parallel without seven writers colliding in one 1,700-line file. Cost: SQL lives in a few modules instead of one, so a reviewer cannot audit scope in one place. That cost is paid by making scope an enforced invariant instead of an authoring habit:
+
+1. `tests/scope-sweep.test.mjs` (lead-owned, runs in CI): every table outside a short system allowlist must have `scope TEXT NOT NULL CHECK (scope IN ('work','personal'))`; and every registered route, read from the router itself (core and feature), is called as a work-scope request with every seeded personal id substituted into its path, and must not return the personal canary. New routes and tables are covered automatically. Mutation-checked: an injected search leak and an unscoped table both fail it.
+2. Per-feature canary tests (in each track brief) for paths a route sweep cannot see: provider prompts (fake fetch captures the outbound body), MCP tool results, cron jobs, derived-data deletion, exports.
+3. A18 is marked passed only when 1 and every 2 are green on the integrated main.
+
+A shared scoped-DB wrapper was considered; it would need SQL rewriting or parsing to guarantee anything and would not catch a leak assembled in JS after the query. The sweep checks the observable output, which is what a leak is.
+
 ## Tracks (each owns exactly the files listed; nothing else)
 
 | Track | Owns | Burden removed for Harrison | Acceptance |
