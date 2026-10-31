@@ -119,6 +119,12 @@ function waitingWhy(w, todayOn, timeZone) {
   return `You asked ${who} on ${asked}. ${follow} ${reply}`;
 }
 
+// 'Thu, Oct 29' for a YYYY-MM-DD date (date-only: formatted in UTC so it never shifts a day).
+function plainDate(on) {
+  const [y, m, d] = on.split('-').map(Number);
+  return new Intl.DateTimeFormat('en-US', { weekday: 'short', month: 'short', day: 'numeric', timeZone: 'UTC' }).format(Date.UTC(y, m - 1, d));
+}
+
 function resumeWhy(c, timeZone) {
   const parts = [];
   if (c.stopped_at_text && String(c.stopped_at_text).trim()) parts.push(`You stopped at: ${c.stopped_at_text}`);
@@ -194,15 +200,16 @@ export function buildToday(rows, opts) {
     next = { ref: `item:${w.id}`, kind: 'waiting', title: w.title, why: waitingWhy(w, todayOn, timeZone), scope: w.scope };
   } else if (overdue.length) {
     const t = overdue[0];
-    next = { ref: `item:${t.id}`, kind: 'task', title: t.title, why: `Hard date ${t.due_on} has passed.`, scope: t.scope };
+    next = { ref: `item:${t.id}`, kind: 'task', title: t.title, why: `It was due ${plainDate(t.due_on)} and is still open.`, scope: t.scope };
   } else if (dueToday.length) {
     const t = dueToday[0];
-    next = { ref: `item:${t.id}`, kind: 'task', title: t.title, why: `Hard date is today (${t.due_on}).`, scope: t.scope };
+    next = { ref: `item:${t.id}`, kind: 'task', title: t.title, why: 'It is due today.', scope: t.scope };
   } else if (picks.length) {
     const t = picks[0];
     next = { ref: `item:${t.id}`, kind: 'task', title: t.title, why: 'You picked this for today.', scope: t.scope };
-  } else if (stale.length) {
-    const c = stale[0];
+  } else if (stale.length || checkpoints.length) {
+    // Nothing due or picked: the most useful move is picking up a saved place (an older one first).
+    const c = stale.length ? stale[0] : checkpoints[0];
     next = { ref: `project:${c.project_id}`, kind: 'project', title: c.project_name, why: resumeWhy(c, timeZone), scope: c.scope };
   }
 

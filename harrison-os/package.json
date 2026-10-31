@@ -9,9 +9,12 @@
     "dev": "wrangler dev --local --ip 127.0.0.1 --port 8899 --test-scheduled",
     "icons": "node scripts/make-icons.mjs",
     "vapid": "node scripts/gen-vapid.mjs",
-    "e2e": "node tests/e2e/run.mjs"
+    "e2e": "node tests/e2e/run.mjs",
+    "demo:build": "node scripts/build-demo.mjs",
+    "demo:check": "node tests/e2e/demo-walk.mjs"
   },
   "devDependencies": {
+    "@sqlite.org/sqlite-wasm": "^3.54.1-build1",
     "wrangler": "^4.92.0"
   }
 }

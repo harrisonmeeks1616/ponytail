@@ -4,9 +4,9 @@ name: harrison-os
 on:
   push:
     branches: [main]
-    paths: ['harrison-os/**', '.github/workflows/harrison-os.yml']
+    paths: ['harrison-os/**', 'docs/harrison-os-demo/**', '.github/workflows/harrison-os.yml']
   pull_request:
-    paths: ['harrison-os/**', '.github/workflows/harrison-os.yml']
+    paths: ['harrison-os/**', 'docs/harrison-os-demo/**', '.github/workflows/harrison-os.yml']
 
 jobs:
   test:
@@ -40,3 +40,6 @@ jobs:
 
       - name: Browser workflows (wrangler dev --local + headless Chrome)
         run: npm run e2e
+
+      - name: In-browser preview walkthrough (real app + Worker code on SQLite WASM)
+        run: npm run demo:build && npm run demo:check

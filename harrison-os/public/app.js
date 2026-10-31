@@ -1385,6 +1385,9 @@ function proposalCard(capture, p, dec, index, anyEditing) {
     row('Who', effective(p, dec, 'who', pick(fields, 'who') || null) || 'not stated');
     const promised = effective(p, dec, 'promised_on', pick(fields, 'promised_on', 'promisedOn') || null);
     row('Promised by', promised ? formatOn(promised) : 'not stated');
+    // A date in the sentence that is not a confirmed promise is shown, never filed as one (Edit sets it).
+    const mentionedW = whenOf(fields);
+    if (!promised && mentionedW && mentionedW.on && ON_RE.test(String(mentionedW.on))) row('Date mentioned (not a confirmed promise)', whenWords(mentionedW));
     const follow = effective(p, dec, 'follow_up_on', pick(fields, 'follow_up_on', 'followUpOn') || null);
     if (follow) row('Follow up', formatOn(follow));
     row('Reply', 'No reply recorded');

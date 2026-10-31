@@ -36,13 +36,21 @@
     right: calc(env(safe-area-inset-right) + 1rem);
     bottom: calc(var(--tabbar-h) + env(safe-area-inset-bottom) + 0.75rem);
     z-index: 31;
-    width: 3.25rem;
     height: 3.25rem;
+    padding: 0 1rem;
     border-radius: 999px;
     border: 1px solid var(--line);
     background: var(--surface);
     color: var(--ink);
     box-shadow: 0 4px 14px rgba(0, 0, 0, 0.18);
+  }
+  /* Floating, it is the only Ask control on screen, so it shows its word, not just a glyph. */
+  #ask-open .ask-open-text {
+    position: static !important;
+    width: auto;
+    height: auto;
+    overflow: visible;
+    clip: auto;
   }
   body:has(#ask-open) {
     padding-bottom: calc(var(--tabbar-h) + env(safe-area-inset-bottom) + 4.75rem);

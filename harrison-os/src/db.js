@@ -1255,8 +1255,10 @@ export async function listProjects(db, scope) {
 async function nextItemFor(db, projectId, scope) {
   const row = await firstOf(
     db,
+    // ponytail: "deferred" compares start_on with the UTC date; a task deferred to tomorrow can count as
+    // startable for the last hours of the evening in New York. Pass the local date in if that matters.
     "SELECT * FROM items WHERE project_id = ? AND scope = ? AND kind = 'task' AND state = 'open' " +
-      'ORDER BY (due_on IS NULL), due_on, today_pick DESC, created_at, rowid LIMIT 1',
+      "ORDER BY (start_on IS NOT NULL AND start_on > date('now')), (due_on IS NULL), due_on, today_pick DESC, created_at, rowid LIMIT 1",
     projectId,
     scope,
   );
@@ -1329,7 +1331,17 @@ export async function checkpointPrefill(db, projectId, scope) {
   const project = await firstOf(db, 'SELECT id FROM projects WHERE id = ? AND scope = ?', projectId, s);
   if (!project) throw new NotFoundError('No such project');
   const [capture] = await projectCaptures(db, projectId, s, 1);
-  const item = await firstOf(db, 'SELECT * FROM items WHERE project_id = ? AND scope = ? ORDER BY updated_at DESC, rowid DESC LIMIT 1', projectId, s);
+  // Where he stopped: the latest finished task says it best; otherwise the latest edited record. Never the
+  // same record as the next step (a task that was only deferred is not where he stopped).
+  const next0 = await nextItemFor(db, projectId, s);
+  const item = await firstOf(
+    db,
+    "SELECT * FROM items WHERE project_id = ? AND scope = ? AND id IS NOT ? ORDER BY (state = 'done') DESC, updated_at DESC, rowid DESC LIMIT 1",
+    projectId,
+    s,
+    next0 ? next0.id : null,
+  );
+  const previous = await latestCheckpoint(db, projectId, s);
   const question = await firstOf(
     db,
     "SELECT title FROM items WHERE project_id = ? AND scope = ? AND state = 'open' AND kind != 'decision' AND rtrim(title) LIKE '%?' " +
@@ -1337,19 +1349,20 @@ export async function checkpointPrefill(db, projectId, scope) {
     projectId,
     s,
   );
-  const next = await nextItemFor(db, projectId, s);
+  const next = next0;
   let stoppedAtText = null;
   let sourceRef = null;
   if (capture) {
     stoppedAtText = capture.text;
     sourceRef = `capture:${capture.id}`;
   } else if (item) {
-    stoppedAtText = item.title;
+    stoppedAtText = item.state === 'done' ? `Finished: ${item.title}` : item.title;
     sourceRef = `item:${item.id}`;
   }
   return {
     stoppedAtText,
-    openQuestion: question ? question.title.trim() : capture ? lastQuestionIn(capture.text) : null,
+    // A question saved last time stays until he changes it.
+    openQuestion: question ? question.title.trim() : (capture && lastQuestionIn(capture.text)) || (previous && previous.open_question) || null,
     nextStep: next ? next.title : null,
     sourceRef,
   };

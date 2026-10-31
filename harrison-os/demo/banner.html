@@ -1,0 +1,28 @@
+  <div class="demo-bar" role="region" aria-label="About this preview">
+    <p class="demo-bar-text"><strong>Preview</strong> · made-up data · stays in this browser <span class="demo-rev">build <span id="demo-revision"></span></span></p>
+    <div class="demo-bar-actions">
+      <button type="button" id="demo-info-open" class="demo-btn">What's real?</button>
+      <button type="button" id="demo-away" class="demo-btn">Skip ahead a week</button>
+      <button type="button" id="demo-reset" class="demo-btn">Start over</button>
+    </div>
+    <p id="demo-storage" class="demo-warn" hidden>This browser is not keeping data: changes vanish when you reload.</p>
+    <p id="demo-fatal" class="demo-warn" role="alert" hidden></p>
+  </div>
+  <dialog id="demo-info" class="demo-dialog" aria-labelledby="demo-info-title">
+    <h2 id="demo-info-title">What this preview is</h2>
+    <p>The real Harrison OS screens and the real server code, running inside this browser tab with fictional sample data (the Maple Street clinic, Jordan Example). Nothing is sent anywhere.</p>
+    <h3>Works here</h3>
+    <ul>
+      <li>Capture, review, Today, open tasks, Waiting, Projects, "Where you left off", Memory search, decisions, export.</li>
+      <li>Ask and "Catch me up" in their <strong>Not AI</strong> mode: answers matched from your saved records.</li>
+      <li>Drafts with the claim check, weekly review, sample calendar and sample company projects (labelled Sample).</li>
+    </ul>
+    <h3>Not real in this preview</h3>
+    <ul>
+      <li>No sign-in, no sync between devices, no offline queue test: the server runs in this tab, so it is always "online".</li>
+      <li>No reminder alerts (no push service). No AI model. No live calendar, PM app or Field Hub connection.</li>
+      <li>Not the installed iPhone app and not a production deployment.</li>
+    </ul>
+    <p>"Skip ahead a week" only moves the app's "last opened" time back eight days, to show the welcome-back view. "Start over" erases this preview's data in this browser.</p>
+    <button type="button" id="demo-info-close" class="demo-btn">Close</button>
+  </dialog>

@@ -1,0 +1,36 @@
+/* Preview banner only. The app's own styles are public/styles.css, unchanged. */
+.demo-bar {
+  background: #1d3b2f;
+  color: #f4f5f2;
+  padding: calc(8px + env(safe-area-inset-top, 0px)) 12px 8px;
+  font: 500 14px/1.35 Inter, system-ui, sans-serif;
+}
+.demo-bar-text { margin: 0 0 6px; }
+.demo-rev { opacity: 0.75; font-size: 12px; white-space: nowrap; }
+.demo-bar-actions { display: flex; flex-wrap: nowrap; gap: 6px; overflow-x: auto; }
+.demo-btn {
+  min-height: 44px;
+  padding: 0 10px;
+  border-radius: 10px;
+  white-space: nowrap;
+  font-size: 13px;
+  border: 1px solid rgba(244, 245, 242, 0.5);
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  cursor: pointer;
+}
+.demo-btn:focus-visible { outline: 3px solid #f2c94c; outline-offset: 2px; }
+.demo-warn { margin: 6px 0 0; color: #ffd9a8; }
+.demo-dialog {
+  max-width: min(560px, calc(100vw - 24px));
+  border: none;
+  border-radius: 16px;
+  padding: 16px 18px;
+  font: 400 15px/1.45 Inter, system-ui, sans-serif;
+}
+.demo-dialog .demo-btn { border-color: currentColor; margin-top: 8px; }
+.demo-dialog::backdrop { background: rgba(0, 0, 0, 0.45); }
+@media (prefers-color-scheme: dark) {
+  .demo-dialog { background: #1b211d; color: #e8ebe6; }
+}

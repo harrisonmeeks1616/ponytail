@@ -146,7 +146,7 @@ test('capture -> proposals -> review -> today -> complete -> undo', async () => 
   assert.equal(t1.status, 200, t1.text);
   assert.equal(t1.data.todayOn, TODAY);
   assert.equal(t1.data.next.ref, `item:${taskItem.id}`);
-  assert.equal(t1.data.next.why, `Hard date is today (${TODAY}).`);
+  assert.equal(t1.data.next.why, 'It is due today.');
   assert.ok(t1.data.today.some((e) => e.ref === `item:${taskItem.id}`));
   assert.equal(t1.data.waiting.count, 1);
   assert.equal(t1.data.needsYou.inboxCount, 0);

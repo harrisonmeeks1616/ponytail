@@ -155,14 +155,14 @@ test('next: overdue hard-dated task, earliest due_on first, beats due today and 
     waiting: [waitingItem({ follow_up_on: '2026-11-02' })],
   });
   assert.equal(out.next.ref, `item:${o2.id}`);
-  assert.equal(out.next.why, 'Hard date 2026-10-21 has passed.');
+  assert.equal(out.next.why, 'It was due Wed, Oct 21 and is still open.');
 });
 
 test('next: task due today beats a today_pick', () => {
   const d = task({ due_on: TODAY });
   const out = build({ tasks: [task({ today_pick: 1 }), d] });
   assert.equal(out.next.ref, `item:${d.id}`);
-  assert.equal(out.next.why, `Hard date is today (${TODAY}).`);
+  assert.equal(out.next.why, 'It is due today.');
 });
 
 test('next: today_pick task when nothing is dated', () => {
@@ -200,13 +200,14 @@ test('next: resume why with empty checkpoint text uses only the saved date', () 
   assert.equal(out.next.why, 'Place saved on 2026-10-24.');
 });
 
-test('next is null when nothing qualifies', () => {
-  const out = build({
+test('nothing due or picked: next is the latest saved place; with no saved place, next is null', () => {
+  const rows = {
     tasks: [task(), task({ due_on: '2026-11-04' })],
     waiting: [waitingItem({ follow_up_on: '2026-11-01' })],
-    checkpoints: [checkpoint({ last_touched_at: '2026-10-30T12:00:00Z' })],
-  });
-  assert.equal(out.next, null);
+  };
+  const out = build({ ...rows, checkpoints: [checkpoint({ last_touched_at: '2026-10-30T12:00:00Z' })] });
+  assert.equal(out.next.kind, 'project');
+  assert.equal(build(rows).next, null);
 });
 
 test('done tasks are never next', () => {
