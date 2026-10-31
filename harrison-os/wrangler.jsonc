@@ -1,0 +1,47 @@
+// Harrison OS Slice 1. Separate Worker, separate D1 database, no shared bindings.
+// Source snapshot configuration. Current user authorization governs build and deployment.
+// Keep deploy-guard checks and replace resource placeholders with the new app resources before deployment.
+//
+// Secrets are never written in this file. Harrison sets them himself with `wrangler secret put`:
+//   VAPID_PRIVATE_JWK  (single-line JSON private key; local dev keeps it in .dev.vars, git-ignored)
+//   OWNER_EMAIL        (optional; owner Access tokens must match it)
+{
+	"$schema": "./node_modules/wrangler/config-schema.json",
+	"name": "harrison-os",
+	"main": "src/worker.js",
+	"compatibility_date": "2026-05-15",
+	"assets": {
+		"directory": "./public",
+		"binding": "ASSETS",
+		"run_worker_first": true
+	},
+	"d1_databases": [
+		{
+			"binding": "DB",
+			"database_name": "harrison-os",
+			// Placeholder. Configure only the new app database; never bind existing production app data.
+			"database_id": "00000000-0000-4000-8000-000000000000",
+			"migrations_dir": "migrations"
+		}
+	],
+	"triggers": {
+		"crons": [
+			"* * * * *"
+		]
+	},
+	"vars": {
+		"BUILD_ID": "slice1-dev",
+		// The unauthenticated dev bypass and test hooks work only on loopback; local values live in .dev.vars.
+		"DEV_ALLOW_UNAUTH": "0",
+		"SPIKE_TEST_HOOKS": "0",
+		"ALLOW_TEST_PUSH_ENDPOINT": "0",
+		// https://<team>.cloudflareaccess.com and the Access application AUD tag (set before any deploy).
+		"ACCESS_TEAM_DOMAIN": "",
+		"ACCESS_AUD": "",
+		// AUD tag of the separate /api/shortcut/* application (Service Auth). Empty = Shortcut capture disabled.
+		"ACCESS_AUD_SHORTCUT": "",
+		"VAPID_PUBLIC_KEY": "",
+		// The Worker's own https:// origin (never an email address).
+		"VAPID_SUBJECT": ""
+	}
+}

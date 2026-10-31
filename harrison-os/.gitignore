@@ -1,0 +1,9 @@
+node_modules/
+.wrangler/
+.dev.vars
+.dev.vars.*
+*.log
+evidence-local/
+.secrets/
+tail*.json
+tail*.jsonl

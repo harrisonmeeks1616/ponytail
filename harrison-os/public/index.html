@@ -1,0 +1,221 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self' https://fonts.googleapis.com; font-src https://fonts.gstatic.com; img-src 'self' data:; connect-src 'self'; worker-src 'self'; manifest-src 'self'; object-src 'none'; base-uri 'none'; form-action 'self'">
+  <meta name="color-scheme" content="light dark">
+  <meta name="theme-color" content="#F4F5F2" media="(prefers-color-scheme: light)">
+  <meta name="theme-color" content="#101512" media="(prefers-color-scheme: dark)">
+  <meta name="mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-title" content="Harrison OS">
+  <meta name="apple-mobile-web-app-status-bar-style" content="default">
+  <meta name="referrer" content="no-referrer">
+  <meta name="format-detection" content="telephone=no">
+  <title>Harrison OS</title>
+  <link rel="manifest" href="/manifest.webmanifest" crossorigin="use-credentials">
+  <link rel="apple-touch-icon" sizes="180x180" href="/icons/icon-180.png">
+  <link rel="icon" type="image/png" sizes="192x192" href="/icons/icon-192.png">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Archivo:wght@600;700&family=Inter:wght@400;500;600&display=swap">
+  <link rel="stylesheet" href="/styles.css">
+  <script type="module" src="/app.js"></script>
+</head>
+<body>
+  <a class="skip" href="#main">Skip to content</a>
+
+  <header class="topbar">
+    <div class="topbar-inner">
+      <p class="brand">Harrison OS</p>
+      <a href="#/tasks" class="topbar-link">
+        <svg class="topbar-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M4 6.5l1.6 1.6L8.5 5M4 12.5l1.6 1.6 2.9-3.1M4 18.5l1.6 1.6 2.9-3.1M11.5 7h8.5M11.5 13h8.5M11.5 19h8.5" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>
+        <span class="topbar-link-text"><span class="visually-hidden">Open </span>Tasks</span>
+      </a>
+      <div class="scope-switch" role="group" aria-label="Show items from">
+        <button type="button" class="scope-btn" data-scope="all" aria-pressed="true">All</button>
+        <button type="button" class="scope-btn" data-scope="work" aria-pressed="false">Work</button>
+        <button type="button" class="scope-btn" data-scope="personal" aria-pressed="false">Personal</button>
+      </div>
+    </div>
+  </header>
+
+  <div class="notices">
+    <p id="storage-warning" class="notice notice-warn" hidden></p>
+    <div id="auth-banner" class="notice notice-warn auth-banner" role="alert" hidden>
+      <p id="auth-banner-text">Sign in again to keep syncing</p>
+      <button type="button" id="auth-banner-button" class="btn btn-primary">Sign in again</button>
+    </div>
+    <p id="offline-banner" class="notice notice-quiet" hidden>Offline. New captures stay on this phone until there's a connection.</p>
+  </div>
+
+  <p id="status" class="visually-hidden" role="status" aria-live="polite" aria-atomic="true"></p>
+
+  <main id="main" tabindex="-1">
+    <section id="screen-today" class="screen" aria-labelledby="today-title" hidden>
+      <div class="screen-head">
+        <h1 id="today-title" tabindex="-1">Today</h1>
+        <p id="today-date" class="subtle"></p>
+      </div>
+      <div id="today-body" class="stack"></div>
+    </section>
+
+    <section id="screen-review" class="screen" aria-labelledby="review-title" hidden>
+      <div class="screen-head">
+        <a href="#/today" class="back-link">Back to Today</a>
+        <h1 id="review-title" tabindex="-1">Review</h1>
+      </div>
+      <div id="review-body" class="stack"></div>
+    </section>
+
+    <section id="screen-waiting" class="screen" aria-labelledby="waiting-title" hidden>
+      <div class="screen-head">
+        <a href="#/today" class="back-link">Back to Today</a>
+        <h1 id="waiting-title" tabindex="-1">Waiting on others</h1>
+        <p class="subtle">Someone else's work. It shows on Today only when a follow-up is due.</p>
+      </div>
+      <div id="waiting-body" class="stack"></div>
+    </section>
+
+    <section id="screen-tasks" class="screen" aria-labelledby="tasks-title" hidden>
+      <div class="screen-head">
+        <a href="#/today" class="back-link">Back to Today</a>
+        <h1 id="tasks-title" tabindex="-1">Open tasks</h1>
+        <p class="subtle">Everything still open, dated or not. Pick a few for today; hard dates show on Today by themselves.</p>
+      </div>
+      <div id="tasks-body" class="stack"></div>
+    </section>
+
+    <section id="screen-projects" class="screen" aria-labelledby="projects-title" hidden>
+      <div class="screen-head">
+        <h1 id="projects-title" tabindex="-1">Projects</h1>
+      </div>
+      <div id="projects-body" class="stack"></div>
+      <details class="card new-project">
+        <summary class="btn btn-secondary">New project</summary>
+        <form id="project-form" class="form" novalidate>
+          <label for="project-name">Name</label>
+          <input id="project-name" name="name" type="text" maxlength="200" autocomplete="off" required>
+          <label for="project-purpose">What it's for <span class="subtle">(optional)</span></label>
+          <textarea id="project-purpose" name="purpose" rows="2" maxlength="2000"></textarea>
+          <fieldset class="segmented">
+            <legend>Where it goes</legend>
+            <label class="seg"><input type="radio" name="pscope" value="work"> <span>Work</span></label>
+            <label class="seg"><input type="radio" name="pscope" value="personal"> <span>Personal</span></label>
+          </fieldset>
+          <p id="project-form-error" class="field-error" hidden></p>
+          <button type="submit" id="project-save" class="btn btn-primary">Create project</button>
+        </form>
+      </details>
+    </section>
+
+    <section id="screen-project" class="screen" aria-labelledby="project-title" hidden>
+      <div class="screen-head">
+        <a href="#/projects" class="back-link">Back to Projects</a>
+        <h1 id="project-title" tabindex="-1">Project</h1>
+        <p id="project-meta" class="subtle"></p>
+      </div>
+      <div id="project-body" class="stack"></div>
+    </section>
+
+    <section id="screen-memory" class="screen" aria-labelledby="memory-title" hidden>
+      <div class="screen-head">
+        <h1 id="memory-title" tabindex="-1">Memory</h1>
+      </div>
+      <form id="search-form" class="search" role="search" novalidate>
+        <label for="search-q">Search what you've saved</label>
+        <div class="search-row">
+          <input id="search-q" name="q" type="search" maxlength="200" autocomplete="off" autocapitalize="off" spellcheck="false">
+          <button type="submit" class="btn btn-primary">Search</button>
+        </div>
+      </form>
+      <p id="search-summary" class="subtle" aria-live="polite"></p>
+      <div id="search-results" class="stack"></div>
+
+      <section class="card" aria-labelledby="export-title">
+        <h2 id="export-title">Export</h2>
+        <p class="subtle">A JSON file of everything in that scope.</p>
+        <div class="button-row">
+          <button type="button" class="btn btn-secondary" data-export="work">Work</button>
+          <button type="button" class="btn btn-secondary" data-export="personal">Personal</button>
+          <button type="button" class="btn btn-secondary" data-export="all">All</button>
+        </div>
+        <p id="export-result" class="subtle" aria-live="polite"></p>
+      </section>
+
+      <section class="card" aria-labelledby="alerts-title">
+        <h2 id="alerts-title">Reminder alerts on this phone</h2>
+        <p id="notify-permission">Checking.</p>
+        <p id="notify-route" class="subtle"></p>
+        <div id="a2hs" class="notice notice-quiet" hidden>
+          <p>Alerts only work from the Home Screen app.</p>
+          <ol>
+            <li>Tap the Share button in Safari.</li>
+            <li>Choose Add to Home Screen.</li>
+            <li>Open Harrison OS from the Home Screen.</li>
+          </ol>
+        </div>
+        <button type="button" id="notify-enable" class="btn btn-secondary">Turn on alerts</button>
+        <p id="notify-result" class="subtle" aria-live="polite"></p>
+      </section>
+
+      <section class="card" aria-labelledby="session-title">
+        <h2 id="session-title">Session</h2>
+        <dl class="rows">
+          <div><dt>Signed in as</dt><dd id="session-kind">Checking</dd></div>
+          <div><dt>Account</dt><dd id="session-email">None</dd></div>
+        </dl>
+        <button type="button" id="session-reload" class="btn btn-secondary">Sign in again</button>
+      </section>
+    </section>
+  </main>
+
+  <div id="toast" class="toast" hidden>
+    <p id="toast-text" role="status" aria-live="polite" aria-atomic="true"></p>
+    <button type="button" id="toast-undo" class="btn btn-toast">Undo</button>
+  </div>
+
+  <nav class="tabbar" aria-label="Main">
+    <a href="#/today" class="tab" data-tab="today">
+      <svg class="tab-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><rect x="4" y="5" width="16" height="15" rx="2" fill="none" stroke="currentColor" stroke-width="1.8"/><path d="M4 10h16M9 3v4M15 3v4" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg>
+      <span>Today</span>
+    </a>
+    <a href="#/projects" class="tab" data-tab="projects">
+      <svg class="tab-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"/></svg>
+      <span>Projects</span>
+    </a>
+    <a href="#/capture" class="tab tab-capture" data-tab="capture" aria-label="Capture">
+      <span class="capture-disc"><svg class="tab-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M12 5v14M5 12h14" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"/></svg></span>
+    </a>
+    <a href="#/memory" class="tab tab-wide" data-tab="memory">
+      <svg class="tab-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><circle cx="11" cy="11" r="6" fill="none" stroke="currentColor" stroke-width="1.8"/><path d="M16 16l4 4" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg>
+      <span>Memory</span>
+    </a>
+  </nav>
+
+  <dialog id="capture-sheet" class="sheet" aria-labelledby="capture-title">
+    <form id="capture-form" class="form" novalidate>
+      <div class="sheet-head">
+        <h2 id="capture-title">Capture</h2>
+        <button type="button" id="capture-close" class="btn btn-ghost">Close</button>
+      </div>
+      <label for="capture-text">What do you want to remember?</label>
+      <textarea id="capture-text" name="text" rows="5" maxlength="4000" autocomplete="off" autocapitalize="sentences" spellcheck="true"></textarea>
+      <p id="draft-status" class="subtle" aria-live="polite"></p>
+      <fieldset class="segmented">
+        <legend>Where it goes</legend>
+        <label class="seg seg-work"><input type="radio" name="cscope" value="work"> <span>Work</span></label>
+        <label class="seg seg-personal"><input type="radio" name="cscope" value="personal"> <span>Personal</span></label>
+      </fieldset>
+      <button type="submit" id="capture-save" class="btn btn-primary btn-block">Save</button>
+      <p class="subtle">Saved on this phone first, then sent when there's a connection. You review what it found before anything is filed.</p>
+    </form>
+    <section class="outbox" aria-labelledby="outbox-title">
+      <h3 id="outbox-title">On this phone</h3>
+      <p id="outbox-summary" class="subtle">Nothing waiting.</p>
+      <ul id="outbox-list" class="list"></ul>
+    </section>
+  </dialog>
+</body>
+</html>
