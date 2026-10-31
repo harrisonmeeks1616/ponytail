@@ -67,7 +67,7 @@ Real resource IDs stay out of this public repository. Keep them in `wrangler.loc
    npx wrangler secret put PM_DIGEST_TOKEN --config wrangler.local.jsonc
    ```
 
-   `AI_API_KEY` is an Anthropic API key, which is not a chat subscription. Work text is never sent to the model until "Allow work text" is switched on in Memory > Ask with AI. `PM_DIGEST_URL` (var) plus `PM_DIGEST_TOKEN` enable the live PM digest; without them, use the import.
+   `AI_API_KEY` is an Anthropic API key, which is not a chat subscription. Work text is never sent to the model until "Allow work text" is switched on in Memory > Ask with AI. `PM_DIGEST_URL` (var) plus `PM_DIGEST_TOKEN` enable the live PM digest; without them, use the import. The deploy guard refuses a config that puts `AI_API_KEY` or `PM_DIGEST_TOKEN` under `vars`; they are secrets only.
 
 7. Guarded deploy:
 

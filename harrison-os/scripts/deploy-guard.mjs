@@ -160,7 +160,7 @@ export function checkConfig(rawText, { preAccess = false } = {}) {
   if (String(vars.ALLOW_TEST_PUSH_ENDPOINT ?? '').trim() === '1') {
     errors.push('vars.ALLOW_TEST_PUSH_ENDPOINT must not be "1" for a deploy');
   }
-  for (const secret of ['VAPID_PRIVATE_JWK', 'OWNER_EMAIL']) {
+  for (const secret of ['VAPID_PRIVATE_JWK', 'OWNER_EMAIL', 'AI_API_KEY', 'PM_DIGEST_TOKEN']) {
     if (vars[secret] !== undefined) errors.push(`vars.${secret} must not be in wrangler.jsonc; set it with wrangler secret put`);
   }
 

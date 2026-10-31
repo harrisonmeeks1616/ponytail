@@ -5,6 +5,9 @@
 // Secrets are never written in this file. Harrison sets them himself with `wrangler secret put`:
 //   VAPID_PRIVATE_JWK  (single-line JSON private key; local dev keeps it in .dev.vars, git-ignored)
 //   OWNER_EMAIL        (optional; owner Access tokens must match it)
+//   AI_API_KEY         (optional; Anthropic API key for Ask. Without it Ask says "Not AI")
+//   PM_DIGEST_TOKEN    (optional; bearer token for the PM digest link)
+// deploy-guard.mjs refuses a deploy if any of these appears under vars below.
 {
 	"$schema": "./node_modules/wrangler/config-schema.json",
 	"name": "harrison-os",
@@ -42,6 +45,17 @@
 		"ACCESS_AUD_SHORTCUT": "",
 		"VAPID_PUBLIC_KEY": "",
 		// The Worker's own https:// origin (never an email address).
-		"VAPID_SUBJECT": ""
+		"VAPID_SUBJECT": "",
+		// AUD tag of the separate /api/mcp application (its own Service Auth token). Empty = MCP disabled.
+		"ACCESS_AUD_MCP": "",
+		// Scopes an MCP client may read (comma list of work, personal). Work only until Harrison decides otherwise.
+		"MCP_SCOPES": "work",
+		// "1" lets an MCP client add captures to the review inbox (never auto-accepted). Off by default.
+		"MCP_ALLOW_CAPTURE": "0",
+		// Optional model id for Ask. Blank = the built-in default. The API key is a secret, not a var.
+		"AI_MODEL": "",
+		"AI_TIMEOUT_MS": "",
+		// https:// URL of the authorized PM digest. Blank = use the PM import instead. The token is a secret.
+		"PM_DIGEST_URL": ""
 	}
 }
