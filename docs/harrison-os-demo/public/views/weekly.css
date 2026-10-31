@@ -1,0 +1,13 @@
+/* Weekly review (#/weekly). Reuses styles.css rows, chips and buttons; only the action row differs:
+   these rows have no check circle to indent past. */
+#weekly-body .row-actions {
+  padding: 0.5rem 0 0;
+}
+
+#weekly-body .plain-row .chips:empty {
+  display: none;
+}
+
+#weekly-done {
+  margin-top: 1.5rem;
+}

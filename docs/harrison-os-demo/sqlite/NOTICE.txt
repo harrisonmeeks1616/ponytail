@@ -1,0 +1,1 @@
+SQLite (public domain) WebAssembly build from the @sqlite.org/sqlite-wasm npm package (Apache-2.0 JS wrapper). https://sqlite.org/wasm
