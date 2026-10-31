@@ -360,7 +360,7 @@ export async function onScheduled(env, nowMs, { fetchImpl } = {}) {
   const due = iso(nowMs - REFRESH_EVERY_MS);
   const row = await env.DB
     .prepare(
-      `SELECT * FROM calendar_connections WHERE kind = 'ics_url' AND (last_fetch_at IS NULL OR last_fetch_at < ?)
+      `SELECT * FROM calendar_connections WHERE kind = 'ics_url' AND url IS NOT NULL AND (last_fetch_at IS NULL OR last_fetch_at < ?)
        ORDER BY last_fetch_at IS NOT NULL, last_fetch_at, created_at, id LIMIT 1`,
     )
     .bind(due)

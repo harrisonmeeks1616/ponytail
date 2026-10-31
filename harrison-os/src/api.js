@@ -24,6 +24,7 @@ import {
   MAX_TEXT, DATE_RE,
 } from './http.js';
 import { FEATURE_ROUTES, SCHEDULED } from './features.js';
+import { exportFeatures, restoreFeatures } from './featuredata.js';
 
 export { HttpError, json, apiError, requireScope };
 
@@ -782,6 +783,7 @@ async function getSearch(ctx) {
 async function getExport(ctx) {
   const scope = queryScope(ctx, { allowAll: true });
   const data = await db.exportData(ctx.env.DB, scope);
+  Object.assign(data.tables, await exportFeatures(ctx.env.DB, scope));
   const counts = Object.fromEntries(Object.entries(data.tables).map(([k, v]) => [k, v.length]));
   await logEvent(ctx.env, ctx.nowMs, 'export', null, { scope, counts });
   const filename = `harrison-os-${scope}-${iso(ctx.nowMs).slice(0, 10)}.json`;
@@ -872,6 +874,9 @@ async function postRestore(ctx) {
   const scope = requireScope(body.scope, { allowAll: true });
   if (!body.data || typeof body.data !== 'object' || Array.isArray(body.data)) throw new HttpError(400, 'invalid_data', 'data must be an export document');
   const res = await db.restoreData(ctx.env.DB, body.data, scope, iso(ctx.nowMs));
+  const feat = await restoreFeatures(ctx.env.DB, body.data, scope);
+  Object.assign(res.inserted, feat.inserted);
+  for (const k of ['skipped_existing', 'skipped_deleted', 'rejected']) res[k] += feat[k];
   await logEvent(ctx.env, ctx.nowMs, 'restore', null, { scope, ...res });
   return json(200, res);
 }

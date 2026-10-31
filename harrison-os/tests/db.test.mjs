@@ -755,7 +755,7 @@ test('kv, meta and events helpers', async () => {
 // DATE_RE, timeRe, re, ...Regex, ...Pattern) is allowed: the copied src/time.js parses dates that way.
 // PLAN.md "Scope enforcement": db.js owns core tables; these feature modules own their own tables. Their
 // scope is enforced by tests/scope-sweep.test.mjs and their own canary tests, not by this list.
-const SQL_OWNERS = new Set(['db.js', 'ask.js', 'ai.js', 'drafts.js', 'claims.js', 'calendar.js', 'pm.js', 'review.js', 'mcp.js']);
+const SQL_OWNERS = new Set(['db.js', 'ask.js', 'ai.js', 'drafts.js', 'claims.js', 'calendar.js', 'pm.js', 'review.js', 'mcp.js', 'featuredata.js']);
 test('static: only db.js and the listed table-owning feature modules call prepare( or .exec(', () => {
   const root = join(dirname(fileURLToPath(import.meta.url)), '..', 'src');
   const files = [];

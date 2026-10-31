@@ -18,7 +18,10 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { createTestDb } from './helpers/d1.mjs';
 import { readFileSync } from 'node:fs';
-import { createWorker, ROUTES } from '../src/api.js';
+import { createWorker, ROUTES, runScheduled } from '../src/api.js';
+import { FEATURE_TABLES } from '../src/featuredata.js';
+import * as calendar from '../src/calendar.js';
+import * as pm from '../src/pm.js';
 
 const ICS = ['BEGIN:VCALENDAR', 'VERSION:2.0', 'PRODID:-//sweep//EN', 'BEGIN:VEVENT', 'UID:sweep-1@example.invalid', 'DTSTAMP:20261028T120000Z',
   'DTSTART:20261029T150000Z', 'DTEND:20261029T160000Z', 'SUMMARY:ZZ-SWEEP-PERSONAL-CANARY appointment', 'LOCATION:ZZ-SWEEP-PERSONAL-CANARY place', 'END:VEVENT', 'END:VCALENDAR', ''].join('\r\n');
@@ -273,7 +276,7 @@ function setup() {
     const res = await worker.fetch(new Request(BASE + path, { method, headers, body: body === undefined ? undefined : JSON.stringify(body) }), env);
     return { status: res.status, text: await res.text() };
   }
-  return { DB, call };
+  return { DB, call, env };
 }
 
 async function seedPersonal(call) {
@@ -365,4 +368,83 @@ test('derived deletion: deleting a personal item removes the draft built from it
   assert.equal((await call('GET', `/api/drafts/${d}?scope=personal`)).status, 404, 'draft citing the deleted item is gone');
   const left = await DB.prepare('SELECT COUNT(*) AS n FROM drafts WHERE source_refs LIKE ?').bind(`%${P.task}%`).first('n');
   assert.equal(left, 0);
+});
+
+// ---------------------------------------------------------------- A18/A20: export, jobs and weekly purge
+
+const parseJson = (r) => JSON.parse(r.text);
+
+test('export canary: feature tables carry personal records only in the personal export', async () => {
+  const { call } = setup();
+  const P = await seedPersonal(call);
+  assert.equal((await call('POST', `/api/review/weekly/select?tz=${TZ}`, { scope: 'personal', refs: [`item:${P.task}`] })).status, 200);
+  const personal = parseJson(await call('GET', '/api/export?scope=personal'));
+  for (const t of FEATURE_TABLES) assert.ok(personal.tables[t].length > 0, `personal export has ${t} rows`);
+  for (const t of ['drafts', 'calendar_connections', 'calendar_events', 'pm_sources', 'pm_records']) {
+    assert.ok(JSON.stringify(personal.tables[t]).includes(CANARY), `${t} carries the seeded canary`);
+  }
+  const work = await call('GET', '/api/export?scope=work');
+  assert.ok(!work.text.includes(CANARY), 'work export has no personal text');
+  const w = parseJson(work);
+  for (const t of FEATURE_TABLES) assert.equal(w.tables[t].length, 0, `work export has no ${t} rows`);
+});
+
+test('jobs canary: a due personal reminder fires without personal text reaching work outputs or the event log', async () => {
+  const { call, env } = setup();
+  const P = await seedPersonal(call); // personal reminder 'rem-sweep-personal-01' at 2026-10-30 09:00 New York
+  const at = Date.UTC(2026, 9, 30, 13, 1, 0);
+  const stats = await runScheduled(env, at);
+  assert.equal(stats.fired, 1);
+  const personalList = (await call('GET', `/api/reminders?scope=personal`)).text;
+  assert.ok(personalList.includes(CANARY) && personalList.includes('no_route'), 'personal reminder fired and shows its delivery');
+  for (const path of ['/api/reminders?scope=work', '/api/export?scope=work', '/api/evidence', `/api/today?scope=work&tz=${TZ}`]) {
+    const r = await call('GET', path);
+    assert.ok(!r.text.includes(CANARY), `${path} has no personal text after the job ran`);
+  }
+  assert.ok(P.reminder);
+});
+
+test('jobs canary: calendar and PM refresh touch only their own rows, scope intact', async () => {
+  const { call, env, DB } = setup();
+  await seedPersonal(call);
+  const NOWC = Date.UTC(2026, 9, 29, 12, 0, 0);
+  const T = new Date(NOWC).toISOString();
+  for (const [id, scope, url] of [['cal-job-work01', 'work', 'https://calendar.example.invalid/work.ics'], ['cal-job-pers01', 'personal', 'https://calendar.example.invalid/personal.ics']]) {
+    await DB.prepare("INSERT INTO calendar_connections (id, scope, label, kind, url, host, state, created_at) VALUES (?, ?, ?, 'ics_url', ?, 'calendar.example.invalid', 'never', ?)").bind(id, scope, `${scope} feed`, url, T).run();
+  }
+  const feed = (url) => async () => {
+    const text = String(url).includes('personal') ? ICS : ICS.replaceAll(CANARY, 'work');
+    return new Response(text, { status: 200, headers: { 'content-type': 'text/calendar' } });
+  };
+  const fetchImpl = (u) => feed(u)();
+  const first = await calendar.onScheduled(env, NOWC, { fetchImpl });
+  const second = await calendar.onScheduled(env, NOWC + 31 * 60 * 1000, { fetchImpl });
+  assert.deepEqual(new Set([first.refreshed, second.refreshed]), new Set(['cal-job-work01', 'cal-job-pers01']));
+  const mismatched = await DB.prepare('SELECT COUNT(*) AS n FROM calendar_events e JOIN calendar_connections c ON c.id = e.connection_id WHERE e.scope <> c.scope').first('n');
+  assert.equal(mismatched, 0, 'every event keeps its connection scope');
+  const workView = await call('GET', `/api/calendar/events?scope=work&from=2026-10-29&to=2026-10-31&tz=${TZ}`);
+  assert.ok(!workView.text.includes(CANARY), 'work calendar view shows personal events busy-only');
+  assert.match(workView.text, /"busy_only":\s*(true|1)/);
+
+  // PM: the cron source is the authorized company digest (work); personal PM rows are untouched.
+  const before = await DB.prepare("SELECT COUNT(*) AS n FROM pm_records WHERE scope = 'personal'").first('n');
+  const penv = { ...env, PM_DIGEST_URL: 'https://pm.example.invalid/digest.json', PM_DIGEST_TOKEN: 'sample-token' };
+  const r = await pm.onScheduled(penv, NOWC, { fetchImpl: async () => new Response(PM_CONTENT.replaceAll(CANARY, 'work'), { status: 200, headers: { 'content-type': 'application/json' } }) });
+  assert.equal(r.ok, true);
+  assert.equal(await DB.prepare("SELECT COUNT(*) AS n FROM pm_records WHERE scope = 'personal'").first('n'), before);
+  assert.equal(await DB.prepare("SELECT COUNT(*) AS n FROM pm_sources WHERE scope = 'personal' AND kind = 'http'").first('n'), 0);
+  assert.ok(!(await call('GET', '/api/pm/digest?scope=work')).text.includes(CANARY));
+});
+
+test('weekly purge: deleting an item removes it from selections and deferrals end to end', async () => {
+  const { call, DB } = setup();
+  const P = await seedPersonal(call);
+  assert.equal((await call('POST', `/api/review/weekly/select?tz=${TZ}`, { scope: 'personal', refs: [`item:${P.task}`] })).status, 200);
+  assert.equal((await call('POST', `/api/review/weekly/defer?tz=${TZ}`, { scope: 'personal', ref: `item:${P.waiting}`, follow_up_on: '2026-11-05' })).status, 200);
+  const raw = async () => (await DB.prepare('SELECT selections, deferrals FROM weekly_reviews').all()).results.map((r) => r.selections + r.deferrals).join('|');
+  const cites = await raw();
+  assert.ok(cites.includes(P.task) && cites.includes(P.waiting), 'the review cites both items before deletion');
+  for (const id of [P.task, P.waiting]) assert.equal((await call('DELETE', `/api/items/${id}?scope=personal`)).status, 200);
+  const after = await raw();
+  assert.ok(!after.includes(P.task) && !after.includes(P.waiting), 'no trace of the deleted items in weekly selections or deferrals');
 });
