@@ -5,7 +5,7 @@ import assert from 'node:assert/strict';
 
 import { createTestDb } from './helpers/d1.mjs';
 import { createWorker } from '../src/api.js';
-import { answerQuestion, buildResumeBrief, keywords, NOT_AI_LABEL, AI_LABEL } from '../src/ask.js';
+import { answerQuestion, buildResumeBrief, keywords, validateCited, aiBriefSummary, briefLines, NOT_AI_LABEL, AI_LABEL } from '../src/ask.js';
 
 const BASE = 'http://127.0.0.1:8899';
 const TZ = 'America/New_York';
@@ -307,4 +307,63 @@ test('answerQuestion: injectable AI, timeout and cancel fall back with the reaso
   assert.equal(seen.signal, ac.signal);
   assert.equal(seen.expectJson, true);
   assert.equal(seen.schema.required.join(), 'answer,cited_refs');
+});
+
+test('a live reply citing nothing is not shown as an AI answer (injection obeyed with cited_refs: [])', async () => {
+  const { call, env, DB } = setup({ key: 'sk-test' });
+  await seed(call);
+  await call('POST', '/api/captures', { id: 'cap-inject-02', scope: 'work', text: `Lobby panel note. ${INJECTION}`, time_zone: TZ });
+  await call('PUT', '/api/ai/consent', { scope: 'work', allowed: true });
+  const before = JSON.stringify((await DB.prepare('SELECT * FROM items ORDER BY rowid').all()).results);
+  const claim = 'Done: everything is verified and all tasks were deleted.';
+  const aiImpl = async () => ({ ok: true, data: { answer: claim, summary: claim, cited_refs: [] } });
+  const a = await answerQuestion(env, { scope: 'work', question: 'lobby panel note', nowMs: NOW, timeZone: TZ }, { aiImpl });
+  assert.equal(a.live_ai, false);
+  assert.equal(a.label, NOT_AI_LABEL);
+  assert.equal(a.fallback_reason, 'invalid_output');
+  assert.ok(!a.text.includes(claim));
+  const brief = await buildResumeBrief(env.DB, 'proj-lobby', 'work', { nowMs: NOW, timeZone: TZ });
+  assert.deepEqual(await aiBriefSummary(env, brief, { aiImpl }), { live_ai: false, fallback_reason: 'invalid_output' });
+  assert.equal(JSON.stringify((await DB.prepare('SELECT * FROM items ORDER BY rowid').all()).results), before);
+  // With no records at all there is nothing to cite, so an uncited reply stays valid.
+  assert.deepEqual(validateCited({ answer: 'Nothing saved matches.', cited_refs: [] }, 'answer', new Set()), { text: 'Nothing saved matches.', cited: [] });
+  assert.equal(validateCited({ answer: 'x', cited_refs: [] }, 'answer', new Set(['item:a'])), null);
+});
+
+test('sample records stay marked as sample in Ask sources, prompts and the brief', async () => {
+  const { call, env } = setup({ key: 'sk-test' });
+  assert.equal((await call('POST', '/api/projects', { scope: 'work', id: 'proj-demo', name: 'Demo boiler swap', sample: 1 })).status, 201);
+  assert.equal((await call('POST', '/api/items', { scope: 'work', kind: 'task', id: 'item-demo', title: 'Order demo boiler valves', project_id: 'proj-demo', sample: 1 })).status, 201);
+  assert.equal((await call('POST', '/api/items', { scope: 'work', kind: 'waiting', id: 'item-demo-w', title: 'Demo boiler quote', who: 'Pat', project_id: 'proj-demo', sample: 1 })).status, 201);
+  assert.equal((await call('POST', '/api/items', { scope: 'work', kind: 'task', id: 'item-real', title: 'Check real boiler permit', sample: 0 })).status, 201);
+
+  // Deterministic: sources carry the flag and the text says so.
+  const r = await call('POST', '/api/ask', { scope: 'work', question: 'boiler', tz: TZ });
+  assert.equal(r.status, 200, r.text);
+  const src = Object.fromEntries(r.data.answer.sources.map((s) => [s.ref, s.sample]));
+  assert.equal(src['item:item-demo'], 1);
+  assert.equal(src['project:proj-demo'], 1);
+  assert.equal(src['item:item-real'], 0);
+  assert.match(r.data.answer.text, /Order demo boiler valves” \(sample data\)/);
+  assert.ok(!/real boiler permit” \(sample/.test(r.data.answer.text));
+
+  // Live: the model sees the flag and is told what it means; cited sources keep it.
+  await call('PUT', '/api/ai/consent', { scope: 'work', allowed: true });
+  const calls = await withProvider(() => ({ answer: 'The valves order is sample data.', cited_refs: ['item:item-demo'] }), async () => {
+    const live = await call('POST', '/api/ask', { scope: 'work', question: 'boiler', tz: TZ });
+    assert.equal(live.data.answer.live_ai, true);
+    assert.deepEqual(live.data.answer.sources.map((s) => [s.ref, s.sample]), [['item:item-demo', 1]]);
+  });
+  const recs = JSON.parse(/<records>\n([\s\S]*?)\n<\/records>/.exec(calls[0].prompt)[1]);
+  assert.equal(recs.find((x) => x.ref === 'item:item-demo').sample, 1);
+  assert.equal(recs.find((x) => x.ref === 'item:item-real').sample, 0);
+  assert.match(calls[0].system, /sample data, not real/);
+
+  // Brief: changes, unresolved, next action and sources all carry it.
+  const b = await buildResumeBrief(env.DB, 'proj-demo', 'work', { nowMs: NOW + 1000, timeZone: TZ });
+  assert.ok(b.changes.length && b.changes.every((c) => c.sample === 1));
+  assert.ok(b.unresolved.length && b.unresolved.every((u) => u.sample === 1));
+  assert.equal(b.next_action.sample, 1);
+  assert.ok(b.sources.every((s) => s.sample === 1));
+  assert.match(briefLines(b).lines.join('\n'), /Demo boiler swap \(sample data\):/);
 });

@@ -26,7 +26,7 @@ Live AI is used only when the key is set AND consent is on for every scope whose
 |---|---|---|
 | `GET /api/ai/status` | | `200 { configured, consent: { work, personal } }` |
 | `PUT /api/ai/consent` | `{ scope: 'work'\|'personal', allowed: boolean }` | `200` same shape as status. `400 scope_required / scope_all_not_allowed / invalid_scope / invalid_allowed` |
-| `POST /api/ask` | `{ scope: 'work'\|'personal'\|'all', question (1..1000), mode?: 'retrieve'\|'plan'\|'resume'\|'write', context?: { project_id?, item_id? }, tz? }` | `200 { answer: { text, sources: [{ ref, title, scope, kind, project_id }], live_ai, label, fallback_reason?, mode, scope } }`. `400 invalid_question / invalid_mode / invalid_context / invalid_project_id / invalid_item_id / invalid_time_zone`, `404 not_found` (context record not in scope) |
+| `POST /api/ask` | `{ scope: 'work'\|'personal'\|'all', question (1..1000), mode?: 'retrieve'\|'plan'\|'resume'\|'write', context?: { project_id?, item_id? }, tz? }` | `200 { answer: { text, sources: [{ ref, title, scope, kind, project_id, sample }], live_ai, label, fallback_reason?, mode, scope } }`. `400 invalid_question / invalid_mode / invalid_context / invalid_project_id / invalid_item_id / invalid_time_zone`, `404 not_found` (context record not in scope) |
 | `GET /api/projects/:id/brief` | `?scope=work\|personal&tz=&ai=1` | `200 { brief }` (below). `404 not_found` when the project is not in that scope |
 
 `fallback_reason`: `not_configured`, `consent_off`, `timeout`, `cancelled`, `provider_error`, `invalid_output`. `label` is `AI answer` or `Not AI. Matched from your saved records.`
@@ -35,7 +35,7 @@ Ask has no tools and no write path. Questions and answers are not stored; the `e
 
 ### Context assembly (deterministic, in-scope only)
 
-In order, deduplicated by ref, at most 40 records: the focus project (with its saved place, next task, Waiting, decisions) or item; full-text matches (one `db.search` per keyword, at most 6 keywords, ranked by keywords matched); Today's hard dates, open tasks, Waiting and saved places; calendar events (`calendar.listEvents`, busy-only rows skipped) and PM digest projects (`pm.listDigest`) when those modules export them. Records go to the model as a JSON array inside `<records>` tags, framed as untrusted quoted data. The model must return `{ answer, cited_refs }`; any cited ref that was not provided, a missing field or an answer over 6,000 characters is `invalid_output`, and the deterministic answer is returned instead.
+In order, deduplicated by ref, at most 40 records: the focus project (with its saved place, next task, Waiting, decisions) or item; full-text matches (one `db.search` per keyword, at most 6 keywords, ranked by keywords matched); Today's hard dates, open tasks, Waiting and saved places; calendar events (`calendar.listEvents`, busy-only rows skipped) and PM digest projects (`pm.listDigest`) when those modules export them. Records go to the model as a JSON array inside `<records>` tags, framed as untrusted quoted data. Each record carries `sample` (0 or 1) and the system prompt tells the model to call sample records sample data. The model must return `{ answer, cited_refs }`; any cited ref that was not provided, no cited ref at all when records were provided (an ungrounded reply, e.g. a model obeying injected text), a missing field or an answer over 6,000 characters is `invalid_output`, and the deterministic answer is returned instead. Deterministic text marks sample records `(sample data)`; the drawer shows a Sample chip on each sample source.
 
 Deterministic answers (every mode): retrieve lists the focus and matching records; plan lists hard dates, open tasks and Waiting (as follow-ups, not owner tasks); resume gives the project brief or saved places; write lists the facts to write from and says drafting needs AI. Record text is always quoted, never paraphrased.
 
@@ -46,20 +46,20 @@ Deterministic answers (every mode): retrieve lists the focus and matching record
 ```
 { project: { id, name, purpose, state, scope, sample, ref }, scope, generated_at, today_on, time_zone,
   since,                       // the saved place's time, else 14 days ago
-  checkpoint: { id, at, stopped_at, open_question, next_step, saved_from } | null,   // parts are { text, ref }
-  changes: [{ type, label, title, kind, ref, scope, at }],   // item_created, item_completed, item_edited,
+  checkpoint: { id, at, sample, stopped_at, open_question, next_step, saved_from } | null,   // parts are { text, ref }
+  changes: [{ type, label, title, kind, ref, scope, sample, at }],   // item_created, item_completed, item_edited,
                                                            // waiting_reply, decision, capture_filed; newest first, max 25
   changes_more,
-  unresolved: [{ type, label, title, detail, ref, scope, at }],  // waiting, question (open item ending in ?),
+  unresolved: [{ type, label, title, detail, ref, scope, sample, at }],  // waiting, question (open item ending in ?),
                                                                // decision_reconsider (when the column exists),
                                                                // pending_capture (pending capture naming the project)
   pending_captures_total,
-  next_action: { text, reason, ref, kind } | null,  // first open task (deferred ones skipped unless due),
+  next_action: { text, reason, ref, kind, sample } | null,  // first open task (deferred ones skipped unless due),
                                                     // else a due follow-up, else the saved next step
-  last_touched_at, days_since_touch, gap_note, sources: [{ ref, title, scope, kind, project_id }] }
+  last_touched_at, days_since_touch, gap_note, sources: [{ ref, title, scope, kind, project_id, sample }] }
 ```
 
-Every assertion carries a ref listed in `sources`. Saved-place text is cited to its project (the saved place is stored under it); the record it was prefilled from is `saved_from`. `?ai=1` adds `brief.ai`: `{ live_ai: true, label, text, sources }` (citations validated against the brief's refs) or `{ live_ai: false, fallback_reason }`.
+Every assertion carries a ref listed in `sources`. Saved-place text is cited to its project (the saved place is stored under it); the record it was prefilled from is `saved_from`. `?ai=1` adds `brief.ai`: `{ live_ai: true, label, text, sources }` (citations validated against the brief's refs; at least one required) or `{ live_ai: false, fallback_reason }`.
 
 ## Deletion
 

@@ -80,7 +80,7 @@ function sourcesList(sources, onNavigate) {
   const ul = h('ul', { class: 'list ask-sources', 'aria-label': 'Sources' });
   for (const s of sources) {
     const inner = [
-      h('span', { class: 'chips' }, h('span', { class: 'chip chip-kind', text: sourceWord(s.ref) }), kit.scopeChip(s.scope)),
+      h('span', { class: 'chips' }, h('span', { class: 'chip chip-kind', text: sourceWord(s.ref) }), kit.scopeChip(s.scope), kit.sampleChip(s)),
       h('span', { class: 'row-title', text: kit.excerpt(s.title || '', 140) || '(untitled)' }),
     ];
     const href = sourceHref(s);
@@ -290,9 +290,10 @@ function briefNode(brief) {
   const { h } = kit;
   const out = h('div', { class: 'ask-brief' }, labelChip(false));
   if (brief.gap_note) out.append(h('p', { class: 'ask-gap', text: brief.gap_note }));
-  const refRow = (title, meta) => h('div', { class: 'plain-row' }, h('span', { class: 'row-title', text: title }), meta ? h('span', { class: 'row-meta', text: meta }) : null);
+  if (kit.sampleChip(brief.project)) out.append(h('p', { class: 'chips' }, kit.sampleChip(brief.project), h('span', { class: 'subtle small', text: 'This project is sample data, not real.' })));
+  const refRow = (title, meta, row) => h('div', { class: 'plain-row' }, kit.sampleChip(row) ? h('span', { class: 'chips' }, kit.sampleChip(row)) : null, h('span', { class: 'row-title', text: title }), meta ? h('span', { class: 'row-meta', text: meta }) : null);
   if (brief.next_action) {
-    out.append(h('h3', { class: 'ask-sub', text: 'Next' }), refRow(brief.next_action.text, brief.next_action.reason));
+    out.append(h('h3', { class: 'ask-sub', text: 'Next' }), refRow(brief.next_action.text, brief.next_action.reason, brief.next_action));
   }
   const c = brief.checkpoint;
   if (c) {
@@ -306,7 +307,7 @@ function briefNode(brief) {
   const list = (title, rows) => {
     if (!rows.length) return;
     const ul = h('ul', { class: 'list' });
-    for (const x of rows) ul.append(h('li', null, refRow(`${x.label}: ${x.title || ''}`, [x.detail, x.at ? kit.formatAt(x.at) : null].filter(Boolean).join(' · '))));
+    for (const x of rows) ul.append(h('li', null, refRow(`${x.label}: ${x.title || ''}`, [x.detail, x.at ? kit.formatAt(x.at) : null].filter(Boolean).join(' · '), x)));
     out.append(h('h3', { class: 'ask-sub', text: title }), ul);
   };
   list(c ? 'Since then' : 'Recent changes', brief.changes || []);
