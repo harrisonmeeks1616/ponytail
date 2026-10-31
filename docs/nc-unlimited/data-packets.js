@@ -732,14 +732,69 @@
   ],
   "questions": [
    {
-    "q": "Mixed re-solves (12, changed numbers from the coach, one at a time): O03, W02, W03, B01, B03, B04, L02, L06, M04, M05, E01, M07.",
-    "a": "Coach generated; keyed arithmetic only, no key supplied on the page.",
-    "src": "Coach"
-   },
-   {
     "q": "Mock A setup checklist: books (NEC 2020; NFPA 72 2013 and NASCLA if in hand), approved calculator, pencils, scratch paper, timer, answer sheet 1-100, quiet room 10 AM-4 PM, phone away.",
     "a": "Checklist, no key.",
     "src": "Setup"
+   },
+   {
+    "q": "O03-v3 (changes O03; Keyed, changed-number variant, complete inputs): Model: required current = 1.25 x continuous + noncontinuous. Inputs: 24 A continuous, 30 A noncontinuous. Calculated minimum before selecting conductors or a device?",
+    "a": "60 A. 1.25 x 24 = 30 A; + 30 A = 60 A. Arithmetic model only; no code-compliance conclusion.",
+    "src": "Original arithmetic under the stated assumptions; no NEC/NFPA compliance conclusion."
+   },
+   {
+    "q": "W02-v3 (changes W02; Keyed, changed-number variant, complete inputs): Model: start at 130 A, multiply by 0.94 ambient and 0.8 conductor-count factors, then separately limit to a 90 A terminal value. Usable maximum under ONLY these assumptions (round to 0.01 A)?",
+    "a": "90.00 A. 130 x 0.94 x 0.8 = 97.76 A; terminal cap 90 A; min = 90.00 A. Arithmetic model only; no code-compliance conclusion.",
+    "src": "Original arithmetic under the stated assumptions; no NEC/NFPA compliance conclusion."
+   },
+   {
+    "q": "W03-v5 (changes W03; Keyed, changed-number variant, complete inputs): Fictitious raceway: 4.00 in2 internal area; stipulated 40% permitted fill; 0.24 in2 per identical conductor. Whole conductors that fit under these assumptions?",
+    "a": "6. 4.00 x 0.40 = 1.60 in2; 1.60 / 0.24 = 6.667; round DOWN to 6. Arithmetic model only; no code-compliance conclusion.",
+    "src": "Original arithmetic under the stated assumptions; no NEC/NFPA compliance conclusion."
+   },
+   {
+    "q": "B01-v2 (changes B01; Keyed, changed-number variant, complete inputs): Fictional box exercise stipulates 5 conductor, 2 device, 1 clamp and 1 grounding allowances, all at 2.25 in3 each. Required volume from these stated allowances?",
+    "a": "20.25 in3. 5+2+1+1 = 9 allowances; 9 x 2.25 = 20.25 in3. Arithmetic model only; no code-compliance conclusion.",
+    "src": "Original arithmetic under the stated assumptions; no NEC/NFPA compliance conclusion."
+   },
+   {
+    "q": "B03-v2 (changes B03; Keyed, changed-number variant, complete inputs): Supplied model: straight-pull length >= 8 x largest raceway trade size. Largest size is 4 in. Minimum model length?",
+    "a": "32 in. 8 x 4 = 32 in. Arithmetic model only; no code-compliance conclusion.",
+    "src": "Original arithmetic under the stated assumptions; no NEC/NFPA compliance conclusion."
+   },
+   {
+    "q": "B04-v1 (changes B04; Keyed, changed-number variant, complete inputs): Supplied angle-pull model: 6 x largest raceway in the row + sum of the others. Sizes 4, 3 and 2 in. Model dimension only?",
+    "a": "29 in. 6 x 4 + 3 + 2 = 29 in. Arithmetic model only; no code-compliance conclusion.",
+    "src": "Original arithmetic under the stated assumptions; no NEC/NFPA compliance conclusion."
+   },
+   {
+    "q": "L02-v2 (changes L02; Keyed, changed-number variant, complete inputs): Balanced three-phase load 225 kVA at 480 V line-to-line. Use I = 1,000 x kVA / (sqrt(3) x V_LL). Line current to the nearest ampere?",
+    "a": "271 A. 225,000 / (1.7320508 x 480) = 270.6329 A -> 271 A. Arithmetic model only; no code-compliance conclusion.",
+    "src": "Original arithmetic under the stated assumptions; no NEC/NFPA compliance conclusion."
+   },
+   {
+    "q": "L06-v2 (changes L06; Keyed, changed-number variant, complete inputs): Supplied model: 125% of 12,000 VA continuous + 100% of 9,500 VA noncontinuous. Total VA?",
+    "a": "24,500 VA. 1.25 x 12,000 = 15,000; + 9,500 = 24,500 VA. Arithmetic model only; no code-compliance conclusion.",
+    "src": "Original arithmetic under the stated assumptions; no NEC/NFPA compliance conclusion."
+   },
+   {
+    "q": "M04-v2 (changes M04; Keyed, changed-number variant, complete inputs): Supplied feeder-conductor model: 125% of largest motor FLC + 100% of the others. Currents 52 A, 27 A, 14 A. Model ampacity?",
+    "a": "106.00 A. 1.25 x 52 = 65.00; + 27 + 14 = 106.00 A. Not a feeder OCP calculation. Arithmetic model only; no code-compliance conclusion.",
+    "src": "Original arithmetic under the stated assumptions; no NEC/NFPA compliance conclusion."
+   },
+   {
+    "q": "M05-v2 (changes M05; Keyed, changed-number variant, complete inputs): Branch fault-protection arithmetic drill: supplied factor 250% x table current 28 A. Product before any standard size or exception?",
+    "a": "70.00 A. 28 x 2.50 = 70.00 A. Arithmetic model only; no code-compliance conclusion.",
+    "src": "Original arithmetic under the stated assumptions; no NEC/NFPA compliance conclusion."
+   },
+   {
+    "q": "E01-v2 (changes E01; Keyed, changed-number variant, complete inputs): Balanced 45 kVA three-phase transformer, 480 V primary and 208 V secondary (line-to-line). I = VA/(sqrt(3) x V_LL). Primary and secondary currents (0.1 A)?",
+    "a": "54.1 A and 124.9 A. 45,000/(1.7320508 x 480) = 54.127 A; 45,000/(1.7320508 x 208) = 124.908 A. Arithmetic model only; no code-compliance conclusion.",
+    "src": "Original arithmetic under the stated assumptions; no NEC/NFPA compliance conclusion."
+   },
+   {
+    "q": "M07-v2 (changes M07; Keyed, changed-number variant, complete inputs): Use ONLY VD = sqrt(3) x K x I x D / CM with K = 12.9, I = 60 A, one-way D = 200 ft, CM = 52,620, line voltage 480 V. Volts dropped and percent (2 decimals)?",
+    "a": "5.10 V; 1.06%. 1.7320508 x 12.9 x 60 x 200 / 52,620 = 5.0954 V; 100 x 5.0954 / 480 = 1.0615%. D is one-way; do not double. Arithmetic model only; no code-compliance conclusion.",
+    "src": "Original arithmetic under the stated assumptions; no NEC/NFPA compliance conclusion."
    }
   ],
   "checks": [
@@ -749,14 +804,14 @@
    "Record table filled; real misses logged in the Error Log",
    "Status checked in this row only after the work is actually done"
   ],
-  "notes": "References: your Day 01-13 record areas (pending items); Active Recall & Error Log (due retests); Mock A form: the acquired fresh form if obtained by Nov 6, otherwise the 100-item learning bank as a labelled learning/endurance run. Mixed re-solves are keyed arithmetic only. Book lookup required = grade only after reading the exact 2020 NEC / 2013 NFPA 72 / NASCLA text. Article maps are navigation starting points. Answer every question before opening the key; write answer, exact source (edition, section/page), condition/exception, elapsed time. Choices may be shuffled; track the answer, not the letter. Difficult day (20 min): recall one due item (5 min), solve one question from today's list (10 min), record actual 20 min (5 min). Carry unfinished items into the next two rows' correction slots (at most two per day). Never double tomorrow; never drop a domain. Pre-Oct 31 version of this row (old plan: P11, P13, P09, P10 starters) is reference only and omitted."
+  "notes": "References: your Day 01-13 record areas (pending items); Active Recall & Error Log (due retests); Mock A form: the acquired fresh form if obtained by Nov 6, otherwise the 100-item learning bank as a labelled learning/endurance run. Each variant is a NEW problem: grade it only against its recomputed key, never against the original bank letter or value. All factors are exercise assumptions (not verified code rules); round only where stated. No time or no coach? Re-solve the original IDs instead and label them repeat (not fresh). Verify before scoring: mixed re-solves are keyed arithmetic only. Book lookup required = grade only after reading the exact 2020 NEC / 2013 NFPA 72 / NASCLA text. Article maps are navigation starting points. Answer every question before opening the key; write answer, exact source (edition, section/page), condition/exception, elapsed time. Choices may be shuffled; track the answer, not the letter. Difficult day (20 min): recall one due item (5 min), solve one question from today's list (10 min), record actual 20 min (5 min). Carry unfinished items into the next two rows' correction slots (at most two per day). Never double tomorrow; never drop a domain. Pre-Oct 31 version of this row (old plan: P11, P13, P09, P10 starters) is reference only and omitted."
  },
  "15": {
   "objective": "Sit 100 questions for six hours under exam conditions and record the actual score and time. (6 h, 10:00 AM-4:00 PM, exam-time rehearsal)",
   "steps": [
    "Before 10:00 (not counted): set out books, calculator, pencils, scratch paper, answer sheet 1-100, timer. Phone away.",
    "10:00-11:15 Questions 1-25 (75 min per 25 questions). Flag anything over 4 minutes and move on.",
-   "11:15-12:30 Questions 26-50. Eat/drink at the desk; the clock keeps running (as on exam day).",
+   "11:15-12:30 Questions 26-50. Keep one continuous six-hour clock. No food or drink in the testing room. Simulate only proctor-permitted restroom breaks; the clock keeps running. Follow actual appointment instructions and any approved accommodations. (Handbook printed p. 5 / PDF p. 6, https://www.ncbeec.org/psi-exam-book-2026-002-2/#page=6)",
    "12:30-1:45 Questions 51-75.",
    "1:45-3:00 Questions 76-100.",
    "3:00-4:00 Flagged items, then a final check that all 100 have an answer.",
@@ -767,8 +822,8 @@
   "checks": [
    "Six-hour sitting finished (or labelled split)",
    "Form type recorded: fresh qualifying form or LEARNING/ENDURANCE run",
-   "Score and elapsed time recorded from the actual sitting",
-   "Record table filled (form/provider/edition; fresh or LEARNING run and prior exposure; score/100 and scorable denominator; actual elapsed time; category results for 11 domains; hardest 2; next retest date); real misses logged in the Error Log",
+   "Raw score / 100 (blanks = 0) and elapsed time recorded from the actual sitting; pending/disputed items counted separately",
+   "Record table filled (form/provider/edition; fresh or LEARNING run and prior exposure; raw score/100 (blanks = 0) with pending/disputed counted separately; actual elapsed time; category results for 11 domains; hardest 2; next retest date); real misses logged in the Error Log",
    "Status checked in this row only after the work is actually done"
   ],
   "notes": "MOCK PROTOCOL. Which form counts: readiness credit only if ALL are true: fresh (never seen), complete 100 multiple-choice items covering all 11 domains incl. NC law/business, plans and NFPA 72; independently keyed; key kept separate and unopened; six uninterrupted hours; admitted books only (2020 NEC, 2013 NFPA 72, NASCLA NC Electrical 14th); no AI help while solving. If no qualifying form was acquired by Nov 6: run the same six-hour slot as a LEARNING / ENDURANCE 100-item run using the 100-item learning bank (blueprint order 11/9/10/7/9/9/9/11/7/3/15; shuffle answer choices); score keyed items, mark Book-lookup items pending; NO readiness credit. A split run is labelled split. Never re-use an exposed form as a fresh score. Never invent a score. References: Preferred: a legitimate fresh full NC Unlimited 100-question form with a separate unexposed key (from the Nov 6 acquisition). Fallback: the 100-item learning bank in blueprint order, labelled LEARNING/ENDURANCE run (no readiness credit; book-lookup items scored as pending). Admitted books only. No AI help while solving. Record actual interruptions/assistance. Old-plan coaching gate (reference): two fresh full mocks at 82%+ within six hours, no persistent category below 70% with adequate fresh samples; AI validation 0/3 documented perfect runs. The 100-item learning bank is not a validated form (open-response lookups, unverified technical keys): do not count it as Mock A or expose a reserved publisher key. If no qualifying form is available, record that blocker and use an explicitly labelled learning session. Book lookup required = grade only after reading the exact 2020 NEC / 2013 NFPA 72 / NASCLA text. Article maps are navigation starting points. Answer every question before opening the key; write answer, exact source (edition, section/page), condition/exception, elapsed time. Choices may be shuffled; track the answer, not the letter. Pre-Oct 31 version of this row (old plan) is reference only and omitted."
@@ -1057,7 +1112,7 @@
   "steps": [
    "Before 10:00 (not counted): set out books, calculator, pencils, scratch paper, answer sheet 1-100, timer. Phone away.",
    "10:00-11:15 Questions 1-25 (75 min per 25 questions). Flag anything over 4 minutes and move on.",
-   "11:15-12:30 Questions 26-50. Eat/drink at the desk; the clock keeps running (as on exam day).",
+   "11:15-12:30 Questions 26-50. Keep one continuous six-hour clock. No food or drink in the testing room. Simulate only proctor-permitted restroom breaks; the clock keeps running. Follow actual appointment instructions and any approved accommodations. (Handbook printed p. 5 / PDF p. 6, https://www.ncbeec.org/psi-exam-book-2026-002-2/#page=6)",
    "12:30-1:45 Questions 51-75.",
    "1:45-3:00 Questions 76-100.",
    "3:00-4:00 Flagged items, then a final check that all 100 have an answer.",
@@ -1068,8 +1123,8 @@
   "checks": [
    "Six-hour sitting finished (or labelled split)",
    "Form type recorded: fresh qualifying form or LEARNING/ENDURANCE run",
-   "Score and elapsed time recorded from the actual sitting",
-   "Record table filled (form/provider/edition; fresh or LEARNING run and prior exposure; score/100 and scorable denominator; actual elapsed time; category results for 11 domains; hardest 2; next retest date); real misses logged in the Error Log",
+   "Raw score / 100 (blanks = 0) and elapsed time recorded from the actual sitting; pending/disputed items counted separately",
+   "Record table filled (form/provider/edition; fresh or LEARNING run and prior exposure; raw score/100 (blanks = 0) with pending/disputed counted separately; actual elapsed time; category results for 11 domains; hardest 2; next retest date); real misses logged in the Error Log",
    "Status checked in this row only after the work is actually done"
   ],
   "notes": "MOCK PROTOCOL. Which form counts: readiness credit only if ALL are true: fresh (never seen), complete 100 multiple-choice items covering all 11 domains incl. NC law/business, plans and NFPA 72; independently keyed; key kept separate and unopened; six uninterrupted hours; admitted books only (2020 NEC, 2013 NFPA 72, NASCLA NC Electrical 14th); no AI help while solving. If no qualifying form was acquired by Nov 6: run the same six-hour slot as a LEARNING / ENDURANCE 100-item run using the 100-item learning bank (blueprint order 11/9/10/7/9/9/9/11/7/3/15; shuffle answer choices); score keyed items, mark Book-lookup items pending; NO readiness credit. A split run is labelled split. Never re-use an exposed form as a fresh score. Never invent a score. References: Preferred: a second legitimate fresh full form with a separate unexposed key. Fallback: 100-item learning bank shuffled (repeat exposure) labelled LEARNING/ENDURANCE run, no readiness credit. Admitted books only. No AI help while solving. Record actual interruptions/assistance. Old-plan coaching gate (reference): two fresh full mocks at 82%+ within six hours, no persistent category below 70% with adequate fresh samples; AI validation 0/3 documented perfect runs. The 100-item learning bank is not a validated form (open-response lookups, unverified technical keys): do not count it as Mock B or expose a reserved publisher key. If no qualifying form is available, record that blocker and use an explicitly labelled learning session. Book lookup required = grade only after reading the exact 2020 NEC / 2013 NFPA 72 / NASCLA text. Article maps are navigation starting points. Answer every question before opening the key; write answer, exact source (edition, section/page), condition/exception, elapsed time. Choices may be shuffled; track the answer, not the letter. Pre-Oct 31 version of this row (old plan) is reference only and omitted."
@@ -1200,7 +1255,7 @@
    {
     "q": "P15 (Law, business, and practical applications, Book lookup required): An owner asks for additional work before a change price is agreed. In NASCLA 14th, locate contract-change documentation and notice topics, then write the facts/authorization/cost/schedule records needed for this case.",
     "a": "Book lookup required. Verify exact section/page, conditions, exception in the named edition before scoring. Starting route: NASCLA NC Electrical 14th, contract/project-management topics. Record page; no page is invented. Identify actual contract authority, notice and documentation; a verbal request does not settle every entitlement question. Pending verification: record a readable designated-book citation before scoring; suggested route is not a verified exact section.",
-    "src": "NASCLA North Carolina Electrical, 14th edition (https://store.nascla.org/products/north-carolina-electrical-14th-edition); page confirmation required"
+    "src": "NASCLA North Carolina Electrical, 14th edition (https://store.nascla.org/products/north-carolina-electrical); page confirmation required"
    }
   ],
   "checks": [
@@ -1309,7 +1364,7 @@
   "steps": [
    "Before 10:00 (not counted): set out books, calculator, pencils, scratch paper, answer sheet 1-100, timer. Phone away.",
    "10:00-11:15 Questions 1-25 (75 min per 25 questions). Flag anything over 4 minutes and move on.",
-   "11:15-12:30 Questions 26-50. Eat/drink at the desk; the clock keeps running (as on exam day).",
+   "11:15-12:30 Questions 26-50. Keep one continuous six-hour clock. No food or drink in the testing room. Simulate only proctor-permitted restroom breaks; the clock keeps running. Follow actual appointment instructions and any approved accommodations. (Handbook printed p. 5 / PDF p. 6, https://www.ncbeec.org/psi-exam-book-2026-002-2/#page=6)",
    "12:30-1:45 Questions 51-75.",
    "1:45-3:00 Questions 76-100.",
    "3:00-4:00 Flagged items, then a final check that all 100 have an answer.",
@@ -1320,8 +1375,8 @@
   "checks": [
    "Six-hour sitting finished (or labelled split)",
    "Form type recorded: fresh qualifying form or LEARNING/ENDURANCE run",
-   "Score and elapsed time recorded from the actual sitting",
-   "Record table filled (form/provider/edition; fresh or LEARNING run and prior exposure; score/100 and scorable denominator; actual elapsed time; category results for 11 domains; hardest 2; next retest date); real misses logged in the Error Log",
+   "Raw score / 100 (blanks = 0) and elapsed time recorded from the actual sitting; pending/disputed items counted separately",
+   "Record table filled (form/provider/edition; fresh or LEARNING run and prior exposure; raw score/100 (blanks = 0) with pending/disputed counted separately; actual elapsed time; category results for 11 domains; hardest 2; next retest date); real misses logged in the Error Log",
    "Status checked in this row only after the work is actually done"
   ],
   "notes": "MOCK PROTOCOL. Which form counts: readiness credit only if ALL are true: fresh (never seen), complete 100 multiple-choice items covering all 11 domains incl. NC law/business, plans and NFPA 72; independently keyed; key kept separate and unopened; six uninterrupted hours; admitted books only (2020 NEC, 2013 NFPA 72, NASCLA NC Electrical 14th); no AI help while solving. If no qualifying form was acquired by Nov 6: run the same six-hour slot as a LEARNING / ENDURANCE 100-item run using the 100-item learning bank (blueprint order 11/9/10/7/9/9/9/11/7/3/15; shuffle answer choices); score keyed items, mark Book-lookup items pending; NO readiness credit. A split run is labelled split. Never re-use an exposed form as a fresh score. Never invent a score. References: Preferred: a third legitimate fresh full form with a separate unexposed key. Fallback: learning/endurance run (bank shuffled or a provider random form), clearly labelled, no readiness credit. Admitted books only. No AI help while solving. Record actual interruptions/assistance. Old-plan coaching gate (reference): two fresh full mocks at 82%+ within six hours, no persistent category below 70% with adequate fresh samples; AI validation 0/3 documented perfect runs. The 100-item learning bank is not a validated form (open-response lookups, unverified technical keys): do not count it as Mock C or expose a reserved publisher key. If no qualifying form is available, record that blocker and use an explicitly labelled learning session. Book lookup required = grade only after reading the exact 2020 NEC / 2013 NFPA 72 / NASCLA text. Article maps are navigation starting points. Answer every question before opening the key; write answer, exact source (edition, section/page), condition/exception, elapsed time. Choices may be shuffled; track the answer, not the letter. Pre-Oct 31 version of this row (old plan) is reference only and omitted."
@@ -1394,7 +1449,7 @@
   ],
   "checks": [
    "Verified-answers table page numbers filled",
-   "Book notes written (pencil) and highlighted on bound pages; no inserted sheets, sticky notes or loose papers",
+   "Book notes written and highlighted",
    "Record table filled; real misses logged in the Error Log",
    "Status checked in this row only after the work is actually done"
   ],
@@ -1545,7 +1600,7 @@
    {
     "q": "P15 (Law, business, and practical applications, Book lookup required): An owner asks for additional work before a change price is agreed. In NASCLA 14th, locate contract-change documentation and notice topics, then write the facts/authorization/cost/schedule records needed for this case.",
     "a": "Book lookup required. Verify exact section/page, conditions, exception in the named edition before scoring. Starting route: NASCLA NC Electrical 14th, contract/project-management topics. Record page; no page is invented. Identify actual contract authority, notice and documentation; a verbal request does not settle every entitlement question.",
-    "src": "NASCLA North Carolina Electrical, 14th edition; page confirmation required (https://store.nascla.org/products/north-carolina-electrical-14th-edition)"
+    "src": "NASCLA North Carolina Electrical, 14th edition; page confirmation required (https://store.nascla.org/products/north-carolina-electrical)"
    }
   ],
   "checks": [
@@ -1561,10 +1616,10 @@
   "steps": [
    "0:00-0:05 (5 min) Launch: open this page and Exam Plan & Readiness.",
    "0:05-0:25 (20 min) Books and tabs: 2020 NEC, 2013 NFPA 72, NASCLA NC Electrical (edition on cover recorded). Complete bound books only. Permanent tabs only: no temporary flags, stapled tabs or divider tabs. No inserted, loose or attached papers. Pencil notes highlighted; pen notes need no highlight.",
-   "0:25-0:40 (15 min) ID and admin: two valid, unexpired, signed IDs (one government photo ID), names match registration; calculator allowed under the handbook; PSI confirmation copy. Check the Board authorization start/expiry: still unverified, so look it up in the Board notice or official account. If a change were needed, the PSI confirmation's own terms (recorded as 48 hours) govern. Notion AI does not cancel or reschedule.",
+   "0:25-0:40 (15 min) ID and admin: two valid, unexpired, signed IDs (one government photo ID), names match registration; calculator, scratch paper and pencils supplied by the test center; PSI confirmation copy. Recheck the Board authorization start/expiry recorded in Week 1 (if still unverified, look it up in the Board notice or official account). If a change were needed, the PSI confirmation's own terms (recorded as 48 hours) govern. Notion AI does not cancel or reschedule.",
    "0:40-0:45 (5 min) Break.",
-   "0:45-1:05 (20 min) Route and timing: PSI Charlotte, Tyvola Executive Park, 5701 Westpark Dr, Suite 101, Charlotte NC 28217. Plan departure to arrive about 9:30 AM for a 10:00 start.",
-   "1:05-1:25 (20 min) Light practice: 10 due Error Log retests, changed scenarios.",
+   "0:45-1:05 (20 min) Route and timing: PSI Charlotte, Tyvola Executive Park, 5701 Westpark Dr, Suite 101, Charlotte NC 28217 (from your actual PSI confirmation; the generic handbook lists Suite 202, so route-check against your appointment instructions). Plan departure to arrive about 9:30 AM for a 10:00 start.",
+   "1:05-1:25 (20 min) Light practice: up to 10 due Error Log retests; prioritize 3-5 highest-weight, stop on time, record attempted / pending. Coach-made changed scenarios must state complete inputs, assumptions and rounding, and use a newly recomputed key revealed only after your answer (never the original bank letter/value). If the coach is unavailable, re-solve the original items as explicit repeats.",
    "1:25-1:30 (5 min) Record and decide: write your personal go / no-go decision on Exam Plan & Readiness."
   ],
   "questions": [
@@ -1586,13 +1641,13 @@
   ],
   "checks": [
    "Books, tabs, notes compliant (complete bound books; permanent tabs only; no loose/attached papers; pencil notes highlighted)",
-   "IDs and confirmation ready (two valid unexpired signed IDs, one government photo ID, names match registration; approved calculator; PSI confirmation copy); Board authorization dates checked or still marked unverified",
+   "IDs and confirmation ready (two valid unexpired signed IDs, one government photo ID, names match registration; calculator, scratch paper and pencils supplied by the test center; PSI confirmation copy); Board authorization dates checked or still marked unverified",
    "Route planned (PSI Charlotte, Tyvola Executive Park, 5701 Westpark Dr, Suite 101, Charlotte NC 28217; arrive about 9:30 AM for 10:00 start)",
    "Personal go / no-go written on Exam Plan & Readiness",
    "Record table filled; real misses logged in the Error Log",
    "Status checked in this row only after the work is actually done"
   ],
-  "notes": "GO/NO-GO: personal conservative scheduling decision is due today (Fri Dec 4), written on Exam Plan & Readiness. Exam is Mon Dec 7, 10:00 AM-4:00 PM. Old-plan reference: PSI's actual cutoff was recorded as 48 hours before the appointment (Saturday Dec 5, 10:00 AM); the PSI confirmation's own terms govern any change; Notion AI does not cancel or reschedule. Board authorization start/expiry is still unverified: look it up in the Board notice or official account. References: Exam Plan & Readiness test-day logistics; current handbook book rules (https://www.ncbeec.org/psi-exam-book-2026-002-2/); your own PSI confirmation email. Starter-style lookups (G02, M01, W01) are on the old plan's list as Pending verification: record a readable designated-book citation before scoring. Book lookup required = grade only after reading the exact 2020 NEC / 2013 NFPA 72 / NASCLA text. Article maps are navigation starting points. Answer every question before opening the key; write answer, exact source (edition, section/page), condition/exception, elapsed time. Choices may be shuffled; track the answer, not the letter. Difficult day (20 min): recall one due item (5 min), solve one question from today's list (10 min), record actual 20 min (5 min). Carry unfinished items into the next two rows' correction slots (at most two per day). Never double tomorrow; never drop a domain. Pre-Oct 31 version of this row (old plan) is reference only and omitted."
+  "notes": "GO/NO-GO: personal conservative scheduling decision is due today (Fri Dec 4), written on Exam Plan & Readiness. Exam is Mon Dec 7, 10:00 AM-4:00 PM. Old-plan reference: PSI's actual cutoff was recorded as 48 hours before the appointment (Saturday Dec 5, 10:00 AM); the PSI confirmation's own terms govern any change; Notion AI does not cancel or reschedule. Board authorization start/expiry is still unverified: look it up in the Board notice or official account. References: Exam Plan & Readiness test-day logistics; current handbook book rules (https://www.ncbeec.org/psi-exam-book-2026-002-2/); your own PSI confirmation email. Starter-style lookups (G02, M01, W01) are on the old plan's list as Pending verification: record a readable designated-book citation before scoring. Book lookup required = grade only after reading the exact 2020 NEC / 2013 NFPA 72 / NASCLA text. Article maps are navigation starting points. Answer every question before opening the key; write answer, exact source (edition, section/page), condition/exception, elapsed time. Choices may be shuffled; track the answer, not the letter. Difficult day (20 min): recall one due item (5 min), solve one question from today's list (10 min), record actual 20 min (5 min). Do not carry unfinished items into Dec 6 or exam day. List them as deferred in the Error Log and on Exam Plan & Readiness (they stay visible). No new material. Pre-Oct 31 version of this row (old plan) is reference only and omitted."
  },
  "36": {
   "objective": "Sharpen speed on known errors and key tables without exhausting yourself. No full mock. (2 h, suggested 9:00-11:00 AM)",
@@ -1600,7 +1655,7 @@
    "0:00-0:05 (5 min) Launch/recall: open due retests in the Error Log; recall one fact from the last session without looking.",
    "0:05-0:30 (25 min) Main learning: Main, 25 min: 20-target navigation speed drill; compare with Day 02 times.",
    "0:30-0:35 (5 min) Break.",
-   "0:35-1:00 (25 min) Practice: 15 items drawn from your Error Log (changed scenarios).",
+   "0:35-1:00 (25 min) Practice: Practice, 25 min: up to 15 Error Log items; prioritize 3-5 highest-weight, stop on time. Coach-made changed scenarios must state complete inputs, assumptions and rounding, and use a newly recomputed key revealed only after your answer (never the original bank letter/value). If the coach is unavailable, re-solve the original items as explicit repeats.",
    "1:00-1:05 (5 min) Break.",
    "1:05-1:25 (20 min) Rotating law/NFPA/plans: Law cards: your 10 most-missed.",
    "1:25-1:55 (30 min) Correct and re-solve: Light corrections only. Stop on time.",
@@ -1635,18 +1690,18 @@
   ],
   "checks": [
    "Navigation drill median recorded",
-   "15 error-log items re-solved",
+   "Error-log items: attempted __, pending __ (actuals; pending stay visible in the Error Log)",
    "Record table filled; real misses logged in the Error Log",
    "Status checked in this row only after the work is actually done"
   ],
-  "notes": "FINAL INSTRUCTIONS (Day 36): short targeted set plus formula/table speed; NO full mock; light corrections only; stop on time; do not exhaust yourself. References: Error Log (all unmastered); navigation drill targets from Day 02. Starter items G02, M01, W01, P11 are Book lookup required (Pending verification: record a readable designated-book citation before scoring); P04 is keyed current law. Book lookup required = grade only after reading the exact 2020 NEC / 2013 NFPA 72 / NASCLA text. Article maps are navigation starting points. Answer every question before opening the key; write answer, exact source (edition, section/page), condition/exception, elapsed time. Choices may be shuffled; track the answer, not the letter. Difficult day (20 min): recall one due item (5 min), solve one question from today's list (10 min), record actual 20 min (5 min). Carry unfinished items into the next two rows' correction slots (at most two per day). Never double tomorrow; never drop a domain. Pre-Oct 31 version of this row (old plan) is reference only and omitted."
+  "notes": "FINAL INSTRUCTIONS (Day 36): short targeted set plus formula/table speed; NO full mock; light corrections only; stop on time; do not exhaust yourself. References: Error Log (all unmastered); navigation drill targets from Day 02. Starter items G02, M01, W01, P11 are Book lookup required (Pending verification: record a readable designated-book citation before scoring); P04 is keyed current law. Book lookup required = grade only after reading the exact 2020 NEC / 2013 NFPA 72 / NASCLA text. Article maps are navigation starting points. Answer every question before opening the key; write answer, exact source (edition, section/page), condition/exception, elapsed time. Choices may be shuffled; track the answer, not the letter. Difficult day (20 min): recall one due item (5 min), solve one question from today's list (10 min), record actual 20 min (5 min). Do not carry unfinished items into Dec 6 or exam day. List them as deferred in the Error Log and on Exam Plan & Readiness (they stay visible). No new material. Pre-Oct 31 version of this row (old plan) is reference only and omitted."
  },
  "37": {
   "objective": "Pack, glance at your own notes, and sleep. No new material. (30 min, any 30 minutes; lights out early)",
   "steps": [
    "0:00-0:05 (5 min) Read your own one-page formula list. No new material.",
    "0:05-0:15 (10 min) Flip through your book tabs and pencil notes only.",
-   "0:15-0:25 (10 min) Pack: 2020 NEC, 2013 NFPA 72, NASCLA, two IDs, approved calculator, directions, water/snack for the car.",
+   "0:15-0:25 (10 min) Pack: 2020 NEC, 2013 NFPA 72, NASCLA, two IDs (calculator is supplied by the center), directions, water/snack for the car.",
    "0:25-0:30 (5 min) Set two alarms, plan to leave on time, lights out early."
   ],
   "questions": [
@@ -1677,7 +1732,7 @@
    }
   ],
   "checks": [
-   "Bag packed (2020 NEC, 2013 NFPA 72, NASCLA, two IDs, approved calculator, directions, water/snack)",
+   "Bag packed (2020 NEC, 2013 NFPA 72, NASCLA, two IDs (calculator is supplied by the center), directions, water/snack)",
    "In bed early (two alarms set, leave on time)",
    "Record table filled; real misses logged in the Error Log",
    "Status checked in this row only after the work is actually done"
