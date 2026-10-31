@@ -546,7 +546,7 @@ g.NC.bank=[
 "D": "3.85 V; 1.85%"
 },
 "ans": "B",
-"why": "VD = 1.7320508 × 12.9 × 40 × 180 / 41,740 = 3.8542 V. Percent = 100 × 3.8542 / 480 = 0.80297%. D is one-way; do not double it in this supplied three-phase formula. AC reactance, actual temperature and power factor are not modeled.",
+"why": "VD = 1.7320508 × 12.9 × 40 × 180 / 41,740 = 3.854165764 V. Percent = 100 × 3.854165764 / 480 = 0.802951201%. Final rounded: 3.85 V and 0.80%. D is one-way; do not double it in this supplied three-phase formula. AC reactance, actual temperature and power factor are not modeled.",
 "ref": "Original arithmetic under the explicit problem assumptions; no NEC/NFPA compliance conclusion.",
 "kind": "calc"
 },
@@ -808,7 +808,7 @@ g.NC.bank=[
 {
 "id": "E02",
 "d": 9,
-"q": "A 500 kVA, 480 V three-phase transformer has 5.75% impedance. Under the supplied stiff-source, secondary-terminal bolted-fault model, use I_FL = 500,000/(sqrt(3) × 480), then I_SC = I_FL/0.0575. Choose the approximate result.",
+"q": "A 500 kVA three-phase transformer has a 480 V secondary (line-to-line) and 5.75% impedance. Under the supplied stiff-source, secondary-terminal bolted-fault model, use I_FL = 500,000/(sqrt(3) × 480 V line-to-line), then I_SC = I_FL/0.0575. Choose the approximate result.",
 "opts": {
 "A": "1.046 kA",
 "B": "6.014 kA",
@@ -895,15 +895,15 @@ g.NC.bank=[
 {
 "id": "P01",
 "d": 11,
-"q": "A candidate passes the Unlimited examination. What must still occur before treating the business as licensed?",
+"q": "Harrison already holds a Limited license. He passes the Unlimited examination. What must still occur before his business is authorized to contract at the Unlimited level?",
 "opts": {
 "A": "Nothing; a passing score is the license",
-"B": "Board license application/issuance and applicable licensing requirements",
+"B": "Board license application/issuance (upgrade to Unlimited) and applicable licensing requirements",
 "C": "Only purchasing a ground rod",
 "D": "Only completing an online mock"
 },
 "ans": "B",
-"why": "Passing alone does not issue the contracting license. The current handbook instructs passing candidates to complete the license application; current G.S. 87-43.2 specifies issuance requirements.",
+"why": "Passing alone does not authorize Unlimited contracting. Holding a Limited license does not by itself authorize Unlimited-level work; the business must be issued the Unlimited classification. The current handbook instructs passing candidates to complete the license application; current G.S. 87-43.2 specifies issuance requirements.",
 "ref": "G.S. 87-43.2, current Legislature text; verified October 5, 2026; G.S. 87-43.2(a); corroborated by July 2026 handbook checklist.",
 "kind": "law"
 },
