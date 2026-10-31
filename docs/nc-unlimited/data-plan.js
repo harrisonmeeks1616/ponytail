@@ -2,6 +2,8 @@
 (function (g) {
   g.NC = g.NC || {};
 
+  g.NC.meta = { syncedAt: "2026-10-31T18:40:00Z", note: "Plan content mirrors the Harrison OS Notion pages, which were still being rewritten on Oct 31. If a date or number looks wrong, Notion wins: tell me and I will re-sync." };
+
   g.NC.exam = {
     startISO: "2026-12-07T15:00:00Z", // Mon Dec 7 2026 10:00 AM EST (UTC-5)
     date: "2026-12-07",
@@ -51,7 +53,7 @@
   ];
 
   // Coaching gates (separate from the Board's 70% pass line).
-  g.NC.gates = { mockPct: 82, mockCount: 2, maxMinutes: 360, categoryFloor: 70, adequateSample: 15, checkpointPct: 75, checkpoints: ["2026-11-06", "2026-11-13", "2026-12-02"], lookupSeconds: 90 };
+  g.NC.gates = { mockPct: 82, mockCount: 2, maxMinutes: 360, categoryFloor: 70, adequateSample: 15, checkpointPct: 75, stretch: "90%+, ideally 95 to 100%", checkpoints: ["2026-11-06", "2026-11-13", "2026-12-02"], lookupSeconds: 90 };
 
   // Sprint rebuilt by Harrison OS on Oct 31, 2026 (Day 01 = today). 37 dated sessions live in data-sessions.js; total 94.5 planned hours.
   g.NC.sprint = { start: "2026-10-31", end: "2026-12-06", hours: 94.5, rhythm: "Ordinary day 2 h (7 to 9 PM). Weekends: two 2 h blocks (9 to 11 AM and 1 to 3 PM) on Sundays and Nov 7. Saturday mocks 6 h (10 AM to 4 PM). Thanksgiving 0.5 h. Difficult-day minimum 20 minutes." };
