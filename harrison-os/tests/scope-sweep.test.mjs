@@ -20,6 +20,8 @@ import { createTestDb } from './helpers/d1.mjs';
 import { readFileSync } from 'node:fs';
 import { createWorker, ROUTES } from '../src/api.js';
 
+const ICS = ['BEGIN:VCALENDAR', 'VERSION:2.0', 'PRODID:-//sweep//EN', 'BEGIN:VEVENT', 'UID:sweep-1@example.invalid', 'DTSTAMP:20261028T120000Z',
+  'DTSTART:20261029T150000Z', 'DTEND:20261029T160000Z', 'SUMMARY:ZZ-SWEEP-PERSONAL-CANARY appointment', 'LOCATION:ZZ-SWEEP-PERSONAL-CANARY place', 'END:VEVENT', 'END:VCALENDAR', ''].join('\r\n');
 // A synthetic PM export with the canary in a project name, for the PM digest fixtures.
 const PM_CONTENT = readFileSync(new URL('./fixtures/pm/digest-v1.json', import.meta.url), 'utf8').replace('Synthetic clinic fit-out', 'ZZ-SWEEP-PERSONAL-CANARY fit-out');
 
@@ -172,7 +174,38 @@ const FIXTURES = {
     reads: true,
     crossOk: (r) => r.status === 404,
   }),
+  'GET /api/calendar/connections': () => ({ cross: ['GET', '/api/calendar/connections?scope=work'], own: ['GET', '/api/calendar/connections?scope=personal'], reads: true }),
+  'POST /api/calendar/connections': () => ({
+    cross: ['POST', '/api/calendar/connections', { scope: 'work', label: 'sweep work feed', url: 'https://calendar.example.com/work.ics' }],
+    own: ['POST', '/api/calendar/connections', { scope: 'personal', label: `${CANARY} feed`, url: 'https://calendar.example.com/personal.ics' }],
+    reads: true,
+  }),
+  // Imported files are not refreshable by design: own answers 409 not_refreshable after the scoped lookup.
+  'POST /api/calendar/connections/([A-Za-z0-9_-]{1,80})/refresh': (P) => ({
+    cross: ['POST', `/api/calendar/connections/${P.calendar}/refresh`, { scope: 'work' }],
+    own: ['POST', `/api/calendar/connections/${P.calendar}/refresh`, { scope: 'personal' }],
+    ownOk: (r) => r.status === 409 && r.text.includes('not_refreshable'),
+    crossOk: (r) => r.status === 404,
+  }),
+  'POST /api/calendar/import': () => ({
+    cross: ['POST', '/api/calendar/import', { scope: 'work', label: 'sweep work import', ics_text: ICS.replaceAll(CANARY, 'work') }],
+    own: ['POST', '/api/calendar/import', { scope: 'personal', label: `${CANARY} second import`, ics_text: ICS }],
+    reads: true,
+  }),
+  'POST /api/calendar/sample': () => ({ cross: ['POST', '/api/calendar/sample', { scope: 'work' }], own: ['POST', '/api/calendar/sample', { scope: 'personal' }] }),
+  // Work view shows personal events as busy-only: present, but without title or location.
+  'GET /api/calendar/events': () => ({
+    cross: ['GET', `/api/calendar/events?scope=work&from=2026-10-29&to=2026-10-31&tz=${TZ}`],
+    own: ['GET', `/api/calendar/events?scope=personal&from=2026-10-29&to=2026-10-31&tz=${TZ}`],
+    reads: true,
+    crossOk: (r) => r.status === 200 && /"busy_only":\s*(true|1)/.test(r.text),
+  }),
   // Mutations that remove or rewrite the seed run last.
+  'DELETE /api/calendar/connections/([A-Za-z0-9_-]{1,80})': (P) => ({
+    cross: ['DELETE', `/api/calendar/connections/${P.calendar}?scope=work`],
+    own: ['DELETE', `/api/calendar/connections/${P.calendar}?scope=personal`],
+    crossOk: (r) => r.status === 404,
+  }),
   'DELETE /api/drafts/([A-Za-z0-9_-]{8,80})': (P) => ({
     cross: ['DELETE', `/api/drafts/${P.draft}?scope=work`],
     own: ['DELETE', `/api/drafts/${P.draft}?scope=personal`],
@@ -196,7 +229,7 @@ const FIXTURES = {
     own: ['DELETE', `/api/captures/${P.capture}?scope=personal`],
   }),
 };
-const LATE = new Set(['DELETE /api/drafts/([A-Za-z0-9_-]{8,80})', 'DELETE /api/pm/sources/([A-Za-z0-9_-]{1,120})', 'POST /api/captures/([A-Za-z0-9_-]{8,80})/review', 'POST /api/undo/([^/]{1,40})', 'DELETE /api/captures/([A-Za-z0-9_-]{8,80})']);
+const LATE = new Set(['DELETE /api/calendar/connections/([A-Za-z0-9_-]{1,80})', 'DELETE /api/drafts/([A-Za-z0-9_-]{8,80})', 'DELETE /api/pm/sources/([A-Za-z0-9_-]{1,120})', 'POST /api/captures/([A-Za-z0-9_-]{8,80})/review', 'POST /api/undo/([^/]{1,40})', 'DELETE /api/captures/([A-Za-z0-9_-]{8,80})']);
 
 function routeKey(method, re) {
   return `${method} ${re.source.replace(/^\^/, '').replace(/\$$/, '').replace(/\\\//g, '/')}`;
@@ -234,6 +267,7 @@ async function seedPersonal(call) {
   await j(call('POST', '/api/reminders', { id: P.reminder, scope: 'personal', text: `${CANARY} reminder`, local_date: '2026-10-30', local_time: '09:00', time_zone: 'America/New_York' }));
   P.pmSource = (await j(call('POST', '/api/pm/import', { scope: 'personal', label: `${CANARY} PM import`, format: 'json', content: PM_CONTENT }))).source.id;
   P.draft = (await j(call('POST', '/api/drafts', { scope: 'personal', kind: 'email', facts: `${CANARY} facts. We requested 2 lifts for Monday.`, source_refs: [`project:${P.project}`] }))).draft.id;
+  P.calendar = (await j(call('POST', '/api/calendar/import', { scope: 'personal', label: `${CANARY} calendar`, ics_text: ICS }))).connection.id;
   return P;
 }
 
