@@ -153,7 +153,30 @@ const FIXTURES = {
     ownOk: (r) => r.status === 409 && r.text.includes('import_source'),
     crossOk: (r) => r.status === 404,
   }),
+  'GET /api/drafts': () => ({ cross: ['GET', '/api/drafts?scope=work'], own: ['GET', '/api/drafts?scope=personal'], reads: true }),
+  'POST /api/drafts': (P) => ({
+    cross: ['POST', '/api/drafts', { scope: 'work', kind: 'update', facts: 'sweep', source_refs: [`item:${P.task}`, `project:${P.project}`] }],
+    own: ['POST', '/api/drafts', { scope: 'personal', kind: 'update', facts: `${CANARY} own facts`, source_refs: [`item:${P.task}`] }],
+    reads: true,
+  }),
+  'GET /api/drafts/([A-Za-z0-9_-]{8,80})': (P) => ({ cross: ['GET', `/api/drafts/${P.draft}?scope=work`], own: ['GET', `/api/drafts/${P.draft}?scope=personal`], reads: true, crossOk: (r) => r.status === 404 }),
+  'PATCH /api/drafts/([A-Za-z0-9_-]{8,80})': (P) => ({
+    cross: ['PATCH', `/api/drafts/${P.draft}`, { scope: 'work', body: 'sweep' }],
+    own: ['PATCH', `/api/drafts/${P.draft}`, { scope: 'personal', body: `${CANARY} edited draft. We requested 2 lifts.` }],
+    reads: true,
+    crossOk: (r) => r.status === 404,
+  }),
+  'POST /api/drafts/([A-Za-z0-9_-]{8,80})/check': (P) => ({
+    cross: ['POST', `/api/drafts/${P.draft}/check`, { scope: 'work' }],
+    own: ['POST', `/api/drafts/${P.draft}/check`, { scope: 'personal' }],
+    reads: true,
+    crossOk: (r) => r.status === 404,
+  }),
   // Mutations that remove or rewrite the seed run last.
+  'DELETE /api/drafts/([A-Za-z0-9_-]{8,80})': (P) => ({
+    cross: ['DELETE', `/api/drafts/${P.draft}?scope=work`],
+    own: ['DELETE', `/api/drafts/${P.draft}?scope=personal`],
+  }),
   'DELETE /api/pm/sources/([A-Za-z0-9_-]{1,120})': (P) => ({
     cross: ['DELETE', `/api/pm/sources/${P.pmSource}?scope=work`],
     own: ['DELETE', `/api/pm/sources/${P.pmSource}?scope=personal`],
@@ -173,7 +196,7 @@ const FIXTURES = {
     own: ['DELETE', `/api/captures/${P.capture}?scope=personal`],
   }),
 };
-const LATE = new Set(['DELETE /api/pm/sources/([A-Za-z0-9_-]{1,120})', 'POST /api/captures/([A-Za-z0-9_-]{8,80})/review', 'POST /api/undo/([^/]{1,40})', 'DELETE /api/captures/([A-Za-z0-9_-]{8,80})']);
+const LATE = new Set(['DELETE /api/drafts/([A-Za-z0-9_-]{8,80})', 'DELETE /api/pm/sources/([A-Za-z0-9_-]{1,120})', 'POST /api/captures/([A-Za-z0-9_-]{8,80})/review', 'POST /api/undo/([^/]{1,40})', 'DELETE /api/captures/([A-Za-z0-9_-]{8,80})']);
 
 function routeKey(method, re) {
   return `${method} ${re.source.replace(/^\^/, '').replace(/\$$/, '').replace(/\\\//g, '/')}`;
@@ -210,6 +233,7 @@ async function seedPersonal(call) {
   P.reminder = 'rem-sweep-personal-01';
   await j(call('POST', '/api/reminders', { id: P.reminder, scope: 'personal', text: `${CANARY} reminder`, local_date: '2026-10-30', local_time: '09:00', time_zone: 'America/New_York' }));
   P.pmSource = (await j(call('POST', '/api/pm/import', { scope: 'personal', label: `${CANARY} PM import`, format: 'json', content: PM_CONTENT }))).source.id;
+  P.draft = (await j(call('POST', '/api/drafts', { scope: 'personal', kind: 'email', facts: `${CANARY} facts. We requested 2 lifts for Monday.`, source_refs: [`project:${P.project}`] }))).draft.id;
   return P;
 }
 
