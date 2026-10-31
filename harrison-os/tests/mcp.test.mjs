@@ -6,6 +6,10 @@ import { createTestDb } from './helpers/d1.mjs';
 import { createWorker } from '../src/api.js';
 import { callTool, listTools, mcpConfig, PROTOCOL_VERSIONS, UNTRUSTED_NOTICE } from '../src/mcp.js';
 import * as db from '../src/db.js';
+import * as askMod from '../src/ask.js';
+import * as reviewMod from '../src/review.js';
+import * as calendarMod from '../src/calendar.js';
+import * as pmMod from '../src/pm.js';
 
 const BASE = 'http://127.0.0.1:8907';
 const NOW = Date.UTC(2026, 9, 29, 12, 0, 0);
@@ -13,6 +17,14 @@ const T0 = new Date(NOW - 3600_000).toISOString();
 const CANARY = 'CANARY-PERSONAL-7731';
 const MCP_ID = { kind: 'service', audience: 'mcp', commonName: 'mcp-client.access' };
 const BASE_TOOLS = ['search_memory', 'get_today', 'list_open_tasks', 'list_waiting', 'get_project'];
+// Contract tools are listed only when the real feature module exports its function (integration state).
+const LIVE_TOOLS = [
+  ...BASE_TOOLS,
+  ...(typeof askMod.buildResumeBrief === 'function' ? ['get_resume_brief'] : []),
+  ...(typeof reviewMod.buildWeeklyReview === 'function' ? ['get_weekly_review'] : []),
+  ...(typeof calendarMod.listEvents === 'function' ? ['list_calendar_events'] : []),
+  ...(typeof pmMod.listDigest === 'function' ? ['get_pm_digest'] : []),
+];
 
 function setup({ identity = MCP_ID, env: extra = {} } = {}) {
   const DB = createTestDb();
@@ -130,13 +142,13 @@ test('unauthenticated 401; owner on /api/mcp 403; MCP identity on any other rout
 test('tools/list equals the allowlist; capture_text appears only when MCP_ALLOW_CAPTURE=1', async () => {
   const s = setup();
   const names = (await s.rpc('tools/list')).data.result.tools.map((t) => t.name);
-  assert.deepEqual(names, BASE_TOOLS);
+  assert.deepEqual(names, LIVE_TOOLS);
   for (const t of (await s.rpc('tools/list')).data.result.tools) {
     assert.equal(t.inputSchema.additionalProperties, false, t.name);
     assert.equal(t.annotations.readOnlyHint, true, t.name);
   }
   const withCapture = setup({ env: { MCP_ALLOW_CAPTURE: '1' } });
-  assert.deepEqual((await withCapture.rpc('tools/list')).data.result.tools.map((t) => t.name), [...BASE_TOOLS, 'capture_text']);
+  assert.deepEqual((await withCapture.rpc('tools/list')).data.result.tools.map((t) => t.name), [...LIVE_TOOLS, 'capture_text']);
   // Contract tools appear only when the feature module provides its function.
   const mods = { ask: { buildResumeBrief() {} }, review: { buildWeeklyReview() {} }, calendar: { listEvents() {} }, pm: { listDigest() {} } };
   assert.deepEqual(listTools({}, mods).map((t) => t.name), [...BASE_TOOLS, 'get_resume_brief', 'get_weekly_review', 'list_calendar_events', 'get_pm_digest']);
@@ -295,7 +307,7 @@ test('injection text inside a returned record triggers nothing', async () => {
   assert.equal((await s.call('capture_text', { text: 'x', scope: 'work' })).result.isError, true);
   assert.equal((await s.call('list_open_tasks', { scope: 'personal' })).result.isError, true);
   assert.deepEqual(await counts(s.DB), before);
-  assert.deepEqual((await s.rpc('tools/list')).data.result.tools.map((t) => t.name), BASE_TOOLS);
+  assert.deepEqual((await s.rpc('tools/list')).data.result.tools.map((t) => t.name), LIVE_TOOLS);
 });
 
 test('GET /api/connections/mcp: owner only, plain status, never secrets', async () => {

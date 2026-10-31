@@ -753,7 +753,10 @@ test('kv, meta and events helpers', async () => {
 
 // Nothing outside src/db.js builds SQL. `.exec(` on a regular expression (a regex literal, or a name such as
 // DATE_RE, timeRe, re, ...Regex, ...Pattern) is allowed: the copied src/time.js parses dates that way.
-test('static: no file in src/ other than db.js calls prepare( or .exec(', () => {
+// PLAN.md "Scope enforcement": db.js owns core tables; these feature modules own their own tables. Their
+// scope is enforced by tests/scope-sweep.test.mjs and their own canary tests, not by this list.
+const SQL_OWNERS = new Set(['db.js', 'ask.js', 'ai.js', 'drafts.js', 'claims.js', 'calendar.js', 'pm.js', 'review.js', 'mcp.js']);
+test('static: only db.js and the listed table-owning feature modules call prepare( or .exec(', () => {
   const root = join(dirname(fileURLToPath(import.meta.url)), '..', 'src');
   const files = [];
   const walk = (dir) => {
@@ -768,7 +771,7 @@ test('static: no file in src/ other than db.js calls prepare( or .exec(', () => 
   const regexReceiver = /(?:\/[gimsuyd]*|(?:^|[^A-Za-z0-9_$])(?:re|RE|[A-Za-z0-9_$]*(?:_RE|_re|Re|Regex|REGEX|regex|Pattern|PATTERN|pattern)))\s*$/;
   const offenders = [];
   for (const f of files) {
-    if (relative(root, f) === 'db.js') continue;
+    if (SQL_OWNERS.has(relative(root, f))) continue;
     const lines = readFileSync(f, 'utf8').split('\n');
     lines.forEach((line, i) => {
       if (/\bprepare\s*\(/.test(line)) offenders.push(`${relative(root, f)}:${i + 1} prepare(`);
