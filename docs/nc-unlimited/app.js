@@ -2,7 +2,7 @@
 (function () {
   "use strict";
   const NC = window.NC, L = window.NCLogic, C = L.calc;
-  const KEY = "ncu.v1";
+  const KEY = "ncu.v2";
   const $ = (s, r) => (r || document).querySelector(s);
   const $$ = (s, r) => Array.from((r || document).querySelectorAll(s));
   const esc = (s) => String(s == null ? "" : s).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
@@ -14,7 +14,7 @@
   const median = (a) => { if (!a.length) return null; const s = a.slice().sort((x, y) => x - y); const m = s.length >> 1; return s.length % 2 ? s[m] : (s[m - 1] + s[m]) / 2; };
 
   // ---------- state ----------
-  const blank = () => ({ done: {}, log: [], attempts: {}, ver: {}, errs: [], mocks: [], cards: {}, check: {}, auth: { start: "", expiry: "" }, strong: {}, lookups: [], theme: "", examTimer: null, verif: {}, sc: {}, nav: {} });
+  const blank = () => ({ done: {}, log: [], attempts: {}, ver: {}, errs: [], mocks: [], cards: {}, check: {}, auth: { start: "", expiry: "" }, strong: {}, lookups: [], theme: "", examTimer: null, verif: {}, sc: {}, nav: {}, necv: {} });
   let S;
   try { S = Object.assign(blank(), JSON.parse(localStorage.getItem(KEY) || "{}")); } catch (e) { S = blank(); }
   const save = () => { try { localStorage.setItem(KEY, JSON.stringify(S)); } catch (e) { toast("Could not save: storage is full or blocked. Use Backup now."); } };
@@ -40,7 +40,11 @@
   const sect = (title, sub, right) => `<div class="top"><div><h2>${t(title)}</h2>${sub ? `<p>${t(sub)}</p>` : ""}</div>${right || ""}</div>`;
   const det = (title, body, open) => `<details ${open ? "open" : ""}><summary>${title}</summary><div class="body">${body}</div></details>`;
   const link = (u, txt) => `<a href="${esc(u)}" target="_blank" rel="noopener">${t(txt)}</a>`;
-  const catColor = { S: "cyan", L: "amber", G: "green", M: "violet", V: "violet", H: "red", O: "red", F: "amber", X: "cyan" };
+  const catColor = { S: "cyan", P: "cyan", W: "cyan", C: "violet", R: "amber", L: "amber", G: "green", M: "violet", V: "violet", H: "red", O: "red", F: "amber", X: "red" };
+
+  const NECT = [["t240.6", "Table 240.6(A) standard ampere ratings", "R"], ["t250.66", "Table 250.66 GEC sizes", "R"], ["t250.122", "Table 250.122 EGC sizes", "R"], ["t310.16", "Table 310.16 ampacities (copper and aluminum)", "R"], ["t310.15C", "Table 310.15(C)(1) adjustment factors", "S"], ["t310.15B", "Table 310.15(B)(1) ambient correction", "R"], ["t314.16", "Table 314.16(B) volume per conductor", "S"], ["tch9", "Chapter 9 Table 1 percent fill", "R"], ["t430.52", "Table 430.52 motor branch protection maximums", "S"], ["t220.12", "Table 220.12 general lighting VA per sq ft", "R"], ["t220.42", "Table 220.42 dwelling lighting demand", "S"]];
+  const necTotal = () => NECT.length + NC.nec.rules.length;
+  const necTick = (id) => { const v = S.necv[id]; return `<div class="row sm" style="margin-top:8px"><label class="row"><input type="checkbox" data-act="necTick" data-k="${id}" ${v && v.ok ? "checked" : ""}> Verified in my 2020 book</label><input type="text" data-act="necPage" data-k="${id}" value="${esc((v && v.page) || "")}" placeholder="page" style="width:90px"></div>`; };
 
   // ---------- views ----------
   const V = {};
@@ -55,16 +59,21 @@
   function go(v) { view = v; S.nav.view = v; save(); render(); window.scrollTo(0, 0); }
 
   // ===== TODAY =====
+  const behindList = (d) => NC.sessions.filter((x) => x[1] < d && !S.done[x[0]]);
   V.today = () => {
     const d = today(), ex = NC.exam, cd = L.countdown(new Date(), ex.startISO);
-    const blk = L.calendarFor(NC.calendar, d), next = L.nextSession(NC.sessions, S.done), hrs = L.hours(NC.sessions, S.done);
+    const todays = NC.sessions.find((x) => x[1] === d), next = L.nextSession(NC.sessions, S.done), hrs = L.hours(NC.sessions, S.done);
+    const behind = behindList(d);
     const due = dueCount(), cardsDue = L.dueCards(NC.cards.map((c) => c[0]), S.cards, d).length;
     const keyed = bank.filter((b) => !b.lookup), tried = keyed.filter((b) => S.attempts[b.id]), right = tried.filter((b) => S.attempts[b.id].ok);
     const cut = L.countdown(new Date(), ex.cutoffISO);
     const authLeft = S.auth.expiry ? L.diffDays(d, S.auth.expiry) : null;
+    const upcoming = NC.keyDates.filter((k) => k[0] >= d).slice(0, 3);
+    const necDone = Object.values(S.necv).filter((x) => x && x.ok).length;
     let mode = "";
-    if (d < "2026-10-26") mode = "The condensed calendar starts Monday Oct 26.";
+    if (d < NC.sprint.start) mode = "The sprint starts " + fmtD(NC.sprint.start) + ".";
     else if (d > ex.date) mode = "The exam date has passed. Record your result and open Exam day for the Board licensing steps.";
+    else if (d > NC.sprint.end) mode = "Sprint over. Exam is " + fmtD(ex.date) + ".";
     return `
     <div class="hero stack"><div class="row between"><div><span class="chip amber">Exam booked</span> <span class="chip">${t(fmtD(ex.date))} &middot; 10:00 AM to 4:00 PM ET</span></div><span class="chip">PSI Charlotte &middot; Tyvola</span></div>
       <h1>${cd.over ? "Exam window open or past" : "Pass the NC Unlimited exam."}</h1>
@@ -72,10 +81,11 @@
       <p class="mut sm">Open book. 100 questions, 6 hours, 70% to pass. Your coaching gate is stricter: two fresh full mocks at ${NC.gates.mockPct}%+. ${t(ex.cutoffText)}${!cut.over ? ` Cutoff is in ${cut.days}d ${cut.hours}h.` : ""}</p></div>
 
     <div class="grid g2" style="margin-top:14px">
-      <div class="card glow stack"><div class="row between"><h3>Today's block</h3>${blk ? chip(fmtD(d), "amber") : ""}</div>
-        ${blk ? `<div><b>${t(blk.title)}</b><p class="mut sm">${t(blk.detail)}</p></div>` : `<p class="mut">${t(mode || "No block scheduled today.")}</p>`}
-        ${next ? `<hr><div class="row between"><div><span class="xs mut">NEXT UNFINISHED SESSION (earliest first)</span><br><b>#${next[0]} ${t(next[5])}</b><br><span class="mut sm">${next[3]}h target &middot; planned ${t(fmtD(next[1]))} &middot; ${t(NC.catNames[next[4]])}</span></div><button class="btn pri" data-act="openSession" data-n="${next[0]}">Open</button></div>` : `<hr><p class="green">All 47 sessions are checked off.</p>`}
-        <div class="notice sm">Hard-day minimum: 20 minutes. Recall one concept, solve one question, correct one miss. It counts as 20 minutes, not two hours.</div>
+      <div class="card glow stack"><div class="row between"><h3>${todays ? "Today: Day " + todays[0] + " of 37" : "Today"}</h3>${chip(fmtD(d), "amber")}</div>
+        ${todays ? `<div><b>${t(todays[5])}</b><div class="row" style="margin:6px 0">${chip(NC.catNames[todays[4]], catColor[todays[4]])}${chip(todays[3] + "h")}${S.done[todays[0]] ? chip("done", "green") : ""}</div><p class="mut sm">${t(todays[6])}</p><div class="row"><button class="btn pri" data-act="openSession" data-n="${todays[0]}">Open session</button></div></div>` : `<p class="mut">${t(mode || "No session scheduled today.")}</p>`}
+        ${behind.length ? `<div class="notice red sm"><b>${behind.length} earlier session${behind.length > 1 ? "s" : ""} not checked off</b> (${behind.slice(0, 4).map((x) => "#" + x[0]).join(", ")}${behind.length > 4 ? ", ..." : ""}). Rule: carry unfinished items into the next two rows' correction slots, at most two per day. Never double tomorrow; never drop a domain. If you did the work, tick it; if not, say so and rebaseline from actual results.<div style="margin-top:8px"><button class="btn sm" data-act="openSession" data-n="${behind[0][0]}">Open #${behind[0][0]}</button></div></div>` : ""}
+        ${next && (!todays || next[0] !== todays[0]) ? `<hr><div class="row between"><div><span class="xs mut">EARLIEST UNFINISHED</span><br><b>#${next[0]} ${t(next[5])}</b><br><span class="mut sm">${next[3]}h &middot; planned ${t(fmtD(next[1]))}</span></div><button class="btn" data-act="openSession" data-n="${next[0]}">Open</button></div>` : ""}
+        <div class="notice sm">Hard-day minimum: 20 minutes. Recall one due item, solve one question, record the actual 20 minutes. It counts as 20 minutes, not two hours.</div>
         <div class="row"><button class="btn" data-act="quick20">Start 20-minute minimum</button><button class="btn" data-act="logForm">Log study time</button></div>
         <div id="logbox"></div></div>
 
@@ -83,53 +93,57 @@
         <div class="row between"><span>Error retests due</span><button class="btn sm ${due ? "pri" : ""}" data-act="nav" data-v="progress">${due} due</button></div>
         <div class="row between"><span>Law cards due or new</span><button class="btn sm ${cardsDue ? "pri" : ""}" data-act="lawStart">${cardsDue}</button></div>
         <div class="row between"><span>Keyed practice missed</span><button class="btn sm" data-act="startMisses">${tried.length - right.length}</button></div>
+        <div class="row between"><span>NEC reference rows verified in your book</span><button class="btn sm" data-act="necGo">${necDone}/${necTotal()}</button></div>
         <hr>
-        <div class="row"><div class="stat"><b>${hrs.done}<span class="dim">/${hrs.total}</span></b><span>session hours</span></div><div class="stat"><b>${Object.keys(S.done).length}<span class="dim">/47</span></b><span>sessions</span></div><div class="stat"><b>${streak()}</b><span>day streak</span></div></div>
+        <div class="row"><div class="stat"><b>${hrs.done}<span class="dim">/${hrs.total}</span></b><span>session hours</span></div><div class="stat"><b>${Object.keys(S.done).length}<span class="dim">/37</span></b><span>sessions</span></div><div class="stat"><b>${streak()}</b><span>day streak</span></div></div>
         <div class="row"><div class="stat"><b>${weekMinutes()}</b><span>min this week</span></div><div class="stat"><b>${tried.length ? pct(right.length, tried.length) + "%" : "n/a"}</b><span>keyed accuracy</span></div></div></div>
     </div>
 
     <div class="grid g2" style="margin-top:14px">
-      <div class="card stack"><h3>Reality check</h3>
+      <div class="card stack"><h3>Next key dates</h3>${upcoming.map((k) => `<div><div class="row between"><b>${t(k[1])}</b>${chip(fmtD(k[0]), "amber")}</div><p class="mut sm" style="margin:2px 0 8px">${t(k[2])}</p></div>`).join("") || `<p class="mut sm">None left.</p>`}
+        <hr><h4>Reality check</h4>
         <div class="row between"><span>Fresh full mocks logged</span><b class="mono ${S.mocks.length ? "" : "amber"}">${S.mocks.filter((m) => m.form === "full" && m.fresh).length}</b></div>
         <div class="row between"><span>AI content validation (3 perfect runs)</span><b class="mono amber">0/3</b></div>
-        <div class="row between"><span>Median lookup time</span><b class="mono">${S.lookups.length ? Math.round(median(S.lookups.map((x) => x.secs))) + "s" : "n/a"}<span class="dim"> / ${NC.gates.lookupSeconds}s goal</span></b></div>
-        <p class="mut sm">Notion says all 47 sessions were unchecked as of Oct 25 and the calendar was rebuilt around real results. This app starts from zero too: nothing is credited until you do it.</p>
+        <div class="row between"><span>Median lookup time</span><b class="mono">${S.lookups.length ? Math.round(median(S.lookups.map((x) => x.secs))) + "s" : "n/a"}<span class="dim"> / ${NC.gates.lookupSeconds}s goal</span></b></div></div>
+      <div class="card stack"><h3>Authorization window</h3>
         <div class="grid g2"><div><label class="f">Board authorization start</label><input type="date" id="authStart" value="${esc(S.auth.start)}"></div><div><label class="f">Authorization expiry</label><input type="date" id="authExp" value="${esc(S.auth.expiry)}"></div></div>
         <button class="btn sm" data-act="saveAuth">Save dates</button>
-        ${authLeft != null ? `<p class="${authLeft < 14 ? "red" : "green"} sm">${authLeft} days until authorization expires.</p>` : `<p class="amber sm">Open item: the Sept 10 approval email states no expiry. Enter the dates from the Board notice.</p>`}</div>
-      <div class="card stack"><h3>Arc's five rules</h3><ol class="sm" style="padding-left:1.2em;margin:0">${NC.arc.map((x) => `<li>${t(x)}</li>`).join("")}</ol>
-        <div class="notice cyan sm">Highest-yield gaps for someone who passed Limited: load calculations at scale, motors and transformers, special occupancies and equipment, NASCLA business, NC law. Navigation is the exam.</div></div>
+        ${authLeft != null ? `<p class="${authLeft < 14 ? "red" : "green"} sm">${authLeft} days until authorization expires.</p>` : `<p class="amber sm">Open item: the Sept 10 approval email states no expiry. Enter the dates from the Board notice.</p>`}
+        <hr><h4>How the sprint works</h4><ul class="sm">${NC.rules.map((x) => `<li>${t(x)}</li>`).join("")}</ul></div>
     </div>`;
   };
   V.after_today = () => {};
 
   // ===== PLAN =====
-  let planTab = "calendar";
+  let planTab = "schedule";
   V.plan = () => {
     const d = today();
-    const tabs = [["calendar", "Active calendar"], ["sessions", "47 sessions"], ["starter", "Optional starter"], ["verify", "Open verifications"]];
+    const tabs = [["schedule", "37-day sprint"], ["dates", "Key dates"], ["forms", "Fresh forms"], ["starter", "Optional starter"], ["verify", "Open verifications"], ["retired", "Retired plan"]];
     let body = "";
-    if (planTab === "calendar") {
-      body = `<div class="notice sm">Active calendar = your Oct 25 condensed rebuild: Mon-Thu two 1-hour blocks, Saturday timed work, Fri/Sun off except Nov 22, Thanksgiving off, cram block Dec 5-6. The 47-session list holds the curriculum content; tick sessions as you actually finish them.</div><div style="margin-top:12px">` +
-        NC.calendar.map((c) => `<div class="sess ${d >= c.from && d <= c.to ? "today" : ""}" style="grid-template-columns:1fr"><div class="row between"><b>${t(c.title)}</b><span class="chip ${d >= c.from && d <= c.to ? "amber" : ""}">${t(fmtD(c.from))}${c.to !== c.from ? " to " + t(fmtD(c.to)) : ""}</span></div><p class="mut sm" style="margin:6px 0 0">${t(c.detail)}</p></div>`).join("") + `</div>`;
-    } else if (planTab === "sessions") {
+    if (planTab === "schedule") {
       const weeks = {};
       NC.sessions.forEach((s) => (weeks[s[2]] = weeks[s[2]] || []).push(s));
-      body = Object.keys(weeks).map((w) => {
-        const list = weeks[w], done = list.filter((s) => S.done[s[0]]).length;
-        return `<h3 style="margin:18px 0 8px">Week ${w} <span class="chip">${done}/${list.length}</span></h3>` + list.map((s) => {
+      body = `<div class="notice sm">${t(NC.sprint.rhythm)} Total ${NC.sprint.hours} planned hours. Dates are planning targets, not reminders.</div>` + Object.keys(weeks).map((w) => {
+        const list = weeks[w], done = list.filter((s) => S.done[s[0]]).length, hr = list.reduce((a, s) => a + s[3], 0);
+        return `<h3 style="margin:18px 0 8px">Week ${w} <span class="chip">${done}/${list.length}</span> <span class="chip">${hr} h</span></h3>` + list.map((s) => {
           const n = s[0], dn = S.done[n], p = NC.packets && NC.packets[n];
           return `<div class="sess ${dn ? "done" : ""} ${s[1] === d ? "today" : ""}" id="s${n}"><button class="chk ${dn ? "on" : ""}" data-act="toggleSession" data-n="${n}" aria-label="Mark session ${n}">${dn ? "✓" : ""}</button>
-            <div><b>#${n} ${t(s[5])}</b><div class="row" style="margin-top:4px">${chip(NC.catNames[s[4]], catColor[s[4]])}${chip(s[3] + "h")}${chip(fmtD(s[1]))}${dn ? chip("done " + fmtD(dn.at) + " &middot; " + dn.min + " min", "green").replace("&middot;", "&middot;") : ""}</div>
-            <details style="margin-top:8px;background:transparent"><summary class="sm">Action and packet</summary><div class="body"><p class="sm">${t(s[6])}</p>${p ? packetHtml(p) : `<p class="xs dim">Practice packet for this session is in the Notion session page; the Practice tab has the 100-item bank and weekly sets.</p>`}</div></details></div><span></span></div>`;
+            <div><b>Day ${n} &middot; ${t(fmtD(s[1]))} &middot; ${t(s[5])}</b><div class="row" style="margin-top:4px">${chip(NC.catNames[s[4]], catColor[s[4]] || "")}${chip(s[3] + "h")}${s[1] < d && !dn ? chip("behind", "red") : ""}${dn ? chip("done " + fmtD(dn.at) + " \u00b7 " + dn.min + " min", "green") : ""}</div>
+            <details style="margin-top:8px;background:transparent"><summary class="sm">Action and packet</summary><div class="body"><p class="sm">${t(s[6])}</p>${p ? packetHtml(p) : `<p class="xs dim">The full session page, with its practice packet and keys, is in Notion under the 37-Day Unlimited Sprint. The Practice tab has the 100-item bank and weekly sets.</p>`}</div></details></div><span></span></div>`;
         }).join("");
       }).join("");
+    } else if (planTab === "dates") {
+      body = NC.keyDates.map((k) => `<div class="sess ${k[0] === d ? "today" : ""}" style="grid-template-columns:1fr"><div class="row between"><b>${t(k[1])}</b>${chip(fmtD(k[0]), k[0] === d ? "amber" : "")}</div><p class="mut sm" style="margin:6px 0 0">${t(k[2])}</p></div>`).join("") + `<div class="notice cyan sm" style="margin-top:12px">Gate reminders: week-1 gate is baseline recorded, every miss tagged, books usable, notice dates entered. Checkpoints ${NC.gates.checkpoints.map(fmtD).join(", ")} aim for ${NC.gates.checkpointPct}%+ on a fresh 30-question timed set. Final gate: two fresh 100-question simulations at ${NC.gates.mockPct}%+ within six hours, no persistent category below ${NC.gates.categoryFloor}%, with 15 to 20 fresh questions per category.</div>`;
+    } else if (planTab === "forms") {
+      body = `<div class="notice amber sm">${t(NC.acquire.note)}</div><h3 style="margin:14px 0 8px">${t(NC.acquire.title)}</h3>` + NC.acquire.items.map((x, i) => `<label class="row sm" style="margin:7px 0"><input type="checkbox" data-act="tick" data-k="acq${i}" ${S.check["acq" + i] ? "checked" : ""}> ${t(x)}</label>`).join("") + `<p class="sm mut">Log each full mock under Progress and mark it Fresh only if every condition holds. A form you have seen, or whose key you read, is a learning run.</p>`;
     } else if (planTab === "starter") {
-      body = `<div class="notice sm">Seven hours across six sessions. A menu for an unfinished baseline or a reduced schedule, not extra required curriculum. A cold diagnostic measures recall, not an open-book score.</div>` + NC.starter.map((s) => det(`<b>${t(s[0])}</b>`, `<p class="sm">${t(s[1])}</p>`)).join("") + `<h3 style="margin:16px 0 8px">Starter exit checklist</h3>` + NC.starterExit.map((x, i) => `<label class="row sm" style="margin:6px 0"><input type="checkbox" data-act="tick" data-k="starter${i}" ${S.check["starter" + i] ? "checked" : ""}> ${t(x)}</label>`).join("") + `<p class="sm mut">Pick the next priority from evidence: Category 11 and Limited-to-Unlimited gaps first, then grounding, calculations, motors; then weight x observed error rate. Small samples are leads, not percentages.</p>`;
-    } else {
+      body = `<div class="notice sm">Seven hours across six sessions. A menu for an unfinished baseline or a reduced schedule, not extra required curriculum. A cold diagnostic measures recall, not an open-book score.</div>` + NC.starter.map((s) => det(`<b>${t(s[0])}</b>`, `<p class="sm">${t(s[1])}</p>`)).join("") + `<h3 style="margin:16px 0 8px">Starter exit checklist</h3>` + NC.starterExit.map((x, i) => `<label class="row sm" style="margin:6px 0"><input type="checkbox" data-act="tick" data-k="starter${i}" ${S.check["starter" + i] ? "checked" : ""}> ${t(x)}</label>`).join("");
+    } else if (planTab === "verify") {
       body = `<p class="mut sm">The plan's single remaining-verification list. Tick when you have the evidence in hand.</p>` + NC.verification.map((x, i) => `<label class="row sm" style="margin:8px 0;align-items:flex-start"><input type="checkbox" data-act="tickV" data-k="${i}" ${S.verif[i] ? "checked" : ""}> <span>${t(x)}</span></label>`).join("") + `<hr><h3>Research that disagrees with your notes</h3>` + conflictsHtml();
+    } else {
+      body = `<div class="notice sm">Retired Oct 31, 2026. These rows came from the Sept 28 plan; their objectives were merged into the sprint. Reference only, not active work.</div>` + (NC.refRows || []).map((r) => `<div class="sess" style="grid-template-columns:1fr;margin-top:8px"><b class="sm">${t(r[0])}</b><span class="xs dim">${t(r[1])}</span></div>`).join("");
     }
-    return sect("Plan", "Dec 7 is booked. Scheduled dates never imply completed work.") + `<div class="tabs">${tabs.map(([k, n]) => `<button data-act="planTab" data-k="${k}" aria-pressed="${planTab === k}">${n}</button>`).join("")}</div>` + body;
+    return sect("Plan", "Day 01 is Oct 31. Scheduled dates never imply completed work.") + `<div class="tabs">${tabs.map(([k, n]) => `<button data-act="planTab" data-k="${k}" aria-pressed="${planTab === k}">${n}</button>`).join("")}</div>` + body;
   };
   function packetHtml(p) {
     let h = "";
@@ -143,7 +157,7 @@
   function conflictsHtml() {
     const rows = [
       ["Who supplies the code books?", "Some prep sites say PSI provides the NEC and NFPA 72 at the center. Your handbook-based notes say you bring complete, permanently tabbed books and the center supplies only calculator, scratch paper and pencils.", "Read your PSI confirmation and the handbook. Until resolved, plan to bring all three books."],
-      ["Passing score", "One secondary site says 75%. Your notes (handbook) say 70%.", "Handbook governs. Coaching gate stays 82% on fresh mocks regardless."],
+      ["Passing score", "One secondary site says 75%. Your Notion plan (handbook re-checked Oct 31) says 100 multiple-choice, six hours, 70%.", "Handbook governs. Coaching gate stays 82% on fresh mocks regardless."],
       ["Experience requirement", "Secondary sites mix 5 to 7 years with voucher statements. Your notes cite 21 NCAC 18B .0201: 9,000 hours total, 8,000 primary.", "Rule text governs. Your eligibility is already approved (Sept 10)."],
       ["Which exam is this?", "Some sites blur the NC state exam with the NASCLA Accredited Electrical Exam.", "Yours is the NC state Unlimited exam. NASCLA NC Electrical 14th is a reference book, not the exam."],
       ["Fresh-form claims", "Prep-site 'verified answers' claims are not answer authority.", "Use the designated books; mark unresolved items Book lookup required."]
@@ -246,10 +260,12 @@
   // ===== STUDY =====
   let studyTab = "cats";
   V.study = () => {
-    const tabs = [["cats", "11 categories"], ["nav", "Article map"], ["nfpa", "NFPA 72 and plans"], ["unl", "Unlimited additions"], ["worked", "Worked examples"], ["research", "Research and sources"]];
+    const tabs = [["cats", "11 categories"], ["nec", "NEC 2020 tables"], ["nav", "Article map"], ["nfpa", "NFPA 72 and plans"], ["unl", "Unlimited additions"], ["worked", "Worked examples"], ["research", "Research and sources"]];
     let body = "";
     if (studyTab === "cats") {
       body = `<p class="mut sm">Board counts are approximate and total 100. Move a strong area to maintenance after two separated sets at 80%+, then keep occasional fresh questions. Study explanations only: confirm numbers in the 2020 NEC.</p>` + NC.categories.map((c) => det(`<span class="chip violet">${c.q}q</span> ${c.id}. ${t(c.name)} ${S.strong[c.id] ? chip("maintenance", "green") : ""}`, `<p>${t(c.purpose)}</p><h4>Key definitions</h4><ul class="sm">${c.defs.map((x) => `<li>${t(x)}</li>`).join("")}</ul><p class="sm"><b>Covers:</b> ${t(c.sections)}</p><p class="sm"><b>Lookup path:</b> ${t(c.path)}</p><div class="notice red sm"><b>Common mistake:</b> ${t(c.mistake)}</div><p class="sm" style="margin-top:8px"><b>Demonstrate:</b> ${t(c.demo)}</p><div class="row"><button class="btn sm" data-act="drillDomain" data-d="${c.id}">Drill this domain</button><label class="row sm"><input type="checkbox" data-act="strong" data-k="${c.id}" ${S.strong[c.id] ? "checked" : ""}> Two separated sets at 80%+</label></div>`)).join("") + `<h3 style="margin:18px 0 8px">Before you call a topic mastered</h3>` + NC.masteryChecks.map((m) => `<div class="card" style="margin-bottom:8px"><b>${t(m[0])}</b><p class="sm" style="margin:4px 0 0">${t(m[1])}</p></div>`).join("");
+    } else if (studyTab === "nec") {
+      body = necHtml();
     } else if (studyTab === "nav") {
       body = `<input type="text" id="navSearch" placeholder="Search topics or articles" style="margin-bottom:10px"><div class="scroll"><table><tr><th>If the question is about</th><th>Go to</th><th>Note</th></tr>${NC.nav.map((r) => `<tr data-s="${esc((r[0] + " " + r[1] + " " + r[2]).toLowerCase())}"><td>${t(r[0])}</td><td><b class="amber">${t(r[1])}</b></td><td class="mut">${t(r[2])}</td></tr>`).join("")}</table></div><p class="mut sm">Article-level map only. Verify exact sections and exceptions in your own 2020 book and tab them permanently.</p><button class="btn pri" data-act="navDrill">Start timed drill</button>`;
     } else if (studyTab === "nfpa") {
@@ -276,13 +292,56 @@
   };
   function researchHtml() {
     const R = NC.research;
-    let h = `<h3>Where the plan came from</h3><p class="sm">Every section of the Harrison OS Notion plan under NC Unlimited was read for this app: Study dashboard, Exam Plan and Readiness, Electrical Study Guide, NC Law and Business (60 cards, 15 scenarios), Fire Alarms and Plan Reading, Sources and Review Notes, Optional Starter, the 47 session pages, the 100-item bank and weekly packets, the error-log schema, the tutor instructions, and the Pass-the-exam outcome page.</p>`;
+    let h = `<h3>Where the plan came from</h3><p class="sm">Every section of the Harrison OS Notion plan under NC Unlimited was read for this app: Study dashboard, Exam Plan and Readiness (rebuilt Oct 31), Electrical Study Guide, NC Law and Business (60 cards, 15 scenarios, corrections of Oct 31), Fire Alarms and Plan Reading, Sources and Review Notes, Optional Starter, the 37-Day Sprint session pages, the 100-item bank and weekly packets, the error-log schema, the tutor instructions, and the Pass-the-exam outcome page.</p>`;
     h += `<h3 style="margin-top:16px">Test-taker reports (anecdotal)</h3><ul class="sm"><li>Jan 2026 Charlotte Unlimited pass: JCR practice tests; stress motor calculations, hazardous locations, load/box/raceway-fill accuracy, NEC navigation, law basics, knowing the fire-alarm book.</li><li>Mar/Sep 2026 Limited-to-Unlimited thread: business law/regulations and medium-voltage material; code navigation is a learned skill.</li><li>Feb 2025: practice questions first, study missed articles and calculations, tab NFPA 72.</li><li>2010-2011 Mike Holt thread: business/rules, NFPA 72, hazardous locations, higher voltage. Old: do not carry counts, prices or editions forward.</li></ul><p class="xs dim">Forum accounts are firsthand claims, not authenticated scores. They guide topic priority, not exam rules or wording.</p>`;
     h += `<h3 style="margin-top:16px">Open-book strategy (general method, adapt it)</h3><ul class="sm"><li><b>Two passes.</b> Pass one: answer anything you can in about 3 minutes, flag the rest. Pass two: spend the saved time on flagged calculations. Plan checkpoints: Q25 at 1:15, Q50 at 2:30, Q75 at 3:45, Q100 at 5:00, leaving an hour for flags.</li><li><b>Write the setup before the arithmetic.</b> Inputs with units, governing rule, then math. Most lost points are setup errors, not arithmetic.</li><li><b>Edition traps.</b> Answer from the 2020 NEC and 2013 NFPA 72 even if you remember a newer rule.</li><li><b>Read the choices for assumptions.</b> If two answers differ by a factor of 1.25 or sqrt3, the question is testing which rule applies.</li><li><b>Lookup beats memory.</b> Tab Articles 250, 310, 430 and Chapter 9 tables permanently and learn the contents page of each.</li><li><b>Do not guess a section number.</b> If the book has it, find it.</li></ul>`;
     if (R && R.sections) h += R.sections.map((s) => `<h3 style="margin-top:16px">${t(s.title)}</h3>${s.items.map((i) => `<p class="sm">${t(i.text)} ${i.url ? link(i.url, "source") : ""} ${chip(i.conf || "Unverified", i.conf === "Certain" ? "green" : "amber")}</p>`).join("")}`).join("");
     h += `<h3 style="margin-top:16px">Official links</h3><ul class="sm">${NC.exam.links.map((l) => `<li>${link(l[1], l[0])}</li>`).join("")}</ul><h3 style="margin-top:16px">Source authority</h3><p class="sm">Current statute controls legal wording; current Board rules control rule limits; the current handbook and Board instructions control exam administration; the designated book edition controls technical answers. A newer file date or a filename containing 2020 does not prove the edition.</p>`;
     return h;
   }
+
+  // ===== NEC reference (unverified until you tick it against your own book) =====
+  function necHtml() {
+    const N = NC.nec, cf = (c) => (c === "S" ? chip("sources agreed", "cyan") : chip("recalled", "amber"));
+    const tb = (head, rows) => `<div class="scroll"><table><tr>${head.map((h) => `<th>${h}</th>`).join("")}</tr>${rows.map((r) => `<tr>${r.map((c) => `<td class="mono">${c}</td>`).join("")}</tr>`).join("")}</table></div>`;
+    const card = (id, title, body) => { const idx = NECT.find((x) => x[0] === id); return `<div class="card stack" style="margin-bottom:12px"><div class="row between"><h4>${t(title)}</h4>${cf(idx[2])}</div>${body}${necTick(id)}</div>`; };
+    const sizes = Object.keys(N.t31016.cu);
+    let h = `<div class="notice red"><b>Read this first.</b> ${t(N.status)} Built without access to the code text: the web search tool returned secondary summaries only. Treat each row as a pointer, tick it only after you read it in your own bound book, and put the page number next to it.</div>
+    <div class="row" style="margin:10px 0">${chip(Object.values(S.necv).filter((x) => x && x.ok).length + " of " + necTotal() + " verified by you", "green")}<button class="btn sm" data-act="nav" data-v="tools">Open lookup helpers</button></div>
+    <h3>Edition traps</h3><ul class="sm">${N.traps.map((x) => `<li>${t(x)}</li>`).join("")}</ul>
+    <h3 style="margin-top:18px">Tables</h3>`;
+    h += card("t240.6", "Table 240.6(A) standard ampere ratings", `<p class="mono sm">${N.std.join(", ")}</p><p class="xs dim">Also 240.6(B) adjustable-trip and (C) fuse/breaker ratings above 800 A. Use 240.4(B) before rounding up.</p>`);
+    h += card("t250.66", "Table 250.66 grounding electrode conductor (by largest ungrounded conductor)", tb(["Ungrounded Cu or Cu-clad", "GEC Cu", "GEC Al"], N.t25066labels.cu.map((l, i) => [l, N.t25066.cu[i][1], N.t25066.cu[i][2]])) + tb(["Ungrounded Al", "GEC Cu", "GEC Al"], N.t25066labels.al.map((l, i) => [l, N.t25066.al[i][1], N.t25066.al[i][2]])) + `<p class="xs dim">Sizes are AWG or kcmil. Electrode-specific limits (rod 6 Cu, concrete-encased 4 Cu, ring) sit in 250.66(A) to (C).</p>`);
+    h += card("t250.122", "Table 250.122 equipment grounding conductor (by OCPD ahead, not exceeding)", tb(["OCPD (A)", "Cu", "Al"], N.t250122.map((r) => [r[0], r[1], r[2]])) + `<p class="xs dim">Aluminum column is the least certain here. Never use this table for a GEC or a supply-side bonding jumper.</p>`);
+    h += card("t310.16", "Table 310.16 allowable ampacity, 30C ambient, not more than 3 current-carrying conductors", tb(["Size", "Cu 60C", "Cu 75C", "Cu 90C", "Al 60C", "Al 75C", "Al 90C"], sizes.map((z) => { const c = N.t31016.cu[z], a = N.t31016.al[z] || ["-", "-", "-"]; return [z, c[0], c[1], c[2], a[0], a[1], a[2]]; })) + `<p class="xs dim">Anchors cross-checked against your Notion examples: 300 kcmil Cu 285 A (75C) and 320 A (90C); 250 kcmil Cu 255 and 290; 4 AWG Cu 70/85/95. Termination limits come from 110.14(C).</p>`);
+    h += card("t310.15C", "Table 310.15(C)(1) adjustment factors (current-carrying conductors)", tb(["Conductors", "Factor"], N.adj.slice(1).map((r) => [r[1] > 100 ? r[0] + " and above" : r[0] + " to " + r[1], r[2] + "%"])));
+    h += card("t310.15B", "Table 310.15(B)(1) ambient correction (30C base)", tb(["Up to (C)", "60C", "75C", "90C"], N.ambient.map((r) => [r[0], r[1] == null ? "n/a" : r[1], r[2] == null ? "n/a" : r[2], r[3] == null ? "n/a" : r[3]])));
+    h += card("t314.16", "Table 314.16(B) volume allowance per conductor (cubic inches)", tb(["AWG", "in3"], Object.entries(N.box).map((r) => [r[0], r[1].toFixed(2)])));
+    h += card("tch9", "Chapter 9 Table 1 percent of raceway cross-section", tb(["Conductors", "Max fill %"], N.fill) + `<p class="xs dim">Tables 4, 5 and 8 values are not reproduced: read them from your book.</p>`);
+    h += card("t430.52", "Table 430.52 motor branch short-circuit and ground-fault maximum (% of FLC)", tb(["Device", "%"], N.t43052));
+    h += card("t220.12", "Table 220.12 general lighting VA per square foot", tb(["Occupancy", "VA/ft2"], N.t22012));
+    h += card("t220.42", "Table 220.42 dwelling lighting demand", tb(["Portion of VA", "Demand"], [["First 3,000", "100%"], ["3,001 to 120,000", "35%"], ["Over 120,000", "25%"]]) + `<p class="xs dim">Applied to the combined general lighting, small-appliance and laundry load.</p>`);
+    h += `<h3 style="margin-top:20px">Rules by topic</h3>`;
+    N.groups.forEach((g, gi) => { h += `<h4 style="margin:14px 0 6px">${t(g)}</h4>` + N.rules.filter((r) => r[1] === gi).map((r) => `<div class="card" style="margin-bottom:8px"><div class="row between"><b class="mono amber">${t(r[2])}</b>${cf(r[4])}</div><p class="sm" style="margin:6px 0">${t(r[3])}</p>${r[5] ? `<p class="xs dim" style="margin:0">${t(r[5])}</p>` : ""}${necTick(r[0])}</div>`).join(""); });
+    h += `<h3 style="margin-top:20px">Not covered yet</h3><p class="sm mut">Needs your book or a primary source before it belongs in the app:</p><ul class="sm">${N.gaps.map((x) => `<li>${t(x)}</li>`).join("")}</ul>`;
+    return h;
+  }
+  // lookup helpers in Tools (use the same unverified tables)
+  const SZ = () => Object.keys(NC.nec.t31016.cu);
+  const opt = (arr, sel) => arr.map((x) => `<option ${String(x) === String(sel) ? "selected" : ""}>${x}</option>`).join("");
+  const NTOOLS = {
+    amp: (v) => { const w = L.nec.worksheet({ size: v.size, mat: v.mat, ins: +v.ins, term: +v.term, n: +v.n, ambient: +v.amb }); if (w.error) return t(w.error); return `Table ${w.table} A &middot; ambient x${w.ambientFactor} &middot; adjustment x${w.adjFactor} = <b>${w.adjusted} A</b> adjusted<br>Termination cap <b>${w.termCap} A</b> &middot; usable <b>${w.usable} A</b> (limited by ${w.limitedBy})<br>Next standard OCPD above usable: <b>${w.nextStd}</b> A<br><span class="dim">Standard size is not automatically permitted: check 240.4(B) and 240.4(D). Compare against the actual load separately.</span>`; },
+    gec: (v) => { const g = L.nec.gec(v.size, v.mat, v.gmat); return g ? `GEC (Table 250.66): <b>${g} ${v.gmat === "al" ? "Al" : "Cu"}</b><br><span class="dim">Electrode limits in 250.66(A) to (C) can lower it: rod 6 Cu, concrete-encased 4 Cu.</span>` : "Not found."; },
+    egc: (v) => { const o = parseFloat(v.ocpd); if (!(o > 0)) return "Enter the OCPD rating."; const g = L.nec.egc(o, v.gmat); return g ? `EGC (Table 250.122): <b>${g} ${v.gmat === "al" ? "Al" : "Cu"}</b> for a ${o} A device (uses the row not exceeding ${NC.nec.t250122.find((x) => o <= x[0])[0]} A)<br><span class="dim">Upsize proportionally if the ungrounded conductors were increased for voltage drop (250.122(B)).</span>` : "Above the table."; },
+    std: (v) => { const a = parseFloat(v.a); if (!(a > 0)) return "Enter amps."; return `Next standard size at or above ${a} A: <b>${L.nec.nextStd(a) || "above 6000"} A</b><br><span class="dim">240.4(B) decides whether you may round up at all.</span>`; },
+    dwell: (v) => { const va = parseFloat(v.va); if (!(va >= 0)) return "Enter VA."; return `Demand <b>${L.nec.dwellingLighting(va).toLocaleString()} VA</b><br><span class="dim">Enter the combined general lighting + small-appliance + laundry VA.</span>`; }
+  };
+  const necTools = () => `
+      <div class="card stack nt" data-t="amp"><h4>Ampacity worksheet</h4><p class="xs dim">Unverified tables: confirm in your book.</p><div class="grid g2"><div><label class="f">Size</label><select data-n="size">${opt(SZ(), "300")}</select></div><div><label class="f">Material</label><select data-n="mat"><option value="cu">Copper</option><option value="al">Aluminum</option></select></div><div><label class="f">Insulation column</label><select data-n="ins"><option>60</option><option>75</option><option selected>90</option></select></div><div><label class="f">Termination column</label><select data-n="term"><option>60</option><option selected>75</option><option>90</option></select></div><div><label class="f">Current-carrying conductors</label><input type="number" data-n="n" value="4" min="1"></div><div><label class="f">Ambient (C)</label><input type="number" data-n="amb" value="30"></div></div><div class="notice cyan sm out"></div></div>
+      <div class="card stack nt" data-t="gec"><h4>GEC size (Table 250.66)</h4><div class="grid g2"><div><label class="f">Largest ungrounded size</label><select data-n="size">${opt(SZ().filter((z) => !isNaN(parseFloat(z)) || z.includes("/")), "350")}</select></div><div><label class="f">Ungrounded material</label><select data-n="mat"><option value="cu">Copper</option><option value="al">Aluminum</option></select></div><div><label class="f">GEC material</label><select data-n="gmat"><option value="cu">Copper</option><option value="al">Aluminum</option></select></div></div><div class="notice cyan sm out"></div></div>
+      <div class="card stack nt" data-t="egc"><h4>EGC size (Table 250.122)</h4><div class="grid g2"><div><label class="f">OCPD rating (A)</label><input type="number" data-n="ocpd" value="200"></div><div><label class="f">EGC material</label><select data-n="gmat"><option value="cu">Copper</option><option value="al">Aluminum</option></select></div></div><div class="notice cyan sm out"></div></div>
+      <div class="card stack nt" data-t="std"><h4>Next standard OCPD size (240.6)</h4><div><label class="f">Amps</label><input type="number" data-n="a" value="260.34" step="any"></div><div class="notice cyan sm out"></div></div>
+      <div class="card stack nt" data-t="dwell"><h4>Dwelling lighting demand (220.42)</h4><div><label class="f">General lighting + small appliance + laundry (VA)</label><input type="number" data-n="va" value="11700"></div><div class="notice cyan sm out"></div></div>`;
 
   // ===== TOOLS =====
   const CALCS = [
@@ -306,9 +365,11 @@
   V.tools = () => {
     const lk = S.lookups.map((x) => x.secs), md = median(lk);
     return sect("Tools", "Screening calculators. The 2020 NEC, your contract and the engineer of record govern.") + `<div class="grid g2">${CALCS.map((c) => `<div class="card stack calc" data-c="${c.id}"><h4>${t(c.title)}</h4><div class="grid g2">${c.f.map((f) => `<div><label class="f">${t(f[1])}</label><input type="number" step="any" data-k="${f[0]}" value="${f[2]}"></div>`).join("")}</div><div class="notice cyan sm out"></div></div>`).join("")}
+      ${necTools()}
       <div class="card stack"><h4>Lookup stopwatch</h4><p class="sm mut">Time real lookups in your tabbed book. Goal: median under ${NC.gates.lookupSeconds}s for routine lookups.</p><div class="timer" id="sw">0.0s</div><input type="text" id="swLabel" placeholder="What did you look up? (e.g. GEC table)"><div class="row"><button class="btn pri" data-act="swStart">Start</button><button class="btn ok" data-act="swStop">Stop and record</button></div><p class="sm">Recorded: <b>${lk.length}</b> &middot; median <b>${md == null ? "n/a" : Math.round(md) + "s"}</b> ${md != null ? chip(md <= NC.gates.lookupSeconds ? "on target" : "slow", md <= NC.gates.lookupSeconds ? "green" : "amber") : ""}</p>${S.lookups.slice(-5).reverse().map((x) => `<div class="row between xs"><span>${t(x.label || "lookup")}</span><span class="mono">${x.secs}s</span></div>`).join("")}</div></div>`;
   };
   V.after_tools = () => {
+    $$(".nt").forEach((box) => { const run = () => { const v = {}; $$("[data-n]", box).forEach((i) => (v[i.dataset.n] = i.value)); $(".out", box).innerHTML = NTOOLS[box.dataset.t](v); }; box.addEventListener("input", run); box.addEventListener("change", run); run(); });
     $$(".calc").forEach((box) => {
       const c = CALCS.find((x) => x.id === box.dataset.c);
       const upd = () => { const v = {}; $$("input", box).forEach((i) => (v[i.dataset.k] = parseFloat(i.value))); $(".out", box).innerHTML = Object.values(v).some((x) => isNaN(x) || !isFinite(x)) ? "Enter all values." : c.run(v); };
@@ -336,10 +397,10 @@
       <div><label class="f">Form</label><select name="form"><option value="full">Full 100 (one sitting)</option><option value="set50">Timed 50</option><option value="set30">Timed 30 checkpoint</option><option value="split">Split full form</option></select></div>
       <div><label class="f">Minutes used</label><input type="number" name="minutes" min="1" max="600" value="${S.examTimer ? Math.round((Date.now() - S.examTimer.start) / 60000) : 360}" required></div>
       <div><label class="f">Score %</label><input type="number" name="score" min="0" max="100" step="0.1" required></div></div>
-      <div class="row"><label class="row sm"><input type="checkbox" name="fresh" checked> Fresh (never seen)</label><label class="row sm"><input type="checkbox" name="assisted"> AI or other assistance</label></div>
+      <div class="row"><label class="row sm"><input type="checkbox" name="fresh"> Fresh (never seen, key never read)</label><label class="row sm"><input type="checkbox" name="assisted"> AI or other assistance</label></div>
       <details style="background:var(--bg2)"><summary class="sm">Category results (right / total) for fresh full mocks</summary><div class="body"><div class="grid g3">${NC.blueprint.map(([id, n, w]) => `<div><label class="f">${id}. ${esc(n.split(",")[0])} (${w})</label><div class="row"><input type="number" name="r${id}" min="0" placeholder="right" style="width:46%"><input type="number" name="t${id}" min="0" placeholder="of" style="width:46%"></div></div>`).join("")}</div></div></details>
       <button class="btn pri" type="submit">Save result</button></form>
-      ${S.mocks.length ? `<div class="scroll"><table><tr><th>Date</th><th>Label</th><th>Form</th><th>Score</th><th>Min</th><th>Counts as</th><th></th></tr>${S.mocks.slice().reverse().map((m) => `<tr><td>${t(fmtD(m.date))}</td><td>${t(m.label)}</td><td>${t(m.form)}</td><td class="mono">${m.score}%</td><td class="mono">${m.minutes}</td><td>${m.form === "full" && m.fresh && !m.assisted && m.minutes <= g.maxMinutes ? chip("fresh readiness", "green") : chip("learning only", "")}</td><td><button class="btn sm" data-act="delMock" data-id="${m.id}">Delete</button></td></tr>`).join("")}</table></div>` : `<p class="mut sm">Planned fresh mocks: Oct 31 (A), Nov 7 (B), Nov 14 (C), Nov 21 (D). Under your condensed calendar the Oct 31 block is a 25-question diagnostic. Mocks need legitimate fresh 100-question forms with separate keys; if only three exist, D becomes a timed 50.</p>`}</div>
+      ${S.mocks.length ? `<div class="scroll"><table><tr><th>Date</th><th>Label</th><th>Form</th><th>Score</th><th>Min</th><th>Counts as</th><th></th></tr>${S.mocks.slice().reverse().map((m) => `<tr><td>${t(fmtD(m.date))}</td><td>${t(m.label)}</td><td>${t(m.form)}</td><td class="mono">${m.score}%</td><td class="mono">${m.minutes}</td><td>${m.form === "full" && m.fresh && !m.assisted && m.minutes <= g.maxMinutes ? chip("fresh readiness", "green") : chip("learning only", "")}</td><td><button class="btn sm" data-act="delMock" data-id="${m.id}">Delete</button></td></tr>`).join("")}</table></div>` : `<p class="mut sm">Planned: Mock A Sat Nov 14, Mock B Nov 21, Mock C Nov 28 (10 AM to 4 PM). Checkpoints Nov 6, Nov 13 and Dec 2 (30 fresh questions, aim 75%+). Mocks need fresh forms with separate keys (Plan, Fresh forms). If none qualify, log them as learning runs: leave Fresh unticked and they will not count toward readiness.</p>`}</div>
 
     <h3 style="margin:20px 0 8px">Active recall and error log</h3>
     <div class="card stack"><div class="row between"><b>${due.length} retests due</b><span class="xs dim">1, 3, 7, 14 days. Mastered = two clean re-solves on separate days.</span></div>
@@ -373,14 +434,14 @@
     const ex = NC.exam, st = S.examTimer;
     const list = (arr) => `<ul class="sm">${arr.map((x) => `<li>${t(x)}</li>`).join("")}</ul>`;
     const ck = (k, txt) => `<label class="row sm" style="margin:7px 0;align-items:flex-start"><input type="checkbox" data-act="tick" data-k="${k}" ${S.check[k] ? "checked" : ""}> <span>${t(txt)}</span></label>`;
-    const items = ["Appointment confirmation printed or saved offline", "Route driven or mapped; leave to arrive by 9:30 (check-in by 9:45)", "Two valid, unexpired signed IDs, one government photo ID, names match registration", "2020 NEC, complete and bound, permanent tabs only", "2013 NFPA 72, complete and bound, permanent tabs only", "NASCLA North Carolina Electrical, 14th edition, page-keyed", "No loose papers, stapled tabs, divider tabs or temporary flags in any book", "Books tabbed to Articles 90, 100, 110, 210, 220, 230, 240, 250, 310, 430, 450, Chapter 9 tables, NFPA 72 chapters", "Read your PSI confirmation: confirm whether the center supplies reference books", "Sleep protected on Dec 6 (hard stop in the evening)", "Water, snack, layers, medications for a six-hour sitting"];
+    const items = ["Appointment confirmation printed or saved offline", "Route driven or mapped; leave to arrive by 9:30 (check-in by 9:45)", "Two valid, unexpired signed IDs, one government photo ID, names match registration", "2020 NEC, complete and bound, permanent tabs only", "2013 NFPA 72, complete and bound, permanent tabs only", "NASCLA North Carolina Electrical, 14th edition, page-keyed", "No loose papers, stapled tabs, divider tabs or temporary flags in any book", "Books tabbed to Articles 90, 100, 110, 210, 220, 230, 240, 250, 310, 430, 450, Chapter 9 tables, NFPA 72 chapters", "Read your PSI confirmation: confirm whether the center supplies reference books", "Borrowed books returned or bought: NASCLA 14th and 2013 NFPA 72 in hand, tabbed and page-keyed", "Sleep protected on Dec 6", "Water, snack, layers, medications for a six-hour sitting"];
     return sect("Exam day", "Dec 7, 2026 at PSI Charlotte, Tyvola.") + `
     <div class="grid g2"><div class="card glow stack"><h3>Logistics</h3><p class="sm">${t(ex.center)}</p><p class="sm">${t(ex.window)}</p><p class="sm"><b>IDs:</b> ${t(ex.ids)}</p><p class="sm amber">${t(ex.cutoffText)} The handbook and FAQ word cancellation differently: get your appointment-specific PSI terms. A changed appointment does not extend authorization.</p><p class="xs dim">${t(ex.contacts)}</p></div>
       <div class="card stack"><h3>Six-hour timer</h3><p class="sm mut">Use for mocks and rehearsals. Checkpoints keep a full hour for flagged items: Q25 at 1:15, Q50 at 2:30, Q75 at 3:45, Q100 at 5:00.</p><div class="timer" id="exClock">${st ? "" : "0:00:00"}</div><div id="exNext" class="sm mut"></div><div class="row">${st ? `<button class="btn bad" data-act="exStop">Stop and log result</button>` : `<button class="btn pri" data-act="exStart">Start clock</button>`}</div></div></div>
     <h3 style="margin:20px 0 8px">Books and what is admitted</h3><div class="scroll"><table><tr><th>Material</th><th>Treatment</th></tr>${ex.books.map((b) => `<tr><td><b>${t(b[0])}</b></td><td>${t(b[1])}</td></tr>`).join("")}</table></div>
     <h3 style="margin:20px 0 8px">Prepare compliant books</h3>${list(ex.bookRules)}
     <h3 style="margin:20px 0 8px">Packing and readiness checklist</h3><div class="card">${items.map((x, i) => ck("pack" + i, x)).join("")}</div>
-    <div class="grid g2" style="margin-top:20px"><div class="card stack"><h3>Final 48 hours</h3>${list(["Normal sleep. Known-error glance only if it helps.", "Confirmation and route checked; approved books and matching IDs ready.", "No new six-hour exam. Dec 5-6 are the cram block under your condensed plan: weakest topics and miss list, then rapid-fire formulas and index speed, hard stop in the evening.", "Dec 7, 5:00 AM: a 45-minute rapid review, then the exam."])}</div>
+    <div class="grid g2" style="margin-top:20px"><div class="card stack"><h3>Final 48 hours</h3>${list(["Normal sleep. Known-error glance only if it helps.", "Confirmation and route checked; approved books and matching IDs ready.", "No new six-hour exam. Dec 5 is a 2 h targeted set plus formula and table speed; Dec 6 is a 0.5 h light review, pack and sleep.", "Go/no-go decision was Dec 4. PSI cutoff is Sat Dec 5, 10:00 AM."])}</div>
       <div class="card stack"><h3>After you pass</h3>${list(["Passing, Board qualification and issuance/upgrade of the business license are separate steps.", "Save the result. Identify the Board licensing/upgrade step: the license application, the qualified-individual certification and the financial evidence for Unlimited (projects above $150,000).", "Listed QI added or lost: tell the Board within five days. Address or contact changes: 30 days.", "You already hold Limited: do not assume the new-QI four-hour Laws and Rules course restarts on an upgrade without Board confirmation.", "South Carolina work needs its own licensing path; an NC license does not authorize it."])}</div></div>
     <h3 style="margin:20px 0 8px">Source conflicts to verify</h3>${conflictsHtml()}`;
   };
@@ -401,7 +462,7 @@
     planTab: (el) => { planTab = el.dataset.k; render(); },
     studyTab: (el) => { studyTab = el.dataset.k; render(); },
     lawTab: (el) => { lawTab = el.dataset.k; render(); },
-    openSession: (el) => { planTab = "sessions"; go("plan"); setTimeout(() => { const n = $("#s" + el.dataset.n); if (n) { n.scrollIntoView({ block: "center" }); $("details", n).open = true; } }, 30); },
+    openSession: (el) => { planTab = "schedule"; go("plan"); setTimeout(() => { const n = $("#s" + el.dataset.n); if (n) { n.scrollIntoView({ block: "center" }); $("details", n).open = true; } }, 30); },
     toggleSession: (el) => {
       const n = +el.dataset.n, s = NC.sessions.find((x) => x[0] === n);
       if (S.done[n]) { delete S.done[n]; save(); return render(); }
@@ -411,6 +472,9 @@
       S.done[n] = { at: today(), min }; if (min) S.log.push({ date: today(), min, note: "Session " + n }); save(); render();
     },
     tick: (el) => { S.check[el.dataset.k] = el.checked; save(); },
+    necTick: (el) => { const k = el.dataset.k; S.necv[k] = Object.assign({ page: "" }, S.necv[k], { ok: el.checked }); save(); const c = $("[data-chip-nec]"); },
+    necPage: (el) => { const k = el.dataset.k; S.necv[k] = Object.assign({ ok: false }, S.necv[k], { page: el.value }); save(); },
+    necGo: () => { studyTab = "nec"; go("study"); },
     tickV: (el) => { S.verif[el.dataset.k] = el.checked; save(); },
     strong: (el) => { S.strong[el.dataset.k] = el.checked; save(); },
     saveAuth: () => { S.auth = { start: $("#authStart").value, expiry: $("#authExp").value }; save(); toast("Saved."); render(); },
@@ -468,7 +532,7 @@
     if (ok) A.next(); else { A.logMiss(); A.next(); }
   }
   document.addEventListener("click", (e) => { const el = e.target.closest("[data-act]"); if (!el || el.tagName === "INPUT") return; const f = A[el.dataset.act]; if (f) f(el); });
-  document.addEventListener("change", (e) => { const el = e.target; if (el.tagName === "INPUT" && el.type === "checkbox" && el.dataset.act && A[el.dataset.act]) A[el.dataset.act](el); });
+  document.addEventListener("change", (e) => { const el = e.target; if (el.tagName === "INPUT" && (el.type === "checkbox" || el.type === "text") && el.dataset.act && A[el.dataset.act]) A[el.dataset.act](el); });
   setInterval(() => { tickClock(); if (P && P.queue && !P.nav && P.i < P.queue.length && byId[P.queue[P.i]] && byId[P.queue[P.i]].lookup && !P.commit) tickLk(); const swEl = $("#sw"); if (swEl && sw) swEl.textContent = ((Date.now() - sw) / 1000).toFixed(1) + "s";
     const cd = L.countdown(new Date(), NC.exam.startISO), q = (k) => $("[data-cd=" + k + "]"); if (q("d")) { q("d").textContent = cd.days; q("h").textContent = cd.hours; q("m").textContent = cd.minutes; } }, 1000);
   window.addEventListener("keydown", (e) => { if (e.target.matches("input,textarea,select")) return; const i = NAV.findIndex((n) => n[0] === view); if (e.key === "]" ) go(NAV[(i + 1) % NAV.length][0]); if (e.key === "[") go(NAV[(i + NAV.length - 1) % NAV.length][0]); });

@@ -112,6 +112,29 @@
   };
   L.calc = C;
 
+  // ---- NEC reference lookups (tables live in data-nec.js; every value there is unverified until checked in your book) ----
+  const N = {};
+  const tbl = () => g.NC.nec;
+  const colIdx = (c) => ({ 60: 0, 75: 1, 90: 2 })[c];
+  N.ampacity = (size, mat, col) => { const r = tbl().t31016[mat][String(size)]; return r ? r[colIdx(col)] : null; };
+  N.adjFactor = (n) => { const r = tbl().adj.find((a) => n >= a[0] && n <= a[1]); return r ? r[2] / 100 : null; };
+  N.ambientFactor = (tc, col) => { const r = tbl().ambient.find((a) => tc <= a[0]); return r ? r[1 + colIdx(col)] : null; };
+  N.gec = (ungrounded, mat, gecMat) => { const rows = tbl().t25066[mat], a = tbl().size(String(ungrounded)); const r = rows.find((x) => a <= x[0] + 1e-9); return r ? r[gecMat === "al" ? 2 : 1] : null; };
+  N.egc = (ocpd, gecMat) => { const r = tbl().t250122.find((x) => ocpd <= x[0]); return r ? r[gecMat === "al" ? 2 : 1] : null; };
+  N.nextStd = (a) => tbl().std.find((x) => x >= a) || null;
+  N.boxVolume = (awg) => tbl().box[String(awg)] || null;
+  N.dwellingLighting = (va) => { let left = va, out = 0, prev = 0; for (const [ceil, p] of tbl().t22042) { const part = Math.max(0, Math.min(left, ceil - prev)); out += (part * p) / 100; left -= part; prev = ceil; if (left <= 0) break; } return r(out); };
+  // Ampacity worksheet: insulation column drives table value, ambient and adjustment; termination column caps the result.
+  N.worksheet = ({ size, mat, ins, term, n, ambient }) => {
+    const table = N.ampacity(size, mat, ins), cap = N.ampacity(size, mat, term), af = N.ambientFactor(ambient == null ? 30 : ambient, ins), jf = N.adjFactor(n == null ? 3 : n);
+    if (table == null || cap == null) return { error: "No such size for that material." };
+    if (af == null) return { error: "Ambient is outside the table for that insulation column." };
+    const adjusted = r(table * af * jf);
+    const usable = Math.min(adjusted, cap);
+    return { table, ambientFactor: af, adjFactor: jf, adjusted, termCap: cap, usable, limitedBy: usable === cap && cap < adjusted ? "termination" : "adjusted ampacity", nextStd: N.nextStd(usable) };
+  };
+  L.nec = N;
+
   // ---- backup ----
   L.exportState = (s) => JSON.stringify({ app: "nc-unlimited", v: 1, at: new Date().toISOString(), state: s });
   L.importState = (txt) => { const j = JSON.parse(txt); if (j.app !== "nc-unlimited" || !j.state) throw new Error("Not an NC Unlimited backup"); return j.state; };

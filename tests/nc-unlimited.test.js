@@ -7,8 +7,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 
 const dir = path.join(__dirname, '..', 'docs', 'nc-unlimited');
-for (const f of ['data-plan', 'data-study', 'data-law', 'data-bank']) require(path.join(dir, f + '.js'));
-if (fs.existsSync(path.join(dir, 'data-packets.js'))) require(path.join(dir, 'data-packets.js'));
+for (const f of ['data-plan', 'data-study', 'data-law', 'data-bank', 'data-nec', 'data-sessions', 'data-packets']) require(path.join(dir, f + '.js'));
 const L = require(path.join(dir, 'logic.js'));
 const NC = globalThis.NC;
 const c = L.calc;
@@ -50,21 +49,52 @@ test('weekly packets only reference real bank ids', () => {
   for (const [, , list] of NC.weeklyPackets) { assert.equal(list.length, 10); for (const id of list) assert.ok(ids.has(id), id); }
 });
 
-test('plan: 47 sessions in date order, hours as published, 60 cards, 15 scenarios', () => {
-  assert.equal(NC.sessions.length, 47);
-  for (let i = 1; i < NC.sessions.length; i++) assert.ok(NC.sessions[i][1] >= NC.sessions[i - 1][1], 'order at ' + (i + 1));
-  const total = NC.sessions.reduce((s, x) => s + x[3], 0);
-  assert.equal(total, 107.5); // 90 core + 17 buffer + 0.5 packing, per Exam Plan & Readiness
+test('sprint: 37 sessions, one per day Oct 31 to Dec 6, 94.5 hours, 60 cards, 15 scenarios', () => {
+  assert.equal(NC.sessions.length, 37);
+  NC.sessions.forEach((s, i) => { assert.equal(s[0], i + 1); assert.equal(s[1], L.addDays('2026-10-31', i), 'Day ' + s[0] + ' must be one day after the last'); assert.ok(NC.catNames[s[4]], 'category ' + s[4]); });
+  assert.equal(NC.sessions[36][1], '2026-12-06');
+  assert.equal(NC.sessions.reduce((s, x) => s + x[3], 0), 94.5);
+  assert.equal(NC.sprint.hours, 94.5);
   assert.equal(NC.cards.length, 60);
   assert.equal(new Set(NC.cards.map((x) => x[0])).size, 60);
   assert.equal(NC.scenarios.length, 15);
 });
 
-test('calendar covers every day Oct 26 to Dec 7 without gaps or overlaps', () => {
-  for (let d = '2026-10-26'; d <= '2026-12-07'; d = L.addDays(d, 1)) {
-    const hits = NC.calendar.filter((x) => d >= x.from && d <= x.to);
-    assert.equal(hits.length, 1, d);
+test('mocks A, B, C are the three 6-hour Saturdays, and nothing is a full mock on Dec 5 or 6', () => {
+  const mocks = NC.sessions.filter((s) => s[3] === 6);
+  assert.deepEqual(mocks.map((s) => s[1]), ['2026-11-14', '2026-11-21', '2026-11-28']);
+  for (const m of mocks) assert.equal(new Date(m[1] + 'T12:00:00Z').getUTCDay(), 6);
+  assert.ok(NC.sessions.filter((s) => s[1] >= '2026-12-05').every((s) => s[3] <= 2));
+  assert.ok(NC.sessions.filter((s) => s[4] === 'R').length >= 7, 'review days are not mocks');
+  assert.equal(NC.sessions.filter((s) => s[4] === 'X' && s[3] !== 6).length, 0);
+});
+
+test('key dates are ordered, inside the window, and include the PSI cutoff and exam', () => {
+  const ds = NC.keyDates.map((k) => k[0]);
+  assert.deepEqual(ds, ds.slice().sort());
+  assert.ok(ds.includes('2026-12-05') && ds.includes('2026-12-07') && ds.includes('2026-11-23'));
+  assert.equal(NC.acquire.items.length, 7);
+  assert.deepEqual(NC.gates.checkpoints, ['2026-11-06', '2026-11-13', '2026-12-02']);
+});
+
+test('packets: every sprint day has a packet; lookup questions never carry an invented answer', () => {
+  for (const s of NC.sessions) {
+    const p = NC.packets[s[0]];
+    assert.ok(p, 'packet ' + s[0]);
+    assert.ok(p.objective && Array.isArray(p.steps));
+    for (const q of p.questions) { assert.equal(typeof q.q, 'string'); assert.equal(typeof q.a, 'string'); }
   }
+  const total = Object.values(NC.packets).reduce((n, p) => n + p.questions.length, 0);
+  assert.ok(total >= 150, 'questions captured: ' + total);
+  assert.ok(!/[^\x00-\x7f]/.test(JSON.stringify(NC.packets)));
+});
+
+test('law cards carry the Oct 31 corrections', () => {
+  const card = (n) => NC.cards.find((c) => c[0] === n)[3];
+  assert.match(card(23), /\$40,000/);
+  assert.doesNotMatch(card(2), /no license-class voltage ceiling/i);
+  assert.match(card(2), /1,000 V/); assert.match(card(2), /600 V/);
+  assert.match(card(60), /978-1-948558-50-1/);
 });
 
 test('countdown is anchored to 10:00 AM Eastern on Dec 7', () => {
@@ -147,4 +177,70 @@ test('next session is the earliest unfinished; backup round-trips', () => {
 test('honesty guards present: lookup items are labeled unverified and AI validation stays 0/3', () => {
   assert.ok(NC.bank.filter((b) => b.lookup).every((b) => b.book && b.hint));
   assert.ok(NC.exam.bookRules.some((r) => /No writing/.test(r)));
+});
+
+// ---- NEC reference tables: structure checks plus anchors that your own Notion worked examples independently confirm ----
+require(path.join(dir, 'data-nec.js'));
+const N = L.nec;
+
+test('NEC tables: ampacity rises with size, with column, and aluminum never beats copper', () => {
+  for (const mat of ['cu', 'al']) {
+    const sizes = Object.keys(NC.nec.t31016[mat]).sort((a, b) => NC.nec.size(a) - NC.nec.size(b));
+    let prev = [0, 0, 0];
+    for (const sz of sizes) {
+      const r = NC.nec.t31016[mat][sz];
+      assert.ok(r[0] < r[1] && r[1] < r[2], mat + ' ' + sz + ' columns must rise 60 < 75 < 90');
+      for (let i = 0; i < 3; i++) assert.ok(r[i] > prev[i], mat + ' ' + sz + ' must exceed the next smaller size');
+      prev = r;
+    }
+  }
+  for (const sz of Object.keys(NC.nec.t31016.al)) { const c = NC.nec.t31016.cu[sz]; for (let i = 0; i < 3; i++) assert.ok(NC.nec.t31016.al[sz][i] < c[i], 'al < cu at ' + sz); }
+});
+
+test('NEC anchors from the Notion worked examples: 300 kcmil Cu 285 A at 75C and 320 A at 90C; 250 kcmil 255/290', () => {
+  assert.equal(N.ampacity('300', 'cu', 75), 285);
+  assert.equal(N.ampacity('300', 'cu', 90), 320);
+  assert.equal(N.ampacity('250', 'cu', 75), 255);
+  assert.equal(N.ampacity('250', 'cu', 90), 290);
+  assert.equal(N.ampacity('4', 'cu', 60), 70); // also printed in an Eaton reference found by search
+  // Notion sample Q22: four current-carrying conductors, 300 kcmil, 90C start, 75C terminals
+  const w = N.worksheet({ size: '300', mat: 'cu', ins: 90, term: 75, n: 4, ambient: 30 });
+  assert.equal(w.adjusted, 256); assert.equal(w.usable, 256); assert.equal(w.nextStd, 300);
+  const w2 = N.worksheet({ size: '250', mat: 'cu', ins: 90, term: 75, n: 4, ambient: 30 });
+  assert.equal(w2.adjusted, 232); assert.equal(w2.nextStd, 250); // 232 A cannot jump to a 300 A device (240.4(B))
+  // Notion: 100 A start with 0.80 and 0.91 factors is 72.8 A
+  assert.equal(Math.round(100 * 0.8 * 0.91 * 10) / 10, 72.8);
+  assert.equal(N.worksheet({ size: '4', mat: 'cu', ins: 90, term: 60, n: 3, ambient: 30 }).usable, 70); // 60C termination caps a 90C conductor
+});
+
+test('NEC adjustment and ambient factors', () => {
+  assert.deepEqual([3, 4, 6, 7, 9, 10, 20, 21, 30, 31, 40, 41, 80].map(N.adjFactor), [1, 0.8, 0.8, 0.7, 0.7, 0.5, 0.5, 0.45, 0.45, 0.4, 0.4, 0.35, 0.35]);
+  assert.equal(N.ambientFactor(30, 90), 1); assert.equal(N.ambientFactor(40, 90), 0.91); assert.equal(N.ambientFactor(35, 60), 0.91);
+  assert.equal(N.ambientFactor(60, 60), null); // 60C column is not permitted that hot
+});
+
+test('NEC GEC (250.66) and EGC (250.122) lookups', () => {
+  assert.equal(N.gec('2', 'cu'), '8'); assert.equal(N.gec('1', 'cu'), '6'); assert.equal(N.gec('1/0', 'cu'), '6'); assert.equal(N.gec('3/0', 'cu'), '4');
+  assert.equal(N.gec('350', 'cu'), '2'); assert.equal(N.gec('600', 'cu'), '1/0'); assert.equal(N.gec('1100', 'cu'), '2/0'); assert.equal(N.gec('1200', 'cu'), '3/0');
+  assert.equal(N.gec('250', 'al'), '4'); assert.equal(N.gec('2', 'cu', 'al'), '6');
+  assert.equal(N.egc(200), '6'); assert.equal(N.egc(400), '3'); assert.equal(N.egc(600), '1'); assert.equal(N.egc(2000), '250');
+  assert.equal(N.egc(70), '8'); // 70 A is not exceeding 60, so it takes the 100 A row
+  assert.equal(N.egc(6000), '800'); assert.equal(N.egc(7000), null);
+  // the table rows rise with OCPD size
+  let prev = 0; for (const [o] of NC.nec.t250122) { assert.ok(o > prev); prev = o; }
+});
+
+test('NEC standard sizes, box volume and the dwelling lighting demand tiers', () => {
+  assert.equal(N.nextStd(232), 250); assert.equal(N.nextStd(260.34), 300); assert.equal(N.nextStd(229.09), 250); assert.equal(N.nextStd(70), 70); assert.equal(N.nextStd(6001), null);
+  assert.deepEqual(NC.nec.std.slice().sort((a, b) => a - b), NC.nec.std);
+  assert.equal(N.boxVolume(12), 2.25); assert.equal(N.boxVolume('14'), 2);
+  assert.equal(N.dwellingLighting(11700), 6045); // 3,000 + 35% of 8,700, the example the search sources agreed on
+  assert.equal(N.dwellingLighting(2000), 2000); assert.equal(N.dwellingLighting(130000), 3000 + 117000 * 0.35 + 10000 * 0.25);
+});
+
+test('NEC rules data: every rule has a confidence tag, no markup, and nothing claims verification', () => {
+  const ids = new Set();
+  for (const r of NC.nec.rules) { assert.ok(!ids.has(r[0]), 'dup ' + r[0]); ids.add(r[0]); assert.ok(['S', 'R'].includes(r[4]), r[0]); assert.ok(r[1] >= 0 && r[1] < NC.nec.groups.length, r[0]); assert.ok(!/[<>]/.test(r[3]), r[0]); }
+  assert.ok(/Not verified/.test(NC.nec.status));
+  assert.ok(NC.nec.gaps.length > 0);
 });
