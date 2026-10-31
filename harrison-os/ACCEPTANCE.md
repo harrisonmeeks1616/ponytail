@@ -23,7 +23,7 @@ Baseline commit `c9cf526`: 207/207 unit, 11/11 local browser (F1-F10, X1) rerun 
 | A15 | not started | | T4/T5; live needs a real ICS URL and PM source authorization |
 | A16 | not started | | T6; real client interoperability separate |
 | A17 | not started | | T7 |
-| A18 | partial | scope-canary tests, F5; `tests/scope-sweep.test.mjs` (all routes + schema, mutation-checked) on core routes | passes only when the sweep is green over integrated feature routes AND each feature canary (AI prompt, derived deletion, MCP, jobs, export) is green |
+| A18 | partial | `tests/scope-sweep.test.mjs`: schema invariant; route completeness (every route has a fixture or a stated exemption); per-route own-scope 2xx + canary-present and work-scope no-canary over seeded personal records, mutation-checked (leak, validation-stopped, empty seed each fail). Covers core + weekly routes on `f67c1f2`+ | not passed until: fixtures for T1a/T2/T3/T4/T5 routes land with them, and each feature's non-HTTP canary (AI prompt body, MCP tool results [done in tests/mcp.test.mjs], jobs, derived deletion, export) is green on integrated main |
 | A19 | not started | | injection case across Ask/drafts/MCP |
 | A20 | partial (delete + export) | F6, db tests | restore path, attachments, outbox-retry resurrection test (T1) |
 | A21 | partial (390px, 0 console/CSP errors) | F9 | 360-430px, 200% zoom, reduced motion, screen-reader labels audit; real phone |
