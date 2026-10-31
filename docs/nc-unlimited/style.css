@@ -1,6 +1,6 @@
 /* NC Unlimited Exam Coach. Look: night-shift switchgear. Amber = live/priority, cyan = info, green = verified/done. */
 :root {
-  --bg: #080d18; --bg2: #0d1424; --card: #111a2e; --card2: #162139; --line: #23314f; --ink: #e8eefc; --mut: #8fa0c4; --dim: #5d6f96;
+  --bg: #080d18; --bg2: #0d1424; --card: #111a2e; --card2: #162139; --line: #23314f; --ink: #e8eefc; --mut: #8fa0c4; --dim: #8493b8;
   --amber: #ffb627; --amber-ink: #1b1200; --cyan: #34d3f0; --green: #3ddc97; --red: #ff6b6b; --violet: #a78bfa; --pink: #ff8fc7;
   --glow: 0 0 0 1px rgba(255,182,39,.25), 0 8px 30px rgba(255,182,39,.12);
   --r: 16px; --r2: 10px; color-scheme: dark;
@@ -8,8 +8,8 @@
   --mono: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
 }
 :root[data-theme="light"] {
-  --bg: #eef2f9; --bg2: #e6ebf5; --card: #ffffff; --card2: #f4f7fd; --line: #d3dcee; --ink: #111a2e; --mut: #4b5b7e; --dim: #7686a8;
-  --amber: #c77d00; --amber-ink: #fff; --cyan: #0b84a5; --green: #12945f; --red: #cc3333; --violet: #6d4fd6; --pink: #c2377f;
+  --bg: #eef2f9; --bg2: #e6ebf5; --card: #ffffff; --card2: #f4f7fd; --line: #d3dcee; --ink: #111a2e; --mut: #4b5b7e; --dim: #53648a;
+  --amber: #8f5400; --amber-ink: #fff; --cyan: #0a6683; --green: #0d7046; --red: #b32626; --violet: #6d4fd6; --pink: #c2377f;
   --glow: 0 0 0 1px rgba(199,125,0,.3), 0 8px 24px rgba(199,125,0,.12); color-scheme: light;
 }
 * { box-sizing: border-box; }
@@ -123,3 +123,18 @@ table { width: 100%; border-collapse: collapse; font-size: .88rem; } th, td { te
 .toast { position: fixed; left: 50%; bottom: 84px; transform: translateX(-50%); background: var(--card2); border: 1px solid var(--amber); padding: 10px 18px; border-radius: 12px; z-index: 50; box-shadow: var(--glow); font-weight: 600; }
 @media (prefers-reduced-motion: reduce) { * { transition: none !important; scroll-behavior: auto !important; } }
 @media print { .side, .btn { display: none; } .shell { display: block; } body { background: #fff; color: #000; } }
+
+/* review fixes: focus rings survive `all: unset`, button options, contrast, touch targets, mobile nav */
+.btn:focus-visible, .nav button:focus-visible, .tabs button:focus-visible, .chk:focus-visible, button.opt:focus-visible { outline: 3px solid var(--amber); outline-offset: 2px; }
+:root[data-theme="light"] .btn.pri, :root[data-theme="light"] .btn.pri:hover { background: var(--amber); color: #fff; }
+:root[data-theme="light"] .tabs button[aria-pressed="true"] { background: var(--amber); color: #fff; }
+button.opt { width: 100%; text-align: left; font: inherit; color: inherit; align-items: flex-start; }
+.chk { width: 32px; height: 32px; }
+@media (max-width: 860px) {
+  .nav { display: grid; grid-template-columns: repeat(4, 1fr); gap: 2px; width: 100%; }
+  .nav button { min-width: 0; min-height: 44px; font-size: .66rem; }
+  main { padding-bottom: 150px; }
+  .btn, .tabs button { min-height: 44px; }
+  .btn.sm { min-height: 40px; }
+  .toast { bottom: 150px; }
+}

@@ -733,7 +733,7 @@
    },
    {
     "q": "M08 (Motors and control wiring, Book lookup required): A feeder supplies several motors and other loads. Identify the separate conductor-ampacity and feeder fault-protection rules, and list all current/device inputs each calculation requires.",
-    "a": "Book lookup required. Verify exact section/page, conditions, exception in the named edition before scoring. Starting route: 2020 Article 430; existing Day 22 starts at 430.24 and 430.62. A conductor sum does not automatically establish the feeder protective-device answer. Pending verification: record a readable designated-book citation before scoring; the suggested route is not a verified exact section.",
+    "a": "Book lookup required. Verify exact section/page, conditions, exception in the named edition before scoring. Starting route: 2020 Article 430; retired-plan Day 22 starts at 430.24 and 430.62. A conductor sum does not automatically establish the feeder protective-device answer. Pending verification: record a readable designated-book citation before scoring; the suggested route is not a verified exact section.",
     "src": "2020 NEC, exact final answer must be verified in this edition"
    },
    {
@@ -1055,12 +1055,12 @@
   "questions": [
    {
     "q": "G10 (Bonding and grounding, Book lookup required): For a 4.16 kV installation, locate the higher-voltage grounding provisions and identify system grounding, equipment grounding and applicable substation/fence requirements. What engineering data would still be needed for touch/step evaluation?",
-    "a": "Book lookup required. Verify exact section/page, conditions, exception in the named edition before scoring. Starting route: 2020 Article 250 Part X, as routed by the existing Day 13 session. Separate code-scope lookup from a completed substation grounding design. State the voltage and actual arrangement.",
+    "a": "Book lookup required. Verify exact section/page, conditions, exception in the named edition before scoring. Starting route: 2020 Article 250 Part X, as routed by the retired-plan Day 13 session. Separate code-scope lookup from a completed substation grounding design. State the voltage and actual arrangement.",
     "src": "2020 NEC, exact final answer must be verified in this edition. Pending verification: record a readable designated-book citation before scoring; suggested route is not a verified exact section."
    },
    {
     "q": "G11 (Bonding and grounding, Book lookup required): Compare an impedance-grounded 480 V system with an impedance-grounded 4.16 kV system. Build a two-column list of scope, neutral/impedance connection, monitoring, grounding electrodes and EGC requirements.",
-    "a": "Book lookup required. Verify exact section/page, conditions, exception in the named edition before scoring. Starting route: 2020 Article 250; existing Day 14 starts at 250.36 and 250.187. Use the provision for the stated voltage. Similar terminology does not justify transferring a lower-voltage condition to a higher-voltage installation.",
+    "a": "Book lookup required. Verify exact section/page, conditions, exception in the named edition before scoring. Starting route: 2020 Article 250; retired-plan Day 14 starts at 250.36 and 250.187. Use the provision for the stated voltage. Similar terminology does not justify transferring a lower-voltage condition to a higher-voltage installation.",
     "src": "2020 NEC, exact final answer must be verified in this edition. Pending verification: record a readable designated-book citation before scoring; suggested route is not a verified exact section."
    },
    {
@@ -1070,7 +1070,7 @@
    },
    {
     "q": "W08 (Wiring methods and terminations, Book lookup required): For a medium-voltage conductor installation, locate the 2020 article and applicable ampacity table. List voltage, conductor construction, installation geometry and temperature assumptions before choosing a value.",
-    "a": "Book lookup required. Verify exact section/page, conditions, exception in the named edition before scoring. Starting route: 2020 Article 311 and referenced ampacity provisions; existing Day 26. A table value without its installation basis is incomplete.",
+    "a": "Book lookup required. Verify exact section/page, conditions, exception in the named edition before scoring. Starting route: 2020 Article 311 and referenced ampacity provisions; retired-plan Day 26. A table value without its installation basis is incomplete.",
     "src": "2020 NEC, exact final answer must be verified in this edition. Pending verification: record a readable designated-book citation before scoring; suggested route is not a verified exact section."
    }
   ],
@@ -1245,7 +1245,7 @@
    },
    {
     "q": "W07 (Wiring methods and terminations, Book lookup required): An elevator traveling cable includes power and control circuits. Locate the specific wiring and separation requirements; record the condition that permits or prohibits the proposed arrangement.",
-    "a": "Book lookup required. Verify exact section/page, conditions, exception in the named edition before scoring. Starting route: 2020 Article 620, per existing Day 28 and study guide. The elevator application supplements general wiring rules. Do not infer conductor separation from a generic low-voltage rule alone.",
+    "a": "Book lookup required. Verify exact section/page, conditions, exception in the named edition before scoring. Starting route: 2020 Article 620, per retired-plan Day 28 and study guide. The elevator application supplements general wiring rules. Do not infer conductor separation from a generic low-voltage rule alone.",
     "src": "2020 NEC, exact final answer must be verified in this edition. Pending verification: record a readable designated-book citation before scoring."
    }
   ],

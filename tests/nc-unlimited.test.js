@@ -132,15 +132,22 @@ test('business scenarios from NC Law & Business', () => {
   assert.equal(c.criticalPath({ A: { d: 2, after: [] }, B: { d: 4, after: ['A'] }, C: { d: 7, after: ['A'] }, D: { d: 3, after: ['B', 'C'] } }).finish, 12);
 });
 
-test('error log: mastered only after two clean re-solves on separate days; a miss resets', () => {
+test('error log: 1 then 3 days, mastered after two clean re-solves on separate days, then 7 and 14 day maintenance; a miss resets', () => {
   let e = L.newError({ concept: 'GEC vs EGC' }, '2026-11-01');
   assert.equal(e.next, '2026-11-02');
   e = L.retest(e, '2026-11-02', true); assert.equal(e.mastered, false); assert.equal(e.next, '2026-11-05');
   e = L.retest(e, '2026-11-02', true); assert.equal(e.mastered, false, 'same-day repeat must not count');
   e = L.retest(e, '2026-11-05', false); assert.equal(e.streak, 0); assert.equal(e.next, '2026-11-06');
-  e = L.retest(e, '2026-11-06', true); e = L.retest(e, '2026-11-09', true);
-  assert.equal(e.mastered, true); assert.equal(e.next, null);
-  assert.equal(L.dueErrors([e], '2026-12-01').length, 0);
+  e = L.retest(e, '2026-11-06', true); assert.equal(e.next, '2026-11-09');
+  e = L.retest(e, '2026-11-09', true);
+  assert.equal(e.mastered, true); assert.equal(e.next, '2026-11-16', 'first maintenance recall 7 days after mastery');
+  assert.equal(L.dueErrors([e], '2026-11-15').length, 0); assert.equal(L.dueErrors([e], '2026-11-16').length, 1);
+  e = L.retest(e, '2026-11-16', true); assert.equal(e.mastered, true); assert.equal(e.next, '2026-11-30', 'second maintenance recall 14 days later');
+  const done = L.retest(e, '2026-11-30', true); assert.equal(done.next, null); assert.equal(L.dueErrors([done], '2027-01-01').length, 0);
+  const lapsed = L.retest(e, '2026-11-30', false); assert.equal(lapsed.mastered, false); assert.equal(lapsed.streak, 0); assert.equal(lapsed.next, '2026-12-01');
+  // after a lapse it needs two fresh clean re-solves again
+  let again = L.retest(lapsed, '2026-12-01', true); assert.equal(again.mastered, false);
+  again = L.retest(again, '2026-12-04', true); assert.equal(again.mastered, true);
 });
 
 test('law cards: right moves up a box, wrong drops to box 1', () => {
@@ -283,4 +290,98 @@ test('topic packets carry the days that use them and every id exists', () => {
   assert.equal(NC.weeklyPackets.length, 8);
   for (const [, , ids, days] of NC.weeklyPackets) { assert.match(days, /^Days? \d/); assert.equal(ids.length, 10); }
   assert.ok(NC.exam.links.every((l) => !/north-carolina-electrical-14th-edition/.test(l[1])), 'the old NASCLA URL returns 404');
+});
+
+
+// ---- review round: boundaries, recomputed keys, hostile state, data cross-checks ----
+test('readiness boundaries: 82.0 passes, 81.9 fails; 360 minutes passes, 361 fails; category floor and sample size edges', () => {
+  const g = NC.gates, mk = (score, o) => ({ form: 'full', fresh: true, assisted: false, minutes: 340, score, ...o });
+  const cats = (n, pct) => NC.blueprint.map(([id, name, w]) => ({ id, name, weight: w, n, pct }));
+  assert.equal(L.readiness([mk(82), mk(82)], g, cats(20, 80)).met, true, 'exactly 82 counts');
+  assert.equal(L.readiness([mk(82), mk(81.9)], g, cats(20, 80)).met, false);
+  assert.equal(L.readiness([mk(90), mk(90, { minutes: 360 })], g, cats(20, 80)).met, true, 'exactly six hours counts');
+  assert.equal(L.readiness([mk(90), mk(90, { minutes: 361 })], g, cats(20, 80)).met, false);
+  assert.equal(L.readiness([mk(90), mk(90)], g, cats(20, 70)).met, true, 'a category at exactly 70 is not below the floor');
+  assert.equal(L.readiness([mk(90), mk(90)], g, cats(20, 69)).met, false);
+  assert.equal(L.readiness([mk(90), mk(90)], g, cats(15, 80)).met, true, '15 fresh questions is an adequate sample');
+  assert.equal(L.readiness([mk(90), mk(90)], g, cats(14, 80)).met, false, '14 is not');
+  assert.equal(L.readiness([mk(90), mk(90, { form: 'set50' })], g, cats(20, 80)).met, false, 'a timed 50 is not a full mock');
+});
+
+test('Leitner intervals, cap and due boundaries', () => {
+  const days = [1, 3, 7, 14, 30]; let st = null;
+  days.forEach((d, i) => { st = L.review(st, true, '2026-11-01'); assert.equal(st.box, i + 1); assert.equal(st.due, L.addDays('2026-11-01', d)); });
+  assert.equal(L.review(st, true, '2026-11-01').box, 5, 'box capped at 5');
+  const miss = L.review(st, false, '2026-11-01'); assert.equal(miss.box, 1); assert.equal(miss.due, '2026-11-02');
+  const dueOn = { 1: { due: '2026-11-02' }, 2: { due: '2026-11-03' } };
+  assert.deepEqual(L.dueCards([1, 2, 3], dueOn, '2026-11-02'), [1, 3], 'due today counts; due tomorrow does not; unseen counts');
+  assert.deepEqual(L.dueErrors([{ next: '2026-11-03', mastered: false }, { next: '2026-11-01', mastered: false }, { next: null }], '2026-11-03').map((e) => e.next), ['2026-11-01', '2026-11-03'], 'ordered, inclusive of today');
+});
+
+test('hours, grading and bank stats', () => {
+  assert.deepEqual(L.hours(NC.sessions, { 1: 1, 2: 1, 15: 1 }), { done: 12, total: 94.5 });
+  const mcq = NC.bank.find((b) => b.id === 'L01');
+  assert.deepEqual(L.gradeMcq(mcq, 'C'), { ok: true, ans: 'C' }); assert.equal(L.gradeMcq(mcq, 'A').ok, false);
+  const st = L.bankStats(NC.bank, { L01: { ok: true }, L02: { ok: false } }, { G01: { ok: true }, G02: { ok: false } });
+  const d1 = st.find((x) => x.d === 1), d8 = st.find((x) => x.d === 8);
+  assert.equal(d1.lookupDone, 1, 'a lookup answered wrong is not counted as verified right'); assert.equal(d1.lookup, 11); assert.equal(d1.keyed, 0);
+  assert.equal(d8.tried, 2); assert.equal(d8.right, 1);
+  assert.equal(st.reduce((n, x) => n + x.total, 0), 100);
+});
+
+test('every numeric keyed answer is recomputed independently from its prompt', () => {
+  const ans = (id) => { const b = NC.bank.find((x) => x.id === id); return b.opts[b.ans]; };
+  const num = (id, ...parts) => { const a = ans(id).replace(/,/g, ''); for (const p of parts) assert.ok(a.includes(String(p).replace(/,/g, '')), id + ': "' + a + '" should contain ' + p); };
+  const root3 = Math.sqrt(3);
+  num('O03', 1.25 * 36 + 24); num('W02', Math.min(95 * 0.91 * 0.8, 65));
+  num('W03', Math.floor((2.0 * 0.4) / 0.12)); num('B01', (6 + 2 + 1 + 2) * 2.25); num('B03', 8 * 3); num('B04', 6 * 3 + 2 + 1);
+  num('S02', 26400 / 240); num('M02', 1.25 * 28); num('M03', 1.25 * 22); num('M04', 1.25 * 40 + 20 + 15); num('M05', 2.5 * 42);
+  const vd = (root3 * 12.9 * 40 * 180) / 41740; num('M07', vd.toFixed(2), ((vd / 480) * 100).toFixed(2));
+  num('L01', 28800 / 240); num('L02', Math.round(138600 / (root3 * 480))); num('L03', 72 / 0.8); num('L04', 3 * 2500);
+  num('L05', 5520); assert.equal(3000 + 7200 * 0.35, 5520); num('L06', 1.25 * 8000 + 12000); num('L11', 124, 123);
+  num('E01', (75000 / (root3 * 480)).toFixed(1), (75000 / (root3 * 208)).toFixed(1));
+  num('E02', (500000 / (root3 * 480) / 0.0575 / 1000).toFixed(3));
+  num('P02', '70,000'); num('P05', '8,960', 40); assert.equal(8000 + 1200 * 0.8, 8960);
+  num('P06', (9150 * 1.2).toLocaleString('en-US'), (9150 / 0.8).toLocaleString('en-US', { minimumFractionDigits: 2 }));
+  num('P07', '40,000', '1.5'); assert.equal(c.criticalPath({ A: { d: 2, after: [] }, B: { d: 4, after: ['A'] }, C: { d: 5, after: ['A'] }, D: { d: 3, after: ['B', 'C'] } }).finish, 10); num('P08', 10);
+  num('P09', 8 * 2 * 32 + 3 * 18); num('P10', 9 + 5, 9 * 2 + 5); num('P12', (((0.25 * 24) + 2.0 * (5 / 60)) * 1.25).toFixed(2));
+  num('P03', 30); num('P04', 'Five');
+  const covered = new Set(['O03', 'W02', 'W03', 'B01', 'B03', 'B04', 'S02', 'M02', 'M03', 'M04', 'M05', 'M07', 'L01', 'L02', 'L03', 'L04', 'L05', 'L06', 'L11', 'E01', 'E02', 'P01', 'P02', 'P03', 'P04', 'P05', 'P06', 'P07', 'P08', 'P09', 'P10', 'P12']);
+  for (const b of NC.bank.filter((x) => x.opts)) assert.ok(covered.has(b.id), 'keyed item ' + b.id + ' has no independent recomputation');
+  assert.match(NC.bank.find((b) => b.id === 'L02').why, /166\.7099/);
+});
+
+test('hostile or malformed saved state is sanitized, not trusted', () => {
+  const base = { done: {}, log: [], attempts: {}, ver: {}, errs: [], mocks: [], cards: {}, check: {}, auth: { start: '', expiry: '' }, strong: {}, lookups: [], theme: '', examTimer: null, verif: {}, sc: {}, nav: {}, necv: {}, books: { nec: '', nfpa: '', nascla: '' } };
+  const ctx = { views: ['today', 'plan'], books: { nec: ['', '2020 edition'], nfpa: ['', '2013 edition'], nascla: ['', '14th edition'] } };
+  const evil = '<img src=x onerror=alert(1)>';
+  const out = L.sanitize({ log: [{ date: '2026-10-31', min: evil }, { date: evil, min: 5 }], errs: [{ id: 'a" onclick="x', type: evil, concept: 'c', next: evil }], mocks: [{ id: '"><script>', minutes: evil, score: 'x', date: '2026-11-14', form: 'bogus' }], nav: { view: 'bogus' }, books: { nec: evil, nfpa: '2013 edition' }, theme: 'neon', done: { '1': { at: evil, min: 'x' }, evil: 1 }, cards: { '5': { box: 99, due: evil } }, auth: { expiry: evil } }, base, ctx);
+  assert.equal(out.log.length, 1); assert.equal(out.log[0].min, 0); assert.equal(typeof out.log[0].min, 'number');
+  assert.equal(out.errs[0].id, 'aonclickx'); assert.equal(out.errs[0].next, null); assert.equal(out.mocks[0].id, 'script'); assert.equal(out.mocks[0].minutes, 0); assert.equal(out.mocks[0].score, 0); assert.equal(out.mocks[0].form, 'split');
+  assert.equal(out.nav.view, 'today'); assert.equal(out.books.nec, ''); assert.equal(out.books.nfpa, '2013 edition'); assert.equal(out.theme, '');
+  assert.deepEqual(Object.keys(out.done), ['1']); assert.equal(out.done['1'].at, ''); assert.equal(out.cards['5'].box, 5); assert.equal(out.cards['5'].due, ''); assert.equal(out.auth.expiry, '');
+  for (const bad of [null, 'x', 5, [], { errs: {}, nav: null, books: null, log: 'x', mocks: 7 }]) { const r = L.sanitize(bad, base, ctx); assert.ok(Array.isArray(r.errs) && Array.isArray(r.mocks) && Array.isArray(r.log)); assert.equal(r.nav.view, 'today'); assert.equal(r.books.nec, ''); }
+  // a clean round trip keeps real data
+  const keep = { done: { 3: { at: '2026-11-02', min: 120 } }, errs: [L.newError({ concept: 'x' }, '2026-11-01')], mocks: [{ id: 'm1', label: 'A', date: '2026-11-14', form: 'full', minutes: 340, score: 85, fresh: true, assisted: false, cats: { 1: [9, 11] } }], nav: { view: 'plan' }, books: { nascla: '14th edition' } };
+  const back = L.sanitize(JSON.parse(JSON.stringify(keep)), base, ctx);
+  assert.equal(back.done[3].min, 120); assert.equal(back.errs[0].concept, 'x'); assert.deepEqual(back.mocks[0].cats[1], [9, 11]); assert.equal(back.nav.view, 'plan'); assert.equal(back.books.nascla, '14th edition');
+});
+
+test('cross-checks: key dates, sprint weeks, checkpoints, topic packet days, links, categories', () => {
+  const dayOf = (iso) => NC.sessions.find((x) => x[1] === iso);
+  NC.sessions.forEach((x, i) => assert.equal(x[2], Math.floor(i / 7) + 1, 'week of day ' + x[0]));
+  for (const iso of ['2026-11-14', '2026-11-21', '2026-11-28']) assert.equal(dayOf(iso)[4], 'X', iso + ' is a full mock day');
+  assert.equal(NC.keyDates.filter((k) => /^Mock [ABC]$/.test(k[1])).map((k) => k[0]).join(), '2026-11-14,2026-11-21,2026-11-28');
+  assert.deepEqual(NC.gates.checkpoints, ['2026-11-06', '2026-11-13', '2026-12-02']);
+  assert.match(dayOf('2026-11-06')[5], /checkpoint/i); assert.match(dayOf('2026-11-13')[5], /checkpoint/i); assert.match(dayOf('2026-12-02')[5], /checkpoint/i);
+  assert.match(dayOf('2026-11-23')[5], /readiness review/i); assert.match(dayOf('2026-12-04')[5], /decision|checks/i); assert.match(dayOf('2026-12-06')[5], /final review|pack|sleep/i);
+  for (const [, , , days] of NC.weeklyPackets) for (const m of days.matchAll(/(\d+)(?:-(\d+))?/g)) { const lo = +m[1], hi = m[2] ? +m[2] : lo; assert.ok(lo >= 1 && hi <= 37 && lo <= hi, 'bad day range in ' + days); }
+  const hosts = ['www.ncbeec.org', 'www.ncleg.gov', 'test-takers.psiexams.com', 'store.nascla.org', 'link.nfpa.org'];
+  for (const [, u] of NC.exam.links) { const url = new URL(u); assert.equal(url.protocol, 'https:'); assert.ok(hosts.includes(url.hostname), 'unexpected host ' + url.hostname); }
+  for (const x of NC.sessions) { if (x[4] === 'R') assert.doesNotMatch(x[5], /full mock/i); assert.ok(x[3] > 0 && x[3] <= 6); }
+  assert.doesNotMatch(JSON.stringify(NC.sessions), /Mock D|47 sessions/);
+  for (const k of NC.keyDates) assert.doesNotMatch(k[2], /Mock D/);
+  const bankIds = new Set(NC.bank.map((b) => b.id));
+  for (const [n, p] of Object.entries(NC.packets)) for (const q of p.questions) { const m = /^([A-Z]\d\d)(-v\d)?\b/.exec(q.q); if (m && /^[GOWBSMLEPDH]/.test(m[1])) assert.ok(bankIds.has(m[1]), 'packet ' + n + ' cites unknown bank id ' + m[1]); }
+  assert.doesNotMatch(JSON.stringify(NC.packets), /existing Day \d/, 'old-plan day numbers must be labeled retired');
 });

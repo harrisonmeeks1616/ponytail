@@ -15,11 +15,10 @@
 
   // ---------- state ----------
   const blank = () => ({ done: {}, log: [], attempts: {}, ver: {}, errs: [], mocks: [], cards: {}, check: {}, auth: { start: "", expiry: "" }, strong: {}, lookups: [], theme: "", examTimer: null, verif: {}, sc: {}, nav: {}, necv: {}, books: { nec: "", nfpa: "", nascla: "" } });
-  let S;
-  try { S = Object.assign(blank(), JSON.parse(localStorage.getItem(KEY) || "{}")); } catch (e) { S = blank(); }
+  let S = blank(); // real state is loaded (and sanitized) just before the first render, below
   const save = () => { try { localStorage.setItem(KEY, JSON.stringify(S)); } catch (e) { toast("Could not save: storage is full or blocked. Use Backup now."); } };
-  const toast = (m) => { const d = document.createElement("div"); d.className = "toast"; d.textContent = m; document.body.appendChild(d); setTimeout(() => d.remove(), 2600); };
-  if (S.theme) document.documentElement.dataset.theme = S.theme;
+  const toast = (m) => { const d = document.createElement("div"); d.className = "toast"; d.setAttribute("role", "status"); d.setAttribute("aria-live", "polite"); d.textContent = m; document.body.appendChild(d); setTimeout(() => d.remove(), 2600); };
+  const applyTheme = () => { if (S.theme) document.documentElement.dataset.theme = S.theme; else delete document.documentElement.dataset.theme; };
 
   // ---------- derived ----------
   const bank = NC.bank, byId = Object.fromEntries(bank.map((b) => [b.id, b]));
@@ -53,14 +52,15 @@
 
   // ---------- views ----------
   const V = {};
-  let view = S.nav.view || "today";
+  let view = "today";
   const NAV = [["today", "⚡", "Today"], ["plan", "\u{1F4C5}", "Plan"], ["practice", "\u{1F9E0}", "Practice"], ["law", "⚖️", "Law"], ["study", "\u{1F4D8}", "Study"], ["tools", "\u{1F9EE}", "Tools"], ["progress", "\u{1F4CA}", "Progress"], ["exam", "\u{1F3AF}", "Exam day"]];
 
   function renderNav() {
     const due = dueCount();
     $("#nav").innerHTML = NAV.map(([k, ic, n]) => `<button data-act="nav" data-v="${k}" ${view === k ? 'aria-current="page"' : ""}><span class="ic">${ic}</span>${n}${k === "progress" && due ? `<span class="badge">${due}</span>` : ""}</button>`).join("");
   }
-  function render() { renderNav(); $("#view").innerHTML = V[view](); if (V["after_" + view]) V["after_" + view](); }
+  function linkLabels() { let n = 0; $$("#view label.f").forEach((lb) => { let c = lb.nextElementSibling; if (c && !/^(INPUT|SELECT|TEXTAREA)$/.test(c.tagName) && c.querySelector) c = c.querySelector("input,select,textarea"); if (c && /^(INPUT|SELECT|TEXTAREA)$/.test(c.tagName)) { if (!c.id) c.id = "fld" + ++n; lb.htmlFor = c.id; } }); }
+  function render() { if (typeof V[view] !== "function") view = "today"; renderNav(); $("#view").innerHTML = V[view](); linkLabels(); if (V["after_" + view]) V["after_" + view](); }
   function go(v) { view = v; S.nav.view = v; save(); render(); window.scrollTo(0, 0); }
 
   // ===== TODAY =====
@@ -97,7 +97,7 @@
 
       <div class="card stack"><h3>Due now</h3>
         <div class="row between"><span>Error retests due</span><button class="btn sm ${due ? "pri" : ""}" data-act="nav" data-v="progress">${due} due</button></div>
-        <div class="row between"><span>Law cards due or new</span><button class="btn sm ${cardsDue ? "pri" : ""}" data-act="lawStart">${cardsDue}</button></div>
+        <div class="row between"><span>Law cards due or new</span><button class="btn sm ${cardsDue ? "pri" : ""}" data-act="lawStart" data-reset="1">${cardsDue}</button></div>
         <div class="row between"><span>Keyed practice missed</span><button class="btn sm" data-act="startMisses">${tried.length - right.length}</button></div>
         <div class="row between"><span>NEC reference rows verified in your book</span><button class="btn sm" data-act="necGo">${necDone}/${necTotal()}</button></div>
         <hr>
@@ -115,7 +115,7 @@
       <div class="card stack"><h3>Authorization window</h3>
         <div class="grid g2"><div><label class="f">Board authorization start</label><input type="date" id="authStart" value="${esc(S.auth.start)}"></div><div><label class="f">Authorization expiry</label><input type="date" id="authExp" value="${esc(S.auth.expiry)}"></div></div>
         <button class="btn sm" data-act="saveAuth">Save dates</button>
-        ${authLeft != null ? `<p class="${authLeft < 14 ? "red" : "green"} sm">${authLeft} days until authorization expires.</p>` : `<p class="amber sm">Open item: the Sept 10 approval email states no expiry. Enter the dates from the Board notice.</p>`}
+        ${authLeft != null ? (authLeft < 0 ? `<p class="red sm"><b>Authorization expired ${-authLeft} day${authLeft === -1 ? "" : "s"} ago</b> (${esc(S.auth.expiry)}). Check the Board notice before relying on the Dec 7 appointment.</p>` : `<p class="${authLeft < 14 ? "red" : "green"} sm">${authLeft === 0 ? "Authorization expires today." : authLeft + " day" + (authLeft === 1 ? "" : "s") + " until authorization expires."}</p>`) : `<p class="amber sm">Open item: the Sept 10 approval email states no expiry. Enter the dates from the Board notice.</p>`}
         <p class="xs dim">${t(NC.meta.note)} Last synced ${t(new Date(NC.meta.syncedAt).toLocaleString("en-US", { timeZone: "America/New_York", month: "short", day: "numeric", hour: "numeric", minute: "2-digit" }))} ET.</p><hr><h4>How the sprint works</h4><ul class="sm">${NC.rules.map((x) => `<li>${t(x)}</li>`).join("")}</ul></div>
     </div>`;
   };
@@ -134,7 +134,7 @@
         const list = weeks[w], done = list.filter((s) => S.done[s[0]]).length, hr = list.reduce((a, s) => a + s[3], 0);
         return `<h3 style="margin:18px 0 8px">Week ${w} <span class="chip">${done}/${list.length}</span> <span class="chip">${hr} h</span></h3>` + list.map((s) => {
           const n = s[0], dn = S.done[n], p = NC.packets && NC.packets[n];
-          return `<div class="sess ${dn ? "done" : ""} ${s[1] === d ? "today" : ""}" id="s${n}"><button class="chk ${dn ? "on" : ""}" data-act="toggleSession" data-n="${n}" aria-label="Mark session ${n}">${dn ? "✓" : ""}</button>
+          return `<div class="sess ${dn ? "done" : ""} ${s[1] === d ? "today" : ""}" id="s${n}"><button class="chk ${dn ? "on" : ""}" data-act="toggleSession" data-n="${n}" role="checkbox" aria-checked="${dn ? "true" : "false"}" aria-label="Day ${n} complete">${dn ? "✓" : ""}</button>
             <div><b>Day ${n} &middot; ${t(fmtD(s[1]))} &middot; ${t(s[5])}</b><div class="row" style="margin-top:4px">${chip(NC.catNames[s[4]], catColor[s[4]] || "")}${chip(s[3] + "h")}${s[1] < d && !dn ? chip("behind", "red") : ""}${dn ? chip("done " + fmtD(dn.at) + " \u00b7 " + dn.min + " min", "green") : ""}</div>
             <details style="margin-top:8px;background:transparent"><summary class="sm">Action and packet</summary><div class="body"><p class="sm">${t(s[6])}</p>${p ? packetHtml(p) : `<p class="xs dim">The full session page, with its practice packet and keys, is in Notion under the 37-Day Unlimited Sprint. The Practice tab has the 100-item bank and weekly sets.</p>`}</div></details></div><span></span></div>`;
         }).join("");
@@ -180,7 +180,7 @@
     const doms = NC.blueprint.map(([id, name, w]) => {
       const s = stats.find((x) => x.d === id) || {};
       const acc = s.tried ? pct(s.right, s.tried) : null;
-      return `<div class="catbar"><div><div class="row between"><span>${id}. ${t(name)}</span><span class="xs dim">${s.keyed} keyed &middot; ${s.lookupDone}/${s.lookup} lookups verified</span></div>${bar(acc == null ? 0 : acc)}</div><b class="mono" style="text-align:right">${acc == null ? "n/a" : acc + "%"}</b></div>`;
+      return `<div class="catbar"><div><div class="row between"><span>${id}. ${t(name)}</span><span class="xs dim">${s.keyed} keyed &middot; ${s.lookupDone}/${s.lookup} lookups answered right</span></div>${bar(acc == null ? 0 : acc)}</div><b class="mono" style="text-align:right">${acc == null ? "n/a" : acc + "%"}</b></div>`;
     }).join("");
     const wk = NC.weeklyPackets.map(([n, name, , days]) => `<button class="btn sm" data-act="startWeek" data-n="${n}" title="${esc(days)}">Packet ${n}: ${t(name)}</button>`).join(" ");
     return sect("Practice", "100-item learning bank, weekly sets, article navigation drills.") + `
@@ -207,14 +207,14 @@
     if (P.i >= P.queue.length) {
       const sc = P.queue.filter((id) => !byId[id].lookup && P.res[id] != null), r = sc.filter((id) => P.res[id]).length;
       const mins = Math.round((Date.now() - P.t0) / 60000);
-      return `${sect("Set complete", P.label)}<div class="card stack"><div class="row"><div class="stat"><b>${sc.length ? r + "/" + sc.length : "n/a"}</b><span>keyed score</span></div><div class="stat"><b>${P.queue.length - sc.length}</b><span>lookups</span></div><div class="stat"><b>${mins}</b><span>minutes</span></div></div><p class="mut sm">Log any real miss to the error log so it comes back on the 1, 3, 7, 14 day schedule. Do not call a topic mastered until two clean re-solves on separate days.</p><div class="row"><button class="btn pri" data-act="endPractice">Back to practice</button><button class="btn" data-act="logStudy20">Log ${mins} min as study time</button></div></div>`;
+      return `${sect("Set complete", P.label)}<div class="card stack"><div class="row"><div class="stat"><b>${sc.length ? r + "/" + sc.length : "n/a"}</b><span>keyed score</span></div><div class="stat"><b>${P.queue.filter((id) => byId[id].lookup).length}</b><span>lookups</span></div><div class="stat"><b>${P.queue.filter((id) => !byId[id].lookup && P.res[id] == null).length}</b><span>skipped</span></div><div class="stat"><b>${mins}</b><span>minutes</span></div></div><p class="mut sm">Log any real miss to the error log so it comes back on the 1, 3, 7, 14 day schedule. Do not call a topic mastered until two clean re-solves on separate days.</p><div class="row"><button class="btn pri" data-act="endPractice">Back to practice</button><button class="btn" data-act="logStudy20">Log ${mins} min as study time</button></div></div>`;
     }
     const it = byId[P.queue[P.i]], n = P.queue.length;
     let body = "";
     if (!it.lookup) {
       const done = P.reveal;
-      body = Object.entries(it.opts).map(([k, v]) => `<div class="opt ${done ? (k === it.ans ? "right" : k === P.pick ? "wrong" : "") : P.pick === k ? "sel" : ""}" data-act="pick" data-k="${k}"><b>${k}</b><span>${t(v)}</span></div>`).join("") +
-        (done ? `<div class="notice ${P.pick === it.ans ? "green" : "red"}" style="margin-top:12px"><b>${P.pick === it.ans ? "Correct" : "Missed. Key: " + it.ans}</b><p class="sm" style="margin:6px 0 0">${t(it.why)}</p><p class="xs dim" style="margin:6px 0 0">${t(it.ref)}</p></div><div class="row" style="margin-top:12px">${P.pick !== it.ans ? `<button class="btn bad" data-act="logMiss">Add to error log</button>` : ""}<button class="btn pri" data-act="next">${P.i + 1 < n ? "Next" : "Finish"}</button></div>` : `<div class="row" style="margin-top:12px"><button class="btn pri" data-act="check" ${P.pick ? "" : "disabled"}>Commit answer</button><button class="btn" data-act="skip">Skip</button></div>`);
+      body = Object.entries(it.opts).map(([k, v]) => `<button type="button" role="radio" aria-checked="${P.pick === k ? "true" : "false"}" class="opt ${done ? (k === it.ans ? "right" : k === P.pick ? "wrong" : "") : P.pick === k ? "sel" : ""}" data-act="pick" data-k="${k}"><b>${k}</b><span>${t(v)}</span></button>`).join("") +
+        (done ? `<div class="notice ${P.pick === it.ans ? "green" : "red"}" style="margin-top:12px"><b>${P.pick === it.ans ? "Correct" : "Missed. Key: " + it.ans}</b><p class="sm" style="margin:6px 0 0">${t(it.why)}</p><p class="xs dim" style="margin:6px 0 0">${t(it.ref)}</p></div><div class="row" style="margin-top:12px">${P.pick !== it.ans ? (P.logged && P.logged[it.id] ? `<span class="chip green">Logged to error log</span>` : `<button class="btn bad" data-act="logMiss">Add to error log</button>`) : ""}<button class="btn pri" data-act="next">${P.i + 1 < n ? "Next" : "Finish"}</button></div>` : `<div class="row" style="margin-top:12px"><button class="btn pri" data-act="check" ${P.pick ? "" : "disabled"}>Commit answer</button><button class="btn" data-act="skip">Skip</button></div>`);
     } else {
       body = `<div class="notice sm"><b>Book lookup required.</b> Open ${t(it.book)}, find the governing section, solve, and record the citation. Lookup clock: <span class="mono" data-lk>0:00</span> (goal under ${NC.gates.lookupSeconds}s for routine lookups).</div>
         <label class="f" style="margin-top:10px">Your answer</label><textarea id="lkAns" ${P.commit ? "disabled" : ""}>${esc(P.ans || "")}</textarea>
@@ -314,7 +314,7 @@
     const card = (id, title, body) => { const idx = NECT.find((x) => x[0] === id); return `<div class="card stack" style="margin-bottom:12px"><div class="row between"><h4>${t(title)}</h4>${cf(idx[2])}</div>${body}${necTick(id)}</div>`; };
     const sizes = Object.keys(N.t31016.cu);
     let h = `<div class="notice red"><b>Read this first.</b> ${t(N.status)} Built without access to the code text: the web search tool returned secondary summaries only. Treat each row as a pointer, tick it only after you read it in your own bound book, and put the page number next to it.</div>
-    <div class="row" style="margin:10px 0">${chip(Object.values(S.necv).filter((x) => x && x.ok).length + " of " + necTotal() + " verified by you", "green")}<button class="btn sm" data-act="nav" data-v="tools">Open lookup helpers</button></div>
+    <div class="row" style="margin:10px 0"><span class="chip green" id="necCount">${Object.values(S.necv).filter((x) => x && x.ok).length} of ${necTotal()} verified by you</span><button class="btn sm" data-act="nav" data-v="tools">Open lookup helpers</button></div>
     <h3>Edition traps</h3><ul class="sm">${N.traps.map((x) => `<li>${t(x)}</li>`).join("")}</ul>
     <h3 style="margin-top:18px">Tables</h3>`;
     h += card("t240.6", "Table 240.6(A) standard ampere ratings", `<p class="mono sm">${N.std.join(", ")}</p><p class="xs dim">Also 240.6(B) adjustable-trip and (C) fuse/breaker ratings above 800 A. Use 240.4(B) before rounding up.</p>`);
@@ -337,7 +337,7 @@
   const SZ = () => Object.keys(NC.nec.t31016.cu);
   const opt = (arr, sel) => arr.map((x) => `<option ${String(x) === String(sel) ? "selected" : ""}>${x}</option>`).join("");
   const NTOOLS = {
-    amp: (v) => { const w = L.nec.worksheet({ size: v.size, mat: v.mat, ins: +v.ins, term: +v.term, n: +v.n, ambient: +v.amb }); if (w.error) return t(w.error); return `Table ${w.table} A &middot; ambient x${w.ambientFactor} &middot; adjustment x${w.adjFactor} = <b>${w.adjusted} A</b> adjusted<br>Termination cap <b>${w.termCap} A</b> &middot; usable <b>${w.usable} A</b> (limited by ${w.limitedBy})<br>Next standard OCPD above usable: <b>${w.nextStd}</b> A<br><span class="dim">Standard size is not automatically permitted: check 240.4(B) and 240.4(D). Compare against the actual load separately.</span>`; },
+    amp: (v) => { const nz = (x, d) => (Number.isFinite(parseFloat(x)) ? parseFloat(x) : d); const w = L.nec.worksheet({ size: v.size, mat: v.mat, ins: +v.ins, term: +v.term, n: Math.max(1, Math.round(nz(v.n, 3))), ambient: nz(v.amb, 30) }); if (w.error) return t(w.error); return `Table ${w.table} A &middot; ambient x${w.ambientFactor} &middot; adjustment x${w.adjFactor} = <b>${w.adjusted} A</b> adjusted<br>Termination cap <b>${w.termCap} A</b> &middot; usable <b>${w.usable} A</b> (limited by ${w.limitedBy})<br>Next standard OCPD above usable: <b>${w.nextStd}</b> A<br><span class="dim">Standard size is not automatically permitted: check 240.4(B) and 240.4(D). Compare against the actual load separately.</span>`; },
     gec: (v) => { const g = L.nec.gec(v.size, v.mat, v.gmat); return g ? `GEC (Table 250.66): <b>${g} ${v.gmat === "al" ? "Al" : "Cu"}</b><br><span class="dim">Electrode limits in 250.66(A) to (C) can lower it: rod 6 Cu, concrete-encased 4 Cu.</span>` : "Not found."; },
     egc: (v) => { const o = parseFloat(v.ocpd); if (!(o > 0)) return "Enter the OCPD rating."; const g = L.nec.egc(o, v.gmat); return g ? `EGC (Table 250.122): <b>${g} ${v.gmat === "al" ? "Al" : "Cu"}</b> for a ${o} A device (uses the row not exceeding ${NC.nec.t250122.find((x) => o <= x[0])[0]} A)<br><span class="dim">Upsize proportionally if the ungrounded conductors were increased for voltage drop (250.122(B)).</span>` : "Above the table."; },
     std: (v) => { const a = parseFloat(v.a); if (!(a > 0)) return "Enter amps."; return `Next standard size at or above ${a} A: <b>${L.nec.nextStd(a) || "above 6000"} A</b><br><span class="dim">240.4(B) decides whether you may round up at all.</span>`; },
@@ -379,7 +379,7 @@
     $$(".nt").forEach((box) => { const run = () => { const v = {}; $$("[data-n]", box).forEach((i) => (v[i.dataset.n] = i.value)); $(".out", box).innerHTML = NTOOLS[box.dataset.t](v); }; box.addEventListener("input", run); box.addEventListener("change", run); run(); });
     $$(".calc").forEach((box) => {
       const c = CALCS.find((x) => x.id === box.dataset.c);
-      const upd = () => { const v = {}; $$("input", box).forEach((i) => (v[i.dataset.k] = parseFloat(i.value))); $(".out", box).innerHTML = Object.values(v).some((x) => isNaN(x) || !isFinite(x)) ? "Enter all values." : c.run(v); };
+      const upd = () => { const v = {}; $$("input", box).forEach((i) => (v[i.dataset.k] = parseFloat(i.value))); const bad = Object.values(v).some((x) => isNaN(x) || !isFinite(x)); let h = bad ? "Enter all values." : c.run(v); if (!bad && /Infinity|NaN|\u221e/.test(h)) h = "Check the inputs: a divisor is zero or a value is out of range."; $(".out", box).innerHTML = h; };
       box.addEventListener("input", upd); upd();
     });
   };
@@ -407,19 +407,19 @@
       <div class="row"><label class="row sm"><input type="checkbox" name="fresh"> Fresh (never seen, key never read)</label><label class="row sm"><input type="checkbox" name="assisted"> AI or other assistance</label></div>
       <details style="background:var(--bg2)"><summary class="sm">Category results (right / total) for fresh full mocks</summary><div class="body"><div class="grid g3">${NC.blueprint.map(([id, n, w]) => `<div><label class="f">${id}. ${esc(n.split(",")[0])} (${w})</label><div class="row"><input type="number" name="r${id}" min="0" placeholder="right" style="width:46%"><input type="number" name="t${id}" min="0" placeholder="of" style="width:46%"></div></div>`).join("")}</div></div></details>
       <button class="btn pri" type="submit">Save result</button></form>
-      ${S.mocks.length ? `<div class="scroll"><table><tr><th>Date</th><th>Label</th><th>Form</th><th>Score</th><th>Min</th><th>Counts as</th><th></th></tr>${S.mocks.slice().reverse().map((m) => `<tr><td>${t(fmtD(m.date))}</td><td>${t(m.label)}</td><td>${t(m.form)}</td><td class="mono">${m.score}%</td><td class="mono">${m.minutes}</td><td>${m.form === "full" && m.fresh && !m.assisted && m.minutes <= g.maxMinutes ? chip("fresh readiness", "green") : chip("learning only", "")}</td><td><button class="btn sm" data-act="delMock" data-id="${m.id}">Delete</button></td></tr>`).join("")}</table></div>` : `<p class="mut sm">Planned: Mock A Sat Nov 14, Mock B Nov 21, Mock C Nov 28 (10 AM to 4 PM). Checkpoints Nov 6, Nov 13 and Dec 2 (30 fresh questions, aim 75%+). Mocks need fresh forms with separate keys (Plan, Fresh forms). If none qualify, log them as learning runs: leave Fresh unticked and they will not count toward readiness.</p>`}</div>
+      ${S.mocks.length ? `<div class="scroll"><table><tr><th>Date</th><th>Label</th><th>Form</th><th>Score</th><th>Min</th><th>Counts as</th><th></th></tr>${S.mocks.slice().reverse().map((m) => `<tr><td>${t(fmtD(m.date))}</td><td>${t(m.label)}</td><td>${t(m.form)}</td><td class="mono">${m.score}%</td><td class="mono">${m.minutes}</td><td>${m.form === "full" && m.fresh && !m.assisted && m.minutes <= g.maxMinutes ? chip("fresh readiness", "green") : chip("learning only", "")}</td><td><button class="btn sm" data-act="delMock" data-id="${esc(m.id)}">Delete</button></td></tr>`).join("")}</table></div>` : `<p class="mut sm">Planned: Mock A Sat Nov 14, Mock B Nov 21, Mock C Nov 28 (10 AM to 4 PM). Checkpoints Nov 6, Nov 13 and Dec 2 (30 fresh questions, aim 75%+). Mocks need fresh forms with separate keys (Plan, Fresh forms). If none qualify, log them as learning runs: leave Fresh unticked and they will not count toward readiness.</p>`}</div>
 
     <h3 style="margin:20px 0 8px">Active recall and error log</h3>
-    <div class="card stack"><div class="row between"><b>${due.length} retests due</b><span class="xs dim">1, 3, 7, 14 days. Mastered = two clean re-solves on separate days.</span></div>
+    <div class="card stack"><div class="row between"><b>${due.length} retests due</b><span class="xs dim">Retests at 1 and 3 days; mastered after two clean re-solves on separate days; then maintenance recalls at 7 and 14 days.</span></div>
       <details style="background:var(--bg2)"><summary class="sm">Add a real miss</summary><div class="body"><form id="errForm" class="stack"><div><label class="f">Question concept</label><input type="text" name="concept" required></div><div class="grid g2"><div><label class="f">What I got wrong</label><textarea name="wrong"></textarea></div><div><label class="f">The correct rule/formula</label><textarea name="rule"></textarea></div></div><div class="grid g3"><div><label class="f">Source material</label><select name="source">${NC.sourceMaterials.map((x) => `<option>${esc(x)}</option>`).join("")}</select></div><div><label class="f">Error type</label><select name="type">${NC.errorTypes.map((x) => `<option>${esc(x)}</option>`).join("")}</select></div><div><label class="f">Governing reference (edition, section/page, question ID)</label><input type="text" name="ref"></div></div><button class="btn pri" type="submit">Log it</button></form></div></details>
-      ${S.errs.length ? S.errs.slice().sort((a, b) => ((a.mastered ? 1 : 0) - (b.mastered ? 1 : 0)) || ((a.next || "9") < (b.next || "9") ? -1 : 1)).map((e) => `<div class="sess" style="grid-template-columns:1fr auto"><div><b>${t(e.concept)}</b> ${e.mastered ? chip("mastered", "green") : e.next && e.next <= d ? chip("due " + fmtD(e.next), "amber") : chip("next " + (e.next ? fmtD(e.next) : "-"))} ${chip(e.type || "untagged")} ${chip(e.source || "")}<p class="sm" style="margin:6px 0 0">${e.wrong ? `<span class="mut">Wrong:</span> ${t(e.wrong)}<br>` : ""}${e.rule ? `<span class="mut">Rule:</span> ${t(e.rule)}<br>` : ""}${e.ref ? `<span class="xs dim">${t(e.ref)}</span>` : ""}</p></div><div class="stack">${e.mastered ? "" : `<button class="btn sm ok" data-act="errClean" data-id="${e.id}">Clean re-solve</button><button class="btn sm bad" data-act="errMiss" data-id="${e.id}">Missed again</button>`}<button class="btn sm" data-act="errDel" data-id="${e.id}">Delete</button></div></div>`).join("") : `<p class="mut sm">Empty on purpose. Record only real misses: nothing is pre-filled.</p>`}
-      ${S.errs.length ? `<p class="xs dim">By type: ${Object.entries(typeCount).map(([k, v]) => k + " " + v).join(" &middot; ")}</p>` : ""}</div>
+      ${S.errs.length ? S.errs.slice().sort((a, b) => ((a.mastered ? 1 : 0) - (b.mastered ? 1 : 0)) || ((a.next || "9") < (b.next || "9") ? -1 : 1)).map((e) => `<div class="sess" style="grid-template-columns:1fr auto"><div><b>${t(e.concept)}</b> ${e.mastered ? chip(e.next ? "mastered, maintenance " + (e.next <= d ? "due " : "") + fmtD(e.next) : "mastered", "green") : e.next && e.next <= d ? chip("due " + fmtD(e.next), "amber") : chip("next " + (e.next ? fmtD(e.next) : "-"))} ${chip(e.type || "untagged")} ${chip(e.source || "")}<p class="sm" style="margin:6px 0 0">${e.wrong ? `<span class="mut">Wrong:</span> ${t(e.wrong)}<br>` : ""}${e.rule ? `<span class="mut">Rule:</span> ${t(e.rule)}<br>` : ""}${e.ref ? `<span class="xs dim">${t(e.ref)}</span>` : ""}</p></div><div class="stack">${e.mastered && !e.next ? "" : `<button class="btn sm ok" data-act="errClean" data-id="${esc(e.id)}">Clean re-solve</button><button class="btn sm bad" data-act="errMiss" data-id="${esc(e.id)}">Missed again</button>`}<button class="btn sm" data-act="errDel" data-id="${e.id}">Delete</button></div></div>`).join("") : `<p class="mut sm">Empty on purpose. Record only real misses: nothing is pre-filled.</p>`}
+      ${S.errs.length ? `<p class="xs dim">By type: ${Object.entries(typeCount).map(([k, v]) => esc(k) + " " + v).join(" &middot; ")}</p>` : ""}</div>
 
     <h3 style="margin:20px 0 8px">Weekly scorecard</h3>
     <div class="card"><div class="grid g4"><div class="stat"><b>${weekMinutes()}</b><span>study minutes (actual)</span></div><div class="stat"><b>${S.mocks.filter((m) => m.date >= L.addDays(d, -6)).length}</b><span>timed sets (7d)</span></div><div class="stat"><b>${S.errs.filter((e) => e.mastered).length}/${S.errs.length}</b><span>errors mastered</span></div><div class="stat"><b>${L.diffDays(d, NC.exam.date)}</b><span>days to exam</span></div></div>
       <p class="sm mut">Weekly update line: "Studied ${weekMinutes()} min; slowest topic __; repeated miss __; appointment Dec 7; next week's available time __."</p></div>
 
-    <h3 style="margin:20px 0 8px">Backup</h3><div class="card stack"><p class="sm">Everything is stored in this browser only. Export before clearing site data or switching phones.</p><div class="row"><button class="btn" data-act="export">Download backup</button><button class="btn" data-act="copyBackup">Copy backup</button><label class="btn">Restore file<input type="file" id="restoreFile" accept="application/json" hidden></label><button class="btn" data-act="theme">Toggle light/dark</button><button class="btn bad" data-act="reset">Erase all progress</button></div><textarea id="restoreTxt" placeholder="Or paste a backup here"></textarea><button class="btn sm" data-act="restoreTxt">Restore pasted backup</button></div>`;
+    <h3 style="margin:20px 0 8px">Backup</h3><div class="card stack"><p class="sm">Everything is stored in this browser only. Export before clearing site data or switching phones.</p><div class="row"><button class="btn" data-act="export">Download backup</button><button class="btn" data-act="copyBackup">Copy backup</button><button class="btn" data-act="pickRestore">Restore file</button><input type="file" id="restoreFile" accept="application/json" hidden><button class="btn" data-act="theme">Toggle light/dark</button><button class="btn bad" data-act="reset">Erase all progress</button></div><textarea id="restoreTxt" placeholder="Or paste a backup here"></textarea><button class="btn sm" data-act="restoreTxt">Restore pasted backup</button></div>`;
   };
   V.after_progress = () => {
     const mf = $("#mockForm");
@@ -434,7 +434,7 @@
     const rf = $("#restoreFile");
     if (rf) rf.addEventListener("change", () => { const r = new FileReader(); r.onload = () => doRestore(r.result); rf.files[0] && r.readAsText(rf.files[0]); });
   };
-  function doRestore(txt) { try { S = Object.assign(blank(), L.importState(txt)); save(); toast("Backup restored."); render(); } catch (e) { toast("Restore failed: " + e.message); } }
+  function doRestore(txt) { try { S = L.sanitize(L.importState(txt), blank(), sanCtx()); applyTheme(); view = S.nav.view; save(); toast("Backup restored."); render(); } catch (e) { toast("Restore failed: " + e.message); } }
 
   // ===== EXAM DAY =====
   V.exam = () => {
@@ -472,14 +472,14 @@
     openSession: (el) => { planTab = "schedule"; go("plan"); setTimeout(() => { const n = $("#s" + el.dataset.n); if (n) { n.scrollIntoView({ block: "center" }); $("details", n).open = true; } }, 30); },
     toggleSession: (el) => {
       const n = +el.dataset.n, s = NC.sessions.find((x) => x[0] === n);
-      if (S.done[n]) { delete S.done[n]; save(); return render(); }
+      if (S.done[n]) { delete S.done[n]; S.log = S.log.filter((x) => x.session !== n); save(); return render(); }
       const m = prompt(`Actual minutes spent on session ${n}? (target ${s[3] * 60})`, String(Math.round(s[3] * 60)));
       if (m === null) return;
       const min = Math.max(0, parseInt(m, 10) || 0);
-      S.done[n] = { at: today(), min }; if (min) S.log.push({ date: today(), min, note: "Session " + n }); save(); render();
+      S.done[n] = { at: today(), min }; if (min) S.log.push({ date: today(), min, note: "Session " + n, session: n }); save(); render();
     },
     tick: (el) => { S.check[el.dataset.k] = el.checked; save(); },
-    necTick: (el) => { const k = el.dataset.k; S.necv[k] = Object.assign({ page: "" }, S.necv[k], { ok: el.checked }); save(); const c = $("[data-chip-nec]"); },
+    necTick: (el) => { const k = el.dataset.k; S.necv[k] = Object.assign({ page: "" }, S.necv[k], { ok: el.checked }); save(); const c = $("#necCount"); if (c) c.textContent = Object.values(S.necv).filter((x) => x && x.ok).length + " of " + necTotal() + " verified by you"; },
     necPage: (el) => { const k = el.dataset.k; S.necv[k] = Object.assign({ ok: false }, S.necv[k], { page: el.value }); save(); },
     necGo: () => { studyTab = "nec"; go("study"); },
     bookSet: (el) => { S.books[el.dataset.k] = el.value; save(); render(); },
@@ -487,7 +487,7 @@
     strong: (el) => { S.strong[el.dataset.k] = el.checked; save(); },
     saveAuth: () => { S.auth = { start: $("#authStart").value, expiry: $("#authExp").value }; save(); toast("Saved."); render(); },
     logForm: () => { $("#logbox").innerHTML = `<div class="row" style="margin-top:8px"><input type="number" id="logMin" placeholder="minutes" style="width:110px" min="1"><input type="text" id="logNote" placeholder="what you did" style="flex:1"><button class="btn pri" data-act="logSave">Save</button></div>`; $("#logMin").focus(); },
-    logSave: () => { const m = parseInt($("#logMin").value, 10); if (!m) return; S.log.push({ date: today(), min: m, note: $("#logNote").value }); save(); toast(m + " minutes logged."); render(); },
+    logSave: () => { const m = parseInt($("#logMin").value, 10); if (!(m > 0 && m <= 1440)) return toast("Enter minutes between 1 and 1440."); S.log.push({ date: today(), min: m, note: $("#logNote").value }); save(); toast(m + " minutes logged."); render(); },
     logStudy20: () => { const m = Math.max(1, Math.round((Date.now() - P.t0) / 60000)); S.log.push({ date: today(), min: m, note: "Practice set" }); save(); P = null; toast(m + " minutes logged."); render(); },
     quick20: () => { const ids = shuffle(bank.filter((b) => !b.lookup).map((b) => b.id)).slice(0, 1); P = null; lawQ = null; go("practice"); startQueue(ids, "20-minute minimum: solve one question, then recall one card, then correct one miss"); },
     // practice
@@ -497,7 +497,7 @@
       if (pcfg.order === "shuffle") ids = shuffle(ids); startQueue(ids.slice(0, pcfg.count), "Custom set");
     },
     startWeek: (el) => { const w = NC.weeklyPackets.find((x) => x[0] === +el.dataset.n); startQueue(w[2].slice(), "Packet " + w[0] + ": " + w[1]); },
-    startMisses: () => { const ids = bank.filter((b) => S.attempts[b.id] && !S.attempts[b.id].ok).map((b) => b.id); if (view !== "practice") { view = "practice"; } startQueue(ids, "Retry misses"); },
+    startMisses: () => { const ids = bank.filter((b) => S.attempts[b.id] && !S.attempts[b.id].ok).map((b) => b.id); if (!ids.length) return toast("No missed keyed questions to retry."); if (view !== "practice") { view = "practice"; S.nav.view = "practice"; } startQueue(ids, "Retry misses"); },
     drillDomain: (el) => { pcfg.domain = +el.dataset.d; go("practice"); },
     navDrill: () => { view = "practice"; P = { nav: { q: shuffle(NC.nav.map((_, i) => i)).slice(0, 15), i: 0, show: false, res: [], times: [], t0: Date.now() }, queue: [0], i: 0, label: "nav" }; render(); },
     navShow: () => { P.nav.show = true; P.nav.dt = (Date.now() - P.nav.t0) / 1000; render(); },
@@ -508,10 +508,10 @@
     next: () => { P.i++; P.reveal = false; P.pick = null; P.commit = false; P.ans = ""; P.cite = ""; P.q0 = Date.now(); render(); },
     lkCommit: () => { P.ans = $("#lkAns").value; P.cite = $("#lkCite").value; P.commit = true; P.secs = Math.round((Date.now() - P.q0) / 1000); render(); },
     lkRight: () => lkDone(true), lkWrong: () => lkDone(false), lkSkip: () => A.next(),
-    logMiss: () => { const it = byId[P.queue[P.i]]; S.errs.push(L.newError({ concept: it.id + " " + domName[it.d] + ": " + it.q.slice(0, 70), wrong: P.pick ? "Chose " + P.pick + ": " + it.opts[P.pick] : (P.ans || ""), rule: it.why || it.hint || "", source: it.lookup ? (it.book === "2013 NFPA 72" ? "2013 NFPA 72" : it.book === "2020 NEC" ? "2020 NEC" : "NASCLA") : (it.kind === "law" ? "NC Board Rules" : "2020 NEC"), ref: "Bank " + it.id + (it.ref ? ". " + it.ref : P.cite ? ". " + P.cite : ""), type: it.kind === "calc" ? "Setup Error" : "Code Lookup Miss" }, today())); save(); toast("Added to the error log. Retest tomorrow."); },
+    logMiss: () => { const it = byId[P.queue[P.i]]; P.logged = P.logged || {}; if (P.logged[it.id]) return; if (S.errs.some((e) => !e.mastered && (e.ref || "").startsWith("Bank " + it.id))) { P.logged[it.id] = true; toast("Already in the error log."); return render(); } P.logged[it.id] = true; S.errs.push(L.newError({ concept: it.id + " " + domName[it.d] + ": " + it.q.slice(0, 70), wrong: P.pick ? "Chose " + P.pick + ": " + it.opts[P.pick] : (P.ans || ""), rule: it.why || it.hint || "", source: it.lookup ? (it.book === "2013 NFPA 72" ? "2013 NFPA 72" : it.book === "2020 NEC" ? "2020 NEC" : "NASCLA") : (it.kind === "law" ? "NC Board Rules" : "2020 NEC"), ref: "Bank " + it.id + (it.ref ? ". " + it.ref : P.cite ? ". " + P.cite : ""), type: it.kind === "calc" ? "Setup Error" : "Code Lookup Miss" }, today())); save(); toast("Added to the error log. Retest tomorrow."); render(); },
     endPractice: () => { P = null; render(); },
     // law
-    lawStart: () => { lawTab = "drill"; const g = $("#lawGroup"); if (g) lawGroup = +g.value; const ids = NC.cards.filter((c) => lawGroup < 0 || c[1] === lawGroup).map((c) => c[0]); lawQ = { ids: shuffle(L.dueCards(ids, S.cards, today())).slice(0, 15), i: 0, show: false }; if (!lawQ.ids.length) { toast("Nothing due in that group."); lawQ = null; } go("law"); },
+    lawStart: (el) => { lawTab = "drill"; const g = $("#lawGroup"); if (g) lawGroup = +g.value; else if (el && el.dataset && el.dataset.reset) lawGroup = -1; const ids = NC.cards.filter((c) => lawGroup < 0 || c[1] === lawGroup).map((c) => c[0]); lawQ = { ids: shuffle(L.dueCards(ids, S.cards, today())).slice(0, 15), i: 0, show: false }; if (!lawQ.ids.length) { toast("Nothing due in that group."); lawQ = null; } go("law"); },
     lawStartAll: () => { const g = $("#lawGroup"); lawGroup = +g.value; lawQ = { ids: shuffle(NC.cards.filter((c) => lawGroup < 0 || c[1] === lawGroup).map((c) => c[0])), i: 0, show: false }; render(); },
     lawShow: () => { lawQ.show = true; render(); },
     lawRes: (el) => { const id = lawQ.ids[lawQ.i]; S.cards[id] = L.review(S.cards[id], el.dataset.ok === "1", today()); lawQ.i++; lawQ.show = false; save(); render(); },
@@ -525,7 +525,8 @@
     errDel: (el) => { if (confirm("Delete this entry?")) { S.errs = S.errs.filter((e) => e.id !== el.dataset.id); save(); render(); } },
     delMock: (el) => { if (confirm("Delete this result?")) { S.mocks = S.mocks.filter((m) => m.id !== el.dataset.id); save(); render(); } },
     export: () => { const b = new Blob([L.exportState(S)], { type: "application/json" }), a = document.createElement("a"); a.href = URL.createObjectURL(b); a.download = "nc-unlimited-backup-" + today() + ".json"; a.click(); },
-    copyBackup: () => { navigator.clipboard ? navigator.clipboard.writeText(L.exportState(S)).then(() => toast("Backup copied.")) : ($("#restoreTxt").value = L.exportState(S)); },
+    copyBackup: () => { const fallback = () => { $("#restoreTxt").value = L.exportState(S); toast("Clipboard blocked: backup placed in the box below. Copy it from there."); }; if (!navigator.clipboard) return fallback(); navigator.clipboard.writeText(L.exportState(S)).then(() => toast("Backup copied."), fallback); },
+    pickRestore: () => $("#restoreFile").click(),
     restoreTxt: () => doRestore($("#restoreTxt").value),
     theme: () => { const cur = document.documentElement.dataset.theme || (matchMedia("(prefers-color-scheme: light)").matches ? "light" : "dark"); S.theme = cur === "dark" ? "light" : "dark"; document.documentElement.dataset.theme = S.theme; save(); },
     reset: () => { if (confirm("Erase ALL progress on this device? Download a backup first.") && confirm("Really erase everything?")) { S = blank(); save(); render(); } },
@@ -544,5 +545,8 @@
   setInterval(() => { tickClock(); if (P && P.queue && !P.nav && P.i < P.queue.length && byId[P.queue[P.i]] && byId[P.queue[P.i]].lookup && !P.commit) tickLk(); const swEl = $("#sw"); if (swEl && sw) swEl.textContent = ((Date.now() - sw) / 1000).toFixed(1) + "s";
     const cd = L.countdown(new Date(), NC.exam.startISO), q = (k) => $("[data-cd=" + k + "]"); if (q("d")) { q("d").textContent = cd.days; q("h").textContent = cd.hours; q("m").textContent = cd.minutes; } }, 1000);
   window.addEventListener("keydown", (e) => { if (e.target.matches("input,textarea,select")) return; const i = NAV.findIndex((n) => n[0] === view); if (e.key === "]" ) go(NAV[(i + 1) % NAV.length][0]); if (e.key === "[") go(NAV[(i + NAV.length - 1) % NAV.length][0]); });
+  const sanCtx = () => ({ views: NAV.map((n) => n[0]), books: Object.fromEntries(BOOKS.map(([k, , o]) => [k, o])) });
+  try { S = L.sanitize(JSON.parse(localStorage.getItem(KEY) || "{}"), blank(), sanCtx()); } catch (e) { S = blank(); }
+  applyTheme(); view = S.nav.view || "today";
   render();
 })();

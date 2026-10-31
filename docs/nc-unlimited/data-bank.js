@@ -675,7 +675,7 @@ g.NC.bank=[
 "D": "500 A"
 },
 "ans": "B",
-"why": "138,600 / (1.7320508 × 480) = 166.7179 A, rounded to 167 A. Do not use line-to-neutral voltage in this stated formula.",
+"why": "138,600 / (1.7320508 × 480) = 166.7099 A, rounded to 167 A (Notion shows 166.7179, a typo in the third decimal; the keyed answer is unchanged). Do not use line-to-neutral voltage in this stated formula.",
 "ref": "Original arithmetic under the explicit problem assumptions; no NEC/NFPA compliance conclusion.",
 "kind": "calc"
 },
@@ -963,7 +963,7 @@ g.NC.bank=[
 "D": "No; the requirement is nine years"
 },
 "ans": "C",
-"why": "Secondary credit = 1,200 × 0.80 = 960. Total = 8,000 + 960 = 8,960. Primary threshold is met; total threshold is not. The Board must accept the underlying activities and documentation.",
+"why": "Secondary credit = 1,200 × 0.80 = 960. Total = 8,000 + 960 = 8,960. The primary-hours requirement (at least 8,000 of the 9,000 total, rule .0201) is met; the total threshold is not. The Board must accept the underlying activities and documentation.",
 "ref": "21 NCAC 18B, current consolidated Board rules; verified October 5, 2026; .0201(b)(3) and .0202(b).",
 "kind": "law"
 },

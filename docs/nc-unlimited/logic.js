@@ -12,7 +12,6 @@
     if (ms <= 0) return { over: true, days: 0, hours: 0, minutes: 0 };
     return { over: false, days: Math.floor(ms / DAY), hours: Math.floor(ms / 3600000) % 24, minutes: Math.floor(ms / 60000) % 60 };
   };
-  L.calendarFor = (cal, iso) => cal.find((c) => iso >= c.from && iso <= c.to) || null;
 
   // ---- sessions ----
   L.nextSession = (sessions, done) => sessions.find((s) => !done[s[0]]) || null;
@@ -23,9 +22,18 @@
   };
 
   // ---- spaced repetition for the error log: ~1,3,7,14 days; mastered = two clean re-solves on separate days ----
-  const STEPS = [1, 3, 7, 14];
+  // Notion: 'Try roughly 1, 3, 7 and 14 days after a miss' and 'Mastered = two clean delayed re-solves on separate days'.
+  // So: 1 day, then 3 days, mastered after two clean; then two maintenance recalls at 7 and 14 days.
+  const STEPS = [1, 3];
+  const MAINT = [7, 14];
   L.newError = (e, today) => ({ id: e.id || "e" + Date.now() + Math.random().toString(36).slice(2, 6), concept: e.concept, wrong: e.wrong || "", rule: e.rule || "", source: e.source || "", ref: e.ref || "", type: e.type || "", created: today, retests: [], mastered: false, next: L.addDays(today, STEPS[0]) });
   L.retest = (err, today, clean) => {
+    if (err.mastered && err.next) { // maintenance recall of something already mastered
+      const retests = err.retests.concat([{ date: today, clean: !!clean, maint: true }]);
+      if (!clean) return { ...err, retests, mastered: false, streak: 0, maint: 0, next: L.addDays(today, STEPS[0]) };
+      const m = (err.maint || 0) + 1;
+      return { ...err, retests, maint: m, next: m >= MAINT.length ? null : L.addDays(today, MAINT[m]) };
+    }
     const e = { ...err, retests: err.retests.concat([{ date: today, clean: !!clean }]) };
     let streak = 0, lastDay = null;
     for (const r of e.retests) {
@@ -34,10 +42,10 @@
     }
     e.mastered = streak >= 2;
     e.streak = streak;
-    e.next = e.mastered ? null : L.addDays(today, clean ? STEPS[Math.min(streak, STEPS.length - 1)] : STEPS[0]);
+    if (e.mastered) { e.maint = 0; e.next = L.addDays(today, MAINT[0]); } else e.next = L.addDays(today, clean ? STEPS[Math.min(streak, STEPS.length - 1)] : STEPS[0]);
     return e;
   };
-  L.dueErrors = (errs, today) => errs.filter((e) => !e.mastered && e.next && e.next <= today).sort((a, b) => (a.next < b.next ? -1 : 1));
+  L.dueErrors = (errs, today) => errs.filter((e) => e.next && e.next <= today).sort((a, b) => (a.next < b.next ? -1 : 1));
 
   // ---- Leitner boxes for the 60 law cards: box 0 new; intervals in days ----
   const BOX = [0, 1, 3, 7, 14, 30];
@@ -55,7 +63,7 @@
     for (const it of bank) {
       const s = byDomain[it.d];
       s.total++;
-      if (it.lookup) { s.lookup++; if (verified[it.id]) s.lookupDone++; } else s.keyed++;
+      if (it.lookup) { s.lookup++; if (verified[it.id] && verified[it.id].ok) s.lookupDone++; } else s.keyed++;
       const a = attempts[it.id];
       if (a && !it.lookup) { s.tried++; if (a.ok) s.right++; }
     }
@@ -134,6 +142,36 @@
     return { table, ambientFactor: af, adjFactor: jf, adjusted, termCap: cap, usable, limitedBy: usable === cap && cap < adjusted ? "termination" : "adjusted ampacity", nextStd: N.nextStd(usable) };
   };
   L.nec = N;
+
+  // ---- state sanitizer: anything restored from a backup or read from storage is untrusted ----
+  L.sanitize = (raw, base, ctx) => {
+    const S = JSON.parse(JSON.stringify(base));
+    S.nav = { view: "today" };
+    if (!raw || typeof raw !== "object" || Array.isArray(raw)) return S;
+    ctx = ctx || {};
+    const str = (x, n) => (typeof x === "string" ? x.slice(0, n || 500) : "");
+    const num = (x, lo, hi, d) => { x = Number(x); return Number.isFinite(x) ? Math.min(hi, Math.max(lo, x)) : (d || 0); };
+    const date = (x) => (typeof x === "string" && /^\d{4}-\d\d-\d\d$/.test(x) ? x : "");
+    const obj = (x) => (x && typeof x === "object" && !Array.isArray(x) ? x : {});
+    const arr = (x) => (Array.isArray(x) ? x : []);
+    const key = (k, re) => re.test(k);
+    for (const [k, v] of Object.entries(obj(raw.done))) if (key(k, /^\d{1,2}$/)) S.done[k] = { at: date(obj(v).at), min: num(obj(v).min, 0, 1440) };
+    S.log = arr(raw.log).slice(0, 5000).map((x) => { x = obj(x); return { date: date(x.date), min: num(x.min, 0, 1440), note: str(x.note, 200), session: Number.isInteger(x.session) ? x.session : undefined }; }).filter((x) => x.date);
+    for (const [k, v] of Object.entries(obj(raw.attempts))) if (key(k, /^[A-Z]\d\d$/)) S.attempts[k] = { ok: !!obj(v).ok, n: num(obj(v).n, 0, 100000), last: date(obj(v).last) };
+    for (const [k, v] of Object.entries(obj(raw.ver))) if (key(k, /^[A-Z]\d\d$/)) S.ver[k] = { cite: str(obj(v).cite, 300), secs: num(obj(v).secs, 0, 86400), ok: !!obj(v).ok, date: date(obj(v).date) };
+    S.errs = arr(raw.errs).slice(0, 5000).map((e, i) => { e = obj(e); return { id: str(e.id, 40).replace(/[^A-Za-z0-9_-]/g, "") || "e" + i, concept: str(e.concept, 300), wrong: str(e.wrong, 1000), rule: str(e.rule, 1000), source: str(e.source, 80), ref: str(e.ref, 400), type: str(e.type, 80), created: date(e.created), retests: arr(e.retests).slice(0, 200).map((r) => ({ date: date(obj(r).date), clean: !!obj(r).clean, maint: !!obj(r).maint })).filter((r) => r.date), mastered: !!e.mastered, streak: num(e.streak, 0, 100), maint: num(e.maint, 0, 10), next: date(e.next) || null }; }).filter((e) => e.concept);
+    S.mocks = arr(raw.mocks).slice(0, 500).map((m, i) => { m = obj(m); const cats = {}; for (const [k, v] of Object.entries(obj(m.cats))) if (key(k, /^\d{1,2}$/) && Array.isArray(v)) cats[k] = [num(v[0], 0, 1000), num(v[1], 0, 1000)]; return { id: str(m.id, 40).replace(/[^A-Za-z0-9_-]/g, "") || "m" + i, label: str(m.label, 80), date: date(m.date), form: ["full", "set50", "set30", "split"].includes(m.form) ? m.form : "split", minutes: num(m.minutes, 0, 1000), score: num(m.score, 0, 100), fresh: !!m.fresh, assisted: !!m.assisted, cats }; }).filter((m) => m.date);
+    for (const [k, v] of Object.entries(obj(raw.cards))) if (key(k, /^\d{1,3}$/)) S.cards[k] = { box: num(obj(v).box, 0, 5), due: date(obj(v).due), n: num(obj(v).n, 0, 100000), last: date(obj(v).last) };
+    for (const f of ["check", "verif", "strong", "sc"]) for (const [k, v] of Object.entries(obj(raw[f]))) if (key(k, /^[A-Za-z0-9_.-]{1,30}$/)) S[f][k] = !!v;
+    S.auth = { start: date(obj(raw.auth).start), expiry: date(obj(raw.auth).expiry) };
+    S.lookups = arr(raw.lookups).slice(-2000).map((x) => ({ label: str(obj(x).label, 120), secs: num(obj(x).secs, 0, 86400), date: date(obj(x).date) }));
+    S.theme = raw.theme === "light" || raw.theme === "dark" ? raw.theme : "";
+    S.examTimer = raw.examTimer && Number.isFinite(Number(raw.examTimer.start)) ? { start: Number(raw.examTimer.start) } : null;
+    S.nav = { view: (ctx.views || []).includes(obj(raw.nav).view) ? raw.nav.view : "today" };
+    for (const [k, v] of Object.entries(obj(raw.necv))) if (key(k, /^[A-Za-z0-9_.-]{1,30}$/)) S.necv[k] = { ok: !!obj(v).ok, page: str(obj(v).page, 40) };
+    for (const k of ["nec", "nfpa", "nascla"]) { const v = obj(raw.books)[k]; S.books[k] = ((ctx.books || {})[k] || []).includes(v) ? v : ""; }
+    return S;
+  };
 
   // ---- backup ----
   L.exportState = (s) => JSON.stringify({ app: "nc-unlimited", v: 1, at: new Date().toISOString(), state: s });
