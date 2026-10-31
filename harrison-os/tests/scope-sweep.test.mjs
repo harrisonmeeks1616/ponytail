@@ -17,7 +17,11 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { createTestDb } from './helpers/d1.mjs';
+import { readFileSync } from 'node:fs';
 import { createWorker, ROUTES } from '../src/api.js';
+
+// A synthetic PM export with the canary in a project name, for the PM digest fixtures.
+const PM_CONTENT = readFileSync(new URL('./fixtures/pm/digest-v1.json', import.meta.url), 'utf8').replace('Synthetic clinic fit-out', 'ZZ-SWEEP-PERSONAL-CANARY fit-out');
 
 const BASE = 'http://127.0.0.1:8899';
 const NOW = Date.UTC(2026, 9, 29, 12, 0, 0); // Thursday 08:00 New York
@@ -41,6 +45,8 @@ const EXEMPT = {
   'PUT /api/settings/test-quiet-hours': 'test setting, no content',
   'POST /api/mcp': 'service identity only (owner gets 403); scope canary in tests/mcp.test.mjs',
   'GET /api/connections/mcp': 'configuration flags only',
+  'GET /api/ai/status': 'configured flag and per-scope consent booleans only',
+  'PUT /api/ai/consent': 'sets a per-scope boolean; returns flags only',
 };
 
 // P: seeded personal ids. Each entry: { cross: [method, path, body], own: [method, path, body], reads }.
@@ -121,7 +127,38 @@ const FIXTURES = {
     cross: ['POST', `/api/review/weekly/complete?tz=${TZ}`, { scope: 'work' }],
     own: ['POST', `/api/review/weekly/complete?tz=${TZ}`, { scope: 'personal' }],
   }),
+  'POST /api/ask': (P) => ({
+    cross: ['POST', '/api/ask', { scope: 'work', question: `${CANARY} what is open`, context: { project_id: P.project }, tz: 'America/New_York' }],
+    own: ['POST', '/api/ask', { scope: 'personal', question: `${CANARY} what is open`, context: { project_id: P.project }, tz: 'America/New_York' }],
+    reads: true,
+  }),
+  'GET /api/projects/([A-Za-z0-9_.:-]{1,120})/brief': (P) => ({
+    cross: ['GET', `/api/projects/${P.project}/brief?scope=work&tz=${TZ}`],
+    own: ['GET', `/api/projects/${P.project}/brief?scope=personal&tz=${TZ}`],
+    reads: true,
+  }),
+  'POST /api/pm/import': () => ({
+    cross: ['POST', '/api/pm/import', { scope: 'work', label: 'sweep work import', format: 'json', content: PM_CONTENT.replace(CANARY, 'work') }],
+    own: ['POST', '/api/pm/import', { scope: 'personal', label: `${CANARY} second import`, format: 'json', content: PM_CONTENT }],
+    reads: true,
+  }),
+  'POST /api/pm/sample': () => ({ cross: ['POST', '/api/pm/sample', { scope: 'work' }], own: ['POST', '/api/pm/sample', { scope: 'personal' }] }),
+  'GET /api/pm/sources': () => ({ cross: ['GET', '/api/pm/sources?scope=work'], own: ['GET', '/api/pm/sources?scope=personal'], reads: true }),
+  'GET /api/pm/digest': () => ({ cross: ['GET', `/api/pm/digest?scope=work&tz=${TZ}`], own: ['GET', `/api/pm/digest?scope=personal&tz=${TZ}`], reads: true }),
+  // File-import sources cannot be refreshed by design: the own request is reached past the scope lookup
+  // and answers 409 import_source; the cross request must be 404.
+  'POST /api/pm/sources/([A-Za-z0-9_-]{1,120})/refresh': (P) => ({
+    cross: ['POST', `/api/pm/sources/${P.pmSource}/refresh`, { scope: 'work' }],
+    own: ['POST', `/api/pm/sources/${P.pmSource}/refresh`, { scope: 'personal' }],
+    ownOk: (r) => r.status === 409 && r.text.includes('import_source'),
+    crossOk: (r) => r.status === 404,
+  }),
   // Mutations that remove or rewrite the seed run last.
+  'DELETE /api/pm/sources/([A-Za-z0-9_-]{1,120})': (P) => ({
+    cross: ['DELETE', `/api/pm/sources/${P.pmSource}?scope=work`],
+    own: ['DELETE', `/api/pm/sources/${P.pmSource}?scope=personal`],
+    crossOk: (r) => r.status === 404,
+  }),
   'POST /api/captures/([A-Za-z0-9_-]{8,80})/review': (P) => ({
     cross: ['POST', `/api/captures/${P.capture}/review`, { scope: 'work', keepAsNote: true }],
     own: ['POST', `/api/captures/${P.capture}/review`, { scope: 'personal', keepAsNote: true }],
@@ -136,7 +173,7 @@ const FIXTURES = {
     own: ['DELETE', `/api/captures/${P.capture}?scope=personal`],
   }),
 };
-const LATE = new Set(['POST /api/captures/([A-Za-z0-9_-]{8,80})/review', 'POST /api/undo/([^/]{1,40})', 'DELETE /api/captures/([A-Za-z0-9_-]{8,80})']);
+const LATE = new Set(['DELETE /api/pm/sources/([A-Za-z0-9_-]{1,120})', 'POST /api/captures/([A-Za-z0-9_-]{8,80})/review', 'POST /api/undo/([^/]{1,40})', 'DELETE /api/captures/([A-Za-z0-9_-]{8,80})']);
 
 function routeKey(method, re) {
   return `${method} ${re.source.replace(/^\^/, '').replace(/\$$/, '').replace(/\\\//g, '/')}`;
@@ -172,6 +209,7 @@ async function seedPersonal(call) {
   await j(call('POST', `/api/projects/${P.project}/checkpoint`, { scope: 'personal', fields: { stopped_at_text: CANARY, next_step: CANARY } }));
   P.reminder = 'rem-sweep-personal-01';
   await j(call('POST', '/api/reminders', { id: P.reminder, scope: 'personal', text: `${CANARY} reminder`, local_date: '2026-10-30', local_time: '09:00', time_zone: 'America/New_York' }));
+  P.pmSource = (await j(call('POST', '/api/pm/import', { scope: 'personal', label: `${CANARY} PM import`, format: 'json', content: PM_CONTENT }))).source.id;
   return P;
 }
 
@@ -212,8 +250,11 @@ test('routes: every fixture reaches its handler for its own scope and never show
     const fx = FIXTURES[key](P);
     const cross = await call(...fx.cross);
     if (cross.text.includes(CANARY)) problems.push(`LEAK ${key}: work request returned personal content (${cross.status})`);
+    if (fx.crossOk && !fx.crossOk(cross)) problems.push(`CROSS ${key}: work request on personal record got ${cross.status}`);
     const own = await call(...fx.own);
-    if (own.status < 200 || own.status >= 300) problems.push(`UNREACHED ${key}: own-scope request got ${own.status} ${own.text.slice(0, 160)}`);
+    if (fx.ownOk) {
+      if (!fx.ownOk(own)) problems.push(`UNREACHED ${key}: own-scope request got ${own.status} ${own.text.slice(0, 160)}`);
+    } else if (own.status < 200 || own.status >= 300) problems.push(`UNREACHED ${key}: own-scope request got ${own.status} ${own.text.slice(0, 160)}`);
     else if (fx.reads && !own.text.includes(CANARY)) problems.push(`EMPTY ${key}: own-scope response lacks the seeded canary, so the cross check proves nothing`);
   }
   assert.deepEqual(problems, [], problems.join('\n'));
