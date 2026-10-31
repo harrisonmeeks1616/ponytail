@@ -14,7 +14,7 @@
   const median = (a) => { if (!a.length) return null; const s = a.slice().sort((x, y) => x - y); const m = s.length >> 1; return s.length % 2 ? s[m] : (s[m - 1] + s[m]) / 2; };
 
   // ---------- state ----------
-  const blank = () => ({ done: {}, log: [], attempts: {}, ver: {}, errs: [], mocks: [], cards: {}, check: {}, auth: { start: "", expiry: "" }, strong: {}, lookups: [], theme: "", examTimer: null, verif: {}, sc: {}, nav: {}, necv: {} });
+  const blank = () => ({ done: {}, log: [], attempts: {}, ver: {}, errs: [], mocks: [], cards: {}, check: {}, auth: { start: "", expiry: "" }, strong: {}, lookups: [], theme: "", examTimer: null, verif: {}, sc: {}, nav: {}, necv: {}, books: { nec: "", nfpa: "", nascla: "" } });
   let S;
   try { S = Object.assign(blank(), JSON.parse(localStorage.getItem(KEY) || "{}")); } catch (e) { S = blank(); }
   const save = () => { try { localStorage.setItem(KEY, JSON.stringify(S)); } catch (e) { toast("Could not save: storage is full or blocked. Use Backup now."); } };
@@ -45,6 +45,11 @@
   const NECT = [["t240.6", "Table 240.6(A) standard ampere ratings", "R"], ["t250.66", "Table 250.66 GEC sizes", "R"], ["t250.122", "Table 250.122 EGC sizes", "R"], ["t310.16", "Table 310.16 ampacities (copper and aluminum)", "R"], ["t310.15C", "Table 310.15(C)(1) adjustment factors", "S"], ["t310.15B", "Table 310.15(B)(1) ambient correction", "R"], ["t314.16", "Table 314.16(B) volume per conductor", "S"], ["tch9", "Chapter 9 Table 1 percent fill", "R"], ["t430.52", "Table 430.52 motor branch protection maximums", "S"], ["t220.12", "Table 220.12 general lighting VA per sq ft", "R"], ["t220.42", "Table 220.42 dwelling lighting demand", "S"]];
   const necTotal = () => NECT.length + NC.nec.rules.length;
   const necTick = (id) => { const v = S.necv[id]; return `<div class="row sm" style="margin-top:8px"><label class="row"><input type="checkbox" data-act="necTick" data-k="${id}" ${v && v.ok ? "checked" : ""}> Verified in my 2020 book</label><input type="text" data-act="necPage" data-k="${id}" value="${esc((v && v.page) || "")}" placeholder="page" style="width:90px"></div>`; };
+
+  // Books you will carry into the room. Only the 14th NASCLA edition is admitted from June 16, 2026 (Exam Plan and handbook, per Notion).
+  const BOOKS = [["nec", "2020 NEC (complete, bound)", ["", "2020 edition, complete and bound", "A different edition", "Not in hand"]], ["nfpa", "2013 NFPA 72 (complete, bound)", ["", "2013 edition, complete and bound", "A different edition", "Not in hand yet (borrowed)"]], ["nascla", "NASCLA North Carolina Electrical", ["", "14th edition", "13th edition", "Not sure which edition", "Not in hand yet (borrowed)"]]];
+  const bookIssues = () => { const b = S.books, out = []; if (b.nascla === "13th edition") out.push(["red", "Your NASCLA copy is the 13th edition. The Board's reference list admits only the 14th edition from June 16, 2026 (the 13th was allowed through June 15), so a 13th edition copy will not be admitted on Dec 7. Get the 14th (ISBN 978-1-948558-50-1) and tab it before the exam."]); else if (b.nascla === "" || b.nascla === "Not sure which edition") out.push(["red", "Confirm the edition printed on your NASCLA book's cover. Only the 14th edition is admitted from June 16, 2026. If it is the 13th you need the 14th (ISBN 978-1-948558-50-1) before Dec 7."]); else if (b.nascla.startsWith("Not in hand")) out.push(["amber", "NASCLA 14th not in hand yet. Borrowed-book target was Nov 3: get it and start page-keying it."]); if (b.nec === "A different edition") out.push(["red", "Only the 2020 NEC is the designated edition."]); if (b.nfpa === "A different edition") out.push(["red", "Only the 2013 edition of NFPA 72 is designated."]); if (b.nfpa.startsWith("Not in hand")) out.push(["amber", "2013 NFPA 72 not in hand yet. Borrowed-book target was Nov 3."]); if (b.nec === "Not in hand") out.push(["red", "The 2020 NEC must be in hand and permanently tabbed."]); return out; };
+  const booksCard = () => `<div class="card stack"><h3>Books check</h3><p class="xs dim">What you will carry in. The center supplies only calculator, scratch paper and pencils.</p>${BOOKS.map(([k, n, opts]) => `<div><label class="f">${t(n)}</label><select data-act="bookSet" data-k="${k}">${opts.map((o) => `<option ${S.books[k] === o ? "selected" : ""}>${esc(o)}</option>`).join("")}</select></div>`).join("")}${bookIssues().map(([c, m]) => `<div class="notice ${c === "red" ? "red" : ""} sm">${t(m)}</div>`).join("") || `<p class="green sm">All three books confirmed.</p>`}</div>`;
 
   // ---------- views ----------
   const V = {};
@@ -80,6 +85,7 @@
       <div class="count" data-clockbox><div><b data-cd="d">${cd.days}</b><span>days</span></div><div><b data-cd="h">${cd.hours}</b><span>hours</span></div><div><b data-cd="m">${cd.minutes}</b><span>min</span></div></div>
       <p class="mut sm">Open book. 100 questions, 6 hours, 70% to pass. Your coaching gate is stricter: two fresh full mocks at ${NC.gates.mockPct}%+. ${t(ex.cutoffText)}${!cut.over ? ` Cutoff is in ${cut.days}d ${cut.hours}h.` : ""}</p></div>
 
+    ${bookIssues().filter((x) => x[0] === "red").slice(0, 1).map(([, m]) => `<div class="notice red" style="margin-top:14px"><b>Books:</b> ${t(m)}</div>`).join("")}
     <div class="grid g2" style="margin-top:14px">
       <div class="card glow stack"><div class="row between"><h3>${todays ? "Today: Day " + todays[0] + " of 37" : "Today"}</h3>${chip(fmtD(d), "amber")}</div>
         ${todays ? `<div><b>${t(todays[5])}</b><div class="row" style="margin:6px 0">${chip(NC.catNames[todays[4]], catColor[todays[4]])}${chip(todays[3] + "h")}${S.done[todays[0]] ? chip("done", "green") : ""}</div><p class="mut sm">${t(todays[6])}</p><div class="row"><button class="btn pri" data-act="openSession" data-n="${todays[0]}">Open session</button></div></div>` : `<p class="mut">${t(mode || "No session scheduled today.")}</p>`}
@@ -105,6 +111,7 @@
         <div class="row between"><span>Fresh full mocks logged</span><b class="mono ${S.mocks.length ? "" : "amber"}">${S.mocks.filter((m) => m.form === "full" && m.fresh).length}</b></div>
         <div class="row between"><span>AI content validation (3 perfect runs)</span><b class="mono amber">0/3</b></div>
         <div class="row between"><span>Median lookup time</span><b class="mono">${S.lookups.length ? Math.round(median(S.lookups.map((x) => x.secs))) + "s" : "n/a"}<span class="dim"> / ${NC.gates.lookupSeconds}s goal</span></b></div></div>
+      ${booksCard()}
       <div class="card stack"><h3>Authorization window</h3>
         <div class="grid g2"><div><label class="f">Board authorization start</label><input type="date" id="authStart" value="${esc(S.auth.start)}"></div><div><label class="f">Authorization expiry</label><input type="date" id="authExp" value="${esc(S.auth.expiry)}"></div></div>
         <button class="btn sm" data-act="saveAuth">Save dates</button>
@@ -475,6 +482,7 @@
     necTick: (el) => { const k = el.dataset.k; S.necv[k] = Object.assign({ page: "" }, S.necv[k], { ok: el.checked }); save(); const c = $("[data-chip-nec]"); },
     necPage: (el) => { const k = el.dataset.k; S.necv[k] = Object.assign({ ok: false }, S.necv[k], { page: el.value }); save(); },
     necGo: () => { studyTab = "nec"; go("study"); },
+    bookSet: (el) => { S.books[el.dataset.k] = el.value; save(); render(); },
     tickV: (el) => { S.verif[el.dataset.k] = el.checked; save(); },
     strong: (el) => { S.strong[el.dataset.k] = el.checked; save(); },
     saveAuth: () => { S.auth = { start: $("#authStart").value, expiry: $("#authExp").value }; save(); toast("Saved."); render(); },
@@ -531,8 +539,8 @@
     P.res[it.id] = ok; save();
     if (ok) A.next(); else { A.logMiss(); A.next(); }
   }
-  document.addEventListener("click", (e) => { const el = e.target.closest("[data-act]"); if (!el || el.tagName === "INPUT") return; const f = A[el.dataset.act]; if (f) f(el); });
-  document.addEventListener("change", (e) => { const el = e.target; if (el.tagName === "INPUT" && (el.type === "checkbox" || el.type === "text") && el.dataset.act && A[el.dataset.act]) A[el.dataset.act](el); });
+  document.addEventListener("click", (e) => { const el = e.target.closest("[data-act]"); if (!el || el.tagName === "INPUT" || el.tagName === "SELECT") return; const f = A[el.dataset.act]; if (f) f(el); });
+  document.addEventListener("change", (e) => { const el = e.target; if (((el.tagName === "INPUT" && (el.type === "checkbox" || el.type === "text")) || el.tagName === "SELECT") && el.dataset.act && A[el.dataset.act]) A[el.dataset.act](el); });
   setInterval(() => { tickClock(); if (P && P.queue && !P.nav && P.i < P.queue.length && byId[P.queue[P.i]] && byId[P.queue[P.i]].lookup && !P.commit) tickLk(); const swEl = $("#sw"); if (swEl && sw) swEl.textContent = ((Date.now() - sw) / 1000).toFixed(1) + "s";
     const cd = L.countdown(new Date(), NC.exam.startISO), q = (k) => $("[data-cd=" + k + "]"); if (q("d")) { q("d").textContent = cd.days; q("h").textContent = cd.hours; q("m").textContent = cd.minutes; } }, 1000);
   window.addEventListener("keydown", (e) => { if (e.target.matches("input,textarea,select")) return; const i = NAV.findIndex((n) => n[0] === view); if (e.key === "]" ) go(NAV[(i + 1) % NAV.length][0]); if (e.key === "[") go(NAV[(i + NAV.length - 1) % NAV.length][0]); });
