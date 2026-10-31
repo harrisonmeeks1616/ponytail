@@ -39,3 +39,9 @@ The repository as a whole is not green; only the `harrison-os` job is.
 - Mitigation: no further workflows or fan-out. Remaining work (T1 merge, deletion/cron wiring, remaining fixtures, cross-slice e2e, acceptance evidence) is done by the lead in bounded steps, each pushed to main only when unit + browser are green, so a hard stop leaves main coherent and recorded.
 - Dropped: the planned M3 adversarial-review workflow. Assurance instead comes from the per-track independent reviews already run and the mutation-checked scope sweep. This reduces review depth, not product scope.
 - If capped: last green main is the delivery; PROGRESS/ACCEPTANCE name what remains; resume after the reset (Mon Nov 2, 6 PM per Codex) or continue from this record.
+- ~11:40 T1a merged (conflict in the static SQL test resolved to the explicit allowlist); purgers and connector cron jobs wired; flaky calendar tie-break fixed. ~11:43 T1b merged. All eight tracks on main `8672286`: 364/364 unit, 11/11 browser.
+
+## Owner preview checkpoint (Harrison's 11:36 direction)
+
+- 11:36-11:55 Built an in-browser preview: the real app and Worker code on the official SQLite WASM build (FTS5), fictional data, published through the repository's existing GitHub Pages site into a new `docs/harrison-os-demo/` folder (no Field/PM files touched). Walked the owner path at 390px and fixed what it exposed (plain-English Next, Next falls back to the saved place, Save my place prefill, mentioned date on Waiting review cards, labelled Ask button). `13abde8`: 365/365 unit, 11/11 browser, 16/16 preview steps. Published `ccd9b6e`; GitHub Pages deployment of `ccd9b6e` reported success (github.io is not reachable from this container, so not loaded here).
+- Owner handoff: `OWNER_PREVIEW.md` (link, walkthrough, comparison, status, recommendation).
