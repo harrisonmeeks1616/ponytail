@@ -167,6 +167,7 @@
     S.lookups = arr(raw.lookups).slice(-2000).map((x) => ({ label: str(obj(x).label, 120), secs: num(obj(x).secs, 0, 86400), date: date(obj(x).date) }));
     S.theme = raw.theme === "light" || raw.theme === "dark" ? raw.theme : "";
     S.examTimer = raw.examTimer && Number.isFinite(Number(raw.examTimer.start)) ? { start: Number(raw.examTimer.start) } : null;
+    S.examElapsed = num(raw.examElapsed, 0, 720);
     S.nav = { view: (ctx.views || []).includes(obj(raw.nav).view) ? raw.nav.view : "today" };
     for (const [k, v] of Object.entries(obj(raw.necv))) if (key(k, /^[A-Za-z0-9_.-]{1,30}$/)) S.necv[k] = { ok: !!obj(v).ok, page: str(obj(v).page, 40) };
     for (const k of ["nec", "nfpa", "nascla"]) { const v = obj(raw.books)[k]; S.books[k] = ((ctx.books || {})[k] || []).includes(v) ? v : ""; }
@@ -175,7 +176,14 @@
 
   // ---- backup ----
   L.exportState = (s) => JSON.stringify({ app: "nc-unlimited", v: 1, at: new Date().toISOString(), state: s });
-  L.importState = (txt) => { const j = JSON.parse(txt); if (j.app !== "nc-unlimited" || !j.state) throw new Error("Not an NC Unlimited backup"); return j.state; };
+  const KNOWN = ["done", "log", "attempts", "ver", "errs", "mocks", "cards", "check", "auth", "strong", "lookups", "theme", "examTimer", "verif", "sc", "nav", "necv", "books", "examElapsed"];
+  L.importState = (txt) => {
+    const j = JSON.parse(txt);
+    if (!j || j.app !== "nc-unlimited") throw new Error("Not an NC Unlimited backup");
+    if (!j.state || typeof j.state !== "object" || Array.isArray(j.state) || !Object.keys(j.state).some((k) => KNOWN.includes(k))) throw new Error("The backup holds no study data, so nothing was changed");
+    return j.state;
+  };
+  L.hasData = (S) => !!(Object.keys(S.done).length || S.log.length || Object.keys(S.attempts).length || Object.keys(S.ver).length || S.errs.length || S.mocks.length || Object.keys(S.cards).length || Object.keys(S.necv).length || S.lookups.length);
 
   g.NCLogic = L;
   if (typeof module !== "undefined" && module.exports) module.exports = L;

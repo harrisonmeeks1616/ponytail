@@ -2,7 +2,7 @@
 (function (g) {
   g.NC = g.NC || {};
 
-  g.NC.meta = { syncedAt: "2026-10-31T18:43:00Z", note: "Plan content mirrors the Harrison OS Notion pages, which were still being rewritten on Oct 31. If a date or number looks wrong, Notion wins: tell me and I will re-sync." };
+  g.NC.meta = { syncedAt: "2026-10-31T19:36:00Z", note: "Plan content mirrors the Harrison OS Notion pages, which were still being rewritten on Oct 31. If a date or number looks wrong, Notion wins: tell me and I will re-sync." };
 
   g.NC.exam = {
     startISO: "2026-12-07T15:00:00Z", // Mon Dec 7 2026 10:00 AM EST (UTC-5)

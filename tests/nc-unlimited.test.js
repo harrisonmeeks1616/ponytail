@@ -385,3 +385,23 @@ test('cross-checks: key dates, sprint weeks, checkpoints, topic packet days, lin
   for (const [n, p] of Object.entries(NC.packets)) for (const q of p.questions) { const m = /^([A-Z]\d\d)(-v\d)?\b/.exec(q.q); if (m && /^[GOWBSMLEPDH]/.test(m[1])) assert.ok(bankIds.has(m[1]), 'packet ' + n + ' cites unknown bank id ' + m[1]); }
   assert.doesNotMatch(JSON.stringify(NC.packets), /existing Day \d/, 'old-plan day numbers must be labeled retired');
 });
+
+test('backup import rejects junk, hasData sees real data, timer minutes are clamped', () => {
+  for (const junk of ['{"app":"nc-unlimited","state":"x"}', '{"app":"nc-unlimited","state":{}}', '{"app":"nc-unlimited","state":[1]}', '{"app":"other","state":{"errs":[]}}', '{"app":"nc-unlimited"}']) assert.throws(() => L.importState(junk), undefined, junk);
+  assert.deepEqual(L.importState('{"app":"nc-unlimited","state":{"errs":[]}}'), { errs: [] });
+  const blank = { done: {}, log: [], attempts: {}, ver: {}, errs: [], mocks: [], cards: {}, check: {}, auth: { start: '', expiry: '' }, strong: {}, lookups: [], theme: '', examTimer: null, examElapsed: 0, verif: {}, sc: {}, nav: {}, necv: {}, books: { nec: '', nfpa: '', nascla: '' } };
+  assert.equal(L.hasData(blank), false);
+  assert.equal(L.hasData({ ...blank, errs: [{}] }), true); assert.equal(L.hasData({ ...blank, done: { 1: {} } }), true); assert.equal(L.hasData({ ...blank, necv: { a: {} } }), true);
+  assert.equal(L.sanitize({ examElapsed: 99999 }, blank, {}).examElapsed, 720); assert.equal(L.sanitize({ examElapsed: -5 }, blank, {}).examElapsed, 0); assert.equal(L.sanitize({ examElapsed: 'x' }, blank, {}).examElapsed, 0);
+});
+
+test('wire sizes sort by area, and the corrected NEC rows say what they should', () => {
+  const sorted = Object.keys(NC.nec.t31016.cu).sort((a, b) => NC.nec.size(a) - NC.nec.size(b));
+  assert.deepEqual(sorted.slice(0, 14), ['14', '12', '10', '8', '6', '4', '3', '2', '1', '1/0', '2/0', '3/0', '4/0', '250']);
+  assert.equal(sorted[sorted.length - 1], '2000');
+  const rule = (id) => NC.nec.rules.find((r) => r[0] === id)[3];
+  assert.match(rule('b1'), /from outside the box/); assert.match(rule('b1'), /start AND end inside the box/); assert.doesNotMatch(rule('b1'), /originates and ends in the box counts 1/);
+  assert.match(rule('s3'), /18 ft \(public streets[^)]*truck traffic[^)]*other land/);
+  assert.match(rule('l7'), /3-wire circuit taken from a 4-wire 3-phase wye/);
+  assert.doesNotMatch(rule('m5'), /Design B energy-efficient starting exception, not the base table/);
+});
