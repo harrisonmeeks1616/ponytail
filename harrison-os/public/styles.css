@@ -275,6 +275,29 @@ a {
   }
 }
 
+/* 200% zoom on a small phone (about 180-215 px of layout): the switch takes its own full line. */
+@media (max-width: 15rem) {
+  .topbar-inner {
+    padding-left: 0.5rem;
+    padding-right: 0.5rem;
+  }
+  .scope-switch {
+    flex: 1 1 100%;
+  }
+  .scope-btn {
+    flex: 1 1 0;
+    padding: 0 0.125rem;
+    font-size: 0.875rem;
+  }
+  .rows > div {
+    flex-direction: column;
+    gap: 0.125rem;
+  }
+  .rows dt {
+    width: auto;
+  }
+}
+
 /* ------------------------------------------------------------------ notices */
 .notices {
   max-width: 40rem;
@@ -1237,9 +1260,214 @@ textarea {
   margin: 0.125rem 0;
 }
 
+/* ------------------------------------------------------------------ attachments */
+.attach-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.5rem 0.75rem;
+  margin-top: 0.5rem;
+}
+
+/* The file input stays focusable (keyboard opens the picker); its label is the visible button. */
+.file-input {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  opacity: 0;
+  overflow: hidden;
+}
+
+.file-input:focus-visible + .file-btn {
+  outline: 0.1875rem solid var(--focus);
+  outline-offset: 0.125rem;
+}
+
+.form label.file-btn {
+  margin-top: 0;
+}
+
+.att-pending {
+  list-style: none;
+  margin: 0.5rem 0 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.375rem;
+}
+
+.att-pending-row {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  padding: 0.25rem 0.25rem 0.25rem 0.375rem;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  background: var(--surface);
+}
+
+.att-preview,
+.att-icon {
+  flex: none;
+  width: 3.5rem;
+  height: 3.5rem;
+  border-radius: var(--radius-sm);
+  object-fit: cover;
+  background: var(--surface-2);
+}
+
+.att-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 0.75rem;
+  font-weight: 700;
+  color: var(--muted);
+}
+
+.att-name {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  overflow-wrap: anywhere;
+}
+
+.att-strip {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  margin-top: 0.5rem;
+}
+
+.att-thumb {
+  display: block;
+  width: 4.5rem;
+  height: 4.5rem;
+  min-width: var(--tap);
+  border-radius: var(--radius-sm);
+  overflow: hidden;
+  border: 1px solid var(--line);
+  background: var(--surface-2);
+}
+
+.att-thumb img {
+  display: block;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+.att-chip {
+  display: inline-flex;
+  align-items: center;
+  min-height: var(--tap);
+  max-width: 100%;
+  padding: 0.25rem 0.75rem;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  background: var(--surface-2);
+  color: var(--ink);
+  font-size: 0.875rem;
+  font-weight: 600;
+  overflow-wrap: anywhere;
+}
+
+.att-state .chip {
+  white-space: normal;
+}
+
+/* ------------------------------------------------------------------ tasks, decisions, preferences */
+.tasks-tools {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.375rem 0.75rem;
+  margin-bottom: 0.75rem;
+}
+
+.tasks-tools label {
+  flex-basis: 100%;
+  font-weight: 600;
+}
+
+.tasks-tools input {
+  flex: 1 1 12rem;
+  min-width: 0;
+}
+
+.decision-row .rows {
+  margin-top: 0.5rem;
+}
+
+.pref-value {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+#edit-sheet .block {
+  margin-top: 1.25rem;
+  padding-top: 0.75rem;
+  border-top: 1px solid var(--line);
+}
+
+#edit-sheet q,
+.form q {
+  font-style: italic;
+}
+
+/* Optional completion feedback; off under reduced motion (below). */
+.check-row.just-done .check::before {
+  animation: done-pop 360ms ease-out;
+}
+
+@keyframes done-pop {
+  0% {
+    transform: scale(1);
+  }
+  45% {
+    transform: scale(1.18);
+  }
+  100% {
+    transform: scale(1);
+  }
+}
+
+img {
+  max-width: 100%;
+}
+
+/* 200% zoom on a small phone: tab bar icons only (each name stays for screen readers). */
+@media (max-width: 15rem) {
+  .tab > span:not(.capture-disc) {
+    position: absolute !important;
+    width: 1px;
+    height: 1px;
+    overflow: hidden;
+    clip: rect(0 0 0 0);
+    white-space: nowrap;
+  }
+  .tabbar {
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+    padding-left: env(safe-area-inset-left);
+    padding-right: env(safe-area-inset-right);
+  }
+  .tab,
+  .tab-capture {
+    padding: 0;
+  }
+  .capture-disc {
+    width: var(--tap);
+    height: var(--tap);
+  }
+}
+
 /* ------------------------------------------------------------------ motion and contrast */
 @media (prefers-reduced-motion: reduce) {
-  * {
+  /* `*` alone does not match pseudo-elements, and the completion pop runs on .check::before. */
+  *,
+  *::before,
+  *::after {
     scroll-behavior: auto !important;
     transition: none !important;
     animation: none !important;

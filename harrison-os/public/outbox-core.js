@@ -1,18 +1,20 @@
-// Harrison OS spike: pure outbox sync engine.
+// Harrison OS: pure outbox sync engine, attachment upload queue and small pure UI helpers.
 // No DOM, no IndexedDB. Importable from Node 22 (tests) and the browser (app.js).
 // Item shape: { id, kind: 'capture' | 'reminder', url, body, state, attempts,
 //               next_attempt_at, last_error, created_at, synced_at }
 // Never stores response bodies or capture text in last_error; error codes only.
 
+// 'deleted': the server answered 410 (the id was deleted on purpose). Terminal, never resent, and the
+// text is dropped from this phone too.
 export const ITEM_STATES = Object.freeze([
-  'saved_on_device', 'sending', 'synced', 'auth_required', 'retry_wait', 'conflict', 'rejected',
+  'saved_on_device', 'sending', 'synced', 'auth_required', 'retry_wait', 'conflict', 'rejected', 'deleted',
 ]);
 
 // States the engine will try to send. 'sending' at the start of a run means a
 // previous page life died mid-request (close/reload), so it is resent; the
 // server's idempotent-by-id rule makes that safe.
 const SENDABLE = new Set(['saved_on_device', 'retry_wait', 'auth_required', 'sending']);
-const TERMINAL = new Set(['synced', 'conflict', 'rejected']);
+const TERMINAL = new Set(['synced', 'conflict', 'rejected', 'deleted']);
 
 export const SYNCED_CAP = 200;
 export const ID_PATTERN = /^[A-Za-z0-9_-]{8,80}$/;
@@ -187,6 +189,59 @@ export function createMemoryStore(initial = []) {
 }
 
 // ---------------------------------------------------------------------------
+// One bounded POST. Resolves { res } or { error: 'timeout' | 'network' }; never reads the body.
+
+export async function postJson(fetchImpl, url, body, headers = {}, timeoutMs = 20000) {
+  const h = { 'Content-Type': 'application/json', ...(headers || {}), 'X-Requested-With': 'XMLHttpRequest' };
+  const init = {
+    method: 'POST',
+    headers: h,
+    body: JSON.stringify(body),
+    redirect: 'manual',
+    credentials: 'same-origin',
+    cache: 'no-store',
+  };
+  let controller = null;
+  if (typeof AbortController === 'function') {
+    controller = new AbortController();
+    init.signal = controller.signal;
+  }
+  let timer = null;
+  const timeout = new Promise((_, reject) => {
+    timer = setTimeout(() => {
+      try { controller && controller.abort(); } catch { /* ignore */ }
+      const e = new Error('timeout');
+      e.code = 'timeout';
+      reject(e);
+    }, timeoutMs);
+  });
+  try {
+    const res = await Promise.race([fetchImpl(url, init), timeout]);
+    return { res };
+  } catch (err) {
+    return { error: err && err.code === 'timeout' ? 'timeout' : 'network' };
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+function contentTypeOf(res) {
+  return res && res.headers && typeof res.headers.get === 'function' ? res.headers.get('content-type') : null;
+}
+
+function discardBody(res) {
+  try { if (res.body && typeof res.body.cancel === 'function' && !res.bodyUsed) res.body.cancel().catch(() => {}); } catch { /* ignore */ }
+}
+
+// Keeps only the id and scope of a body whose content was deleted on the server.
+function redactedBody(body) {
+  const b = body && typeof body === 'object' ? body : {};
+  const out = { id: b.id };
+  if (b.scope !== undefined) out.scope = b.scope;
+  return out;
+}
+
+// ---------------------------------------------------------------------------
 // Sync engine
 
 /**
@@ -200,8 +255,9 @@ export function createMemoryStore(initial = []) {
  * auth_required (items are kept, never terminal) and on a network error
  * (the phone is offline; the rest wait for the next trigger).
  *
- * Resolves to { attempted, synced, retry, auth_required, conflict, rejected,
+ * Resolves to { attempted, synced, retry, auth_required, conflict, rejected, deleted,
  *               skipped_not_due, stopped: null | 'auth_required' | 'offline' }.
+ * A 410 answer marks the item 'deleted' (terminal) and drops its text from the store.
  */
 export function createSyncEngine({
   store,
@@ -236,38 +292,8 @@ export function createSyncEngine({
     return item.next_attempt_at == null || Number(item.next_attempt_at) <= t;
   }
 
-  async function send(item) {
-    const h = { 'Content-Type': 'application/json', ...(headers || {}), 'X-Requested-With': 'XMLHttpRequest' };
-    const init = {
-      method: 'POST',
-      headers: h,
-      body: JSON.stringify(item.body),
-      redirect: 'manual',
-      credentials: 'same-origin',
-      cache: 'no-store',
-    };
-    let controller = null;
-    if (typeof AbortController === 'function') {
-      controller = new AbortController();
-      init.signal = controller.signal;
-    }
-    let timer = null;
-    const timeout = new Promise((_, reject) => {
-      timer = setTimeout(() => {
-        try { controller && controller.abort(); } catch { /* ignore */ }
-        const e = new Error('timeout');
-        e.code = 'timeout';
-        reject(e);
-      }, timeoutMs);
-    });
-    try {
-      const res = await Promise.race([fetchImpl(item.url, init), timeout]);
-      return { res };
-    } catch (err) {
-      return { error: err && err.code === 'timeout' ? 'timeout' : 'network' };
-    } finally {
-      clearTimeout(timer);
-    }
+  function send(item) {
+    return postJson(fetchImpl, item.url, item.body, headers, timeoutMs);
   }
 
   async function processItem(item, summary) {
@@ -287,10 +313,10 @@ export function createSyncEngine({
       return 'offline';
     }
 
-    const contentType = res.headers && typeof res.headers.get === 'function' ? res.headers.get('content-type') : null;
+    const contentType = contentTypeOf(res);
     const verdict = classifyResponse({ type: res.type, status: res.status, contentType });
     // Do not read the body: the engine never stores server text.
-    try { if (res.body && typeof res.body.cancel === 'function' && !res.bodyUsed) res.body.cancel().catch(() => {}); } catch { /* ignore */ }
+    discardBody(res);
 
     const statusLabel = res.type === 'opaqueredirect' ? 'opaqueredirect' : String(res.status);
     switch (verdict) {
@@ -325,6 +351,16 @@ export function createSyncEngine({
         summary.conflict += 1;
         return null;
       default:
+        if (res.status === 410) {
+          // Deleted on purpose (maybe from another device): terminal, and its words leave this phone.
+          item.state = 'deleted';
+          item.last_error = 'http_410';
+          item.next_attempt_at = null;
+          item.body = redactedBody(item.body);
+          await save(item);
+          summary.deleted += 1;
+          return null;
+        }
         item.state = 'rejected';
         item.last_error = `http_${statusLabel}`;
         item.next_attempt_at = null;
@@ -351,7 +387,7 @@ export function createSyncEngine({
 
   async function run(ignoreBackoff) {
     const summary = {
-      attempted: 0, synced: 0, retry: 0, auth_required: 0, conflict: 0, rejected: 0,
+      attempted: 0, synced: 0, retry: 0, auth_required: 0, conflict: 0, rejected: 0, deleted: 0,
       skipped_not_due: 0, stopped: null,
     };
     const tried = new Set();
@@ -404,4 +440,305 @@ export function createSyncEngine({
   }
 
   return { syncOnce, pendingCount };
+}
+
+// ---------------------------------------------------------------------------
+// Attachment upload queue
+//
+// A photo or file added in the capture sheet is kept on this phone (IndexedDB, keyed by its own id) and
+// uploaded with POST /api/attachments only after its capture has synced, because the server needs the
+// parent capture to exist. The id is fixed at creation, so a retry of the same bytes is idempotent on the
+// server (200 duplicate). Item shape:
+//   { id, capture_id, scope, name, mime, size, data_b64, state, attempts, next_attempt_at, last_error,
+//     created_at, uploaded_at }
+// States: waiting (for its capture or a connection), sending, retry_wait, auth_required: pending;
+//         uploaded, dropped (its capture was deleted), rejected, conflict: terminal.
+// data_b64 is removed once uploaded or dropped; it is kept after a refusal so nothing pasted is lost.
+
+export const ATTACHMENT_MIME = Object.freeze(['image/jpeg', 'image/png', 'image/webp', 'image/heic', 'application/pdf', 'text/plain']);
+export const MAX_ATTACHMENT_BYTES = 1000000;
+export const MAX_ATTACHMENTS_PER_CAPTURE = 5;
+export const IMAGE_MAX_SIDE = 2048;
+export const UPLOADED_CAP = 50;
+const ATTACHMENT_PENDING = new Set(['waiting', 'sending', 'retry_wait', 'auth_required']);
+const SCOPE_RE = /^(work|personal)$/;
+
+const EXT_MIME = { jpg: 'image/jpeg', jpeg: 'image/jpeg', png: 'image/png', webp: 'image/webp', heic: 'image/heic', heif: 'image/heic', pdf: 'application/pdf', txt: 'text/plain' };
+
+/** The allowed mime for a picked file (by its type, else its extension), or null. */
+export function attachmentMime(type, name) {
+  const t = String(type || '').toLowerCase().split(';')[0].trim();
+  if (t === 'image/heif') return 'image/heic';
+  if (ATTACHMENT_MIME.includes(t)) return t;
+  if (t && t !== 'application/octet-stream') return null;
+  const ext = /\.([A-Za-z0-9]{1,5})$/.exec(String(name || ''));
+  return ext ? EXT_MIME[ext[1].toLowerCase()] || null : null;
+}
+
+/** A file name without any path, control characters or more than 120 characters. */
+export function safeFileName(name, fallback = 'file') {
+  // eslint-disable-next-line no-control-regex
+  const base = String(name || '').split(/[\\/]/).pop().replace(/[\u0000-\u001f\u007f]/g, '').trim();
+  return (base || fallback).slice(0, 120);
+}
+
+/** Decoded byte count of a base64 string. */
+export function base64Bytes(b64) {
+  const s = String(b64 || '').replace(/\s/g, '');
+  if (!s) return 0;
+  const pad = s.endsWith('==') ? 2 : s.endsWith('=') ? 1 : 0;
+  return Math.floor((s.length * 3) / 4) - pad;
+}
+
+/** Width and height scaled so the longest side is at most max (never upscaled). */
+export function fitWithin(width, height, max = IMAGE_MAX_SIDE) {
+  const w = Math.max(1, Math.round(Number(width) || 1));
+  const hgt = Math.max(1, Math.round(Number(height) || 1));
+  const long = Math.max(w, hgt);
+  if (long <= max) return { width: w, height: hgt };
+  const k = max / long;
+  return { width: Math.max(1, Math.round(w * k)), height: Math.max(1, Math.round(hgt * k)) };
+}
+
+export function createAttachmentItem({ id, capture_id, scope, name, mime, data_b64, nowMs = Date.now() }) {
+  if (!ID_PATTERN.test(String(id || ''))) throw new RangeError('bad_id');
+  if (!ID_PATTERN.test(String(capture_id || ''))) throw new RangeError('bad_capture_id');
+  if (!SCOPE_RE.test(String(scope || ''))) throw new RangeError('bad_scope');
+  if (!ATTACHMENT_MIME.includes(mime)) throw new RangeError('bad_mime');
+  const size = base64Bytes(data_b64);
+  if (size < 1) throw new RangeError('empty');
+  if (size > MAX_ATTACHMENT_BYTES) throw new RangeError('too_large');
+  return {
+    id, capture_id, scope, name: safeFileName(name), mime, size, data_b64: String(data_b64),
+    state: 'waiting', attempts: 0, next_attempt_at: null, last_error: null,
+    created_at: isoAt(nowMs), uploaded_at: null,
+  };
+}
+
+export function isAttachmentPending(item) {
+  return !!item && ATTACHMENT_PENDING.has(item.state);
+}
+
+/**
+ * syncAttachments({ store, outbox, fetchImpl, now, rand, headers, timeoutMs, onChange })
+ * Sends each due pending attachment whose capture has synced (or is no longer in the outbox, i.e. it
+ * synced and was pruned). A capture that is still pending keeps its attachments waiting; one that came
+ * back deleted (410) drops them; one that was refused or conflicted holds them as rejected.
+ * Answers: 2xx uploaded; 404 or 410 dropped ('capture_deleted', the parent is gone); 409 conflict
+ * (different bytes under this id); 401/403/redirect/HTML stop the run (auth_required); network errors stop
+ * the run (offline); 408/429/5xx retry with backoff; other 4xx rejected.
+ * Resolves { attempted, uploaded, dropped, retry, auth_required, rejected, conflict, waiting, stopped }.
+ */
+export async function syncAttachments({
+  store, outbox, fetchImpl = globalThis.fetch, now = () => Date.now(), rand = Math.random,
+  headers = {}, timeoutMs = 30000, onChange = () => {}, url = '/api/attachments', ignoreBackoff = false,
+} = {}) {
+  if (!store || !outbox) throw new TypeError('store and outbox required');
+  const summary = { attempted: 0, uploaded: 0, dropped: 0, retry: 0, auth_required: 0, rejected: 0, conflict: 0, waiting: 0, stopped: null };
+  const save = async (item) => {
+    await store.put(item);
+    try { onChange(clone(item)); } catch { /* UI errors never break sync */ }
+  };
+  const items = (await store.list()).filter(isAttachmentPending);
+  for (const item of items) {
+    const parent = await outbox.get(item.capture_id);
+    if (parent && parent.state === 'deleted') {
+      Object.assign(item, { state: 'dropped', last_error: 'capture_deleted', next_attempt_at: null });
+      delete item.data_b64;
+      await save(item);
+      summary.dropped += 1;
+      continue;
+    }
+    if (parent && (parent.state === 'rejected' || parent.state === 'conflict')) {
+      Object.assign(item, { state: 'rejected', last_error: 'capture_not_saved', next_attempt_at: null });
+      await save(item);
+      summary.rejected += 1;
+      continue;
+    }
+    if (parent && parent.state !== 'synced') {
+      if (item.state !== 'waiting' && item.state !== 'auth_required') {
+        item.state = 'waiting';
+        await save(item);
+      }
+      summary.waiting += 1;
+      continue;
+    }
+    if (!ignoreBackoff && item.state === 'retry_wait' && item.next_attempt_at != null && Number(item.next_attempt_at) > now()) {
+      summary.waiting += 1;
+      continue;
+    }
+    summary.attempted += 1;
+    item.state = 'sending';
+    await save(item);
+    const body = { id: item.id, scope: item.scope, capture_id: item.capture_id, name: item.name, mime: item.mime, data_b64: item.data_b64 };
+    const { res, error } = await postJson(fetchImpl, url, body, headers, timeoutMs);
+    const done = now();
+    if (error) {
+      Object.assign(item, { state: 'retry_wait', last_error: error, next_attempt_at: done + backoffMs(item.attempts, rand), attempts: (item.attempts || 0) + 1 });
+      await save(item);
+      summary.retry += 1;
+      summary.stopped = 'offline';
+      break;
+    }
+    const contentType = contentTypeOf(res);
+    const verdict = classifyResponse({ type: res.type, status: res.status, contentType });
+    discardBody(res);
+    const status = res.type === 'opaqueredirect' ? 'opaqueredirect' : String(res.status);
+    if (verdict === 'synced') {
+      Object.assign(item, { state: 'uploaded', uploaded_at: isoAt(done), last_error: null, next_attempt_at: null });
+      delete item.data_b64;
+      await save(item);
+      summary.uploaded += 1;
+    } else if (verdict === 'auth_required') {
+      Object.assign(item, { state: 'auth_required', last_error: `auth_${status}`, next_attempt_at: null });
+      await save(item);
+      summary.auth_required += 1;
+      summary.stopped = 'auth_required';
+      break;
+    } else if (verdict === 'retry') {
+      Object.assign(item, { state: 'retry_wait', last_error: `http_${status}`, next_attempt_at: done + backoffMs(item.attempts, rand), attempts: (item.attempts || 0) + 1 });
+      await save(item);
+      summary.retry += 1;
+    } else if (res.status === 404 || res.status === 410) {
+      Object.assign(item, { state: 'dropped', last_error: 'capture_deleted', next_attempt_at: null });
+      delete item.data_b64;
+      await save(item);
+      summary.dropped += 1;
+    } else if (verdict === 'conflict') {
+      Object.assign(item, { state: 'conflict', last_error: 'http_409', next_attempt_at: null });
+      await save(item);
+      summary.conflict += 1;
+    } else {
+      Object.assign(item, { state: 'rejected', last_error: `http_${status}`, next_attempt_at: null });
+      await save(item);
+      summary.rejected += 1;
+    }
+  }
+  // Keep the newest uploaded/dropped records for the "On this phone" list; they hold no bytes.
+  const finished = (await store.list()).filter((i) => i.state === 'uploaded' || i.state === 'dropped').sort(byCreated).reverse();
+  for (const old of finished.slice(UPLOADED_CAP)) await store.remove(old.id);
+  return summary;
+}
+
+// ---------------------------------------------------------------------------
+// Small pure UI helpers (used by app.js; here so node tests can run them)
+
+const ON_RE = /^(\d{4})-(\d{2})-(\d{2})$/;
+
+/** Date-only arithmetic: 'YYYY-MM-DD' plus n days (calendar days, no time zone involved). */
+export function addDaysOn(on, n) {
+  const m = ON_RE.exec(String(on || ''));
+  if (!m) return null;
+  const d = new Date(Date.UTC(Number(m[1]), Number(m[2]) - 1, Number(m[3]) + Math.trunc(Number(n) || 0)));
+  return d.toISOString().slice(0, 10);
+}
+
+/** Defer targets for a local date: tomorrow, and next Monday (the start of next week, always after today). */
+export function deferTargets(todayOn) {
+  const m = ON_RE.exec(String(todayOn || ''));
+  if (!m) return null;
+  const dow = new Date(Date.UTC(Number(m[1]), Number(m[2]) - 1, Number(m[3]))).getUTCDay(); // 0 Sunday
+  return { tomorrow: addDaysOn(todayOn, 1), nextWeek: addDaysOn(todayOn, ((8 - dow) % 7) || 7) };
+}
+
+export const RECURRENCES = Object.freeze(['none', 'daily', 'weekdays', 'weekly', 'monthly']);
+export const RECURRENCE_LABEL = Object.freeze({ none: 'Does not repeat', daily: 'Every day', weekdays: 'Every weekday', weekly: 'Every week', monthly: 'Every month' });
+
+/** Problems with a task edit before it is sent, as plain words; null when fine. */
+export function taskEditProblem({ title, due_on, start_on, recurrence }) {
+  if (!String(title || '').trim()) return 'A title is needed.';
+  if (due_on && !ON_RE.test(due_on)) return 'The due date is not a date.';
+  if (start_on && !ON_RE.test(start_on)) return 'The "Not before" date is not a date.';
+  if (recurrence && !RECURRENCES.includes(recurrence)) return 'Pick how it repeats.';
+  if (recurrence && recurrence !== 'none' && !due_on) return 'A repeating task needs a due date.';
+  return null;
+}
+
+/** Decision options typed one per line: trimmed, blank lines dropped; at most 10, each at most 200 characters. */
+export function parseOptionLines(text) {
+  const options = String(text || '').split(/\r?\n/).map((l) => l.trim()).filter(Boolean);
+  if (options.length > 10) return { options: null, error: 'Up to 10 options, one per line.' };
+  if (options.some((o) => o.length > 200)) return { options: null, error: 'Each option can be up to 200 characters.' };
+  return { options, error: null };
+}
+
+/** Options stored as an array or a JSON array string, as an array of strings. */
+export function optionsOf(value) {
+  let v = value;
+  if (typeof v === 'string') {
+    try { v = JSON.parse(v); } catch { return []; }
+  }
+  return Array.isArray(v) ? v.filter((x) => typeof x === 'string' && x.trim()).map((x) => x.trim()) : [];
+}
+
+export const PREF_KEY_RE = /^[a-z0-9_.-]{1,60}$/;
+
+/** A preference key from a typed name: 'Email sign-off' -> 'email-sign-off'. Null when nothing usable is left. */
+export function prefKeyFrom(name) {
+  const k = String(name || '').toLowerCase().trim().replace(/\s+/g, '-').replace(/[^a-z0-9_.-]/g, '')
+    .replace(/-{2,}/g, '-').replace(/^[-.]+|[-.]+$/g, '').slice(0, 60);
+  return PREF_KEY_RE.test(k) ? k : null;
+}
+
+/** A preference key shown as words: 'email-sign-off' -> 'Email sign off'. */
+export function prefLabel(key) {
+  const s = String(key || '').replace(/[-_.]+/g, ' ').trim();
+  return s ? s[0].toUpperCase() + s.slice(1) : '';
+}
+
+function countValue(v) {
+  if (typeof v === 'number' && Number.isFinite(v)) return v;
+  if (Array.isArray(v)) return v.length;
+  if (v && typeof v === 'object') return Object.values(v).reduce((n, x) => n + countValue(x), 0);
+  return 0;
+}
+
+const TABLE_WORDS = {
+  captures: ['capture', 'captures'], items: ['item', 'items'], projects: ['project', 'projects'], checkpoints: ['saved place', 'saved places'],
+  reminders: ['reminder', 'reminders'], attachments: ['attachment', 'attachments'], preferences: ['preference', 'preferences'],
+  proposals: ['suggestion', 'suggestions'], changes: ['undo record', 'undo records'],
+};
+
+/** A restore result ({ inserted: {table: n}, skipped_existing, skipped_deleted, rejected }) in plain words. */
+export function restoreWords(result) {
+  const r = result && typeof result === 'object' ? result : {};
+  const inserted = r.inserted && typeof r.inserted === 'object' ? r.inserted : {};
+  const parts = [];
+  for (const [table, n] of Object.entries(inserted)) {
+    const c = countValue(n);
+    if (!c) continue;
+    const w = TABLE_WORDS[table] || ['record', 'records'];
+    parts.push(`${c} ${c === 1 ? w[0] : w[1]}`);
+  }
+  const total = countValue(inserted);
+  const existing = countValue(r.skipped_existing);
+  const deleted = countValue(r.skipped_deleted);
+  const rejected = countValue(r.rejected);
+  const out = [total ? `Restored ${parts.join(', ')}.` : 'Nothing new to restore.'];
+  if (existing) out.push(`${existing} already here, left as they are.`);
+  if (deleted) out.push(`${deleted} you deleted earlier, not brought back.`);
+  if (rejected) out.push(`${rejected} could not be restored (wrong scope or not valid).`);
+  const quiet = countValue(r.reminders_not_rescheduled);
+  if (quiet) out.push(`${quiet} ${quiet === 1 ? 'reminder was' : 'reminders were'} restored without a new alert time.`);
+  return out.join(' ');
+}
+
+/** Case-insensitive match of every typed word against a task's words (title, notes, who asked, date phrase). */
+export function taskMatches(item, filter) {
+  const q = String(filter || '').trim().toLowerCase();
+  if (!q) return true;
+  const hay = [item && item.title, item && item.body, item && item.claim_by, item && item.when_text].filter(Boolean).join(' ').toLowerCase();
+  return q.split(/\s+/).every((w) => hay.includes(w));
+}
+
+/** Capture text from a Web Share Target GET (title, text, url), without repeating a part already included. */
+export function shareText({ title, text, url } = {}, max = 4000) {
+  const parts = [];
+  for (const raw of [title, text, url]) {
+    const p = String(raw || '').trim();
+    if (!p) continue;
+    if (parts.some((x) => x.includes(p))) continue;
+    parts.push(p);
+  }
+  return parts.join('\n').slice(0, max);
 }

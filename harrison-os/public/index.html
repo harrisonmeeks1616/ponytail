@@ -88,7 +88,12 @@
       <div class="screen-head">
         <a href="#/today" class="back-link">Back to Today</a>
         <h1 id="tasks-title" tabindex="-1">Open tasks</h1>
-        <p class="subtle">Everything still open, dated or not. Pick a few for today; hard dates show on Today by themselves.</p>
+        <p id="tasks-sub" class="subtle">Everything still open, dated or not. Pick a few for today; hard dates show on Today by themselves.</p>
+      </div>
+      <div class="tasks-tools">
+        <label for="tasks-filter">Filter tasks</label>
+        <input id="tasks-filter" type="search" maxlength="200" autocomplete="off" autocapitalize="off" spellcheck="false">
+        <a id="tasks-mode-link" href="#/tasks/archived" class="inline-link">Archived tasks</a>
       </div>
       <div id="tasks-body" class="stack"></div>
     </section>
@@ -140,6 +145,41 @@
       <div id="search-results" class="stack"></div>
       <div id="memory-extra" class="stack"></div>
 
+      <section class="card" aria-labelledby="decisions-title">
+        <h2 id="decisions-title">Decisions</h2>
+        <p class="subtle">Record what was decided, the options, and when to look at it again. A replaced decision stays findable, marked as replaced.</p>
+        <button type="button" id="decision-new" class="btn btn-secondary">Record a decision</button>
+      </section>
+
+      <section class="card" aria-labelledby="prefs-title">
+        <h2 id="prefs-title">Preferences</h2>
+        <p class="subtle">How you like things done, kept until you change them. Only what you add here is a preference. Correcting one item never turns into a preference by itself.</p>
+        <p id="prefs-status" class="subtle" aria-live="polite"></p>
+        <ul id="prefs-list" class="list"></ul>
+        <details id="prefs-details" class="inline-form">
+          <summary id="prefs-summary" class="btn btn-secondary">Add a preference</summary>
+          <form id="prefs-form" class="form" novalidate>
+            <label for="pref-name">Name</label>
+            <input id="pref-name" type="text" maxlength="60" autocomplete="off" aria-describedby="pref-name-hint">
+            <p id="pref-name-hint" class="subtle small">For example: Email sign-off.</p>
+            <label for="pref-value">Preference</label>
+            <textarea id="pref-value" rows="2" maxlength="500"></textarea>
+            <label for="pref-note">Note <span class="subtle">(optional)</span></label>
+            <input id="pref-note" type="text" maxlength="500" autocomplete="off">
+            <fieldset id="pref-scope" class="segmented">
+              <legend>Where it applies</legend>
+              <label class="seg"><input type="radio" name="prefscope" value="work"> <span>Work</span></label>
+              <label class="seg"><input type="radio" name="prefscope" value="personal"> <span>Personal</span></label>
+            </fieldset>
+            <p id="prefs-error" class="field-error" role="alert" hidden></p>
+            <div class="button-row">
+              <button type="submit" id="pref-save" class="btn btn-primary">Save preference</button>
+              <button type="button" id="pref-cancel" class="btn btn-secondary">Cancel</button>
+            </div>
+          </form>
+        </details>
+      </section>
+
       <section class="card" aria-labelledby="export-title">
         <h2 id="export-title">Export</h2>
         <p class="subtle">A JSON file of everything in that scope.</p>
@@ -149,6 +189,23 @@
           <button type="button" class="btn btn-secondary" data-export="all">All</button>
         </div>
         <p id="export-result" class="subtle" aria-live="polite"></p>
+      </section>
+
+      <section class="card" aria-labelledby="restore-title">
+        <h2 id="restore-title">Restore from an export</h2>
+        <p class="subtle">Adds back what is missing from an export file, with its photos and links. It never changes what is already here and never brings back something you deleted.</p>
+        <form id="restore-form" class="form" novalidate>
+          <label for="restore-file">Export file</label>
+          <input id="restore-file" type="file" accept=".json,application/json">
+          <label for="restore-scope">Restore into</label>
+          <select id="restore-scope">
+            <option value="all">Work and Personal</option>
+            <option value="work">Work only</option>
+            <option value="personal">Personal only</option>
+          </select>
+          <button type="submit" id="restore-run" class="btn btn-secondary">Restore</button>
+        </form>
+        <p id="restore-result" class="subtle" aria-live="polite"></p>
       </section>
 
       <section class="card" aria-labelledby="alerts-title">
@@ -209,6 +266,12 @@
       </div>
       <label for="capture-text">What do you want to remember?</label>
       <textarea id="capture-text" name="text" rows="5" maxlength="4000" autocomplete="off" autocapitalize="sentences" spellcheck="true"></textarea>
+      <div class="attach-row">
+        <input id="capture-file" class="file-input" type="file" accept="image/*,.heic,.heif,application/pdf,.pdf,text/plain,.txt" multiple>
+        <label for="capture-file" class="btn btn-secondary file-btn">Add photo or file</label>
+        <span class="subtle small">Photos, PDF or text, up to 1 MB each. You can also paste a picture.</span>
+      </div>
+      <ul id="capture-files" class="att-pending" aria-label="Added to this capture" hidden></ul>
       <p id="draft-status" class="subtle" aria-live="polite"></p>
       <fieldset class="segmented">
         <legend>Where it goes</legend>
@@ -223,6 +286,15 @@
       <p id="outbox-summary" class="subtle">Nothing waiting.</p>
       <ul id="outbox-list" class="list"></ul>
     </section>
+  </dialog>
+
+  <dialog id="edit-sheet" class="sheet" aria-labelledby="edit-sheet-title">
+    <div class="sheet-head">
+      <h2 id="edit-sheet-title">Edit</h2>
+      <button type="button" id="edit-sheet-close" class="btn btn-ghost">Close</button>
+    </div>
+    <p id="edit-sheet-status" class="subtle" role="status" aria-live="polite"></p>
+    <div id="edit-sheet-body"></div>
   </dialog>
 </body>
 </html>
