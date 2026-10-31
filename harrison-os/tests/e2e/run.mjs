@@ -1279,8 +1279,11 @@ async function main() {
 
     const require = createRequire(PLAYWRIGHT_PKG);
     const { chromium } = require('playwright');
-    browser = await chromium.launch({ channel: 'chrome', headless: true });
-    say(`setup: Chrome ${browser.version()} (headless, ${VIEWPORT.width}x${VIEWPORT.height}, ${TZ}, Playwright from the existing install)`);
+    // System Google Chrome by default (CI runners and this repo's dev machines have it). E2E_CHROME_PATH
+    // points at another Chromium binary instead, e.g. a preinstalled Playwright Chromium.
+    const launch = process.env.E2E_CHROME_PATH ? { executablePath: process.env.E2E_CHROME_PATH } : { channel: 'chrome' };
+    browser = await chromium.launch({ ...launch, headless: true });
+    say(`setup: Chrome ${browser.version()} (headless, ${VIEWPORT.width}x${VIEWPORT.height}, ${TZ}, Playwright resolved from ${PLAYWRIGHT_PKG})`);
   } catch (err) {
     setupError = err;
   }

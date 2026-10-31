@@ -7,3 +7,4 @@ evidence-local/
 .secrets/
 tail*.json
 tail*.jsonl
+wrangler.local.jsonc
