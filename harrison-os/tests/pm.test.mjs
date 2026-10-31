@@ -7,6 +7,7 @@ import { readFileSync } from 'node:fs';
 import { createTestDb } from './helpers/d1.mjs';
 import { createWorker } from '../src/api.js';
 import * as pm from '../src/pm.js';
+import { freshnessWords } from '../public/views/pm.js';
 
 const BASE = 'http://127.0.0.1:8899';
 const TZ = 'America/New_York';
@@ -187,6 +188,11 @@ test('sample is labelled and idempotent; refresh of an import says to import aga
   assert.ok(dg.data.totals.overdue >= 1 && dg.data.totals.due_soon >= 1);
 
   const id = s1.data.source.id;
+  // Real data can never be imported into the sample source (it would be labelled and discarded as sample).
+  const into = await importJson(call, 'work', fixture(), { source_id: id });
+  assert.equal(into.status, 409);
+  assert.equal(into.data.error.code, 'sample_source');
+  assert.deepEqual((await DB.prepare('SELECT DISTINCT sample FROM pm_records WHERE source_id = ?').bind(id).all()).results, [{ sample: 1 }]);
   const ref = await call('POST', `/api/pm/sources/${id}/refresh`, { scope: 'work' });
   assert.equal(ref.status, 409);
   assert.equal(ref.data.error.code, 'import_source');
@@ -221,6 +227,16 @@ test('digest link: not connected without config; https only; bearer token; failu
   assert.equal((await off.call('GET', '/api/pm/sources?scope=personal')).data.sources.length, 0);
   assert.equal(pm.httpConfigured({ ...LINK_ENV, PM_DIGEST_URL: 'http://pm.example.com/d.json' }), false);
   assert.deepEqual(await pm.onScheduled(off.env, NOW), { skipped: 'not_connected' });
+
+  // A first check that fails is reported as a failure, not as "not checked yet".
+  const first = setup(LINK_ENV);
+  await pm.refreshHttpSource(first.env, NOW, { fetchImpl: () => new Response('no', { status: 401 }) });
+  const failed = (await first.call('GET', '/api/pm/sources?scope=work')).data.sources[0];
+  assert.equal(failed.state, 'error');
+  assert.equal(failed.last_error_code, 'http_401');
+  assert.equal(failed.fetched_at, null);
+  assert.equal(freshnessWords(failed, String), 'Last check failed: The digest link refused the token. Nothing stored yet');
+  assert.equal(freshnessWords({ state: 'never', fetched_at: null }, String), 'Set up, not checked yet');
 
   const { env, call } = setup(LINK_ENV);
   assert.equal((await call('GET', '/api/pm/sources?scope=work')).data.sources[0].state, 'never');

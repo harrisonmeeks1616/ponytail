@@ -303,6 +303,7 @@ export async function importInto(d, { sourceId = null, scope, label, kind = 'imp
   const existing = sourceId ? await getSource(d, sourceId, scope) : null;
   if (sourceId && !existing) throw new db.NotFoundError('source not found');
   if (existing && existing.kind !== kind) throw new HttpError(409, 'wrong_source_kind', 'That source is not an import');
+  if (existing && Number(existing.sample) && !sample) throw new HttpError(409, 'sample_source', 'That is the sample; import into a new source');
   const id = existing ? existing.id : sourceId || newId('pms');
   const prev = existing
     ? (await d.prepare('SELECT id, kind, provider_id, status, due_on, milestone_due_on FROM pm_records WHERE source_id = ?').bind(id).all()).results

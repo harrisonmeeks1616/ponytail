@@ -84,7 +84,7 @@ link stays configured.
 
 | Route | Body / query | Result |
 |---|---|---|
-| `POST /api/pm/import` | `{ scope, label, format: json\|csv, content, source_id?, system? }` | 201 new / 200 update: `{ source, changes, dropped_urls }` |
+| `POST /api/pm/import` | `{ scope, label, format: json\|csv, content, source_id?, system? }` | 201 new / 200 update: `{ source, changes, dropped_urls }`; `source_id` of the sample answers 409 `sample_source` |
 | `POST /api/pm/sample` | `{ scope }` | Synthetic sample, labelled Sample (idempotent per scope) |
 | `GET /api/pm/sources` | `?scope=work\|personal\|all` | `{ sources }` with state, freshness, counts, last changes |
 | `POST /api/pm/sources/:id/refresh` | `{ scope }` | Digest link only (`pm-http`); imports answer 409 `import_source` |

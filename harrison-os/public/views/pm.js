@@ -16,6 +16,21 @@ const ERROR_WORDS = {
   http_404: 'The digest link was not found',
 };
 
+export const errorWords = (code) => ERROR_WORDS[code] || (code ? 'The last check failed' : '');
+
+// One line of honest status for a source. A failed check is reported even when nothing was ever stored.
+export function freshnessWords(s, formatAt) {
+  if (s.state === 'not_connected') return s.message || ERROR_WORDS.not_connected;
+  if (!s.fetched_at) {
+    if (s.state === 'error') return `Last check failed: ${errorWords(s.last_error_code)}. Nothing stored yet`;
+    return s.message || 'Set up, not checked yet';
+  }
+  const parts = [s.export_time_known ? `Exported ${formatAt(s.exported_at)}` : `Export time not stated, imported ${formatAt(s.fetched_at)}`];
+  if (s.state === 'error') parts.push(`Last check failed: ${errorWords(s.last_error_code)}. Showing the copy from ${formatAt(s.fetched_at)}`);
+  if (s.stale) parts.push('May be out of date');
+  return parts.join('. ');
+}
+
 export function register(kit) {
   const {
     h, api, state, section, chip, scopeChip, sampleChip, noticeBlock, showToast, guarded, failWords, formatOn, formatAt, plural, qs,
@@ -25,16 +40,7 @@ export function register(kit) {
   let updateTarget = null; // an import source the next file replaces
 
   const digest = (scope) => api(`/api/pm/digest?${qs({ scope, tz: deviceTimeZone() })}`);
-  const errorWords = (code) => ERROR_WORDS[code] || (code ? 'The last check failed' : '');
-
-  function freshness(s) {
-    if (s.state === 'not_connected') return s.message || ERROR_WORDS.not_connected;
-    if (!s.fetched_at) return s.message || 'Set up, not checked yet';
-    const parts = [s.export_time_known ? `Exported ${formatAt(s.exported_at)}` : `Export time not stated, imported ${formatAt(s.fetched_at)}`];
-    if (s.state === 'error') parts.push(`Last check failed: ${errorWords(s.last_error_code)}. Showing the copy from ${formatAt(s.fetched_at)}`);
-    if (s.stale) parts.push('May be out of date');
-    return parts.join('. ');
-  }
+  const freshness = (s) => freshnessWords(s, formatAt);
 
   function changeWords(c) {
     if (!c) return null;
