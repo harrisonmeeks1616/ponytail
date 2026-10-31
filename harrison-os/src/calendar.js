@@ -357,14 +357,22 @@ export function purgeRef() {
 /** Cron: refresh at most one ICS link whose last attempt is older than 30 minutes (oldest first). */
 export async function onScheduled(env, nowMs, { fetchImpl } = {}) {
   if (!env || !env.DB) return { refreshed: null };
+  const due = iso(nowMs - REFRESH_EVERY_MS);
   const row = await env.DB
     .prepare(
       `SELECT * FROM calendar_connections WHERE kind = 'ics_url' AND (last_fetch_at IS NULL OR last_fetch_at < ?)
-       ORDER BY last_fetch_at IS NOT NULL, last_fetch_at, id LIMIT 1`,
+       ORDER BY last_fetch_at IS NOT NULL, last_fetch_at, created_at, id LIMIT 1`,
     )
-    .bind(iso(nowMs - REFRESH_EVERY_MS))
+    .bind(due)
     .first();
   if (!row) return { refreshed: null };
+  // Stamp the attempt before fetching: a run killed mid-refresh (CPU or wall limit) must not leave this
+  // link first in line forever, starving every other link. The guard also stops two runs claiming it.
+  const claim = await env.DB
+    .prepare('UPDATE calendar_connections SET last_fetch_at = ? WHERE id = ? AND (last_fetch_at IS NULL OR last_fetch_at < ?)')
+    .bind(iso(nowMs), row.id, due)
+    .run();
+  if (!claim || !claim.meta || Number(claim.meta.changes) !== 1) return { refreshed: null };
   await refreshConnection(env.DB, row, { nowMs, fetchImpl });
   return { refreshed: row.id };
 }

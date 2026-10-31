@@ -309,6 +309,8 @@ test('cron: refreshes at most one due link per run, never-fetched first, imports
   const { call, DB, env, setNow } = setup();
   await call('POST', '/api/calendar/import', { scope: 'work', label: 'File', ics_text: FEED });
   const a = (await call('POST', '/api/calendar/connections', { scope: 'work', label: 'A', url: FEED_URL })).data.connection.id;
+  // Created a moment later: among never-fetched links the older one goes first (not whichever random id sorts first).
+  setNow(NOW + 1);
   const b = (await call('POST', '/api/calendar/connections', { scope: 'personal', label: 'B', url: 'https://calendar.example.com/b.ics' })).data.connection.id;
   const fake = async () => new Response(FEED, { status: 200 });
   const fetched = [];
@@ -321,4 +323,25 @@ test('cron: refreshes at most one due link per run, never-fetched first, imports
   assert.equal((await onScheduled(env, NOW + REFRESH_EVERY_MS + 1000, { fetchImpl: tracking })).refreshed, a, 'oldest attempt first');
   const bRow = await DB.prepare('SELECT scope, state FROM calendar_connections WHERE id = ?').bind(b).first();
   assert.deepEqual({ ...bRow }, { scope: 'personal', state: 'ok' });
+});
+
+test('cron: a run that never finishes does not block the other links, and a link is claimed once', async () => {
+  const { call, env } = setup();
+  const a = (await call('POST', '/api/calendar/connections', { scope: 'work', label: 'A', url: FEED_URL })).data.connection.id;
+  const b = (await call('POST', '/api/calendar/connections', { scope: 'work', label: 'B', url: 'https://calendar.example.com/b.ics' })).data.connection.id;
+  // Run 1 claims one link and hangs in fetch, like an invocation killed mid-refresh.
+  let release;
+  const hung = new Promise((r) => (release = r));
+  const fetched = [];
+  const stuck = onScheduled(env, NOW, { fetchImpl: async (u) => (fetched.push(u), await hung, new Response(FEED, { status: 200 })) });
+  await new Promise((r) => setTimeout(r, 0));
+  assert.equal(fetched.length, 1);
+  const first = fetched[0] === FEED_URL ? a : b;
+  // Runs 2 and 3 move on to the other link, then find nothing due; the hung link is not picked again.
+  const ok = async () => new Response(FEED, { status: 200 });
+  const second = (await onScheduled(env, NOW + 1000, { fetchImpl: ok })).refreshed;
+  assert.equal(second, first === a ? b : a);
+  assert.equal((await onScheduled(env, NOW + 2000, { fetchImpl: ok })).refreshed, null);
+  release();
+  assert.equal((await stuck).refreshed, first);
 });

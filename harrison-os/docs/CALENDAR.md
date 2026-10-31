@@ -35,7 +35,7 @@ Each calendar belongs to one scope (Work or Personal), chosen when it is added.
 | Last refresh failed | A plain reason (link no longer works, refused, not a calendar, too large, did not answer in 8 seconds, ...) plus "Showing events from 3 hours ago." The previous events are kept, never silently emptied. |
 | Imported file | "From a file imported Oct 31, 11:21 AM. It does not update." |
 
-The cron entry point `onScheduled(env, nowMs)` refreshes at most one link per call: the one whose last attempt is oldest and more than 30 minutes ago. Manual **Refresh** is in the Memory card.
+The cron entry point `onScheduled(env, nowMs)` refreshes at most one link per call: the one whose last attempt is oldest and more than 30 minutes ago (never-checked links first, older links first among them). It stamps the attempt before fetching, so a run cut off mid-refresh (CPU or wall-clock limit) does not keep picking the same link and starving the others, and two overlapping runs never fetch the same link. Wire it after reminder delivery in `runScheduled`, so a slow feed can never delay a reminder. Manual **Refresh** is in the Memory card.
 
 Fetch limits: https only (every redirect re-checked), at most 3 redirects, 8 seconds for the whole refresh including the body, 2 MB, no credentials in the URL, no loopback or IP-literal hosts. Each refresh has its own `AbortController`.
 
@@ -48,7 +48,8 @@ Repeating events stay at their wall-clock time across daylight-saving changes (s
 Known limits (shown to the user, not hidden):
 - A rule using other parts (`BYSETPOS`, `BYHOUR`, `BYMONTH`, monthly `BYDAY` without an ordinal, ...) shows only its first occurrence; the calendar's health line says how many.
 - At most 2,000 occurrences are stored per calendar (the earliest in the window of 14 days back to 180 days ahead); the health line says when that cap was hit.
-- A `TZID` that is neither IANA nor a mapped Windows name is read in the calendar's own zone.
+- A `TZID` that is neither IANA nor a mapped Windows name is read in the calendar's own zone. So are zones past the 40th distinct one in a file (counted the same way).
+- Work is bounded per parse, not just output: a `COUNT` rule that began years ago skips straight to the window (its count stays exact), and one shared budget covers every event read, `EXDATE` value, rule period and occurrence. A hostile file stops there, marked as cut short, in well under a second (1000 decades-old daily `COUNT` series: ~0.2 s; any 2 MB file tried: under 0.5 s in Node).
 - CPU: parsing a 2 MB feed took roughly 60 to 110 ms in Node in a synthetic benchmark. Small feeds fit the Workers Free plan's 10 ms CPU budget; large feeds may need the Paid plan.
 
 ## API
