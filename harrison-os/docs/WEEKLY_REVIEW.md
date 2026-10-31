@@ -18,7 +18,7 @@ Every row has `ref` (`item:<id>`, `project:<id>`, `reminder:<id>`, `event:<id>` 
 | `changes.decisions` | decisions recorded in the last 7 days (with `supersedes` / `superseded_by` refs) |
 | `changes.replies` | Waiting items whose reply was recorded in the last 7 days |
 | `changes.captures` | `{ sorted, pending }`: captures received in the last 7 days that are no longer pending, and all still pending |
-| `hard` | open non-Waiting, non-idea items with `due_on` up to today + 14 (earlier ones flagged `past`); active reminders firing within 14 days; calendar events (`calendar.listEvents`) and PM entries with a `due_on` (`pm.listDigest`) when those modules provide them. Never hidden by a deferral. |
+| `hard` | open non-Waiting, non-idea items with `due_on` up to today + 14 (earlier ones flagged `past`); active reminders firing within 14 days; calendar events (`calendar.listEvents`) and PM due dates (`pm.listDigest`: each project's `next_milestone`, ref = the project's `pm:<id>`, plus its `overdue` and `due_soon` items; overdue ones flagged `past`) when those modules provide them. The digest is asked as of today + 7 so its 7-day `due_soon` window reaches today + 14. Never hidden by a deferral. |
 | `follow_ups` | open Waiting items with `follow_up_on` up to the Sunday that ends next week |
 | `decisions` | open, not superseded decisions with `claim_status = 'proposed'` or a `reconsider_when` |
 | `resume` | active projects with their latest checkpoint |
@@ -56,7 +56,8 @@ The week is the local Monday-to-Sunday week (`week_of` = its Monday).
   - Decisions and projects: recorded in the review only (`applied: 'review_only'`).
   `due_on` is never written. The deferral hides the row from the flexible sections for this week while
   the written date is still the live value (an Undo brings the row back); hard-date rows always stay,
-  marked `deferred_until`. Deferring removes the ref from this week's picks. Errors: 400
+  marked `deferred_until` with `deferred_field` (`start_on`, or `null` when only the review recorded it:
+  the screen then says the task still shows on Today and in Tasks). Deferring removes the ref from this week's picks. Errors: 400
   `invalid_date`, `follow_up_on_required`, `start_on_required`, `invalid_ref`; 404 out of scope; 409
   `not_open`.
 - `POST /api/review/weekly/complete { scope, time_zone? }` 200: `{ week_of, completed_at, status }`.

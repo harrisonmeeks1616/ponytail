@@ -141,37 +141,43 @@ async function calendarRows(impl, d1, scope, scopes, nowMs, timeZone) {
   return { state: 'included', rows: out };
 }
 
-// PM digest entries (projects and any nested arrays of entries) that carry a due_on inside the window.
+// PM due dates from T5's digest: each project's next_milestone (ref = the project's pm:<id>) and its
+// overdue / due_soon items. Overdue entries stay in, marked past, like overdue core tasks.
+// ponytail: T5's due_soon window is 7 days, so the digest is asked as of today+7: its overdue + due_soon
+// then cover every dated item up to today+14, and `past` is recomputed against the real today. Only the
+// date classification depends on nowMs there (plus source staleness, unused here). Upgrade path: a
+// window option on listDigest.
 async function pmRows(impl, d1, scope, scopes, nowMs, timeZone, w) {
   if (!impl || typeof impl.listDigest !== 'function') return { state: 'not_available', rows: [] };
   let digest;
   try {
-    digest = await impl.listDigest(d1, scope, { nowMs, timeZone });
+    digest = await impl.listDigest(d1, scope, { nowMs: nowMs + (HARD_AHEAD_DAYS - 7) * DAY_MS, timeZone });
   } catch {
     return { state: 'error', rows: [] };
   }
-  const entries = [];
-  for (const p of Array.isArray(digest && digest.projects) ? digest.projects : []) {
-    if (!p || typeof p !== 'object') continue;
-    entries.push(p);
-    for (const v of Object.values(p)) if (Array.isArray(v)) entries.push(...v.filter((x) => x && typeof x === 'object'));
-  }
   const out = [];
-  for (const x of entries) {
+  const add = (x, ref, title, dueOn) => {
+    if (!x || typeof x !== 'object' || out.length >= LIST_CAP) return;
     const s = x.scope || (scope === 'all' ? null : scope);
-    if (!scopes.includes(s) || typeof x.source_ref !== 'string' || !x.source_ref.startsWith('pm:')) continue;
-    if (!isDateOn(x.due_on) || x.due_on < w.todayOn || x.due_on > w.hard_until) continue;
+    if (!scopes.includes(s) || typeof ref !== 'string' || !ref.startsWith('pm:') || out.some((r) => r.ref === ref)) return;
+    if (!isDateOn(dueOn) || dueOn > w.hard_until) return;
     out.push({
-      ref: x.source_ref,
+      ref,
       kind: 'pm',
-      title: typeof x.title === 'string' ? x.title : typeof x.name === 'string' ? x.name : null,
+      title: typeof title === 'string' ? title : null,
       scope: s,
       sample: Number(x.sample) ? 1 : 0,
-      date: x.due_on,
+      date: dueOn,
+      past: dueOn < w.todayOn,
       url: typeof x.url === 'string' && /^https:\/\//i.test(x.url) ? x.url : null,
       fetched_at: x.fetched_at ?? x.exported_at ?? null,
     });
-    if (out.length >= LIST_CAP) break;
+  };
+  for (const p of Array.isArray(digest && digest.projects) ? digest.projects : []) {
+    if (!p || typeof p !== 'object') continue;
+    const m = p.next_milestone;
+    if (m && typeof m === 'object') add(p, p.source_ref, [p.name, m.title].filter((t) => typeof t === 'string').join(': ') || null, m.due_on);
+    for (const list of [p.overdue, p.due_soon]) for (const x of Array.isArray(list) ? list : []) add(x, x && x.source_ref, x && x.title, x && x.due_on);
   }
   return { state: 'included', rows: out };
 }
@@ -254,15 +260,16 @@ export async function buildWeeklyReview(d1, scope, { nowMs, timeZone, calendar =
 
   // Selections mark rows; a "Not this week" choice hides a flexible row for this week. Hard dates are
   // never hidden: a deferred hard task still shows, with its unchanged due date.
-  const deferredUntil = (row) => {
+  const deferral = (row) => {
     const rec = records[row.scope];
     const d = rec && rec.deferrals.find((x) => x.ref === row.ref);
     if (!d || typeof d.until !== 'string' || d.until <= w.todayOn) return null;
     // A deferral that wrote a date counts only while that date is still the live value (Undo restores it).
     if (d.field === 'follow_up_on' && row.date !== d.until) return null;
     if (d.field === 'start_on' && row.start_on !== d.until) return null;
-    return d.until;
+    return d;
   };
+  const deferredUntil = (row) => (deferral(row) || {}).until || null;
   const mark = (row) => ({ ...row, selected: !!(records[row.scope] && records[row.scope].selections.includes(row.ref)) });
   const flexible = (list) => list.map(mark).filter((r) => !deferredUntil(r));
 
@@ -283,7 +290,12 @@ export async function buildWeeklyReview(d1, scope, { nowMs, timeZone, calendar =
   ]
     .map((r) => {
       const m = mark(r);
-      if (m.kind === 'task') m.deferred_until = deferredUntil(m);
+      if (m.kind === 'task') {
+        // deferred_field null = only set aside in this review: core (Today, Tasks) still shows the task.
+        const d = deferral(m);
+        m.deferred_until = d ? d.until : null;
+        m.deferred_field = d ? d.field || null : null;
+      }
       return m;
     })
     .sort((a, b) => (a.date || '9999').localeCompare(b.date || '9999') || String(a.at || '').localeCompare(String(b.at || '')) || a.ref.localeCompare(b.ref));

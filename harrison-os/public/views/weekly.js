@@ -1,5 +1,14 @@
 // Weekly review screen (#/weekly) and its Today link. Server: src/review.js (/api/review/weekly*).
 // Nothing here changes a record unless the owner taps a button; hard dates are never moved.
+
+// What a "Not this week" answer really changed (server `applied`): say only that.
+export function deferWords(applied, kind, untilWords) {
+  if (applied === 'start_on') return `Shows from ${untilWords}. Due dates stay as they are.`;
+  if (applied === 'follow_up_on') return `Follow-up moved to ${untilWords}.`;
+  if (kind === 'task') return `Set aside in this review until ${untilWords}. It still shows on Today and in Tasks.`;
+  return `Hidden from this review until ${untilWords}. Nothing else changed.`;
+}
+
 export function register(kit) {
   const { h, api, state, section, chip, scopeChip, sampleChip, statusChip, noticeBlock, showToast, showNotice, guarded, failWords } = kit;
   const { formatOn, formatAt, excerpt, enc, qs, plural, deviceTimeZone, reloadCurrent, sourceWords } = kit;
@@ -83,7 +92,7 @@ export function register(kit) {
               keepPlace(e.currentTarget);
               const r = await post('/api/review/weekly/defer', { scope: row.scope, ref: row.ref, [defer.field]: defer.until }, 'move this to next week');
               if (!r.ok) return;
-              showToast(`Moved to ${formatOn(defer.until)}. Due dates stay as they are.`, r.data.changeId);
+              showToast(deferWords(r.data.applied, row.kind, formatOn(r.data.until || defer.until)), r.data.changeId);
               reloadCurrent();
             }),
         }),
@@ -164,7 +173,8 @@ export function register(kit) {
                 [
                   KIND_WORDS[r.kind],
                   r.past ? `Was due ${dateWords(r)}` : r.kind === 'event' || r.kind === 'reminder' ? dateWords(r) : `Due ${dateWords(r)}`,
-                  r.deferred_until || r.start_on ? `Shows from ${formatOn(r.deferred_until || r.start_on)}` : null,
+                  r.start_on && r.start_on > d.todayOn ? `Shows from ${formatOn(r.start_on)}` : null,
+                  r.deferred_until && !r.deferred_field ? `Set aside in this review until ${formatOn(r.deferred_until)}; still on Today and in Tasks` : null,
                   r.fetched_at ? `Updated ${formatAt(r.fetched_at)}` : null,
                 ],
                 {
@@ -212,7 +222,7 @@ export function register(kit) {
 
     const ch = s.changes;
     const changeRows = [
-      ...ch.decisions.map((r) => rowNode(r, ['Decision recorded', formatAt(r.date), r.supersedes ? 'Replaces an earlier decision' : null, r.superseded_by ? 'Since replaced' : null])),
+      ...ch.decisions.map((r) => rowNode(r, ['Decision recorded', dateWords(r), r.supersedes ? 'Replaces an earlier decision' : null, r.superseded_by ? 'Since replaced' : null])),
       ...ch.replies.map((r) => rowNode(r, [r.who ? `Reply from ${r.who} recorded` : 'Reply recorded', formatAt(r.date)])),
     ];
     out.push(
@@ -239,7 +249,7 @@ export function register(kit) {
         'Decisions still open',
         list(
           s.decisions,
-          (r) => rowNode(r, [r.reconsider_when ? `Reconsider when: ${excerpt(r.reconsider_when, 80)}` : null, `Recorded ${formatAt(r.date)}`], { pick: true, defer: { field: 'start_on', until: next } }),
+          (r) => rowNode(r, [r.reconsider_when ? `Reconsider when: ${excerpt(r.reconsider_when, 80)}` : null, `Recorded ${dateWords(r)}`], { pick: true, defer: { field: 'start_on', until: next } }),
           'No open decisions.',
         ),
         'weekly-decisions',

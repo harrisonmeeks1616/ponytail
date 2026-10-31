@@ -7,6 +7,8 @@ import { createTestDb } from './helpers/d1.mjs';
 import { createWorker } from '../src/api.js';
 import * as db from '../src/db.js';
 import { buildWeeklyReview, purgeRef, weekOf, reviewStatus } from '../src/review.js';
+import { instantToZonedParts } from '../src/time.js';
+import { addDaysOn } from '../src/dates.js';
 
 const TZ = 'America/New_York';
 // Thursday 2026-10-29 08:00 in New York. Week of Mon 10-26; next Monday 11-02; next week ends 11-08.
@@ -46,6 +48,35 @@ async function seedWeek(d, scope, word = 'Sample') {
 }
 
 const refsOf = (rows) => rows.map((r) => r.ref);
+
+// A pm module stand-in with T5's real listDigest output shape and date rules (src/pm.js on hos/T5):
+// projects[] carry next_milestone { title, due_on, overdue } without a source_ref, and open items are
+// split into overdue (< today), due_soon (<= today + 7), undated, and only counted in later_count.
+function t5Pm(projects, scope = 'work') {
+  return {
+    async listDigest(_db, _scope, { nowMs, timeZone }) {
+      const today = instantToZonedParts(nowMs, timeZone).date;
+      const soon = addDaysOn(today, 7);
+      const base = (id) => ({ id, source_ref: `pm:${id}`, scope, sample: 1, url: `https://pm.example.invalid/${id}`, fetched_at: at(0), exported_at: null });
+      return {
+        sources: [],
+        today,
+        due_soon_until: soon,
+        projects: projects.map((p) => {
+          const out = { ...base(p.id), name: p.name, next_milestone: p.milestone ? { ...p.milestone, overdue: p.milestone.due_on < today } : null, overdue: [], due_soon: [], undated: [], later_count: 0 };
+          for (const it of p.items) {
+            const item = { ...base(it.id), title: it.title, due_on: it.due_on };
+            if (!it.due_on) out.undated.push(item);
+            else if (it.due_on < today) out.overdue.push({ ...item, state: 'overdue' });
+            else if (it.due_on <= soon) out.due_soon.push({ ...item, state: 'due_soon' });
+            else out.later_count++;
+          }
+          return out;
+        }),
+      };
+    },
+  };
+}
 
 test('weekOf: Monday of the local week', () => {
   assert.equal(weekOf('2026-10-29'), '2026-10-26');
@@ -103,14 +134,7 @@ test('calendar and PM entries come in through their contracts; a failing connect
       ];
     },
   };
-  const pm = {
-    async listDigest() {
-      return {
-        sources: [],
-        projects: [{ source_ref: 'pm:p1', name: 'Clinic reno', scope: 'work', url: 'https://pm.example.invalid/p1', due_on: '2026-11-06', fetched_at: at(0), sample: 1 }],
-      };
-    },
-  };
+  const pm = t5Pm([{ id: 'p1', name: 'Clinic reno', milestone: { title: 'Rough-in done', due_on: '2026-11-06' }, items: [] }]);
   const r = await buildWeeklyReview(d, 'work', { nowMs: NOW, timeZone: TZ, calendar, pm });
   assert.deepEqual(r.sources, { calendar: 'included', pm: 'included' });
   const ev = r.sections.hard.filter((x) => x.kind === 'event');
@@ -125,6 +149,41 @@ test('calendar and PM entries come in through their contracts; a failing connect
   assert.ok(r2.sections.hard.length >= 3);
 });
 
+test('PM due dates in T5\'s digest shape: milestones, items due 8-14 days out and overdue items all reach fixed dates', async () => {
+  const d = createTestDb();
+  // Today is 2026-10-29: hard_until is 11-12.
+  const pm = t5Pm([
+    {
+      id: 'p1',
+      name: 'Clinic reno',
+      milestone: { title: 'Fixture submittal', due_on: '2026-11-03' },
+      items: [
+        { id: 'i-soon', title: 'Order panels', due_on: '2026-11-01' },
+        { id: 'i-later', title: 'Inspection booked', due_on: '2026-11-08' },
+        { id: 'i-edge', title: 'Last day in window', due_on: '2026-11-12' },
+        { id: 'i-out', title: 'Past the window', due_on: '2026-11-13' },
+        { id: 'i-over', title: 'Submittal log', due_on: '2026-10-20' },
+        { id: 'i-undated', title: 'No date', due_on: null },
+      ],
+    },
+    { id: 'p2', name: 'Warehouse', milestone: { title: 'Shutdown window', due_on: '2026-11-20' }, items: [] },
+  ]);
+  const r = await buildWeeklyReview(d, 'work', { nowMs: NOW, timeZone: TZ, calendar: NO_MODULE, pm });
+  const rows = r.sections.hard.filter((x) => x.kind === 'pm');
+  assert.deepEqual(
+    rows.map((x) => [x.ref, x.date, x.past]),
+    [
+      ['pm:i-over', '2026-10-20', true],
+      ['pm:i-soon', '2026-11-01', false],
+      ['pm:p1', '2026-11-03', false],
+      ['pm:i-later', '2026-11-08', false],
+      ['pm:i-edge', '2026-11-12', false],
+    ],
+  );
+  assert.equal(rows.find((x) => x.ref === 'pm:p1').title, 'Clinic reno: Fixture submittal');
+  assert.equal(rows.find((x) => x.ref === 'pm:i-later').url, 'https://pm.example.invalid/i-later');
+});
+
 test('personal canary never appears in a work review (records, calendar, PM, selections)', async () => {
   const d = createTestDb();
   await seedWeek(d, 'work');
@@ -132,7 +191,7 @@ test('personal canary never appears in a work review (records, calendar, PM, sel
   await db.updateItem(d, p.hard, { body: `${CANARY} body` }, 'personal', at(0));
   // A calendar that wrongly returns a personal title in a Work view, and a PM digest with a personal row.
   const calendar = { async listEvents() { return [{ id: 'evp', scope: 'personal', title: `${CANARY} dentist`, location: CANARY, start_at: '2026-10-30T15:00:00.000Z', busy_only: 0, source_ref: 'event:evp' }]; } };
-  const pm = { async listDigest() { return { projects: [{ source_ref: 'pm:x', name: CANARY, scope: 'personal', due_on: '2026-11-02' }] }; } };
+  const pm = t5Pm([{ id: 'x', name: CANARY, milestone: { title: CANARY, due_on: '2026-11-02' }, items: [{ id: 'xi', title: CANARY, due_on: '2026-10-30' }] }], 'personal');
   const work = await buildWeeklyReview(d, 'work', { nowMs: NOW, timeZone: TZ, calendar, pm });
   assert.ok(!JSON.stringify(work).includes(CANARY));
   assert.equal(work.sections.hard.find((x) => x.ref === 'event:evp').title, null);
@@ -205,6 +264,8 @@ test('API: review, pick for this week (onto Today), not this week, mark done', a
   const hardRow = g2.data.sections.hard.find((x) => x.ref === `item:${ids.hard}`);
   assert.equal(hardRow.date, '2026-11-04');
   assert.equal(hardRow.deferred_until, '2026-11-02');
+  // Only a written start_on counts as moved; a review-only deferral says so (the screen keys off this).
+  assert.equal(hardRow.deferred_field, def.data.applied === 'start_on' ? 'start_on' : null);
   assert.equal(hardRow.selected, false);
 
   // Not this week on a Waiting follow-up moves only the follow-up date, and hides it for this week.
