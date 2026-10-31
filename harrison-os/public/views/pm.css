@@ -1,1 +1,77 @@
-/* pm view styles. Reuse styles.css tokens and classes first. */
+/* Company projects (PM digest). Reuses styles.css tokens and classes (card, chips, list, row-*, btn). */
+.pm-project .chips {
+  margin: 0.25rem 0 0.5rem;
+}
+
+.pm-milestone {
+  margin: 0.5rem 0;
+}
+
+.pm-milestone.is-overdue,
+.pm-overdue .pm-group-title {
+  color: var(--bad);
+}
+
+.pm-group {
+  margin-top: 0.75rem;
+}
+
+.pm-group-title {
+  font-size: 1rem;
+  font-weight: 600;
+  margin: 0 0 0.25rem;
+}
+
+.pm-item,
+.pm-source {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+  padding: 0.5rem 0;
+  overflow-wrap: anywhere;
+}
+
+.pm-foot {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.5rem 1rem;
+  margin-top: 0.75rem;
+}
+
+.pm-changes summary {
+  min-height: var(--tap);
+  display: flex;
+  align-items: center;
+  cursor: pointer;
+  color: var(--work);
+  font-weight: 600;
+}
+
+.pm-change-list {
+  margin: 0.25rem 0 0;
+  padding-left: 1.25rem;
+  color: var(--muted);
+}
+
+.pm-form {
+  margin-top: 1rem;
+  padding-top: 1rem;
+  border-top: 1px solid var(--line);
+}
+
+.pm-form input[type="file"] {
+  min-height: var(--tap);
+  max-width: 100%;
+  font: inherit;
+  color: var(--ink);
+}
+
+.pm-form .row-actions,
+.pm-source .row-actions {
+  padding: 0;
+}
+
+.pm-today .chip {
+  align-self: flex-start;
+}
