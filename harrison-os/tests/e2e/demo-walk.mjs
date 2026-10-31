@@ -37,6 +37,13 @@ let failures = 0;
   page.on('console', (m) => { if (m.type() === 'error') errors.push(m.text()); });
   page.on('pageerror', (e) => errors.push('PAGEERROR ' + e.message));
   page.on('dialog', (d) => d.accept());
+  // Privacy claim check: after the walk, nothing but ordinary page and font GETs may have left this origin.
+  const outbound = [];
+  page.on('request', (r) => {
+    const u = new URL(r.url());
+    if (!/^https?:$/.test(u.protocol) || u.hostname === '127.0.0.1' || u.hostname === 'localhost') return;
+    outbound.push(`${r.method()} ${u.hostname}`);
+  });
   const log = (...a) => console.log(...a);
   const shot = async (n) => page.screenshot({ path: `${shots}/${n}.png` });
   const step = async (name, fn) => { try { await fn(); log('OK  ', name); } catch (e) { failures++; log('FAIL', name, '::', e.message.split('\n')[0]); await shot('fail-' + name.replace(/\W+/g, '_')); } };
@@ -164,6 +171,9 @@ let failures = 0;
     await page.locator('#ask-result').getByText(/Not AI/).first().waitFor({ timeout: 8000 });
     await shot('15-ask');
   });
+  const badOut = outbound.filter((o) => !/^GET (fonts\.googleapis\.com|fonts\.gstatic\.com)$/.test(o));
+  log('requests to other hosts:', outbound.length ? [...new Set(outbound)].join(', ') : 'none', badOut.length ? 'UNEXPECTED: ' + badOut.join(', ') : '(fonts only)');
+  if (badOut.length) failures++;
   log('console errors:', errors.length ? JSON.stringify(errors) : 'none');
   await browser.close();
   server.close();

@@ -7,7 +7,7 @@ Checkpoint, Saturday October 31, 2026, about noon Eastern. Source revision `13ab
 **On your phone or computer:** https://harrisonmeeks1616.github.io/ponytail/harrison-os-demo/
 
 - It is published by the repository's existing GitHub Pages site (the same one that serves the Schwab Field app), into its own new folder. No Field or PM file was changed.
-- It is the real Harrison OS screens and the real server code running inside your browser tab, with made-up data (Maple Street clinic, Jordan Example). Nothing you type leaves the browser. It is not the deployed app, there is no sign-in, and nothing syncs between devices.
+- It is the real Harrison OS screens and the real server code running inside your browser tab, with made-up data (Maple Street clinic, Jordan Example). What you type stays in this browser (the page is only allowed to talk to its own site, and the preview holds no AI or company-system keys; the preview walkthrough checks this). Opening the page does load fonts from Google, and GitHub Pages sees the page visit; neither sees what you type. Clearing this site's data in the browser erases it. It is not the deployed app, there is no sign-in, and nothing syncs between devices.
 - I could not open github.io from the build environment (its network blocks it). The GitHub Pages deployment of this commit is the evidence that it is live; if the page does not load, use the local steps below.
 - First load downloads about 2.5 MB (mostly the SQLite engine). Works in current Safari and Chrome.
 
