@@ -388,7 +388,7 @@ function wordsOf(s) {
   return s.toLowerCase().match(/[a-z0-9'[\]/-]+/g) || [];
 }
 
-function checkVerbatim(label, value, quote) {
+function checkVerbatim(label, value, quote, { contiguous = true } = {}) {
   assert.equal(typeof value, 'string', label);
   for (const digits of value.match(/\d+/g) || []) {
     assert.ok(quote.includes(digits), `${label}: digits "${digits}" not in "${quote}"`);
@@ -405,7 +405,7 @@ function checkVerbatim(label, value, quote) {
       assert.ok(new RegExp(`\\b${b}\\b`, 'i').test(quote), `${label}: adds "${b}" absent from "${quote}"`);
     }
   }
-  assert.ok(quote.includes(value), `${label}: "${value}" is not a verbatim part of "${quote}"`);
+  if (contiguous) assert.ok(quote.includes(value), `${label}: "${value}" is not a verbatim part of "${quote}"`);
 }
 
 test('property: no proposal invents digits, capitalised words or status words', () => {
@@ -425,7 +425,9 @@ test('property: no proposal invents digits, capitalised words or status words', 
       assert.equal(p.ordinal, idx + 1);
       assert.ok(text.includes(p.sourceQuote), 'sourceQuote is verbatim');
       assert.ok(p.title.length > 0, 'title is not empty');
-      checkVerbatim('title', p.title, p.sourceQuote);
+      // A corrected task title may take words from the correction sentence, never from anywhere else.
+      if (p.fields.correctionQuote && p.kind === 'task') checkVerbatim('title', p.title, `${p.sourceQuote} ${p.fields.correctionQuote}`, { contiguous: false });
+      else checkVerbatim('title', p.title, p.sourceQuote);
       const f = p.fields;
       if (f.who != null) checkVerbatim('who', f.who, p.sourceQuote);
       if (f.claim && f.claim.by != null) checkVerbatim('claim.by', f.claim.by, p.sourceQuote);
@@ -438,7 +440,7 @@ test('property: no proposal invents digits, capitalised words or status words', 
       }
       if (f.claim) {
         assert.ok(['requested', 'proposed', 'confirmed', 'reported_complete', 'verified', 'unspecified'].includes(f.claim.status));
-        if (f.claim.status === 'confirmed') assert.match(p.sourceQuote, /\b(confirmed|agreed|will|\w+'ll)\b/i);
+        if (f.claim.status === 'confirmed') assert.match(p.sourceQuote, /\b(confirmed|agreed|promised|will|\w+'ll|\w+'d)\b/i);
       }
       if ('promisedOn' in f) assert.equal(f.claim.status, 'confirmed', 'promisedOn only for confirmed claims');
       checked++;

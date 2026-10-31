@@ -521,7 +521,7 @@ test('deleteCapture: proposals and FTS row go; accepted items keep text with sou
   assert.equal(await count(d, "SELECT COUNT(*) FROM fts_work WHERE ref = 'capture:cap-del-001'"), 1);
 
   const res = await db.deleteCapture(d, 'cap-del-001', 'work', T3);
-  assert.deepEqual(res, { captures: 1, proposals: 3, itemsDeleted: 0, itemsDetached: 2, checkpointsDetached: 1 });
+  assert.deepEqual(res, { captures: 1, proposals: 3, itemsDeleted: 0, itemsDetached: 2, checkpointsDetached: 1, attachments: 0 });
   const cpAfter = (await db.getProject(d, proj.project.id, 'work')).checkpoint;
   assert.equal(cpAfter.source_ref, null, 'checkpoint loses the link to the deleted capture');
   assert.equal(cpAfter.stopped_at_text, cp.checkpoint.stopped_at_text, 'the saved words stay (user-saved, like accepted items)');
@@ -545,7 +545,7 @@ test('deleteCapture: proposals and FTS row go; accepted items keep text with sou
 
   // Repeat and wrong scope are harmless.
   assert.deepEqual(await db.deleteCapture(d, 'cap-del-001', 'work', T4), {
-    captures: 0, proposals: 0, itemsDeleted: 0, itemsDetached: 0, checkpointsDetached: 0,
+    captures: 0, proposals: 0, itemsDeleted: 0, itemsDetached: 0, checkpointsDetached: 0, attachments: 0,
   });
   await capture(d, 'cap-del-002', 'other');
   assert.equal((await db.deleteCapture(d, 'cap-del-002', 'personal', T4)).captures, 0);
@@ -751,9 +751,12 @@ test('kv, meta and events helpers', async () => {
 
 // ---------------------------------------------------------------- static rule
 
-// Nothing outside src/db.js builds SQL. `.exec(` on a regular expression (a regex literal, or a name such as
-// DATE_RE, timeRe, re, ...Regex, ...Pattern) is allowed: the copied src/time.js parses dates that way.
-test('static: no file in src/ other than db.js calls prepare( or .exec(', () => {
+// No core module other than src/db.js builds SQL. Feature modules registered in src/features.js may own SQL
+// for their own tables (PLAN.md), so only the core files are checked. `.exec(` on a regular expression (a
+// regex literal, or a name such as DATE_RE, timeRe, re, ...Regex, ...Pattern) is allowed: src/time.js parses
+// dates that way.
+const CORE_FILES = new Set(['api.js', 'auth.js', 'dates.js', 'features.js', 'http.js', 'interpret.js', 'time.js', 'today.js', 'webpush.js', 'worker.js']);
+test('static: no core file in src/ other than db.js calls prepare( or .exec(', () => {
   const root = join(dirname(fileURLToPath(import.meta.url)), '..', 'src');
   const files = [];
   const walk = (dir) => {
@@ -764,11 +767,11 @@ test('static: no file in src/ other than db.js calls prepare( or .exec(', () => 
     }
   };
   walk(root);
-  assert.ok(files.some((f) => f.endsWith('db.js')));
+  assert.ok(files.some((f) => f.endsWith('db.js')) && [...CORE_FILES].every((c) => files.some((f) => relative(root, f) === c)));
   const regexReceiver = /(?:\/[gimsuyd]*|(?:^|[^A-Za-z0-9_$])(?:re|RE|[A-Za-z0-9_$]*(?:_RE|_re|Re|Regex|REGEX|regex|Pattern|PATTERN|pattern)))\s*$/;
   const offenders = [];
   for (const f of files) {
-    if (relative(root, f) === 'db.js') continue;
+    if (!CORE_FILES.has(relative(root, f))) continue;
     const lines = readFileSync(f, 'utf8').split('\n');
     lines.forEach((line, i) => {
       if (/\bprepare\s*\(/.test(line)) offenders.push(`${relative(root, f)}:${i + 1} prepare(`);

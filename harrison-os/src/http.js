@@ -49,11 +49,11 @@ export function clampInt(value, { min, max, fallback }) {
   return Math.min(max, Math.max(min, n));
 }
 
-export async function readJson(request) {
+export async function readJson(request, max = MAX_BODY_CHARS) {
   const declared = Number(request.headers.get('content-length') || '0');
-  if (declared > MAX_BODY_CHARS * 4) throw new HttpError(413, 'too_large', 'Request body is too large');
+  if (declared > max * 4) throw new HttpError(413, 'too_large', 'Request body is too large');
   const text = await request.text();
-  if (text.length > MAX_BODY_CHARS) throw new HttpError(413, 'too_large', 'Request body is too large');
+  if (text.length > max) throw new HttpError(413, 'too_large', 'Request body is too large');
   if (!text.trim()) return {};
   let body;
   try {
