@@ -1,1 +1,12 @@
-/* connections view styles. Reuse styles.css tokens and classes first. */
+/* Connections card (Memory). Reuses .list, .plain-row, .row-title, .row-meta and the chip colours from styles.css. */
+.conn-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.375rem 0.75rem;
+}
+
+.conn-need {
+  color: var(--ink);
+}

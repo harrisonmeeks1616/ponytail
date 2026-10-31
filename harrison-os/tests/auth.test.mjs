@@ -8,6 +8,7 @@ import {
   normaliseTeamDomain,
   _resetJwksCache,
   JWKS_TTL_MS,
+  mcpAudience,
 } from '../src/auth.js';
 
 const subtle = globalThis.crypto.subtle;
@@ -280,7 +281,8 @@ test('OWNER_EMAIL mismatch -> 403 not_owner; match is case-insensitive', async (
 test('service token -> kind service; authorizeRoute allows only POST /api/shortcut/capture', async () => {
   const token = await mint(serviceClaims({ aud: [SHORTCUT_AUD] }));
   const id = await authenticate(req(token), { ...ENV2, OWNER_EMAIL: 'harrison@example.com' }, { fetchImpl, nowMs: NOW });
-  assert.deepEqual(id, { kind: 'service', commonName: 'client-id.access', expMs: (NOW_S + 3600) * 1000 });
+  assert.deepEqual(id, { kind: 'service', audience: 'shortcut', commonName: 'client-id.access', expMs: (NOW_S + 3600) * 1000 });
+  assert.equal(authorizeRoute(id, 'POST', '/api/mcp'), false);
 
   assert.equal(authorizeRoute(id, 'POST', '/api/shortcut/capture'), true);
   assert.equal(authorizeRoute(id, 'post', '/api/shortcut/capture'), true);
@@ -345,6 +347,44 @@ test('token with neither email nor common_name -> 401 invalid', async () => {
   await expectAuthError(authenticate(req(token), ENV, { fetchImpl, nowMs: NOW }), 401, 'invalid');
   const blank = await mint(ownerClaims({ email: '   ' }));
   await expectAuthError(authenticate(req(blank), ENV, { fetchImpl, nowMs: NOW }), 401, 'invalid');
+});
+
+const MCP_AUD = 'aud-mcp-0011223344556677';
+const ENV3 = { ...ENV2, ACCESS_AUD_MCP: MCP_AUD };
+
+test('MCP service token -> audience mcp; reaches only /api/mcp; owner never reaches /api/mcp', async () => {
+  const token = await mint(serviceClaims({ aud: [MCP_AUD] }));
+  const id = await authenticate(req(token, 'https://hos.example/api/mcp'), ENV3, { fetchImpl, nowMs: NOW });
+  assert.deepEqual(id, { kind: 'service', audience: 'mcp', commonName: 'client-id.access', expMs: (NOW_S + 3600) * 1000 });
+  assert.equal(authorizeRoute(id, 'POST', '/api/mcp'), true);
+  assert.equal(authorizeRoute(id, 'GET', '/api/mcp'), true, 'reaches the route table, which answers 405');
+  for (const [m, p] of [['POST', '/api/mcp/'], ['POST', '/api/shortcut/capture'], ['GET', '/api/connections/mcp'], ['GET', '/api/inbox'],
+    ['GET', '/api/export'], ['POST', '/api/captures'], ['GET', '/api/session'], ['DELETE', '/api/items/x']]) {
+    assert.equal(authorizeRoute(id, m, p), false, `${m} ${p}`);
+  }
+  // The owner's browser identity is never an MCP channel; dev (loopback only) keeps every route.
+  assert.equal(authorizeRoute({ kind: 'owner', email: 'a@b.c' }, 'POST', '/api/mcp'), false);
+  assert.equal(authorizeRoute({ kind: 'owner', email: 'a@b.c' }, 'GET', '/api/connections/mcp'), true);
+  assert.equal(authorizeRoute({ kind: 'dev' }, 'POST', '/api/mcp'), true);
+});
+
+test('MCP audience is bound: not configured -> rejected; owner token with MCP aud rejected; both service auds rejected', async () => {
+  const svc = await mint(serviceClaims({ aud: [MCP_AUD] }));
+  await expectAuthError(authenticate(req(svc), ENV2, { fetchImpl, nowMs: NOW }), 401, 'invalid');
+  const ownerMcp = await mint(ownerClaims({ aud: [MCP_AUD] }));
+  await expectAuthError(authenticate(req(ownerMcp), ENV3, { fetchImpl, nowMs: NOW }), 401, 'invalid');
+  const both = await mint(serviceClaims({ aud: [MCP_AUD, SHORTCUT_AUD] }));
+  await expectAuthError(authenticate(req(both), ENV3, { fetchImpl, nowMs: NOW }), 401, 'invalid');
+  // A Shortcut token stays a Shortcut token when MCP is configured too.
+  const sc = await authenticate(req(await mint(serviceClaims({ aud: [SHORTCUT_AUD] }))), ENV3, { fetchImpl, nowMs: NOW });
+  assert.equal(sc.audience, 'shortcut');
+  // An MCP audience equal to the owner's or the Shortcut's is ignored, so a token can never act as both.
+  assert.equal(mcpAudience({ ...ENV2, ACCESS_AUD_MCP: AUD }), '');
+  assert.equal(mcpAudience({ ...ENV2, ACCESS_AUD_MCP: SHORTCUT_AUD }), '');
+  assert.equal(mcpAudience({ ...ENV2, ACCESS_AUD_MCP: '  ' }), '');
+  assert.equal(mcpAudience(ENV3), MCP_AUD);
+  const ownerAsMcp = await mint(serviceClaims({ aud: [AUD] }));
+  await expectAuthError(authenticate(req(ownerAsMcp), { ...ENV2, ACCESS_AUD_MCP: AUD }, { fetchImpl, nowMs: NOW }), 401, 'invalid');
 });
 
 test('owner and dev are allowed everywhere under /api, nowhere else', () => {
