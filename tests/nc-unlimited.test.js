@@ -505,3 +505,9 @@ test('Table 310.15(B)(1) full ambient table read in NFPA LiNK matches, with boun
   for (const x of cu) { const [sz, v] = x.split(':'); assert.deepEqual(NC.nec.t31016.cu[sz], v.split('/').map(Number), 'Cu ' + sz); }
   assert.equal(Object.keys(NC.nec.t31016.cu).length, 28);
 });
+
+test('license-class wording never claims voltage alone makes Unlimited exclusive', () => {
+  const fs = require('fs'), txt = ['data-law.js', 'app.js', 'README.md'].map((f) => fs.readFileSync(path.join(dir, f), 'utf8')).join('\n');
+  for (const bad of [/only license for work past/i, /Unlimited either way/i, /what only Unlimited covers/i, /nothing above 1,000 V is Limited work/i]) assert.doesNotMatch(txt, bad);
+  assert.match(NC.cards.find((c) => c[0] === 2)[3], /voltage alone does not decide/i);
+});
