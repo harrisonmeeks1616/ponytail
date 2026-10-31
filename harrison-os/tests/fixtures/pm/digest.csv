@@ -1,0 +1,5 @@
+project_id,project_name,item_id,title,status,due_on,owner_label,url,updated_at
+P-100,Synthetic clinic fit-out,I-1,"Send device schedule, rev 2",Open,2026-10-27,Owner A,https://pm.example.com/items/I-1,2026-10-28T20:00:00Z
+P-100,Synthetic clinic fit-out,I-2,"Confirm ""home run"" conduit
+route",Open,2026-11-02,,https://pm.example.com/items/I-2,
+P-300,Synthetic gate controller,,,,,,,

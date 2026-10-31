@@ -1,0 +1,30 @@
+{
+  "format": "harrison-os.pm-digest",
+  "version": 1,
+  "source": { "system": "Example PM", "exported_at": "2026-10-29T11:00:00Z", "base_url": "https://pm.example.com/" },
+  "projects": [
+    {
+      "id": "P-100",
+      "name": "Synthetic clinic fit-out",
+      "status": "In progress",
+      "url": "https://pm.example.com/projects/P-100",
+      "updated_at": "2026-10-28T20:00:00Z",
+      "next_milestone": { "title": "Rough-in inspection", "due_on": "2026-11-03" },
+      "open_items": [
+        { "id": "I-1", "title": "Send device schedule", "status": "Open", "due_on": "2026-10-27", "owner_label": "Owner A", "url": "https://pm.example.com/items/I-1", "updated_at": "2026-10-28T20:00:00Z" },
+        { "id": "I-2", "title": "Confirm conduit route", "status": "Open", "due_on": "2026-11-02", "owner_label": "Owner B", "url": "https://pm.example.com/items/I-2", "updated_at": "2026-10-28T20:00:00Z" },
+        { "id": "I-3", "title": "Pick fixture finish", "status": "Open", "due_on": null, "owner_label": "", "url": "http://pm.example.com/items/I-3", "updated_at": null },
+        { "id": "I-4", "title": "Order spare breakers", "status": "Open", "due_on": "2026-11-20", "owner_label": "Owner A", "url": "https://pm.example.com/items/I-4", "updated_at": "2026-10-28T20:00:00Z" },
+        { "id": "I-5", "title": "Old punch item", "status": "Done", "due_on": "2026-10-01", "owner_label": "Owner C", "url": "https://pm.example.com/items/I-5", "updated_at": "2026-10-28T20:00:00Z" }
+      ]
+    },
+    {
+      "id": "P-200",
+      "name": "Synthetic parking lot lighting",
+      "status": "Planning",
+      "url": "javascript:alert(1)",
+      "updated_at": "2026-10-20T12:00:00Z",
+      "open_items": []
+    }
+  ]
+}
