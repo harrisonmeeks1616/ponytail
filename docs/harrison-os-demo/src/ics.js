@@ -26,6 +26,14 @@ const MAX_TEXT = 200;
 // walked per VEVENT. Both only bind on hostile or degenerate input.
 const MAX_COLLECT = 20000;
 const MAX_PERIODS = 10000;
+// One work budget for the whole parse: each event read, EXDATE value, rule period walked and occurrence
+// emitted spends a unit (~1-20 us each in Node, the worst being a time-zone lookup). A real feed spends a
+// few thousand; a hostile file stops here, flagged truncated, instead of burning seconds of CPU on the
+// import request or the cron run.
+const MAX_WORK = 50_000;
+// Distinct TZIDs honoured per file. Real feeds use a handful; each new zone costs Intl formatter setup
+// (~0.5 ms), so a file naming hundreds is read in the calendar's zone past this point (counted as a fallback).
+const MAX_ZONES = 40;
 const DAY_MS = 86_400_000;
 
 export class IcsError extends Error {
@@ -167,7 +175,15 @@ function parseDateValue(raw, params, ctx) {
 
 function resolveTz(tzid, ctx) {
   const raw = String(tzid).trim().replace(/^\/+/, '');
-  if (raw && validTz(raw)) return raw;
+  // Memoised per parse: building an Intl formatter to validate costs ~80 us, once per distinct TZID.
+  const k = `z|${raw}`;
+  let valid = ctx.memo.get(k);
+  if (valid === undefined) {
+    valid = ctx.zones < MAX_ZONES && Boolean(raw) && validTz(raw);
+    if (valid) ctx.zones++;
+    ctx.memo.set(k, valid);
+  }
+  if (valid) return raw;
   const mapped = WINDOWS_TZ[raw.toLowerCase()];
   if (mapped) return mapped;
   // A TZID with no IANA meaning (a custom VTIMEZONE name). Read in the calendar's zone and count it.
@@ -306,7 +322,7 @@ function periodDates(rule, startDate, k) {
   return d ? [d] : [];
 }
 
-// First period index worth walking for a window starting at windowStartDate (only used without COUNT).
+// First period index worth walking for a window starting at windowStartDate.
 function firstPeriod(rule, startDate, windowStartDate) {
   const days = daysBetween(startDate, windowStartDate);
   if (days <= 0) return 0;
@@ -316,6 +332,30 @@ function firstPeriod(rule, startDate, windowStartDate) {
   else if (rule.freq === 'MONTHLY') periods = monthIndex(windowStartDate) - monthIndex(startDate);
   else periods = Number(windowStartDate.slice(0, 4)) - Number(startDate.slice(0, 4));
   return Math.max(0, Math.floor(periods / rule.interval) - 1);
+}
+
+// Spends one unit of the parse's work budget; false (and the result flagged truncated) once it is gone.
+function spend(ctx) {
+  if (ctx.work++ < MAX_WORK) return true;
+  ctx.stats.truncated = true;
+  return false;
+}
+
+// Occurrences that periods 0..k0-1 generate, DTSTART included, so a COUNT rule can start at the window
+// instead of walking from DTSTART. Exact: EXDATE does not change what COUNT counts (RFC 5545 3.8.5.3).
+// Returns null when the walk would exceed the parse's work budget.
+function countBefore(rule, startDate, k0, ctx) {
+  const after = (k) => periodDates(rule, startDate, k).filter((d) => d > startDate).length;
+  if (rule.freq === 'DAILY' || (rule.freq === 'WEEKLY' && !rule.byday)) return k0;
+  if (rule.freq === 'WEEKLY') return 1 + after(0) + (k0 - 1) * periodDates(rule, startDate, 1).length;
+  // MONTHLY / YEARLY: months and years differ (BYMONTHDAY=31, 5th Tuesday, Feb 29), so count the cheap
+  // date-only periods (at most 12 a year) rather than derive a formula per rule shape. A period here costs
+  // ~1.5 us, an eighth of a budget unit.
+  ctx.work += Math.ceil(k0 / 8);
+  if (ctx.work > MAX_WORK) return null;
+  let n = 1;
+  for (let k = 0; k < k0; k++) n += after(k);
+  return n;
 }
 
 // ---------------------------------------------------------------- components
@@ -475,6 +515,7 @@ function expandMaster(ev, base, ctx, out, overriddenKeys) {
   const excludedDates = new Set();
   for (const p of ev.EXDATE || []) {
     for (const v of p.value.split(',')) {
+      if (!spend(ctx)) return;
       const dv = parseDateValue(v, p.params, ctx);
       if (!dv) continue;
       if (!dv.time && base.start.time) excludedDates.add(dv.date);
@@ -494,9 +535,18 @@ function expandMaster(ev, base, ctx, out, overriddenKeys) {
   const startDate = base.start.date;
   const windowStartDate = msDate(ctx.fromMs - base.durMs - (base.durDays + 2) * DAY_MS);
   const windowEndDate = msDate(ctx.toMs + 2 * DAY_MS);
+  const k0 = firstPeriod(rule, startDate, windowStartDate);
   let produced = 0;
-  const k0 = rule.count ? 0 : firstPeriod(rule, startDate, windowStartDate);
+  if (rule.count && k0 > 0) {
+    produced = countBefore(rule, startDate, k0, ctx);
+    if (produced === null) {
+      ctx.stats.truncated = true;
+      return;
+    }
+    if (produced >= rule.count) return;
+  }
   const emit = (date) => {
+    if (!spend(ctx)) return false;
     const dv = { ...base.start, date };
     if (!withinUntil(dv)) return false;
     produced++;
@@ -509,7 +559,7 @@ function expandMaster(ev, base, ctx, out, overriddenKeys) {
   // DTSTART is always the first occurrence (RFC 5545 3.8.5.3).
   if (k0 === 0 && !emit(startDate)) return;
   for (let k = k0, walked = 0; ; k++, walked++) {
-    if (walked >= MAX_PERIODS || out.length >= MAX_COLLECT) {
+    if (walked >= MAX_PERIODS || out.length >= MAX_COLLECT || !spend(ctx)) {
       ctx.stats.truncated = true;
       return;
     }
@@ -541,7 +591,7 @@ export function parseIcs(text, { fromMs, toMs, defaultTimeZone = 'America/New_Yo
   const stats = { vevents: raw.length, cancelled: 0, unsupported_rules: 0, tz_fallbacks: 0, truncated: false };
   const floatingTz = cal.tz && validTz(cal.tz) ? cal.tz : viewTz;
   const ctx = {
-    floatingTz, viewTz, stats, fromMs, toMs, memo: new Map(),
+    floatingTz, viewTz, stats, fromMs, toMs, memo: new Map(), work: 0, zones: 0,
     windowStartDate: msDate(fromMs - 2 * DAY_MS),
     windowEndDate: msDate(toMs + 2 * DAY_MS),
   };
@@ -551,6 +601,7 @@ export function parseIcs(text, { fromMs, toMs, defaultTimeZone = 'America/New_Yo
   const masters = [];
   for (const ev of raw) {
     if (clearlyOutside(ev, ctx)) continue;
+    if (!spend(ctx)) break;
     const rid = first(ev, 'RECURRENCE-ID');
     let base;
     try {

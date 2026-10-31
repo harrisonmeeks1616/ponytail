@@ -165,3 +165,7 @@ Keep each step small, run the relevant tests, update `ACCEPTANCE.md`/`PROGRESS.m
 - Public repository: no secrets, populated `.dev.vars`/`wrangler.local.jsonc`, real captures, real names, emails, account or resource ids. Synthetic fixtures only.
 - Do not change the application's AI-provider configuration because the builder model changed.
 - The Opus builder session stopped after committing this file.
+
+## 8. Status after the Sonnet session (2026-10-31, afternoon)
+
+Section 6 items 1 to 7 are done and recorded in `PROGRESS.md` and `ACCEPTANCE.md`; item 8 (Harrison's steps) is in the final message of that session. Still open: everything labelled device, deployed or blocked in section 3.

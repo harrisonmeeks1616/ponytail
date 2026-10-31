@@ -1454,7 +1454,14 @@ function proposalCard(capture, p, dec, index, anyEditing) {
       // A reminder without a date and time (or in the past) cannot be filed as it is: Edit first.
       disabled: anyEditing || (!!problem && choice !== 'accept'),
       dataset: { fk: `accept-${capture.id}-${p.ordinal}` },
-      onclick: () => setDecision(capture.id, p.ordinal, { choice: choice === 'accept' ? null : 'accept' }),
+      onclick: () => {
+        // After "Use these" the edit is already accepted: a second tap must not silently drop it.
+        if (choice === 'accept' && dec && dec.edits && Object.keys(dec.edits).length > 0) {
+          setStatus('Already accepted with your edit. Tap Edit to change it, or Drop.');
+          return;
+        }
+        setDecision(capture.id, p.ordinal, { choice: choice === 'accept' ? null : 'accept' });
+      },
     }),
     h('button', {
       type: 'button',

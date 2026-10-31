@@ -1,6 +1,6 @@
 # Harrison OS: try it, and what it is for
 
-Checkpoint, Saturday October 31, 2026, about noon Eastern. Source revision `13abde8`; preview published in `ccd9b6e` on `main`.
+Updated Saturday October 31, 2026, afternoon Eastern. Source revision `4a416f4`; the published preview is rebuilt from it (earlier checkpoint: `13abde8`, published in `ccd9b6e`).
 
 ## 1. Open the preview
 

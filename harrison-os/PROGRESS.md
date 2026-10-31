@@ -45,3 +45,14 @@ The repository as a whole is not green; only the `harrison-os` job is.
 
 - 11:36-11:55 Built an in-browser preview: the real app and Worker code on the official SQLite WASM build (FTS5), fictional data, published through the repository's existing GitHub Pages site into a new `docs/harrison-os-demo/` folder (no Field/PM files touched). Walked the owner path at 390px and fixed what it exposed (plain-English Next, Next falls back to the saved place, Save my place prefill, mentioned date on Waiting review cards, labelled Ask button). `13abde8`: 365/365 unit, 11/11 browser, 16/16 preview steps. Published `ccd9b6e`; GitHub Pages deployment of `ccd9b6e` reported success (github.io is not reachable from this container, so not loaded here).
 - Owner handoff: `OWNER_PREVIEW.md` (link, walkthrough, comparison, status, recommendation).
+
+## Sonnet continuation (Saturday 2026-10-31, afternoon)
+
+- Merged `hos/T4-fix` (`923e269`) into the working branch; one conflict in `calendar.js` `onScheduled` ORDER BY resolved to T4-fix's `created_at, id` (unique and deterministic). Calendar and ICS tests 29/29, five repeat runs.
+- A20: `src/featuredata.js` exports/restores drafts, calendar, PM and weekly rows (feed URL never exported; tombstone-aware; scope-checked). `tests/feature-restore.test.mjs`.
+- A18: export, cron, calendar/PM job and weekly-purge canaries added to the scope sweep; mutation-checked.
+- Deploy readiness: blank vars in `wrangler.jsonc`; guard refuses `AI_API_KEY` and `PM_DIGEST_TOKEN` in vars; `tests/deploy-guard.test.mjs`.
+- Browser F11-F14 (drafts flag, weekly "Not this week" keeps the due date, calendar Busy-only across scope + PM link, Connections honest states). F13 first failed because the test read the "All" render before the Work render, not because of a leak: the server blanks other-scope titles in SQL.
+- UX: "Looks right" no longer silently drops an edit accepted with "Use these"; project next step compares `start_on` with the New York date (db test). The floating Ask pill overlapping a Waiting card was not reproduced at scroll end on Today, Waiting or Tasks at 390x844 (no overlap), so no CSS change.
+- Preview wording corrected: typed text stays in the browser (CSP `connect-src 'self'`, no keys in the preview env), but fonts load from Google and GitHub Pages sees the page visit. The preview walkthrough now fails if any other request leaves the origin. Service worker cache bumped to `hos-v6`.
+- Results on `4a416f4`: 380/380 unit, 15/15 browser, preview walkthrough passed. Not run: real iPhone, deployed Worker, Access, live AI, real calendar or PM, MCP client.
