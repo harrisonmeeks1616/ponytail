@@ -74,7 +74,18 @@ Every tool has a strict input schema (`additionalProperties: false`) and a bound
 
 ## Owner status endpoint
 
-`GET /api/connections/mcp` (owner or local dev only) answers `{ configured, scopes, allow_capture, last_call_at }`. `configured` means the Access team domain and a distinct `ACCESS_AUD_MCP` are set; it does not prove a client can connect. No secrets or audience values are returned.
+`GET /api/connections/mcp` (owner or local dev only) answers `{ configured, scopes, allow_capture, last_call_at, shortcut_configured, features: { ai, calendar, pm } }`. `configured` means the Access team domain and a distinct `ACCESS_AUD_MCP` are set; it does not prove a client can connect. `shortcut_configured` means the team domain, `ACCESS_AUD` and `ACCESS_AUD_SHORTCUT` are set; it does not prove the phone has sent anything. `features` says whether this build has `GET /api/ai/status`, `GET /api/calendar/connections` and `GET /api/pm/sources`; the Connections card asks only those that exist. No secrets or audience values are returned.
+
+## iPhone Shortcut
+
+The Memory -> Connections card points here for the Shortcut. It uses the same kind of Access service token as an MCP client, through its own application, and may only call `POST /api/shortcut/capture`.
+
+1. Zero Trust -> Access -> Service credentials: create a service token (for example "Harrison OS Shortcut"). Keep the Client ID and Client Secret only in the Shortcut.
+2. Access -> Applications: add a self-hosted application for the Worker hostname with path `api/shortcut/capture`. Policy: action **Service Auth**, include that service token only. Set its AUD tag as the Worker variable `ACCESS_AUD_SHORTCUT` (it must differ from `ACCESS_AUD_MCP`).
+3. In the Shortcuts app: add "Dictate Text" or "Ask for Input", then "Get Contents of URL" with URL `https://<your worker host>/api/shortcut/capture`, method POST, headers `CF-Access-Client-Id` and `CF-Access-Client-Secret`, and a JSON body: `text` (the input), optionally `scope` (`work` or `personal`, default `personal`), `client_ref` (6-60 of `A-Z a-z 0-9 _ -`, so a retry is not saved twice) and `time_zone`.
+4. Run it once while online and check the capture appears in the Inbox. The Shortcut needs a connection: it does not keep captures while the phone is offline.
+
+The card shows "Set up" once the variables are set; that does not prove the phone has sent anything.
 
 ## Audit
 

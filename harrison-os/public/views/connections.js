@@ -3,10 +3,13 @@
 
 // tone: 'good' | 'warn' | 'bad' | 'none'. Each row: { name, status, tone, detail, need }.
 const UNAVAILABLE = (name) => ({ name, status: 'Not available yet', tone: 'none', detail: 'This part of Harrison OS is not on this server yet.', need: null });
+const UNCHECKED = (name) => ({ name, status: 'Could not check', tone: 'none', detail: 'The server did not answer just now.', need: 'Try again when you are online.' });
+const NAMES = ['Ask with AI', 'Calendar', 'Company projects', 'AI clients (MCP)', 'iPhone Shortcut'];
 
 function sourcesRow(name, results, key, { none, problem }) {
   if (!results.some((r) => r && r.ok)) return UNAVAILABLE(name);
-  const list = rowsOf(results, key);
+  // A 'not_connected' entry is a placeholder for a source that was never added, not a source.
+  const list = rowsOf(results, key).filter((c) => c && c.state !== 'not_connected');
   if (!list.length) return { name, status: 'Not set up', tone: 'none', detail: null, need: none };
   const real = list.filter((c) => !c.sample);
   if (list.some((c) => c.state === 'error')) return { name, status: 'Problem', tone: 'bad', detail: problem, need: 'Open its card below to refresh it or check the link.' };
@@ -26,6 +29,8 @@ function rowsOf(results, key) {
 
 /** Pure: API answers -> rows. ai, mcp: one api() result; calendar, pm: an array of api() results (one per scope). */
 export function summarize({ ai, calendar = [], pm = [], mcp }, { formatAt = (v) => v } = {}) {
+  // The MCP status route says which other routes exist; if it did not answer (offline, server error), nothing is known.
+  if (!mcp || (!mcp.ok && mcp.status !== 404)) return NAMES.map(UNCHECKED);
   const rows = [];
 
   if (!ai || !ai.ok || !ai.data) rows.push(UNAVAILABLE('Ask with AI'));
@@ -67,13 +72,16 @@ export function summarize({ ai, calendar = [], pm = [], mcp }, { formatAt = (v) 
     });
   }
 
-  rows.push({
-    name: 'iPhone Shortcut',
-    status: 'Not checked here',
-    tone: 'none',
-    detail: 'Sends a capture to your inbox when the phone is online. It does not keep captures while offline.',
-    need: 'Setup steps are in docs/SHORTCUT.md.',
-  });
+  const shortcutDetail = 'Sends a capture to your inbox when the phone is online. It does not keep captures while offline.';
+  const shortcutSet = mcp.ok && mcp.data ? mcp.data.shortcut_configured : undefined;
+  const shortcutNeed = 'A Cloudflare Access service token for the Shortcut. Steps are in docs/MCP.md, "iPhone Shortcut".';
+  rows.push(
+    shortcutSet === true
+      ? { name: 'iPhone Shortcut', status: 'Set up', tone: 'warn', detail: `${shortcutDetail} This shows the server is ready, not that the phone has sent anything.`, need: null }
+      : shortcutSet === false
+        ? { name: 'iPhone Shortcut', status: 'Not set up', tone: 'none', detail: shortcutDetail, need: shortcutNeed }
+        : { name: 'iPhone Shortcut', status: 'Not checked here', tone: 'none', detail: shortcutDetail, need: shortcutNeed },
+  );
   return rows;
 }
 
@@ -88,13 +96,16 @@ export function register(kit) {
   kit.addMemoryBlock(async () => {
     // Only the scopes on screen are asked about, so a Work view never counts Personal connections.
     const scopes = state.scope === 'all' ? ['work', 'personal'] : [state.scope];
-    const [ai, mcp, ...rest] = await Promise.all([
-      api('/api/ai/status'),
-      api('/api/connections/mcp'),
-      ...scopes.map((s) => api(`/api/calendar/connections?scope=${s}`)),
-      ...scopes.map((s) => api(`/api/pm/sources?scope=${s}`)),
+    // Ask only for routes the server says it has: a missing route would be a 404 (a console error) on every visit.
+    const mcp = await api('/api/connections/mcp');
+    const has = (mcp.ok && mcp.data && mcp.data.features) || {};
+    const each = (on, path) => (on ? Promise.all(scopes.map((s) => api(`${path}?scope=${s}`))) : []);
+    const [ai, calendar, pm] = await Promise.all([
+      has.ai ? api('/api/ai/status') : null,
+      each(has.calendar, '/api/calendar/connections'),
+      each(has.pm, '/api/pm/sources'),
     ]);
-    const rows = summarize({ ai, mcp, calendar: rest.slice(0, scopes.length), pm: rest.slice(scopes.length) }, { formatAt });
+    const rows = summarize({ ai, mcp, calendar, pm }, { formatAt });
     const list = h(
       'ul',
       { class: 'list conn-list' },

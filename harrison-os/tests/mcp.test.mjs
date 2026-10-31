@@ -303,11 +303,33 @@ test('GET /api/connections/mcp: owner only, plain status, never secrets', async 
   const owner = setup({ identity: { kind: 'owner', email: 'x', emailMasked: 'x***' }, env });
   const r = await owner.http('GET', '/api/connections/mcp');
   assert.equal(r.status, 200);
-  assert.deepEqual(r.data, { configured: true, scopes: ['work'], allow_capture: false, last_call_at: null });
+  const { features, ...rest } = r.data;
+  assert.deepEqual(rest, { configured: true, scopes: ['work'], allow_capture: false, last_call_at: null, shortcut_configured: false });
+  assert.deepEqual(Object.keys(features), ['ai', 'calendar', 'pm']);
   assert.ok(!r.text.includes('secretish'));
   await callTool({ env: owner.env, nowMs: NOW }, 'list_open_tasks', { scope: 'work' });
   assert.equal((await owner.http('GET', '/api/connections/mcp')).data.last_call_at, new Date(NOW).toISOString());
   // Same audience as the owner's application is a misconfiguration: not configured.
   const clash = setup({ identity: { kind: 'owner', email: 'x' }, env: { ...env, ACCESS_AUD_MCP: env.ACCESS_AUD } });
   assert.equal((await clash.http('GET', '/api/connections/mcp')).data.configured, false);
+});
+
+test('GET /api/connections/mcp: shortcut_configured is a boolean, never the audience', async () => {
+  const env = { ACCESS_TEAM_DOMAIN: 'team.cloudflareaccess.com', ACCESS_AUD: 'aud-owner-secretish', ACCESS_AUD_SHORTCUT: 'aud-sc-secretish' };
+  const owner = setup({ identity: { kind: 'owner', email: 'x', emailMasked: 'x***' }, env });
+  const r = await owner.http('GET', '/api/connections/mcp');
+  assert.equal(r.data.shortcut_configured, true);
+  assert.ok(!r.text.includes('secretish'));
+  const blank = setup({ identity: { kind: 'owner', email: 'x' }, env: { ...env, ACCESS_AUD_SHORTCUT: '  ' } });
+  assert.equal((await blank.http('GET', '/api/connections/mcp')).data.shortcut_configured, false);
+});
+
+test('GET /api/connections/mcp: features is true exactly for the status routes this build answers', async () => {
+  const owner = setup({ identity: { kind: 'owner', email: 'x', emailMasked: 'x***' } });
+  const { features } = (await owner.http('GET', '/api/connections/mcp')).data;
+  const paths = { ai: '/api/ai/status', calendar: '/api/calendar/connections?scope=work', pm: '/api/pm/sources?scope=work' };
+  for (const [key, path] of Object.entries(paths)) {
+    const status = (await owner.http('GET', path)).status;
+    assert.equal(features[key], status !== 404, `${key}: feature ${features[key]}, route answered ${status}`);
+  }
 });

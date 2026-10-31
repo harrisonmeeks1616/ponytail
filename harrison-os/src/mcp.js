@@ -1,7 +1,8 @@
 // Harrison OS MCP server (Slice 3.2): a narrow, read-first tool surface for AI clients.
 //
 // POST /api/mcp            JSON-RPC 2.0 over MCP Streamable HTTP, plain JSON responses only (no SSE, no sessions).
-// GET  /api/connections/mcp  owner-only status for the Connections card: { configured, scopes, allow_capture, last_call_at }.
+// GET  /api/connections/mcp  owner-only status for the Connections card: { configured, scopes, allow_capture, last_call_at,
+//                            shortcut_configured, features: { ai, calendar, pm } }.
 //
 // Authority lives here, in code, never in tool arguments or record text:
 // - Only the MCP service identity (Access service token through its own application, ACCESS_AUD_MCP) and the
@@ -390,7 +391,35 @@ async function getMcpStatus(ctx) {
   if (kind !== 'owner' && kind !== 'dev') return apiError(403, 'forbidden', 'This identity may not call this route');
   const cfg = mcpConfig(ctx.env);
   const lastCallAt = (await db.getMeta(ctx.env.DB, META_LAST_CALL)) || null;
-  return json(200, { configured: cfg.configured, scopes: cfg.scopes, allow_capture: cfg.allowCapture, last_call_at: lastCallAt });
+  return json(200, {
+    configured: cfg.configured,
+    scopes: cfg.scopes,
+    allow_capture: cfg.allowCapture,
+    last_call_at: lastCallAt,
+    shortcut_configured: shortcutConfigured(ctx.env),
+    features: connectionFeatures(),
+  });
+}
+
+// The Shortcut's Access audience is set (never its value). Like MCP's `configured`, this does not prove it works.
+export function shortcutConfigured(env = {}) {
+  const set = (v) => typeof v === 'string' && v.trim() !== '';
+  return !!normaliseTeamDomain(env.ACCESS_TEAM_DOMAIN) && set(env.ACCESS_AUD) && set(env.ACCESS_AUD_SHORTCUT);
+}
+
+// Which status routes the Connections card may ask, from the owning modules' route tables, so the card never
+// requests a route this build lacks (a 404 is a console error in the browser).
+const FEATURE_STATUS = [
+  ['ai', ask, '/api/ai/status'],
+  ['calendar', calendar, '/api/calendar/connections'],
+  ['pm', pm, '/api/pm/sources'],
+];
+export function connectionFeatures() {
+  const out = {};
+  for (const [key, mod, path] of FEATURE_STATUS) {
+    out[key] = Array.isArray(mod.ROUTES) && mod.ROUTES.some(([m, re]) => m === 'GET' && re.test(path));
+  }
+  return out;
 }
 
 export const ROUTES = [
