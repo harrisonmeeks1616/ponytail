@@ -1,6 +1,7 @@
-// Harrison OS spike: small IndexedDB wrapper.
-// openStores() -> { outbox, drafts, log, persistent, warning? }
+// Harrison OS: small IndexedDB wrapper.
+// openStores() -> { outbox, attachments, drafts, log, persistent, warning? }
 //   outbox: engine store interface { list(), get(id), put(item), remove(id) }
+//   attachments: the same interface, keyed by attachment id (photos and files waiting to upload)
 //   drafts: { get(key), put(key, value), del(key) }
 //   log:    { add(entry), list(n) }  (newest first; entries hold ids/states/codes only)
 // Falls back to memory, with a visible warning string, when IndexedDB is
@@ -9,7 +10,7 @@
 import { createMemoryStore } from './outbox-core.js';
 
 export const DB_NAME = 'harrison-os-spike';
-export const DB_VERSION = 1;
+export const DB_VERSION = 2; // 2 adds the attachments store
 export const LOG_CAP = 500;
 
 const MEMORY_WARNING =
@@ -34,6 +35,7 @@ function openDb(factory, name) {
     req.onupgradeneeded = () => {
       const db = req.result;
       if (!db.objectStoreNames.contains('outbox')) db.createObjectStore('outbox', { keyPath: 'id' });
+      if (!db.objectStoreNames.contains('attachments')) db.createObjectStore('attachments', { keyPath: 'id' });
       if (!db.objectStoreNames.contains('drafts')) db.createObjectStore('drafts');
       if (!db.objectStoreNames.contains('log')) db.createObjectStore('log', { keyPath: 'seq', autoIncrement: true });
     };
@@ -110,25 +112,30 @@ function createConnection(factory, name, firstDb) {
   return { withStore };
 }
 
-function idbStores(conn) {
-  const { withStore } = conn;
-  const outbox = {
+function keyedStore(withStore, name) {
+  return {
     async list() {
-      const all = await withStore('outbox', 'readonly', (s) => reqToPromise(s.getAll()));
+      const all = await withStore(name, 'readonly', (s) => reqToPromise(s.getAll()));
       return (all || []).sort(byCreated);
     },
     async get(id) {
-      const v = await withStore('outbox', 'readonly', (s) => reqToPromise(s.get(id)));
+      const v = await withStore(name, 'readonly', (s) => reqToPromise(s.get(id)));
       return v === null ? undefined : v;
     },
     async put(item) {
       if (!item || typeof item.id !== 'string') throw new TypeError('item.id required');
-      await withStore('outbox', 'readwrite', (s) => reqToPromise(s.put(item)));
+      await withStore(name, 'readwrite', (s) => reqToPromise(s.put(item)));
     },
     async remove(id) {
-      await withStore('outbox', 'readwrite', (s) => reqToPromise(s.delete(id)));
+      await withStore(name, 'readwrite', (s) => reqToPromise(s.delete(id)));
     },
   };
+}
+
+function idbStores(conn) {
+  const { withStore } = conn;
+  const outbox = keyedStore(withStore, 'outbox');
+  const attachments = keyedStore(withStore, 'attachments');
   const drafts = {
     async get(key) {
       const v = await withStore('drafts', 'readonly', (s) => reqToPromise(s.get(key)));
@@ -188,7 +195,7 @@ function idbStores(conn) {
       };
     }));
   }
-  return { outbox, drafts, log };
+  return { outbox, attachments, drafts, log };
 }
 
 export function createMemoryStores(warning = MEMORY_WARNING) {
@@ -199,6 +206,7 @@ export function createMemoryStores(warning = MEMORY_WARNING) {
   const copy = (v) => (typeof structuredClone === 'function' ? structuredClone(v) : JSON.parse(JSON.stringify(v)));
   return {
     outbox,
+    attachments: createMemoryStore(),
     drafts: {
       async get(key) { return draftMap.has(key) ? copy(draftMap.get(key)) : undefined; },
       async put(key, value) { draftMap.set(key, copy(value)); },
@@ -222,7 +230,7 @@ export function createMemoryStores(warning = MEMORY_WARNING) {
 }
 
 /**
- * openStores({ name, indexedDB }) -> Promise<{ outbox, drafts, log, persistent, warning? }>
+ * openStores({ name, indexedDB }) -> Promise<{ outbox, attachments, drafts, log, persistent, warning? }>
  * Never rejects: any IndexedDB failure falls back to memory with a warning.
  */
 export async function openStores({ name = DB_NAME, indexedDB: factory = globalThis.indexedDB } = {}) {

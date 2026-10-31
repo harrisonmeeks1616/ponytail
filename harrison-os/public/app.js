@@ -1,13 +1,20 @@
 // Harrison OS phone client, Slice 1.
 // Plain ES module, no framework. Hash routes: #/today (default), #/capture (sheet),
-// #/review and #/review/<id>, #/waiting, #/tasks (every open task), #/projects, #/project/<id>, #/memory.
+// #/review and #/review/<id>, #/waiting, #/tasks (every open task), #/tasks/archived, #/projects,
+// #/project/<id>, #/memory. Task edits and decisions open in the edit sheet (a dialog, not a route).
 // Never logs or stores capture text, item text, tokens, push keys or emails in the
 // local log. User text only lives in the outbox, the draft store and on screen.
-import { createSyncEngine, createOutboxItem, newClientId, classifyResponse, isPending } from './outbox-core.js';
+import {
+  createSyncEngine, createOutboxItem, newClientId, classifyResponse, isPending,
+  createAttachmentItem, syncAttachments, isAttachmentPending, attachmentMime, safeFileName, fitWithin,
+  MAX_ATTACHMENT_BYTES, MAX_ATTACHMENTS_PER_CAPTURE, IMAGE_MAX_SIDE,
+  deferTargets, RECURRENCES, RECURRENCE_LABEL, taskEditProblem, parseOptionLines, optionsOf,
+  prefKeyFrom, prefLabel, restoreWords, taskMatches, shareText,
+} from './outbox-core.js';
 import { openStores } from './idb.js';
 import { VIEW_MODULES } from './views/index.js';
 
-const CLIENT_BUILD = 'ui-2';
+const CLIENT_BUILD = 'ui-3';
 const IDB_NAME = 'harrison-os';
 const API_HEADERS = Object.freeze({ 'X-Requested-With': 'XMLHttpRequest' });
 const DRAFT_KEY = 'capture';
@@ -104,7 +111,14 @@ const state = {
   lastResubscribeAt: 0,
   toastChange: null,
   toastTimer: null,
-  seq: { today: 0, review: 0, waiting: 0, tasks: 0, projects: 0, project: 0, search: 0 },
+  seq: { today: 0, review: 0, waiting: 0, tasks: 0, projects: 0, project: 0, search: 0, prefs: 0 },
+  attachments: new Map(), // attachment id -> queue item (no bytes kept here)
+  sheetFiles: [], // photos and files added in the open capture sheet, not saved yet
+  tasksFilter: '',
+  tasksMode: 'open', // open | archived (#/tasks/archived)
+  prefs: null,
+  prefsError: null,
+  sheetOpener: null,
 };
 
 // ---------------------------------------------------------------------------
@@ -353,14 +367,14 @@ function kindChip(kind) {
 // ---------------------------------------------------------------------------
 // API
 
-async function api(path, { method = 'GET', body } = {}) {
+async function api(path, { method = 'GET', body, timeoutMs = 15000 } = {}) {
   const headers = { ...API_HEADERS };
   if (body !== undefined) headers['Content-Type'] = 'application/json';
   let res;
   // A request the server never answers must not leave a screen waiting forever (seen live in the spike).
   const controller = new AbortController();
   let timedOut = false;
-  const timer = setTimeout(() => { timedOut = true; controller.abort(); }, 15000);
+  const timer = setTimeout(() => { timedOut = true; controller.abort(); }, timeoutMs);
   try {
     res = await fetch(path, {
       method,
@@ -393,12 +407,15 @@ async function api(path, { method = 'GET', body } = {}) {
 
 function failWords(r, what) {
   if (!r) return `Could not ${what}.`;
-  if (r.timedOut) return `Could not ${what}. The server didn't answer in 15 seconds.`;
+  if (r.timedOut) return `Could not ${what}. The server didn't answer in time.`;
   if (r.offline) return `Could not ${what}. No connection.`;
   if (r.verdict === 'auth_required') return `Could not ${what}. Sign in again first.`;
   if (r.status === 409) return `Could not ${what}. It changed since this screen loaded. Refresh and try again.`;
   const err = (r.data && r.data.error) || {};
   const code = err.code;
+  if (r.status === 410) return `Could not ${what}. It was deleted.`;
+  if (r.status === 413 || code === 'too_large') return `Could not ${what}. It is too large.`;
+  if (r.status === 404) return `Could not ${what}. It was not found. It may have been deleted.`;
   if (code === 'in_past') return `Could not ${what}. A reminder time has already passed. Tap Edit on it and pick a later time.`;
   if (code === 'invalid' && err.field === 'when') return `Could not ${what}. A reminder needs a date and a time. Tap Edit on it and add them.`;
   return `Could not ${what} (${code ? String(code) : `HTTP ${r.status || 0}`}).`;
@@ -411,6 +428,12 @@ function showNotice(message) {
   const sheet = $('capture-sheet');
   if (sheet && sheet.open) {
     setText('draft-status', message);
+    return;
+  }
+  const edit = $('edit-sheet');
+  if (edit && edit.open) {
+    setText('edit-sheet-status', '');
+    setTimeout(() => setText('edit-sheet-status', message), 30);
     return;
   }
   showToast(message, null);
@@ -580,12 +603,20 @@ async function onCheckChange(input, li, id, scope) {
   }
   input.dataset.busy = '1';
   input.disabled = true;
-  const r = await api(`/api/items/${enc(id)}/${want ? 'complete' : 'reopen'}`, { method: 'POST', body: { scope } });
+  // today_on lets a recurring task's next instance start from this phone's own date.
+  const body = want ? { scope, today_on: localOn() } : { scope };
+  const r = await api(`/api/items/${enc(id)}/${want ? 'complete' : 'reopen'}`, { method: 'POST', body });
   input.disabled = false;
   input.dataset.busy = '';
   logEvent({ kind: want ? 'item_complete' : 'item_reopen', id, status: r.status, ok: r.ok });
   if (r.ok) {
     li.classList.toggle('is-done', want);
+    // Optional completion feedback; styles.css turns it off under reduced motion.
+    if (want) {
+      li.classList.remove('just-done');
+      void li.offsetWidth;
+      li.classList.add('just-done');
+    }
     // The same item can show twice (Next and the Today list): keep both in step.
     for (const other of document.querySelectorAll('input.check')) {
       if (other === input || other.dataset.itemId !== id) continue;
@@ -593,11 +624,20 @@ async function onCheckChange(input, li, id, scope) {
       const row = other.closest('.check-row');
       if (row) row.classList.toggle('is-done', want);
     }
-    showToast(want ? 'Marked done.' : 'Marked not done.', changeIdFrom(r.data));
+    showToast(want ? completedWords(r.data) : 'Marked not done.', changeIdFrom(r.data));
   } else {
     input.checked = !want;
     showNotice(failWords(r, want ? 'mark it done' : 'mark it not done'));
   }
+}
+
+// "Marked done." plus, for a repeating task, when the next one is due.
+function completedWords(data) {
+  const next = data && data.next && typeof data.next === 'object' ? data.next : null;
+  const item = data && data.item && typeof data.item === 'object' ? data.item : null;
+  if (next && ON_RE.test(String(next.due_on || ''))) return `Marked done. Next one due ${formatOn(next.due_on)}.`;
+  if (item && item.recurrence && item.recurrence !== 'none') return 'Marked done. The next one is already on your list.';
+  return 'Marked done.';
 }
 
 async function itemAction(button, { id, scope, action, method = 'POST', body = {}, done, failure }) {
@@ -701,7 +741,7 @@ function titleFor(route) {
     case 'waiting':
       return 'Waiting';
     case 'tasks':
-      return 'Open tasks';
+      return route.id === 'archived' ? 'Archived tasks' : 'Open tasks';
     case 'projects':
       return 'Projects';
     case 'project':
@@ -727,6 +767,7 @@ function loadRoute(route) {
       return loadProject(route.id);
     case 'memory':
       renderExtBlocks(EXT.memory, 'memory-extra', null);
+      loadPreferences();
       return rerunSearch();
     default:
       if (EXT.routes.has(route.name)) {
@@ -876,7 +917,12 @@ function renderToday() {
           meta: row.meta,
           done: !!row.done,
           sample: row.sample,
-          extra: picked && !row.done ? pickButton({ id: ref.id, scope: row.scope, picked: true, title: row.title }) : null,
+          extra: row.done
+            ? null
+            : [
+                picked ? pickButton({ id: ref.id, scope: row.scope, picked: true, title: row.title }) : null,
+                editButton({ id: ref.id, scope: row.scope, title: row.title }),
+              ],
         }),
       );
     } else {
@@ -1056,6 +1102,7 @@ function normaliseCapture(c) {
     scope: c.scope,
     sample: c.sample,
     receivedAt: pick(c, 'received_at', 'receivedAt'),
+    attachments: listFrom(c.attachments),
     proposals: listFrom(c.proposals)
       .map(normaliseProposal)
       .filter((p) => Number.isFinite(p.ordinal) && p.state === 'pending')
@@ -1127,6 +1174,7 @@ function renderInboxList(body) {
             'span',
             { class: 'row-meta' },
             n ? `${plural(n, 'thing', 'things')} found` : 'Nothing found. Stays a note.',
+            c.attachments.length ? ` · ${plural(c.attachments.length, 'attachment', 'attachments')}` : '',
             c.receivedAt ? ` · ${formatAt(c.receivedAt)}` : '',
           ),
           h('span', { class: 'chips' }, scopeChip(c.scope), sampleChip(c)),
@@ -1245,6 +1293,7 @@ function renderCaptureReview(body, id) {
       { class: 'card original', 'aria-labelledby': 'orig-h' },
       h('h2', { id: 'orig-h', class: 'eyebrow', text: 'Your words' }),
       h('blockquote', { class: 'original-text', text: capture.text }),
+      attachmentStrip(capture.attachments, capture.scope),
       h('p', { class: 'row-meta' }, h('span', { class: 'chips' }, scopeChip(capture.scope), sampleChip(capture)), capture.receivedAt ? ` Saved ${formatAt(capture.receivedAt)}` : ''),
     ),
   );
@@ -1581,7 +1630,7 @@ async function submitReview(button, capture, keepAsNote) {
 async function deleteCapture(button, capture) {
   if (state.reviewBusy) return;
   if (!isScope(capture.scope)) return;
-  if (!window.confirm('Delete this capture? Your original words are removed for good. Anything already filed from it stays, marked as from a deleted capture.')) return;
+  if (!window.confirm('Delete this capture? Your original words and its photos and files are removed for good. Anything already filed from it stays, marked as from a deleted capture.')) return;
   state.reviewBusy = true;
   await guarded(button, async () => {
     const r = await api(`/api/captures/${enc(capture.id)}?${qs({ scope: capture.scope })}`, { method: 'DELETE' });
@@ -1598,6 +1647,7 @@ async function deleteCapture(button, capture) {
         /* the server refuses a deleted id anyway */
       }
       state.items.delete(capture.id);
+      await removeLocalAttachments(capture.id);
       renderOutbox();
       setStatus('Capture deleted.');
       state.reviewBusy = false;
@@ -1776,25 +1826,48 @@ function waitingCard(it, today) {
 async function loadTasks() {
   const seq = ++state.seq.tasks;
   const body = $('tasks-body');
+  const mode = state.route.name === 'tasks' && state.route.id === 'archived' ? 'archived' : 'open';
+  if (mode !== state.tasksMode) {
+    state.tasksMode = mode;
+    state.tasks = null;
+  }
+  renderTasksHead();
   body.setAttribute('aria-busy', 'true');
   if (!state.tasks) body.replaceChildren(h('p', { class: 'subtle', text: 'Loading.' }));
   const scopes = scopesToQuery();
-  const results = await Promise.all(scopes.map((s) => api(`/api/items?${qs({ kind: 'task', state: 'open', scope: s, limit: 500 })}`)));
+  const results = await Promise.all(scopes.map((s) => api(`/api/items?${qs({ kind: 'task', state: mode, scope: s, limit: 500 })}`)));
   if (seq !== state.seq.tasks) return;
   const bad = results.find((r) => !r.ok);
   if (bad) {
-    state.tasksError = failWords(bad, 'load your open tasks');
+    state.tasksError = failWords(bad, mode === 'archived' ? 'load archived tasks' : 'load your open tasks');
   } else {
     const all = [];
     results.forEach((r, i) => {
       for (const it of listFrom(r.data, 'items', 'tasks')) all.push(normaliseItem(it, scopes[i]));
     });
-    state.tasks = all.filter((it) => PATH_ID_RE.test(it.id) && (it.kind === undefined || it.kind === 'task') && (it.state === undefined || it.state === 'open'));
+    state.tasks = all.filter((it) => PATH_ID_RE.test(it.id) && (it.kind === undefined || it.kind === 'task') && (it.state === undefined || it.state === mode));
     state.tasksScope = state.scope;
     state.tasksError = null;
   }
   body.setAttribute('aria-busy', 'false');
   renderTasks();
+}
+
+function renderTasksHead() {
+  const archived = state.tasksMode === 'archived';
+  setText('tasks-title', archived ? 'Archived tasks' : 'Open tasks');
+  setText(
+    'tasks-sub',
+    archived
+      ? 'Put away without being done. Bring one back to make it open again.'
+      : 'Everything still open, dated or not. Pick a few for today; hard dates show on Today by themselves.',
+  );
+  const link = $('tasks-mode-link');
+  if (link) {
+    link.href = archived ? '#/tasks' : '#/tasks/archived';
+    link.textContent = archived ? 'Back to open tasks' : 'Archived tasks';
+  }
+  document.title = `${archived ? 'Archived tasks' : 'Open tasks'} - Harrison OS`;
 }
 
 function isPicked(it) {
@@ -1824,15 +1897,34 @@ function taskMeta(it, today) {
     else if (it.due_on === today) parts.push('Due today');
     else parts.push(`Due ${formatOn(it.due_on)}`);
   }
+  if (ON_RE.test(String(it.start_on || '')) && it.start_on > today) parts.push(`Not before ${formatOn(it.start_on)}`);
+  if (it.recurrence && it.recurrence !== 'none' && RECURRENCE_LABEL[it.recurrence]) parts.push(RECURRENCE_LABEL[it.recurrence]);
   if (isPicked(it)) parts.push('Picked for today');
   if (it.claim_by) parts.push(`Asked by ${it.claim_by}`);
   return parts.join(' · ') || null;
+}
+
+function editButton({ id, scope, title }) {
+  return h('button', {
+    type: 'button',
+    class: 'btn btn-secondary btn-pick',
+    text: 'Edit',
+    'aria-label': `Edit: ${title || 'task'}`,
+    dataset: { fk: `edit-task-${id}` },
+    onclick: (e) => openTaskSheet(e.currentTarget, id, scope),
+  });
+}
+
+function onTasksFilterInput() {
+  state.tasksFilter = $('tasks-filter').value;
+  renderTasks();
 }
 
 function renderTasks() {
   const body = $('tasks-body');
   const key = focusKey();
   body.replaceChildren();
+  const archived = state.tasksMode === 'archived';
   const list = state.tasks && state.tasksScope === state.scope ? state.tasks : null;
   if (state.tasksError) body.append(noticeBlock(list ? `${state.tasksError} Showing what loaded last.` : state.tasksError, () => loadTasks()));
   if (!list) {
@@ -1840,13 +1932,28 @@ function renderTasks() {
     return;
   }
   if (!list.length) {
-    body.append(h('p', { class: 'empty', text: 'No open tasks.' }));
+    body.append(h('p', { class: 'empty', text: archived ? 'No archived tasks.' : 'No open tasks.' }));
     restoreFocus(body, key);
     return;
   }
   const today = localOn();
-  const groups = taskGroups(list);
-  body.append(h('p', { class: 'subtle', text: `${plural(list.length, 'open task', 'open tasks')}.` }));
+  const filter = state.tasksFilter.trim();
+  const shown = list.filter((it) => taskMatches(it, filter));
+  const noun = archived ? ['archived task', 'archived tasks'] : ['open task', 'open tasks'];
+  body.append(
+    h('p', {
+      class: 'subtle',
+      text: filter ? `${shown.length} of ${plural(list.length, noun[0], noun[1])} match “${excerpt(filter, 40)}”.` : `${plural(list.length, noun[0], noun[1])}.`,
+    }),
+  );
+  if (archived) {
+    const ul = h('ul', { class: 'list' });
+    for (const it of shown.slice().sort((a, b) => String(b.updated_at || '').localeCompare(String(a.updated_at || '')))) ul.append(archivedRow(it));
+    if (shown.length) body.append(section(`Archived (${shown.length})`, ul, 'tasks-archived'));
+    restoreFocus(body, key);
+    return;
+  }
+  const groups = taskGroups(shown);
   const group = (title, id, rows) => {
     if (!rows.length) return;
     const ul = h('ul', { class: 'list check-list' });
@@ -1860,7 +1967,7 @@ function renderTasks() {
           done: false,
           sample: it.sample,
           fk: `task-${it.id}`,
-          extra: pickButton({ id: it.id, scope: it.scope, picked: isPicked(it), title: it.title }),
+          extra: [pickButton({ id: it.id, scope: it.scope, picked: isPicked(it), title: it.title }), editButton({ id: it.id, scope: it.scope, title: it.title })],
         }),
       );
     }
@@ -1870,6 +1977,443 @@ function renderTasks() {
   group('Picked for today', 'tasks-picked', groups.picked);
   group('Anytime', 'tasks-anytime', groups.anytime);
   restoreFocus(body, key);
+}
+
+function archivedRow(it) {
+  return h(
+    'li',
+    { class: 'plain-row' },
+    h('span', { class: 'row-title', text: it.title || '(no title)' }),
+    it.updated_at ? h('span', { class: 'row-meta', text: `Archived ${formatAt(it.updated_at)}` }) : null,
+    h('span', { class: 'chips' }, state.scope === 'all' ? scopeChip(it.scope) : null, sampleChip(it)),
+    h(
+      'div',
+      { class: 'button-row' },
+      h('button', {
+        type: 'button',
+        class: 'btn btn-secondary',
+        text: 'Bring back',
+        'aria-label': `Bring back: ${it.title || 'task'}`,
+        dataset: { fk: `unarchive-${it.id}` },
+        onclick: (e) => itemAction(e.currentTarget, { id: it.id, scope: it.scope, action: 'reopen', done: 'Back on your open tasks.', failure: 'bring it back' }),
+      }),
+      deleteItemButton(it),
+    ),
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Edit sheet (a dialog for task edits and decisions). Not a route: closing returns focus to its opener.
+
+function openEditSheet(title, content, opener) {
+  const d = $('edit-sheet');
+  state.sheetOpener = opener || document.activeElement;
+  setText('edit-sheet-title', title);
+  setText('edit-sheet-status', '');
+  $('edit-sheet-body').replaceChildren(content);
+  if (!d.open) {
+    try {
+      d.showModal();
+    } catch {
+      d.setAttribute('open', '');
+    }
+  }
+  setTimeout(() => {
+    const first = $('edit-sheet-body').querySelector('input, select, textarea');
+    if (first) first.focus();
+  }, 30);
+}
+
+function closeEditSheet() {
+  const d = $('edit-sheet');
+  if (d.open) {
+    if (typeof d.close === 'function') d.close();
+    else {
+      d.removeAttribute('open');
+      onEditSheetClosed();
+    }
+  }
+}
+
+function onEditSheetClosed() {
+  $('edit-sheet-body').replaceChildren();
+  const opener = state.sheetOpener;
+  state.sheetOpener = null;
+  if (opener && opener.isConnected && typeof opener.focus === 'function') opener.focus({ preventScroll: true });
+  else {
+    const h1 = currentHeading();
+    if (h1) h1.focus({ preventScroll: true });
+  }
+}
+
+// One labelled field. kind: text | textarea | date | select. Returns the control.
+function field(form, { id, label, kind = 'text', value = '', options = [], hint, maxlength, min }) {
+  let input;
+  if (kind === 'select') {
+    input = h('select', { id, name: id });
+    for (const o of options) input.append(h('option', { value: o.value, text: o.label, selected: o.value === (value ?? '') }));
+  } else if (kind === 'textarea') {
+    input = h('textarea', { id, name: id, rows: 3, maxlength: maxlength || 2000, value: value || '' });
+  } else {
+    input = h('input', { id, name: id, type: kind, value: value || '', autocomplete: 'off', maxlength: kind === 'text' ? maxlength || 500 : null, min: min || null });
+  }
+  const hintId = hint ? `${id}-hint` : null;
+  if (hintId) input.setAttribute('aria-describedby', hintId);
+  form.append(h('label', { for: id, text: label }), hintId ? h('p', { id: hintId, class: 'subtle small', text: hint }) : null, input);
+  return input;
+}
+
+async function activeProjectsIn(scope) {
+  const r = await api(`/api/projects?${qs({ scope })}`);
+  if (!r.ok) return [];
+  return listFrom(r.data, 'projects', 'items').filter((p) => p && PATH_ID_RE.test(String(p.id || '')) && (!p.state || p.state === 'active'));
+}
+
+async function findTask(id, scope) {
+  const known = (state.tasks || []).find((t) => t.id === id && t.scope === scope);
+  if (known) return { task: known };
+  for (const st of ['open', 'archived', 'done']) {
+    const r = await api(`/api/items?${qs({ kind: 'task', state: st, scope, limit: 500 })}`);
+    if (!r.ok) return { error: failWords(r, 'open the task') };
+    const hit = listFrom(r.data, 'items').find((t) => t.id === id);
+    if (hit) return { task: normaliseItem(hit, scope) };
+  }
+  return { error: 'This task was not found. It may have been deleted.' };
+}
+
+async function openTaskSheet(button, id, scope) {
+  if (!isScope(scope)) {
+    showNotice('Could not open it. Its scope is unknown.');
+    return;
+  }
+  await guarded(button, async () => {
+    const [found, projects] = await Promise.all([findTask(id, scope), activeProjectsIn(scope)]);
+    if (found.error) {
+      showNotice(found.error);
+      return;
+    }
+    openEditSheet('Edit task', taskSheet(found.task, projects), button);
+  });
+}
+
+function taskSheet(it, projects) {
+  const wrap = h('div', { class: 'stack' });
+  const today = localOn();
+  const n = ++formSeq;
+  const form = h('form', { class: 'form', novalidate: true });
+  const title = field(form, { id: `ts-${n}-title`, label: 'Title', value: it.title, maxlength: 500 });
+  const notes = field(form, { id: `ts-${n}-notes`, label: 'Notes', kind: 'textarea', value: it.body || '' });
+  const due = field(form, { id: `ts-${n}-due`, label: 'Due date', kind: 'date', value: it.due_on || '', hint: 'A hard date. Leave empty if there is none.' });
+  if (it.when_text) form.append(h('p', { class: 'subtle small' }, 'Your words: ', h('q', { text: it.when_text })));
+  const start = field(form, { id: `ts-${n}-start`, label: 'Not before', kind: 'date', value: it.start_on || '', hint: 'Keeps it off Today until then. The due date does not change.' });
+  const repeat = field(form, {
+    id: `ts-${n}-repeat`,
+    label: 'Repeat',
+    kind: 'select',
+    value: RECURRENCES.includes(it.recurrence) ? it.recurrence : 'none',
+    options: RECURRENCES.map((r) => ({ value: r, label: RECURRENCE_LABEL[r] })),
+    hint: 'Repeats from its due date. Missed ones do not pile up.',
+  });
+  const projectOptions = [{ value: '', label: 'No project' }, ...projects.map((p) => ({ value: p.id, label: p.name || '(no name)' }))];
+  if (it.project_id && !projects.some((p) => p.id === it.project_id)) projectOptions.push({ value: it.project_id, label: 'Current project' });
+  const project = field(form, { id: `ts-${n}-project`, label: 'Project', kind: 'select', value: it.project_id || '', options: projectOptions });
+  const err = h('p', { class: 'field-error', role: 'alert', hidden: true });
+  const save = h('button', { type: 'submit', class: 'btn btn-primary', text: 'Save changes' });
+  form.append(err, h('div', { class: 'button-row' }, save, h('button', { type: 'button', class: 'btn btn-secondary', text: 'Cancel', onclick: closeEditSheet })));
+  form.addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const next = {
+      title: title.value.trim(),
+      body: notes.value.trim() || null,
+      due_on: due.value || null,
+      start_on: start.value || null,
+      recurrence: repeat.value,
+      project_id: project.value || null,
+    };
+    const problem = taskEditProblem(next);
+    if (problem) {
+      err.textContent = problem;
+      err.hidden = false;
+      return;
+    }
+    err.hidden = true;
+    // Only changed fields are sent, so an untouched due date is never rewritten.
+    const patch = {};
+    for (const [k, v] of Object.entries(next)) {
+      const before = it[k] === undefined || it[k] === '' ? null : it[k];
+      const was = k === 'recurrence' ? before || 'none' : before;
+      if (v !== was) patch[k] = v;
+    }
+    if (!Object.keys(patch).length) {
+      closeEditSheet();
+      setStatus('Nothing changed.');
+      return;
+    }
+    await guarded(save, async () => {
+      const r = await api(`/api/items/${enc(it.id)}`, { method: 'PATCH', body: { ...patch, scope: it.scope } });
+      logEvent({ kind: 'item_patch', id: it.id, fields: Object.keys(patch).length, status: r.status, ok: r.ok });
+      if (!r.ok) {
+        err.textContent = failWords(r, 'save the changes');
+        err.hidden = false;
+        return;
+      }
+      closeEditSheet();
+      showToast('Task saved.', changeIdFrom(r.data));
+      reloadCurrent();
+    });
+  });
+  wrap.append(form);
+
+  // Defer sets "Not before" only. The due date is never touched.
+  if (it.state === 'open' || it.state === undefined) {
+    const t = deferTargets(today);
+    const defer = (btn, on) =>
+      guarded(btn, async () => {
+        const r = await api(`/api/items/${enc(it.id)}/defer`, { method: 'POST', body: { scope: it.scope, start_on: on } });
+        logEvent({ kind: 'item_defer', id: it.id, status: r.status, ok: r.ok });
+        if (!r.ok) {
+          showNotice(failWords(r, 'defer it'));
+          return;
+        }
+        closeEditSheet();
+        showToast(`Not before ${formatOn(on)}.${it.due_on ? ' Due date unchanged.' : ''}`, changeIdFrom(r.data));
+        reloadCurrent();
+      });
+    const pickId = `ts-${n}-defer`;
+    const pickInput = h('input', { id: pickId, type: 'date', min: t.tomorrow, value: '' });
+    const pickBtn = h('button', { type: 'submit', class: 'btn btn-secondary', text: 'Defer to this date' });
+    const pickForm = h('form', { class: 'form', novalidate: true }, h('label', { for: pickId, text: 'Defer until' }), pickInput, pickBtn);
+    pickForm.addEventListener('submit', (e) => {
+      e.preventDefault();
+      if (!ON_RE.test(pickInput.value)) {
+        showNotice('Pick a date first.');
+        return;
+      }
+      defer(pickBtn, pickInput.value);
+    });
+    wrap.append(
+      section(
+        'Defer',
+        h(
+          'div',
+          null,
+          h('p', { class: 'subtle small', text: 'Keeps it off Today until that day. A due date stays as it is and still shows when it comes.' }),
+          h(
+            'div',
+            { class: 'button-row' },
+            h('button', { type: 'button', class: 'btn btn-secondary', text: `Tomorrow (${formatOn(t.tomorrow)})`, onclick: (e) => defer(e.currentTarget, t.tomorrow) }),
+            h('button', { type: 'button', class: 'btn btn-secondary', text: `Next week (${formatOn(t.nextWeek)})`, onclick: (e) => defer(e.currentTarget, t.nextWeek) }),
+          ),
+          h('details', { class: 'inline-form' }, h('summary', { class: 'btn btn-ghost', text: 'Pick a date' }), pickForm),
+        ),
+        `ts-${n}-defer-sec`,
+      ),
+    );
+  }
+
+  const more = h('div', { class: 'button-row' });
+  if (it.state !== 'archived') {
+    more.append(
+      h('button', {
+        type: 'button',
+        class: 'btn btn-secondary',
+        text: 'Archive',
+        onclick: (e) =>
+          guarded(e.currentTarget, async () => {
+            const r = await api(`/api/items/${enc(it.id)}/archive`, { method: 'POST', body: { scope: it.scope } });
+            logEvent({ kind: 'item_archive', id: it.id, status: r.status, ok: r.ok });
+            if (!r.ok) {
+              showNotice(failWords(r, 'archive it'));
+              return;
+            }
+            closeEditSheet();
+            showToast('Archived. Find it under Archived tasks.', changeIdFrom(r.data));
+            reloadCurrent();
+          }),
+      }),
+    );
+  }
+  more.append(deleteItemButton(it, { inSheet: true }));
+  wrap.append(section('Put away', more, `ts-${n}-away`));
+  return wrap;
+}
+
+// Hard delete with a confirm that says what goes. No Undo: the undo history goes with it.
+function deleteItemButton(it, { inSheet = false, after } = {}) {
+  return h('button', {
+    type: 'button',
+    class: 'btn btn-danger',
+    text: 'Delete',
+    'aria-label': `Delete: ${it.title || 'item'}`,
+    dataset: { fk: `delete-${it.id}` },
+    onclick: (e) => deleteItem(e.currentTarget, it, { inSheet, after }),
+  });
+}
+
+async function deleteItem(button, it, { inSheet = false, after } = {}) {
+  if (!isScope(it.scope) || !PATH_ID_RE.test(String(it.id || ''))) {
+    showNotice('Could not delete it. Its scope is unknown.');
+    return;
+  }
+  const ok = window.confirm(
+    `Delete “${excerpt(it.title || 'this item', 80)}” for good?\n\n` +
+      'This removes the item, its attachments and its undo history. It will not show in search again. ' +
+      'Exports you already downloaded are not changed.',
+  );
+  if (!ok) return;
+  await guarded(button, async () => {
+    const r = await api(`/api/items/${enc(it.id)}?${qs({ scope: it.scope })}`, { method: 'DELETE' });
+    logEvent({ kind: 'item_delete', id: it.id, status: r.status, ok: r.ok });
+    if (!r.ok) {
+      showNotice(failWords(r, 'delete it'));
+      return;
+    }
+    if (inSheet) closeEditSheet();
+    if (state.tasks) state.tasks = state.tasks.filter((t) => t.id !== it.id);
+    showToast('Deleted.', null);
+    if (typeof after === 'function') after();
+    else reloadCurrent();
+  });
+}
+
+// ---------------------------------------------------------------------------
+// Decisions: options, recommendation, assumptions, reason, outcome, reconsider-when. Replacing one keeps
+// the old decision, marked as replaced (supersedes_id); nothing is overwritten.
+
+function decisionRows(d) {
+  const dl = h('dl', { class: 'rows rows-stacked' });
+  const row = (label, value) => {
+    if (value === null || value === undefined || value === '' || (Array.isArray(value) && !value.length)) return;
+    const dd = Array.isArray(value) ? h('dd', null, h('ul', { class: 'plain-list' }, value.map((v) => h('li', { text: v })))) : h('dd', { text: String(value) });
+    dl.append(h('div', null, h('dt', { text: label }), dd));
+  };
+  row('Options', optionsOf(pick(d, 'options_json', 'options')));
+  row('Recommendation', d.recommendation);
+  row('Assumptions', d.assumptions);
+  row('Reason', d.reason);
+  row('Outcome', d.outcome);
+  row('Reconsider when', d.reconsider_when);
+  if (ON_RE.test(String(d.decided_on || ''))) row('Decided on', formatOn(d.decided_on));
+  return dl.childNodes.length ? dl : null;
+}
+
+function decisionCard(d, scope, { projectId } = {}) {
+  const superseded = !!(d.superseded_by_id || d.supersededById || d.superseded === true || d.superseded === 1);
+  const li = h(
+    'li',
+    { class: `plain-row decision-row${superseded ? ' is-superseded' : ''}` },
+    h('span', { class: 'row-title', text: d.title || '' }),
+    h('span', { class: 'chips' }, superseded ? chip('chip-kind', 'Replaced by a later decision') : chip('chip-good', 'Current'), sampleChip(d)),
+    decisionRows(d),
+  );
+  if (!superseded && PATH_ID_RE.test(String(d.id || '')) && isScope(scope)) {
+    li.append(
+      h(
+        'div',
+        { class: 'button-row' },
+        h('button', {
+          type: 'button',
+          class: 'btn btn-secondary',
+          text: 'Replace with a new decision',
+          'aria-label': `Replace with a new decision: ${d.title || 'decision'}`,
+          dataset: { fk: `replace-${d.id}` },
+          onclick: (e) => openDecisionSheet(e.currentTarget, { scope, projectId: projectId || d.project_id || null, replaces: d }),
+        }),
+      ),
+    );
+  }
+  return li;
+}
+
+// scope: a fixed scope (project, replace), or null to choose (Memory with All). replaces: the decision it supersedes.
+async function openDecisionSheet(button, { scope = null, projectId = null, replaces = null } = {}) {
+  await guarded(button, async () => {
+    const fixed = isScope(scope) ? scope : null;
+    const projects = fixed && !projectId ? await activeProjectsIn(fixed) : [];
+    openEditSheet(replaces ? 'Replace a decision' : 'Record a decision', decisionForm({ scope: fixed, projectId, replaces, projects }), button);
+  });
+}
+
+function decisionForm({ scope, projectId, replaces, projects }) {
+  const n = ++formSeq;
+  const form = h('form', { class: 'form', novalidate: true });
+  if (replaces) {
+    form.append(
+      h('p', { class: 'subtle' }, 'Replaces ', h('q', { text: replaces.title || 'the earlier decision' }), '. The earlier one stays, marked as replaced.'),
+    );
+  }
+  const title = field(form, { id: `df-${n}-title`, label: 'Decision', value: replaces ? replaces.title : '', maxlength: 500 });
+  const options = field(form, { id: `df-${n}-options`, label: 'Options considered', kind: 'textarea', value: replaces ? optionsOf(pick(replaces, 'options_json', 'options')).join('\n') : '', hint: 'One per line, up to 10.' });
+  const rec = field(form, { id: `df-${n}-rec`, label: 'Recommendation', kind: 'textarea' });
+  const assumptions = field(form, { id: `df-${n}-assumptions`, label: 'Assumptions', kind: 'textarea' });
+  const reason = field(form, { id: `df-${n}-reason`, label: 'Reason', kind: 'textarea' });
+  const outcome = field(form, { id: `df-${n}-outcome`, label: 'Outcome', kind: 'textarea', hint: 'What was decided or what happened. Leave empty if not known yet.' });
+  const reconsider = field(form, { id: `df-${n}-reconsider`, label: 'Reconsider when', kind: 'text', hint: 'For example: if the supplier price changes.' });
+  let scopeInputs = null;
+  if (!scope) {
+    const name = `df-${n}-scope`;
+    const want = preferredCaptureScope();
+    scopeInputs = ['work', 'personal'].map((v) => h('input', { type: 'radio', name, value: v, checked: v === want }));
+    form.append(
+      h(
+        'fieldset',
+        { class: 'segmented' },
+        h('legend', { text: 'Where it goes' }),
+        h('label', { class: 'seg' }, scopeInputs[0], ' ', h('span', { text: 'Work' })),
+        h('label', { class: 'seg' }, scopeInputs[1], ' ', h('span', { text: 'Personal' })),
+      ),
+    );
+  }
+  let project = null;
+  if (!projectId && projects.length) {
+    project = field(form, { id: `df-${n}-project`, label: 'Project', kind: 'select', value: '', options: [{ value: '', label: 'No project' }, ...projects.map((p) => ({ value: p.id, label: p.name || '(no name)' }))] });
+  }
+  const err = h('p', { class: 'field-error', role: 'alert', hidden: true });
+  const save = h('button', { type: 'submit', class: 'btn btn-primary', text: replaces ? 'Save the new decision' : 'Save decision' });
+  form.append(err, h('div', { class: 'button-row' }, save, h('button', { type: 'button', class: 'btn btn-secondary', text: 'Cancel', onclick: closeEditSheet })));
+  form.addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const fail = (m) => {
+      err.textContent = m;
+      err.hidden = false;
+    };
+    const t = title.value.trim();
+    if (!t) return fail('Write what was decided.');
+    const parsed = parseOptionLines(options.value);
+    if (parsed.error) return fail(parsed.error);
+    const target = scope || (scopeInputs.find((i) => i.checked) || {}).value;
+    if (!isScope(target)) return fail('Choose Work or Personal.');
+    err.hidden = true;
+    const opt = (input) => input.value.trim() || null;
+    const body = {
+      kind: 'decision',
+      scope: target,
+      title: t,
+      options_json: parsed.options,
+      recommendation: opt(rec),
+      assumptions: opt(assumptions),
+      reason: opt(reason),
+      outcome: opt(outcome),
+      reconsider_when: opt(reconsider),
+    };
+    // Empty fields are left out rather than sent as null.
+    for (const k of Object.keys(body)) if (body[k] === null || (Array.isArray(body[k]) && !body[k].length)) delete body[k];
+    const pid = projectId || (project && project.value) || null;
+    if (pid) body.project_id = pid;
+    if (replaces && replaces.id) body.supersedes_id = replaces.id;
+    await guarded(save, async () => {
+      const r = await api('/api/items', { method: 'POST', body });
+      logEvent({ kind: 'decision_create', replaces: !!replaces, status: r.status, ok: r.ok });
+      if (!r.ok) {
+        fail(failWords(r, 'save the decision'));
+        return;
+      }
+      closeEditSheet();
+      showToast(replaces ? 'New decision saved. The earlier one stays, marked as replaced.' : 'Decision saved.', changeIdFrom(r.data));
+      reloadCurrent();
+    });
+  });
+  return form;
 }
 
 // ---------------------------------------------------------------------------
@@ -2110,21 +2654,17 @@ function renderProject() {
     body.append(section('Waiting on others', h('div', null, ul, h('a', { class: 'btn btn-ghost', href: '#/waiting', text: 'Open Waiting' })), 'project-waiting'));
   }
 
-  if (pd.decisions.length) {
+  {
     const ul = h('ul', { class: 'list' });
-    for (const d of pd.decisions) {
-      const superseded = !!(d.superseded_by_id || d.supersededById || d.superseded === true);
-      ul.append(
-        h(
-          'li',
-          { class: `plain-row${superseded ? ' is-superseded' : ''}` },
-          h('span', { class: 'row-title', text: d.title || '' }),
-          d.reason ? h('span', { class: 'row-meta', text: d.reason }) : null,
-          superseded ? h('span', { class: 'chips' }, chip('chip-kind', 'Replaced by a later decision')) : null,
-        ),
-      );
-    }
-    body.append(section('Decisions', ul, 'project-decisions'));
+    for (const d of pd.decisions) ul.append(decisionCard(d, pd.scope, { projectId: pd.id }));
+    const add = h('button', {
+      type: 'button',
+      class: 'btn btn-secondary',
+      text: 'Record a decision',
+      dataset: { fk: `decide-${pd.id}` },
+      onclick: (e) => openDecisionSheet(e.currentTarget, { scope: pd.scope, projectId: pd.id }),
+    });
+    body.append(section('Decisions', h('div', null, pd.decisions.length ? ul : h('p', { class: 'subtle', text: 'No decisions recorded on this project.' }), add), 'project-decisions'));
   }
 
   if (pd.recentCaptures.length) {
@@ -2391,7 +2931,236 @@ function searchRow(row) {
     at ? h('span', { class: 'row-meta', text: formatAt(at) }) : null,
   ];
   if (ref.type === 'project') return h('li', null, h('a', { class: 'row-link', href: `#/project/${enc(ref.id)}` }, inner));
-  return h('li', { class: `plain-row${superseded ? ' is-superseded' : ''}` }, inner);
+  const li = h('li', { class: `plain-row${superseded ? ' is-superseded' : ''}` }, inner, attachmentStrip(row.attachments, row.scope));
+  if (ref.type === 'item' && isScope(row.scope)) {
+    const it = { id: ref.id, scope: row.scope, title: row.title, project_id: row.project_id || null };
+    const actions = h('div', { class: 'button-row' });
+    if (kind === 'decision' && !superseded) {
+      actions.append(
+        h('button', {
+          type: 'button',
+          class: 'btn btn-secondary',
+          text: 'Replace with a new decision',
+          'aria-label': `Replace with a new decision: ${row.title || 'decision'}`,
+          onclick: (e) => openDecisionSheet(e.currentTarget, { scope: row.scope, projectId: it.project_id, replaces: it }),
+        }),
+      );
+    }
+    actions.append(deleteItemButton(it, { after: () => runSearch(state.search ? state.search.q : '') }));
+    li.append(actions);
+  }
+  return li;
+}
+
+// Photos as small thumbnails, other files as chips. Both open the stored file (same origin, the
+// server sends it sandboxed). Nothing is shown when there are none.
+function attachmentStrip(list, scope) {
+  const atts = Array.isArray(list) ? list.filter((a) => a && PATH_ID_RE.test(String(a.id || ''))) : [];
+  if (!atts.length || !isScope(scope)) return null;
+  const strip = h('div', { class: 'att-strip' });
+  for (const a of atts) {
+    const url = `/api/attachments/${enc(a.id)}?${qs({ scope })}`;
+    const name = safeFileName(a.name, 'file');
+    if (String(a.mime || '').startsWith('image/') && a.mime !== 'image/heic') {
+      strip.append(
+        h(
+          'a',
+          { class: 'att-thumb', href: url, target: '_blank', rel: 'noopener', 'aria-label': `Open photo ${name}` },
+          h('img', { src: url, alt: '', loading: 'lazy', decoding: 'async', width: 72, height: 72 }),
+        ),
+      );
+    } else {
+      const size = Number(a.size) > 0 ? ` · ${Math.max(1, Math.round(Number(a.size) / 1024))} KB` : '';
+      strip.append(h('a', { class: 'att-chip', href: url, target: '_blank', rel: 'noopener' }, h('span', { class: 'visually-hidden', text: 'Open file ' }), `${name}${size}`));
+    }
+  }
+  return strip;
+}
+
+// ---------------------------------------------------------------------------
+// Preferences (editable memory). Only explicit writes here create one; each write is undoable.
+
+let prefEditing = null; // { key, scope } while an existing preference is in the form
+
+async function loadPreferences() {
+  const seq = ++state.seq.prefs;
+  const list = $('prefs-list');
+  list.setAttribute('aria-busy', 'true');
+  const r = await api(`/api/preferences?${qs({ scope: state.scope })}`);
+  if (seq !== state.seq.prefs) return;
+  list.setAttribute('aria-busy', 'false');
+  if (r.ok) {
+    state.prefs = listFrom(r.data, 'preferences', 'items').filter((p) => p && typeof p.key === 'string' && isScope(p.scope));
+    state.prefsScope = state.scope;
+    state.prefsError = null;
+  } else {
+    state.prefsError = r.status === 404 ? 'Preferences are not available on this server yet.' : failWords(r, 'load preferences');
+  }
+  renderPreferences();
+}
+
+function renderPreferences() {
+  const list = $('prefs-list');
+  list.replaceChildren();
+  const prefs = state.prefs && state.prefsScope === state.scope ? state.prefs : null;
+  setText('prefs-status', state.prefsError || (prefs && !prefs.length ? 'No preferences yet.' : ''));
+  for (const p of prefs || []) {
+    list.append(
+      h(
+        'li',
+        { class: 'plain-row' },
+        h('span', { class: 'row-title', text: prefLabel(p.key) }),
+        h('span', { class: 'pref-value', text: p.value || '' }),
+        p.note ? h('span', { class: 'row-meta', text: `Note: ${p.note}` }) : null,
+        h('span', { class: 'chips' }, state.scope === 'all' ? scopeChip(p.scope) : null, sampleChip(p)),
+        h(
+          'div',
+          { class: 'button-row' },
+          h('button', { type: 'button', class: 'btn btn-secondary', text: 'Edit', 'aria-label': `Edit preference: ${prefLabel(p.key)}`, onclick: () => editPreference(p) }),
+          h('button', { type: 'button', class: 'btn btn-danger', text: 'Delete', 'aria-label': `Delete preference: ${prefLabel(p.key)}`, onclick: (e) => deletePreference(e.currentTarget, p) }),
+        ),
+      ),
+    );
+  }
+  const scopeBox = $('pref-scope');
+  // A new preference names one scope; the switch decides unless it shows All.
+  scopeBox.hidden = !!prefEditing || isScope(state.scope);
+  if (!document.querySelector('input[name="prefscope"]:checked')) {
+    const want = document.querySelector(`input[name="prefscope"][value="${preferredCaptureScope()}"]`);
+    if (want) want.checked = true;
+  }
+}
+
+function resetPreferenceForm() {
+  prefEditing = null;
+  $('prefs-form').reset();
+  $('pref-name').disabled = false;
+  $('prefs-error').hidden = true;
+  setText('prefs-summary', 'Add a preference');
+  setText('pref-save', 'Save preference');
+  renderPreferences();
+}
+
+function editPreference(p) {
+  prefEditing = { key: p.key, scope: p.scope };
+  $('pref-name').value = prefLabel(p.key);
+  $('pref-name').disabled = true;
+  $('pref-value').value = p.value || '';
+  $('pref-note').value = p.note || '';
+  setText('prefs-summary', `Editing: ${prefLabel(p.key)}`);
+  setText('pref-save', 'Save changes');
+  $('prefs-details').open = true;
+  renderPreferences();
+  $('pref-value').focus();
+}
+
+async function onPreferenceSubmit(event) {
+  event.preventDefault();
+  const err = $('prefs-error');
+  const fail = (m) => {
+    err.textContent = m;
+    err.hidden = false;
+  };
+  const key = prefEditing ? prefEditing.key : prefKeyFrom($('pref-name').value);
+  if (!key) return fail('Give it a short name using letters or numbers.');
+  const value = $('pref-value').value.trim();
+  if (!value) return fail('Write the preference.');
+  if (value.length > 500) return fail('Keep it to 500 characters.');
+  const checked = document.querySelector('input[name="prefscope"]:checked');
+  const scope = prefEditing ? prefEditing.scope : isScope(state.scope) ? state.scope : checked && checked.value;
+  if (!isScope(scope)) return fail('Choose Work or Personal.');
+  err.hidden = true;
+  const note = $('pref-note').value.trim() || null;
+  await guarded($('pref-save'), async () => {
+    const r = await api(`/api/preferences/${enc(key)}`, { method: 'PUT', body: { scope, value, note } });
+    logEvent({ kind: 'preference_put', status: r.status, ok: r.ok });
+    if (!r.ok) {
+      fail(failWords(r, 'save the preference'));
+      return;
+    }
+    $('prefs-details').open = false;
+    resetPreferenceForm();
+    showToast('Preference saved.', changeIdFrom(r.data));
+    loadPreferences();
+  });
+}
+
+async function deletePreference(button, p) {
+  if (!window.confirm(`Delete the preference “${prefLabel(p.key)}”?`)) return;
+  await guarded(button, async () => {
+    const r = await api(`/api/preferences/${enc(p.key)}?${qs({ scope: p.scope })}`, { method: 'DELETE' });
+    logEvent({ kind: 'preference_delete', status: r.status, ok: r.ok });
+    if (!r.ok) {
+      showNotice(failWords(r, 'delete the preference'));
+      return;
+    }
+    if (prefEditing && prefEditing.key === p.key && prefEditing.scope === p.scope) resetPreferenceForm();
+    showToast('Preference deleted.', changeIdFrom(r.data));
+    loadPreferences();
+  });
+}
+
+// ---------------------------------------------------------------------------
+// Restore from an export file. Adds missing rows only; the server decides what is inserted.
+
+const MAX_RESTORE_CHARS = 8000000;
+
+async function onRestoreFileChange() {
+  setText('restore-result', '');
+  const file = $('restore-file').files && $('restore-file').files[0];
+  if (!file) return;
+  // Default the target to the file's own scope.
+  try {
+    const head = await file.slice(0, 4096).text();
+    const m = /"scope"\s*:\s*"(work|personal|all)"/.exec(head);
+    if (m) $('restore-scope').value = m[1];
+  } catch {
+    /* the full read on Restore reports problems */
+  }
+}
+
+async function onRestoreSubmit(event) {
+  event.preventDefault();
+  const file = $('restore-file').files && $('restore-file').files[0];
+  if (!file) {
+    setText('restore-result', 'Choose an export file first.');
+    return;
+  }
+  if (file.size > MAX_RESTORE_CHARS) {
+    setText('restore-result', 'This file is too large to restore from the phone (over 8 MB).');
+    return;
+  }
+  await guarded($('restore-run'), async () => {
+    let data;
+    try {
+      data = JSON.parse(await file.text());
+    } catch {
+      setText('restore-result', 'This file is not a Harrison OS export. Nothing was restored.');
+      return;
+    }
+    if (!data || data.format !== 'harrison-os-export' || !data.tables || typeof data.tables !== 'object') {
+      setText('restore-result', 'This file is not a Harrison OS export. Nothing was restored.');
+      return;
+    }
+    const scope = $('restore-scope').value;
+    setText('restore-result', 'Restoring. This can take a minute.');
+    const r = await api('/api/restore', { method: 'POST', body: { scope, data }, timeoutMs: 120000 });
+    logEvent({ kind: 'restore', scope, status: r.status, ok: r.ok });
+    if (!r.ok) {
+      const code = r.data && r.data.error && r.data.error.code;
+      // Restoring again is safe: it only ever adds what is still missing.
+      const words =
+        r.status === 404 && !code
+          ? 'Restore is not available on this server yet.'
+          : r.status >= 400 && r.status < 500
+            ? `${failWords(r, 'restore')} Nothing was restored.`
+            : `${failWords(r, 'restore')} Part of it may have been added. Restoring again is safe: it only adds what is still missing.`;
+      setText('restore-result', words);
+      return;
+    }
+    setText('restore-result', restoreWords(r.data));
+    rerunSearch();
+  });
 }
 
 // Export: fetched with the CSRF header (a plain link could not carry it), then saved.
@@ -2508,11 +3277,12 @@ async function writeDraft() {
     const stores = await storesReady;
     await draftRestored; // never overwrite the stored draft before it was restored
     if (gen !== state.draftGen) return; // a Save happened meanwhile
-    if (text.trim() === '') {
+    const files = state.sheetFiles.slice();
+    if (text.trim() === '' && !files.length) {
       await stores.drafts.del(DRAFT_KEY);
       setText('draft-status', '');
     } else {
-      await stores.drafts.put(DRAFT_KEY, { id, text, scope, updated_at: new Date().toISOString() });
+      await stores.drafts.put(DRAFT_KEY, { id, text, scope, files, updated_at: new Date().toISOString() });
       setText('draft-status', `Draft kept on this phone at ${hhmm(Date.now())}.`);
     }
   } catch {
@@ -2528,7 +3298,8 @@ async function restoreDraft() {
   } catch {
     draft = undefined;
   }
-  if (!draft || typeof draft.text !== 'string' || draft.text.trim() === '') {
+  const draftFiles = draft && Array.isArray(draft.files) ? draft.files.filter(validDraftFile).slice(0, MAX_ATTACHMENTS_PER_CAPTURE) : [];
+  if (!draft || typeof draft.text !== 'string' || (draft.text.trim() === '' && !draftFiles.length)) {
     if (!state.draftId) state.draftId = newClientId('capture');
     return;
   }
@@ -2548,6 +3319,9 @@ async function restoreDraft() {
   const box = $('capture-text');
   // If typing already started during startup, keep both: nothing is lost.
   box.value = box.value.trim() !== '' ? `${draft.text}\n${box.value}` : draft.text;
+  const known = new Set(state.sheetFiles.map((f) => f.id));
+  state.sheetFiles = draftFiles.filter((f) => !known.has(f.id)).concat(state.sheetFiles);
+  renderSheetFiles();
   if (isScope(draft.scope)) setCaptureScope(draft.scope);
   state.draftId = typeof draft.id === 'string' && CLIENT_ID_RE.test(draft.id) ? draft.id : newClientId('capture');
   setText('draft-status', `Draft restored from this phone (kept ${formatAt(draft.updated_at)}).`);
@@ -2557,7 +3331,9 @@ async function restoreDraft() {
 function onCaptureSubmit(event) {
   event.preventDefault();
   const box = $('capture-text');
-  const text = box.value.trim();
+  const files = state.sheetFiles.slice();
+  // A photo on its own still needs words for the server: say plainly what it is.
+  const text = box.value.trim() || (files.length ? `Attached: ${files.map((f) => f.name).join(', ')}` : '');
   if (!text) {
     showNotice('Nothing to save.');
     return;
@@ -2575,12 +3351,14 @@ function onCaptureSubmit(event) {
   state.draftGen += 1;
   state.draftId = newClientId('capture');
   box.value = '';
+  state.sheetFiles = [];
+  renderSheetFiles();
   setText('draft-status', '');
   writeLocal(CAPTURE_SCOPE_KEY, scope);
-  persistCapture({ id, text, scope });
+  persistCapture({ id, text, scope, files });
 }
 
-async function persistCapture({ id, text, scope }) {
+async function persistCapture({ id, text, scope, files = [] }) {
   let item;
   try {
     item = createOutboxItem({
@@ -2597,20 +3375,34 @@ async function persistCapture({ id, text, scope }) {
     const stores = await storesReady;
     const existing = await stores.outbox.get(id);
     if (!existing) await stores.outbox.put(item);
-    await stores.drafts.del(DRAFT_KEY).catch(() => {});
     state.items.set(id, existing || item);
-    logEvent({ kind: 'capture_saved', id });
-    setStatus('Saved on this phone.');
+    logEvent({ kind: 'capture_saved', id, attachments: files.length });
   } catch {
-    // Put the text back so nothing is lost.
+    // Put the text and files back so nothing is lost.
     const box = $('capture-text');
     if (box.value.trim() === '') {
       box.value = text;
       state.draftId = id;
+      state.sheetFiles = files.concat(state.sheetFiles);
+      renderSheetFiles();
       onDraftInput();
     }
     showNotice('Could not save on this phone. Your text is back in the box.');
     return;
+  }
+  const kept = await queueAttachments(id, scope, files);
+  if (kept) {
+    // Remove the draft only if it is still this capture's (typing may have started a new one).
+    const stores = await storesReady;
+    const d = await stores.drafts.get(DRAFT_KEY).catch(() => null);
+    if (!d || d.id === id) await stores.drafts.del(DRAFT_KEY).catch(() => {});
+    setStatus(files.length ? `Saved on this phone with ${plural(files.length, 'attachment', 'attachments')}.` : 'Saved on this phone.');
+  } else {
+    // The words are saved; the photos go back in the box to be saved again as their own capture.
+    state.sheetFiles = files.concat(state.sheetFiles);
+    renderSheetFiles();
+    writeDraft();
+    showNotice('The words are saved, but this phone could not keep the photos with them. They are back in the box: save again.');
   }
   renderOutbox();
   renderAuthBanner();
@@ -2660,10 +3452,25 @@ function syncNow(reason) {
           auth_required: summary.auth_required,
           conflict: summary.conflict,
           rejected: summary.rejected,
+          deleted: summary.deleted,
           stopped: summary.stopped,
         });
       }
       await reloadItems();
+      // Photos and files go once their capture has synced; signed out or offline, they wait too.
+      if (state.stores && state.stores.attachments && (!summary || !summary.stopped)) {
+        const att = await syncAttachments({
+          store: state.stores.attachments,
+          outbox: state.stores.outbox,
+          fetchImpl: (u, init) => fetch(u, init),
+          headers: API_HEADERS,
+          ignoreBackoff: IGNORE_BACKOFF_REASONS.has(reason),
+          onChange: onAttachmentChange,
+        });
+        if (att.attempted > 0) logEvent({ kind: 'attachment_run', reason, attempted: att.attempted, uploaded: att.uploaded, dropped: att.dropped, retry: att.retry, rejected: att.rejected, conflict: att.conflict, stopped: att.stopped });
+        if (att.auth_required) markAuthLost();
+        await reloadAttachments();
+      }
     } catch (e) {
       logEvent({ kind: 'sync_error', reason, error: e && e.name ? e.name : 'error' });
     } finally {
@@ -2684,7 +3491,7 @@ function scheduleRetry() {
   retryTimer = null;
   if (document.visibilityState !== 'visible') return;
   let next = null;
-  for (const item of state.items.values()) {
+  for (const item of [...state.items.values(), ...state.attachments.values()]) {
     if (item.state === 'retry_wait' && item.next_attempt_at != null) {
       const t = Number(item.next_attempt_at);
       if (next === null || t < next) next = t;
@@ -2713,6 +3520,8 @@ function itemStateWords(item) {
       return 'Not synced: conflict';
     case 'rejected':
       return 'Not synced: refused';
+    case 'deleted':
+      return 'Deleted, not resent';
     default:
       return String(item.state || 'Unknown');
   }
@@ -2733,6 +3542,8 @@ function itemExplanation(item) {
       return `The server refused it (${item.last_error || 'no code'}). It will not be sent again. The text is still on this phone.`;
     case 'auth_required':
       return 'Kept on this phone until you sign in again.';
+    case 'deleted':
+      return 'You deleted this capture, so it will not be sent again. Its words were removed from this phone too.';
     default:
       return '';
   }
@@ -2756,20 +3567,25 @@ function renderOutbox() {
   if (!list) return;
   list.replaceChildren();
   const items = [...state.items.values()].filter((i) => i.kind === 'capture').sort((a, b) => String(b.created_at).localeCompare(String(a.created_at)));
+  const atts = [...state.attachments.values()];
   const pending = items.filter(isPending).length;
+  const pendingAtts = atts.filter(isAttachmentPending).length;
   const problems = items.filter((i) => i.state === 'conflict' || i.state === 'rejected').length;
   let summary;
-  if (!items.length) summary = 'Nothing saved on this phone yet.';
+  if (!items.length && !atts.length) summary = 'Nothing saved on this phone yet.';
   else if (pending) summary = `${plural(pending, 'capture', 'captures')} waiting to sync.`;
   else summary = 'Everything on this phone has synced.';
+  if (pendingAtts) summary = `${pending ? summary : ''}${pending ? ' ' : ''}${plural(pendingAtts, 'photo or file', 'photos or files')} waiting to upload.`;
   if (problems) summary += ` ${plural(problems, 'capture needs', 'captures need')} a look.`;
   setText('outbox-summary', summary);
-  // Pending and problem items first, then the 10 most recent synced ones.
-  const shown = items.filter((i) => i.state !== 'synced').concat(items.filter((i) => i.state === 'synced').slice(0, 10));
+  const attsFor = (id) => atts.filter((a) => a.capture_id === id);
+  // Pending and problem items first (and any capture with a photo still waiting), then the 10 most recent synced ones.
+  const busy = (i) => i.state !== 'synced' || attsFor(i.id).some(isAttachmentPending);
+  const shown = items.filter(busy).concat(items.filter((i) => !busy(i)).slice(0, 10));
   for (const item of shown.slice(0, 40)) {
     const b = item.body || {};
     const li = h('li', { class: 'outbox-row' });
-    li.append(h('p', { class: 'row-title', text: excerpt(b.text, 140) }));
+    li.append(h('p', { class: 'row-title', text: item.state === 'deleted' ? '(deleted capture)' : excerpt(b.text, 140) }));
     li.append(h('p', null, h('span', { class: itemStateClass(item.state), text: itemStateWords(item) }), ' ', scopeChip(b.scope)));
     const meta = [`Saved ${formatAt(item.created_at)}`];
     if (item.attempts) meta.push(plural(item.attempts, 'retry', 'retries'));
@@ -2777,8 +3593,285 @@ function renderOutbox() {
     li.append(h('p', { class: 'row-meta', text: meta.join(' · ') }));
     const why = itemExplanation(item);
     if (why) li.append(h('p', { class: 'row-meta', text: why }));
+    for (const a of attsFor(item.id)) {
+      li.append(h('p', { class: 'row-meta att-state' }, h('span', { class: attachmentClass(a), text: attachmentWords(a, item) }), ' ', a.name));
+    }
     list.append(li);
   }
+  // Photos whose capture is no longer listed here (pruned after syncing, or deleted).
+  const listed = new Set(shown.map((i) => i.id));
+  for (const a of atts.filter((x) => !listed.has(x.capture_id) && (isAttachmentPending(x) || x.state === 'rejected' || x.state === 'conflict')).slice(0, 20)) {
+    list.append(h('li', { class: 'outbox-row' }, h('p', { class: 'row-title', text: a.name }), h('p', null, h('span', { class: attachmentClass(a), text: attachmentWords(a, null) }))));
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Photos and files in the capture sheet. Kept with the draft on this phone, queued (IndexedDB, keyed by
+// attachment id) when the capture is saved, and uploaded after the capture has synced.
+
+function readAsDataUrl(blob) {
+  return new Promise((resolve, reject) => {
+    const r = new FileReader();
+    r.onload = () => resolve(String(r.result || ''));
+    r.onerror = () => reject(r.error || new Error('read_failed'));
+    r.readAsDataURL(blob);
+  });
+}
+
+async function decodeImage(blob) {
+  if (typeof createImageBitmap === 'function') {
+    try {
+      return await createImageBitmap(blob);
+    } catch {
+      /* fall through: some engines decode only through an image element */
+    }
+  }
+  // The page CSP allows data: images (not blob:), so decode through a data URL.
+  const url = await readAsDataUrl(blob);
+  return new Promise((resolve, reject) => {
+    const img = new Image();
+    img.onload = () => resolve(img);
+    img.onerror = () => reject(new Error('decode_failed'));
+    img.src = url;
+  });
+}
+
+function canvasJpeg(canvas, quality) {
+  return new Promise((resolve) => {
+    try {
+      canvas.toBlob((b) => resolve(b), 'image/jpeg', quality);
+    } catch {
+      resolve(null);
+    }
+  });
+}
+
+// A JPEG no larger than MAX_ATTACHMENT_BYTES, longest side IMAGE_MAX_SIDE or less, or null.
+async function downscaleImage(blob) {
+  const img = await decodeImage(blob);
+  const w0 = img.naturalWidth || img.width;
+  const h0 = img.naturalHeight || img.height;
+  try {
+    for (const [side, quality] of [[IMAGE_MAX_SIDE, 0.85], [IMAGE_MAX_SIDE, 0.7], [1600, 0.7], [1280, 0.6]]) {
+      const { width, height } = fitWithin(w0, h0, side);
+      const canvas = document.createElement('canvas');
+      canvas.width = width;
+      canvas.height = height;
+      canvas.getContext('2d').drawImage(img, 0, 0, width, height);
+      const out = await canvasJpeg(canvas, quality);
+      if (out && out.size <= MAX_ATTACHMENT_BYTES) return out;
+    }
+    return null;
+  } finally {
+    if (typeof img.close === 'function') img.close();
+  }
+}
+
+async function prepareFile(file) {
+  const mime = attachmentMime(file.type, file.name);
+  let name = safeFileName(file.name, mime && mime.startsWith('image/') ? 'photo' : 'file');
+  if (!mime) return { error: `${name} can't be attached. Photos, PDF and text files only.` };
+  let blob = file;
+  let outMime = mime;
+  if (mime.startsWith('image/') && file.size > MAX_ATTACHMENT_BYTES) {
+    const small = await downscaleImage(file).catch(() => null);
+    if (!small) return { error: `${name} is over 1 MB and could not be made smaller on this phone.` };
+    blob = small;
+    outMime = 'image/jpeg';
+    name = `${name.replace(/\.[A-Za-z0-9]{1,5}$/, '')}.jpg`;
+  }
+  if (blob.size > MAX_ATTACHMENT_BYTES) return { error: `${name} is over 1 MB. Only photos can be made smaller.` };
+  if (blob.size < 1) return { error: `${name} is empty.` };
+  const url = await readAsDataUrl(blob);
+  return { file: { id: newClientId('att'), name, mime: outMime, size: blob.size, data_b64: url.slice(url.indexOf(',') + 1) } };
+}
+
+async function addFiles(fileList) {
+  const files = [...(fileList || [])];
+  for (const f of files) {
+    if (state.sheetFiles.length >= MAX_ATTACHMENTS_PER_CAPTURE) {
+      showNotice(`Up to ${MAX_ATTACHMENTS_PER_CAPTURE} photos or files per capture.`);
+      break;
+    }
+    setText('draft-status', 'Adding.');
+    let res;
+    try {
+      res = await prepareFile(f);
+    } catch {
+      res = { error: 'That file could not be read on this phone.' };
+    }
+    if (res.error) {
+      showNotice(res.error);
+      continue;
+    }
+    state.sheetFiles.push(res.file);
+    setText('draft-status', `${res.file.mime.startsWith('image/') ? 'Photo' : 'File'} added.`);
+  }
+  renderSheetFiles();
+  writeDraft();
+}
+
+function onCaptureFileChange() {
+  const input = $('capture-file');
+  const files = input.files;
+  addFiles(files).finally(() => {
+    input.value = '';
+  });
+}
+
+// A pasted picture is added as a photo; pasted text still pastes as text.
+function onCapturePaste(e) {
+  const cd = e.clipboardData;
+  if (!cd) return;
+  const images = [...(cd.files || [])].filter((f) => String(f.type || '').startsWith('image/'));
+  if (!images.length) return;
+  if (!cd.getData('text/plain')) e.preventDefault();
+  addFiles(images);
+}
+
+function previewable(mime) {
+  return mime === 'image/jpeg' || mime === 'image/png' || mime === 'image/webp';
+}
+
+function renderSheetFiles() {
+  const ul = $('capture-files');
+  ul.replaceChildren();
+  ul.hidden = state.sheetFiles.length === 0;
+  for (const f of state.sheetFiles) {
+    const kb = Math.max(1, Math.round(f.size / 1024));
+    ul.append(
+      h(
+        'li',
+        { class: 'att-pending-row' },
+        previewable(f.mime) ? h('img', { class: 'att-preview', src: `data:${f.mime};base64,${f.data_b64}`, alt: '', width: 56, height: 56 }) : h('span', { class: 'att-icon', 'aria-hidden': 'true', text: f.mime === 'application/pdf' ? 'PDF' : 'FILE' }),
+        h('span', { class: 'att-name' }, h('span', { text: f.name }), h('span', { class: 'row-meta', text: `${kb} KB` })),
+        h('button', {
+          type: 'button',
+          class: 'btn btn-ghost',
+          text: 'Remove',
+          'aria-label': `Remove ${f.name}`,
+          onclick: () => {
+            state.sheetFiles = state.sheetFiles.filter((x) => x.id !== f.id);
+            renderSheetFiles();
+            writeDraft();
+            setStatus(`${f.name} removed.`);
+            $('capture-file').focus();
+          },
+        }),
+      ),
+    );
+  }
+}
+
+function validDraftFile(f) {
+  return !!f && CLIENT_ID_RE.test(String(f.id || '')) && attachmentMime(f.mime, '') === f.mime && typeof f.data_b64 === 'string' && f.data_b64.length > 0 && Number(f.size) <= MAX_ATTACHMENT_BYTES;
+}
+
+// Queues the sheet's files for a saved capture. Returns false when this phone could not keep them.
+async function queueAttachments(captureId, scope, files) {
+  if (!files.length) return true;
+  try {
+    const stores = await storesReady;
+    for (const f of files) {
+      const item = createAttachmentItem({ id: f.id, capture_id: captureId, scope, name: f.name, mime: f.mime, data_b64: f.data_b64 });
+      if (!(await stores.attachments.get(item.id))) await stores.attachments.put(item);
+      state.attachments.set(item.id, withoutBytes(item));
+    }
+    logEvent({ kind: 'attachments_queued', id: captureId, count: files.length });
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function withoutBytes(item) {
+  const { data_b64: _drop, ...rest } = item;
+  return rest;
+}
+
+async function reloadAttachments() {
+  const stores = await storesReady;
+  const list = await stores.attachments.list();
+  state.attachments = new Map(list.map((a) => [a.id, withoutBytes(a)]));
+}
+
+function onAttachmentChange(item) {
+  state.attachments.set(item.id, withoutBytes(item));
+  logEvent({ kind: 'attachment_state', id: item.id, capture: item.capture_id, state: item.state, attempts: item.attempts, error: item.last_error || null });
+  if (item.state === 'dropped') showNotice(`${item.mime.startsWith('image/') ? 'A photo was' : 'A file was'} not sent: its capture was deleted. It was removed from this phone.`);
+  scheduleOutboxRender();
+}
+
+async function removeLocalAttachments(captureId) {
+  try {
+    const stores = await storesReady;
+    for (const a of await stores.attachments.list()) {
+      if (a.capture_id === captureId) {
+        await stores.attachments.remove(a.id);
+        state.attachments.delete(a.id);
+      }
+    }
+  } catch {
+    /* the server refuses attachments for a deleted capture anyway */
+  }
+}
+
+function attachmentWords(a, capture) {
+  const noun = String(a.mime || '').startsWith('image/') ? 'Photo' : 'File';
+  const offline = navigator.onLine === false;
+  switch (a.state) {
+    case 'sending':
+      return `${noun} sending`;
+    case 'waiting':
+      if (offline) return `${noun} waiting for a connection`;
+      return capture && capture.state === 'auth_required' ? `${noun} waiting: sign in again` : `${noun} waiting for its capture to sync`;
+    case 'retry_wait':
+      return offline || a.last_error === 'network' || a.last_error === 'timeout' ? `${noun} waiting for a connection` : `${noun} not sent yet, trying again`;
+    case 'auth_required':
+      return `${noun} waiting: sign in again`;
+    case 'uploaded':
+      return `${noun} uploaded`;
+    case 'dropped':
+      return `${noun} not sent: its capture was deleted`;
+    case 'conflict':
+      return `${noun} not sent: a different file already has this ID`;
+    case 'rejected':
+      return a.last_error === 'capture_not_saved' ? `${noun} not sent: its capture was not saved` : `${noun} not sent: refused (${a.last_error || 'no code'})`;
+    default:
+      return `${noun}: ${String(a.state || 'unknown')}`;
+  }
+}
+
+function attachmentClass(a) {
+  if (a.state === 'uploaded') return 'chip chip-good';
+  if (a.state === 'dropped' || a.state === 'conflict' || a.state === 'rejected') return 'chip chip-bad';
+  return 'chip chip-wait';
+}
+
+// Web Share Target (GET ?title=&text=&url=): opens the capture sheet with the shared words. Nothing is
+// saved until Save is tapped; shared text is only text.
+function handleShareParam() {
+  let params;
+  try {
+    params = new URLSearchParams(location.search);
+  } catch {
+    return;
+  }
+  if (!['title', 'text', 'url'].some((k) => params.has(k))) return;
+  const shared = shareText({ title: params.get('title'), text: params.get('text'), url: params.get('url') });
+  try {
+    history.replaceState(null, '', `${location.pathname}#/capture`);
+  } catch {
+    /* ignore */
+  }
+  logEvent({ kind: 'share_opened', has_text: shared.length > 0 });
+  if (shared) {
+    const box = $('capture-text');
+    box.value = box.value.trim() ? `${box.value}\n${shared}` : shared;
+    onDraftInput();
+  }
+  onRoute();
+  setText('draft-status', shared ? 'Shared text added. Check it, then Save.' : 'Nothing came with the share. Type or paste instead.');
 }
 
 // ---------------------------------------------------------------------------
@@ -3152,6 +4245,30 @@ function bindHandlers() {
     if (!inside) closeCaptureSheet(true);
   });
 
+  $('capture-file').addEventListener('change', onCaptureFileChange);
+  $('capture-text').addEventListener('paste', onCapturePaste);
+
+  const edit = $('edit-sheet');
+  $('edit-sheet-close').addEventListener('click', closeEditSheet);
+  edit.addEventListener('close', onEditSheetClosed);
+  edit.addEventListener('click', (e) => {
+    if (e.target !== edit) return;
+    const r = edit.getBoundingClientRect();
+    const inside = e.clientX >= r.left && e.clientX <= r.right && e.clientY >= r.top && e.clientY <= r.bottom;
+    if (!inside) closeEditSheet();
+  });
+
+  $('tasks-filter').addEventListener('input', onTasksFilterInput);
+  $('decision-new').addEventListener('click', (e) => openDecisionSheet(e.currentTarget, { scope: isScope(state.scope) ? state.scope : null }));
+  $('prefs-form').addEventListener('submit', onPreferenceSubmit);
+  $('pref-cancel').addEventListener('click', () => {
+    $('prefs-details').open = false;
+    resetPreferenceForm();
+    $('prefs-summary').focus();
+  });
+  $('restore-file').addEventListener('change', onRestoreFileChange);
+  $('restore-form').addEventListener('submit', onRestoreSubmit);
+
   $('project-form').addEventListener('submit', onProjectSubmit);
   $('search-form').addEventListener('submit', onSearchSubmit);
   $('search-q').addEventListener('input', onSearchInput);
@@ -3309,9 +4426,11 @@ async function init() {
     resolveDraftRestored();
   }
   await reloadItems().catch(() => {});
+  await reloadAttachments().catch(() => {});
   renderOutbox();
   renderAuthBanner();
   handleAckParam();
+  handleShareParam();
   try {
     if (navigator.storage && navigator.storage.persisted && !(await navigator.storage.persisted()) && navigator.storage.persist) {
       const granted = await navigator.storage.persist();
