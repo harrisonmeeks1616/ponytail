@@ -48,7 +48,7 @@ Plain ES modules, no framework: `public/app.js` (screens), `public/outbox-core.j
 - 44 px targets throughout, visible focus (including the file button through its hidden input).
 - No horizontal scroll at 360-430 px and at 200% zoom (checked at 180, 195 and 215 CSS px: the scope switch takes its own line and the tab bar shows icons only, names kept for screen readers).
 - Dark mode uses the same custom properties as everything else. Safe-area insets come from the existing sheet, top bar and tab bar rules.
-- Optional completion feedback: a short pop on the check when a task is marked done; `prefers-reduced-motion: reduce` turns all animation off.
+- Optional completion feedback: a short pop on the check when a task is marked done; `prefers-reduced-motion: reduce` turns all animation and transitions off, including on `::before`/`::after` pseudo-elements (the pop runs on `.check::before`).
 - The edit sheet is a modal `<dialog>`; Escape or Close returns focus to the button that opened it.
 
 ## Before T1a's API is merged

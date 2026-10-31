@@ -1464,7 +1464,10 @@ img {
 
 /* ------------------------------------------------------------------ motion and contrast */
 @media (prefers-reduced-motion: reduce) {
-  * {
+  /* `*` alone does not match pseudo-elements, and the completion pop runs on .check::before. */
+  *,
+  *::before,
+  *::after {
     scroll-behavior: auto !important;
     transition: none !important;
     animation: none !important;
