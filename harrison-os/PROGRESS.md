@@ -25,3 +25,17 @@ Times are actual clock or commit times (`git log`, author date converted to EDT)
 | `0fd281e` | 473 tests: 319 pass, 114 fail, 40 cancelled |
 
 The repository as a whole is not green; only the `harrison-os` job is.
+
+## Integration log (actual times)
+
+- ~11:27 T6+T7 workflow finished (implement -> review -> fix). Merged `hos/T6-fix`, `hos/T7-fix`. Integration fixes: MCP allowlist test derives contract tools from the real modules (get_weekly_review is live); static SQL test names the table-owning modules from PLAN. 243/243 unit, 11/11 browser. `f67c1f2` on main.
+- ~11:29 Codex: sweep counted validation errors as coverage. Rewrote `tests/scope-sweep.test.mjs`: per-route fixtures or stated exemptions (completeness test fails on a new route), own-scope 2xx + canary present, work-scope no canary. Mutation-checked (leak, validation-stopped, empty seed). `46e30a2`.
+- ~11:31 Merged `hos/T2-fix` (Ask/AI/briefs), `hos/T5-fix` (PM digest); completeness test caught their unfixtured routes as designed; fixtures added. ~11:33 merged `hos/T3-fix` (drafts/claims) + fixtures; merged `hos/T4-fix` (calendar) + fixtures (work view must return personal events busy-only). 320/320 unit, 11/11 browser. `208c00d` on main.
+- Waiting on: T1a (core backend) and T1b (core UI) review/fix stages.
+
+## Usage-limit risk (Codex 11:29: weekly usage at 75%)
+
+- The meter is not visible from inside this session; absolute headroom is unknown. Three completed workflows used roughly 1 M subagent tokens each.
+- Mitigation: no further workflows or fan-out. Remaining work (T1 merge, deletion/cron wiring, remaining fixtures, cross-slice e2e, acceptance evidence) is done by the lead in bounded steps, each pushed to main only when unit + browser are green, so a hard stop leaves main coherent and recorded.
+- Dropped: the planned M3 adversarial-review workflow. Assurance instead comes from the per-track independent reviews already run and the mutation-checked scope sweep. This reduces review depth, not product scope.
+- If capped: last green main is the delivery; PROGRESS/ACCEPTANCE name what remains; resume after the reset (Mon Nov 2, 6 PM per Codex) or continue from this record.
