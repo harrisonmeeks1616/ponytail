@@ -120,6 +120,7 @@
     ["Swimming pools, fountains, similar installations", "Article 680", "Bonding, grounding, GFCI, underwater lighting."],
     ["Emergency systems (legally required life safety)", "Article 700", "Contrast 701 standby, 702 optional standby."],
     ["Over-1,000 V grounding (2020)", "Article 250 Part X", "Do not use 2023 reorganized headings as a 2020 map."],
+    ["High-impedance grounded neutral systems (250.36)", "250.36 (not in Part X)", "Compare with 250.187 separately and check the voltage scope in the 2020 text."],
     ["Medium-voltage cable and over-1,000 V equipment", "Articles 311 and 490", "Verify voltage range and numbers in 2020."]
   ];
 

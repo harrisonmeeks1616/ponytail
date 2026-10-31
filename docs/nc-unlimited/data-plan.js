@@ -2,7 +2,7 @@
 (function (g) {
   g.NC = g.NC || {};
 
-  g.NC.meta = { syncedAt: "2026-10-31T18:40:00Z", note: "Plan content mirrors the Harrison OS Notion pages, which were still being rewritten on Oct 31. If a date or number looks wrong, Notion wins: tell me and I will re-sync." };
+  g.NC.meta = { syncedAt: "2026-10-31T18:42:00Z", note: "Plan content mirrors the Harrison OS Notion pages, which were still being rewritten on Oct 31. If a date or number looks wrong, Notion wins: tell me and I will re-sync." };
 
   g.NC.exam = {
     startISO: "2026-12-07T15:00:00Z", // Mon Dec 7 2026 10:00 AM EST (UTC-5)
@@ -68,13 +68,13 @@
   // Key dates and decisions
   g.NC.keyDates = [
     ["2026-11-03", "Borrowed books target", "Have the NASCLA NC Electrical (14th) and the 2013 NFPA 72 in hand (Day 04 check)."],
-    ["2026-11-06", "Checkpoint 1 and fresh-form decision", "30-question checkpoint (aim 75%+). Decide where fresh full forms come from (acquisition checklist below)."],
+    ["2026-11-06", "Checkpoint 1, fresh-form decision, authorization lookup", "30-question checkpoint (aim 75%+). Decide where fresh full forms come from (acquisition checklist). Start the Board authorization-window lookup by today and recheck Dec 4."],
     ["2026-11-13", "Checkpoint 2", "Mixed checkpoint and Mock A preparation (aim 75%+)."],
     ["2026-11-14", "Mock A", "Full 100-question form, 10 AM to 4 PM, admitted books, no assistance."],
     ["2026-11-21", "Mock B", "Second fresh full form."],
     ["2026-11-23", "14-day readiness review", "Review Mocks A and B, category evidence and recurring errors. Decide early about targeted instruction or an in-window date change."],
     ["2026-11-28", "Mock C", "Third fresh full form."],
-    ["2026-12-02", "Final readiness decision and checkpoint 3", "Fresh targeted checkpoint (aim 75%+), then the final readiness decision."],
+    ["2026-12-02", "Final readiness decision and checkpoint 3", "75 minutes: 20 not-previously-seen items on your weakest two domains (raw score = correct / 20, blanks 0). Then 35 minutes grading and repairs, and a 10-minute final decision written from actual evidence. Unverified fresh AI items stay LEARNING; if no qualifying fresh source exists, label the whole set LEARNING."],
     ["2026-12-04", "Personal go/no-go", "Final book/tab/ID/route/authorization checks. Decide before the PSI cutoff."],
     ["2026-12-05", "PSI cutoff 10:00 AM", "Cancel or reschedule at least 48 hours ahead. Your confirmation's terms govern. Dec 5 is a 2 h targeted set only; no full mock."],
     ["2026-12-06", "Light review, pack, sleep", "0.5 h. Normal sleep."],

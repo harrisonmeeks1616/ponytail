@@ -5,7 +5,7 @@
    "0:00-0:05 (5 min) Launch/recall: open due retests in the Error Log; recall one fact from the last session without looking.",
    "0:05-0:30 (25 min) Main learning: Book tour, 25 min: in the 2020 NEC find the Index, Article 100, Article 250, Table 310.16, Chapter 9 Tables 1, 4, 5 and 8, and Annex C. Write down page numbers in pencil on a scratch list (not in the book yet). Plan permanent tabs: allowed are permanent tabs; not allowed are temporary flags, stapled tabs, divider tabs, loose or attached papers. Pencil notes must be highlighted; pen notes need no highlight.",
    "0:30-0:35 (5 min) Break.",
-   "0:35-1:00 (25 min) Practice: Baseline, 25 min, timed: answer official sample Questions 1-10 in order. Commit every answer before looking at anything else. Write the time you finish. Unfinished questions count as unattempted, not wrong guesses.",
+   "0:35-1:00 (25 min) Practice: Baseline, 25 min, timed: first mark any of Q1-10 you have seen before (seen = review, not a cold/fresh baseline). Answer official sample Questions 1-10 in order; Q1-2 use the Lighting & Power plans (printed pp. 69-70 / PDF pp. 70-71; https://www.ncbeec.org/psi-exam-book-2026-002-2/#page=70). Commit every answer before looking at anything else. Write the time you finish. Raw timed baseline = correct / 10: blanks count 0; also write how many were unattempted. A source-pending item may get a separate note, but never shrinks the /10.",
    "1:00-1:05 (5 min) Break.",
    "1:05-1:25 (20 min) Rotating law/NFPA/plans: Book inventory, 20 min: list exactly what is on the desk. NEC 2020: confirm cover says 2020. NFPA 72: must be the 2013 edition (72, not 13 or 70E). NASCLA NC Electrical: note the edition printed on the cover. The publisher currently offers the 14th edition, ISBN 978-1-948558-50-1. Record 'not yet in hand' for borrowed books.",
    "1:25-1:55 (30 min) Correct and re-solve: Grade with the official key. For each miss write one line: what you chose, the governing source, cause (knowledge, navigation, setup, arithmetic, reading, time). Pick the weakest 2 areas from misses plus slowest lookups.",
@@ -13,14 +13,16 @@
   ],
   "questions": [
    {
-    "q": "Official sample Q1-Q10 (handbook p.15, https://www.ncbeec.org/psi-exam-book-2026-002-2/#page=15). Answer sheet: 1 __ 2 __ 3 __ 4 __ 5 __ 6 __ 7 __ 8 __ 9 __ 10 __ finish time __",
-    "a": "Official key: handbook p.23 (#page=23); open only after all 10 answers are committed.",
-    "src": "Official NCBEEC/PSI handbook sample. Do not open the Fire Alarms & Plan Reading sample corrections first (they expose answers). Sample ambiguity notes Q22-23, Q26 do not affect Q1-10."
+    "q": "Official sample Q1-Q10 (handbook printed pp. 14-18 / PDF pp. 15-19, https://www.ncbeec.org/psi-exam-book-2026-002-2/#page=15). Answer sheet: 1 __ 2 __ 3 __ 4 __ 5 __ 6 __ 7 __ 8 __ 9 __ 10 __ finish time __",
+    "a": "Official key: handbook printed p. 22 / PDF p. 23 (#page=23); open only after all 10 answers are committed.",
+    "src": "Official NCBEEC/PSI handbook sample; Q1-2 need the Lighting & Power plans (printed pp. 69-70 / PDF pp. 70-71, #page=70). Do not open the Fire Alarms & Plan Reading sample corrections first (they expose answers). Sample ambiguity notes Q22-23, Q26 do not affect Q1-10."
    }
   ],
   "checks": [
    "10 answers committed and graded against the official key",
+   "Raw baseline written as correct / 10 (blanks 0), unattempted count and seen-before items noted",
    "Weakest 2 areas written in the record",
+   "Authorization window: start the lookup this week (Board notice or official account; target Fri Nov 6) and record it on the readiness page. Recheck Dec 4.",
    "Book inventory written, including NFPA 72 and NASCLA edition status",
    "Record table filled; real misses logged in the Error Log",
    "Status checked in this row only after the work is actually done"
@@ -32,7 +34,7 @@
   "steps": [
    "BLOCK 1 (2 h)",
    "0:00-0:05 (5 min) Launch/recall: open due retests in the Error Log; recall one fact from the last session without looking.",
-   "0:05-0:30 (25 min) Main learning: three jobs. Grounded conductor (neutral) carries normal current. EGC carries fault current back to the source so the OCPD opens. GEC connects the system to earth through the electrode system. The rod is not the fault path. Table 250.66 sizes the GEC from the service-entrance conductor; Table 250.122 sizes the EGC from the OCPD rating.",
+   "0:05-0:30 (25 min) Main learning: three jobs (2020 book navigation route; confirm final text). A grounded conductor is intentionally grounded and is often, but not always, a neutral. EGC provides the fault-return path so the OCPD opens. GEC connects the system/equipment to the electrode system. The rod is not the fault path. Identify the conductor's function first, then the applicable 250.66 / 250.122 / 250.102 arrangement, electrode and parallel-conductor conditions. Service amperes alone do not settle sizing.",
    "0:30-0:35 (5 min) Break.",
    "0:35-1:00 (25 min) Practice: G01, G02, G03, G05, G09 below.",
    "1:00-1:05 (5 min) Break.",
@@ -104,12 +106,12 @@
   "objective": "Separate ampere rating from interrupting rating and trace service point -> service disconnect -> feeder. (2 h, suggested 7-9 PM)",
   "steps": [
    "0:00-0:05 (5 min) Launch/recall: open due retests in the Error Log; recall one fact from the last session without looking.",
-   "0:05-0:30 (25 min) Main learning: ampere rating protects the conductor; interrupting rating must handle available fault current. Continuous load: 125% of continuous plus 100% noncontinuous for OCPD sizing. Next size up (240.4(B)) has conditions; it is not automatic.",
+   "0:05-0:30 (25 min) Main learning: Main, 25 min (book navigation route; confirm final text): distinguish the ampere rating/setting from the interrupting rating (which must suit the available fault current). The ordinary 125% continuous + 100% noncontinuous treatment applies only within the governing rule's scope, including listed-assembly conditions and exceptions. Next-size-up permission (240.4(B)) is conditional, not automatic.",
    "0:30-0:35 (5 min) Break.",
-   "0:35-1:00 (25 min) Practice: S01, S09, O01, O02, O03, O04, O06.",
+   "0:35-1:00 (25 min) Practice: Practice, 25 min: S01, S09, O01, O02, O03, O04, O06.",
    "1:00-1:05 (5 min) Break.",
    "1:05-1:25 (20 min) Rotating law/NFPA/plans: NC Law & Business cards 11-15 (fees, renewal, supervision, permits, August 2026 change).",
-   "1:25-1:55 (30 min) Correct and re-solve: Re-solve O03 with changed numbers (e.g. 40 A continuous + 15 A noncontinuous). Every lookup: section + condition.",
+   "1:25-1:55 (30 min) Correct and re-solve: Solve variant O03-v1 below (new recomputed key). Every lookup: section + condition.",
    "1:55-2:00 (5 min) Record: fill the record table (actual minutes; attempted/verified/pending; score; hardest 2; next retest date); log real misses."
   ],
   "questions": [
@@ -144,6 +146,11 @@
     "src": "2020 NEC, exact final answer must be verified in this edition"
    },
    {
+    "q": "O03-v1 (changes O03; changed-number variant, a NEW problem graded only against its recomputed key, never the original O03 letter/value; all factors are exercise assumptions, not verified code rules; no time or no coach? re-solve the original IDs instead and label them repeat, not fresh): Model: required current = 1.25 x continuous + noncontinuous. Inputs: 40 A continuous, 15 A noncontinuous. Calculated minimum before selecting conductors or a device?",
+    "a": "65 A. 1.25 x 40 = 50 A; + 15 A = 65 A. Arithmetic model only; no code-compliance conclusion.",
+    "src": "Original arithmetic under the stated assumptions; no NEC/NFPA compliance conclusion."
+   },
+   {
     "q": "O06 (Overcurrent protection, Book lookup required): Compare a circuit breaker, a plug fuse and a cartridge fuse for their permitted locations, rating information and replacement constraints. Give one condition that prevents assuming the three are interchangeable.",
     "a": "Book lookup required. Verify exact section/page, conditions, exception in the named edition before scoring. Starting route: Article 240 relevant device parts.",
     "src": "2020 NEC, exact final answer must be verified in this edition"
@@ -161,12 +168,12 @@
   "objective": "Run the full ampacity chain: column -> ambient correction -> adjustment -> terminal limit -> OCP check. (2 h, suggested 7-9 PM)",
   "steps": [
    "0:00-0:05 (5 min) Launch/recall: open due retests in the Error Log; recall one fact from the last session without looking.",
-   "0:05-0:30 (25 min) Main learning: start from the insulation column for correction/adjustment, then limit the result to the terminal rating (often 75C). A neutral carrying mainly nonlinear load counts as current-carrying. Write the chain on one line every time.",
+   "0:05-0:30 (25 min) Main learning: Main, 25 min (book navigation route; confirm 110.14(C), Article 310 and the applicable sizing/protection text): check separately (1) load/duty and terminal temperature limits, (2) the adjusted/corrected installation ampacity, and (3) overcurrent protection. Do not turn every condition into one blanket multiplier. Whether a neutral counts as current-carrying depends on the stated system and load conditions. Write each check on its own line.",
    "0:30-0:35 (5 min) Break.",
-   "0:35-1:00 (25 min) Practice: W01, W02, W04, W05, W10, O09.",
+   "0:35-1:00 (25 min) Practice: Practice, 25 min: W01, W02, W04, W05, W10, O09.",
    "1:00-1:05 (5 min) Break.",
    "1:05-1:25 (20 min) Rotating law/NFPA/plans: Books check, 20 min (borrowed-book day): if NFPA 72 and NASCLA arrived, confirm the 2013 edition and the NASCLA edition on the cover and copyright page. Record it. If not arrived, read NC Law & Business cards 16-20 instead.",
-   "1:25-1:55 (30 min) Correct and re-solve: Re-solve W02 with 0.82 ambient and 0.70 adjustment. Book items: exact section or pending.",
+   "1:25-1:55 (30 min) Correct and re-solve: Solve variant W02-v1 below (new recomputed key). Book items: exact section or pending.",
    "1:55-2:00 (5 min) Record: fill the record table (actual minutes; attempted/verified/pending; score; hardest 2; next retest date); log real misses."
   ],
   "questions": [
@@ -199,6 +206,11 @@
     "q": "O09 (Overcurrent protection, Book lookup required): For an adjustable protective device, identify the exact rating or setting used by the relevant conductor/grounding rule. What prevents choosing a result from the frame size without reading the rule?",
     "a": "Book lookup required. Verify exact section/page, conditions, exception in the named edition before scoring. Starting route: Articles 240 and 250; exact quantity depends on the selected provision.",
     "src": "2020 NEC, exact final answer must be verified in this edition"
+   },
+   {
+    "q": "W02-v1 (changes W02; changed-number variant, a NEW problem graded only against its recomputed key, never the original W02 letter/value; all factors are exercise assumptions, not verified code rules; no time or no coach? re-solve the original IDs instead and label them repeat, not fresh): Model: start at 95 A, multiply by 0.82 ambient and 0.7 conductor-count factors, then separately limit to a 65 A terminal value. Usable maximum under ONLY these assumptions (round to 0.01 A)?",
+    "a": "54.53 A. 95 x 0.82 x 0.7 = 54.53 A; terminal cap 65 A; min = 54.53 A. Arithmetic model only; no code-compliance conclusion.",
+    "src": "Original arithmetic under the stated assumptions; no NEC/NFPA compliance conclusion."
    }
   ],
   "checks": [
@@ -213,12 +225,12 @@
   "objective": "Pick the right Chapter 9 note and table, and finish a raceway-fill problem in under 4 minutes. (2 h, suggested 7-9 PM)",
   "steps": [
    "0:00-0:05 (5 min) Launch/recall: open due retests in the Error Log; recall one fact from the last session without looking.",
-   "0:05-0:30 (25 min) Main learning: conduit fill is cross-sectional area (Ch 9 Table 1 percentages, Table 4 and 5). Wireways use their own article. Fill is not ampacity adjustment. Use Annex C only for same-size conductors.",
+   "0:05-0:30 (25 min) Main learning: Main, 25 min: conduit fill is cross-sectional area (Ch 9 Table 1 percentages, Table 4 and 5). Wireways use their own article. Fill is not ampacity adjustment. Annex C applies only when the raceway type AND the conductor type/insulation/size all match the table; for mixed conditions use the applicable Chapter 9 area method (book route; confirm notes).",
    "0:30-0:35 (5 min) Break.",
-   "0:35-1:00 (25 min) Practice: W03, W06, plus two changed-number fill problems from the coach.",
+   "0:35-1:00 (25 min) Practice: Practice, 25 min: W03, W06, plus variants W03-v2 and W03-v3 below.",
    "1:00-1:05 (5 min) Break.",
-   "1:05-1:25 (20 min) Rotating law/NFPA/plans: Plans, 20 min: open the official Lighting & Power plans (handbook p.70, https://www.ncbeec.org/psi-exam-book-2026-002-2/#page=70). Learn the legend, symbols and panel schedule layout. No answers yet.",
-   "1:25-1:55 (30 min) Correct and re-solve: Re-solve W03 with 1.50 in2 area and 0.09 in2 conductors. Note the Chapter 9 note that applies.",
+   "1:05-1:25 (20 min) Rotating law/NFPA/plans: Plans, 20 min: open the official Lighting & Power plans (handbook printed pp. 69-70 / PDF pp. 70-71, https://www.ncbeec.org/psi-exam-book-2026-002-2/#page=70). Learn the legend, symbols and panel schedule layout. No answers yet.",
+   "1:25-1:55 (30 min) Correct and re-solve: Solve variant W03-v1 below. Note the Chapter 9 note that applies.",
    "1:55-2:00 (5 min) Record: fill the record table (actual minutes; attempted/verified/pending; score; hardest 2; next retest date); log real misses."
   ],
   "questions": [
@@ -233,19 +245,29 @@
     "src": "2020 NEC, exact final answer must be verified in this edition"
    },
    {
-    "q": "Coach fill variant 1 and 2: ask the coach for two original raceway-fill problems with supplied areas (one question at a time).",
-    "a": "No key supplied; coach generated.",
-    "src": "Coach"
+    "q": "W03-v1 (changes W03; changed-number variant, a NEW problem graded only against its recomputed key, never the original W03 letter/value; all factors are exercise assumptions, not verified code rules; no time or no coach? re-solve the original IDs instead and label them repeat, not fresh): Fictitious raceway: 1.50 in2 internal area; stipulated 40% permitted fill; 0.09 in2 per identical conductor. Whole conductors that fit under these assumptions?",
+    "a": "6. 1.50 x 0.40 = 0.60 in2; 0.60 / 0.09 = 6.667; round DOWN to 6. Arithmetic model only; no code-compliance conclusion.",
+    "src": "Original arithmetic under the stated assumptions; no NEC/NFPA compliance conclusion."
+   },
+   {
+    "q": "W03-v2 (changes W03; changed-number variant, a NEW problem graded only against its recomputed key, never the original W03 letter/value; all factors are exercise assumptions, not verified code rules; no time or no coach? re-solve the original IDs instead and label them repeat, not fresh): Fictitious raceway: 3.00 in2 internal area; stipulated 40% permitted fill; 0.15 in2 per identical conductor. Whole conductors that fit under these assumptions?",
+    "a": "8. 3.00 x 0.40 = 1.20 in2; 1.20 / 0.15 = 8.000; round DOWN to 8. Arithmetic model only; no code-compliance conclusion.",
+    "src": "Original arithmetic under the stated assumptions; no NEC/NFPA compliance conclusion."
+   },
+   {
+    "q": "W03-v3 (changes W03; changed-number variant, a NEW problem graded only against its recomputed key, never the original W03 letter/value; all factors are exercise assumptions, not verified code rules; no time or no coach? re-solve the original IDs instead and label them repeat, not fresh): Fictitious raceway: 1.25 in2 internal area; stipulated 40% permitted fill; 0.11 in2 per identical conductor. Whole conductors that fit under these assumptions?",
+    "a": "4. 1.25 x 0.40 = 0.50 in2; 0.50 / 0.11 = 4.545; round DOWN to 4. Arithmetic model only; no code-compliance conclusion.",
+    "src": "Original arithmetic under the stated assumptions; no NEC/NFPA compliance conclusion."
    }
   ],
   "checks": [
    "W03 graded; W06 cited or pending",
-   "Two coach fill variants solved",
+   "Fill variants W03-v1 to W03-v3 solved (record attempted / pending)",
    "Plan legend toured",
    "Record table filled; real misses logged in the Error Log",
    "Status checked in this row only after the work is actually done"
   ],
-  "notes": "2020 NEC map: Article 300 general; raceway articles (e.g. 344 RMC, 352 PVC, 358 EMT); Chapter 9 Table 1 and Notes, Table 4 (raceway areas), Table 5 (conductor areas); Annex C (same-size fill tables); 376.22 wireway fill. W03 is keyed arithmetic under stipulated areas. Book lookup required = grade only after reading the exact 2020 NEC / 2013 NFPA 72 / NASCLA text. Article maps are navigation starting points. Answer every question before opening the key; write answer, exact source (edition, section/page), condition/exception, elapsed time. Choices may be shuffled; track the answer, not the letter. Difficult day (20 min): recall one due item (5 min), solve one question from today's list (10 min), record actual 20 min (5 min). Carry unfinished items into the next two rows' correction slots (at most two per day). Never double tomorrow; never drop a domain."
+  "notes": "2020 NEC map: Article 300 general; raceway articles (e.g. 344 RMC, 352 PVC, 358 EMT); Chapter 9 Table 1 and Notes, Table 4 (raceway areas), Table 5 (conductor areas); Annex C (only when raceway and conductor type/insulation/size match); 376.22 wireway fill. W03 is keyed arithmetic under stipulated areas. Book lookup required = grade only after reading the exact 2020 NEC / 2013 NFPA 72 / NASCLA text. Article maps are navigation starting points. Answer every question before opening the key; write answer, exact source (edition, section/page), condition/exception, elapsed time. Choices may be shuffled; track the answer, not the letter. Difficult day (20 min): recall one due item (5 min), solve one question from today's list (10 min), record actual 20 min (5 min). Carry unfinished items into the next two rows' correction slots (at most two per day). Never double tomorrow; never drop a domain."
  },
  "6": {
   "objective": "Count box fill using the 2020 grounding-conductor rule and size straight and angle pulls. (2 h, suggested 7-9 PM)",
@@ -367,12 +389,12 @@
   "steps": [
    "BLOCK 1 (2 h)",
    "0:00-0:05 (5 min) Launch/recall: open due retests in the Error Log; recall one fact from the last session without looking.",
-   "0:05-0:30 (25 min) Main learning: standard method order. General lighting at the 2020 dwelling unit value, plus small-appliance and laundry circuits, demand per 220.42, then range/dryer/appliances, larger of heat or AC.",
+   "0:05-0:30 (25 min) Main learning: standard method order. General lighting at the 2020 dwelling unit value, plus small-appliance and laundry circuits, demand per 220.42, then range/dryer/appliances. Heating vs A/C: \"larger of heat or AC\" is not universal; apply the selected method's permitted noncoincident/HVAC treatment, the equipment and controls, and any heat-pump/supplemental-heat conditions. Keep the standard and optional methods separate (book route; confirm 220.60 / 220.82).",
    "0:30-0:35 (5 min) Break.",
    "0:35-1:00 (25 min) Practice: L01, L04, L05, L07, L08, L11.",
    "1:00-1:05 (5 min) Break.",
    "1:05-1:25 (20 min) Rotating law/NFPA/plans: NC Law & Business cards 26-30.",
-   "1:25-1:55 (30 min) Correct and re-solve: Re-solve L05 and S02 with new numbers. Check each worksheet line has a 2020 section.",
+   "1:25-1:55 (30 min) Correct and re-solve: Solve variants L05-v1 and S02-v1 below (first block); second block: repeat them from memory or re-solve L05/S02 as labelled repeats. Check each worksheet line has a 2020 section.",
    "1:55-2:00 (5 min) Record: fill the record table (actual minutes; attempted/verified/pending; score; hardest 2; next retest date); log real misses.",
    "BLOCK 2 (2 h)",
    "2:00-2:05 (5 min) Launch/recall: open due retests in the Error Log; recall one fact from the last session without looking.",
@@ -381,7 +403,7 @@
    "2:35-3:00 (25 min) Practice: S02, S05, S06 plus one coach dwelling worksheet (supplied house data).",
    "3:00-3:05 (5 min) Break.",
    "3:05-3:25 (20 min) Rotating law/NFPA/plans: cards 31-35.",
-   "3:25-3:55 (30 min) Correct and re-solve: Re-solve L05 and S02 with new numbers. Check each worksheet line has a 2020 section.",
+   "3:25-3:55 (30 min) Correct and re-solve: Solve variants L05-v1 and S02-v1 below (first block); second block: repeat them from memory or re-solve L05/S02 as labelled repeats. Check each worksheet line has a 2020 section.",
    "3:55-4:00 (5 min) Record: fill the record table (actual minutes; attempted/verified/pending; score; hardest 2; next retest date); log real misses."
   ],
   "questions": [
@@ -431,6 +453,16 @@
     "src": "2020 NEC, exact final answer must be verified in this edition"
    },
    {
+    "q": "L05-v1 (changes L05; (changed-number variant, a NEW problem graded only against its recomputed key, never the original letter/value; all factors are exercise assumptions, not verified code rules; no time or no coach? re-solve the original IDs instead and label them repeat, not fresh)): Fictitious demand model: first 3,000 VA at 100%, remaining 9,600 VA at 35%. Calculated demand?",
+    "a": "6,360 VA. 3,000 + 9,600 x 0.35 = 3,000 + 3,360 = 6,360 VA. Arithmetic model only; no code-compliance conclusion.",
+    "src": "Original arithmetic under the stated assumptions; no NEC/NFPA compliance conclusion."
+   },
+   {
+    "q": "S02-v1 (changes S02; (changed-number variant, a NEW problem graded only against its recomputed key, never the original letter/value; all factors are exercise assumptions, not verified code rules; no time or no coach? re-solve the original IDs instead and label them repeat, not fresh)): Balanced single-phase 120/240 V service, calculated apparent load 32,400 VA (all required treatment already applied). Line current?",
+    "a": "135.00 A. 32,400 / 240 = 135.00 A (use 240 V, not 120 V). Arithmetic model only; no code-compliance conclusion.",
+    "src": "Original arithmetic under the stated assumptions; no NEC/NFPA compliance conclusion."
+   },
+   {
     "q": "Coach dwelling worksheet: ask for one original single-family calculation with all inputs supplied.",
     "a": "Coach generated; no key supplied.",
     "src": "Coach"
@@ -449,12 +481,12 @@
   "steps": [
    "BLOCK 1 (2 h)",
    "0:00-0:05 (5 min) Launch/recall: open due retests in the Error Log; recall one fact from the last session without looking.",
-   "0:05-0:30 (25 min) Main learning: continuous lighting at 125%, receptacles at 180 VA each with 220.44 demand, motors via 430.24.",
+   "0:05-0:30 (25 min) Main learning: continuous lighting at 125% where the governing rule applies; receptacle outlets per the applicable 2020 220.14(I) treatment, which is per single or multiple receptacle on one yoke, with its conditions/exceptions (do not count each duplex outlet as another 180 VA), then 220.44 demand only where allowed; motors via 430.24 (book route; confirm final text).",
    "0:30-0:35 (5 min) Break.",
    "0:35-1:00 (25 min) Practice: L02, L03, L06, L09, L10.",
    "1:00-1:05 (5 min) Break.",
    "1:05-1:25 (20 min) Rotating law/NFPA/plans: NC Law & Business cards 36-40.",
-   "1:25-1:55 (30 min) Correct and re-solve: Re-solve L02 and L06 with new numbers. L10: write the actual 2020 Table 220.12 value for an office.",
+   "1:25-1:55 (30 min) Correct and re-solve: Solve variants L02-v1 and L06-v1 below (first block); second block: re-solve them from memory or L02/L06 as labelled repeats. L10: write the actual 2020 Table 220.12 value for an office.",
    "1:55-2:00 (5 min) Record: fill the record table (actual minutes; attempted/verified/pending; score; hardest 2; next retest date); log real misses.",
    "BLOCK 2 (2 h)",
    "2:00-2:05 (5 min) Launch/recall: open due retests in the Error Log; recall one fact from the last session without looking.",
@@ -463,7 +495,7 @@
    "2:35-3:00 (25 min) Practice: S03, S04, S07, S08 plus a W04 re-solve.",
    "3:00-3:05 (5 min) Break.",
    "3:05-3:25 (20 min) Rotating law/NFPA/plans: cards 41-45 (safety numbers).",
-   "3:25-3:55 (30 min) Correct and re-solve: Re-solve L02 and L06 with new numbers. L10: write the actual 2020 Table 220.12 value for an office.",
+   "3:25-3:55 (30 min) Correct and re-solve: Solve variants L02-v1 and L06-v1 below (first block); second block: re-solve them from memory or L02/L06 as labelled repeats. L10: write the actual 2020 Table 220.12 value for an office.",
    "3:55-4:00 (5 min) Record: fill the record table (actual minutes; attempted/verified/pending; score; hardest 2; next retest date); log real misses."
   ],
   "questions": [
@@ -513,6 +545,16 @@
     "src": "2020 NEC, exact final answer must be verified in this edition"
    },
    {
+    "q": "L02-v1 (changes L02; (changed-number variant, a NEW problem graded only against its recomputed key, never the original letter/value; all factors are exercise assumptions, not verified code rules; no time or no coach? re-solve the original IDs instead and label them repeat, not fresh)): Balanced three-phase load 112.5 kVA at 208 V line-to-line. Use I = 1,000 x kVA / (sqrt(3) x V_LL). Line current to the nearest ampere?",
+    "a": "312 A. 112,500 / (1.7320508 x 208) = 312.2688 A, rounded to 312 A. Arithmetic model only; no code-compliance conclusion.",
+    "src": "Original arithmetic under the stated assumptions; no NEC/NFPA compliance conclusion."
+   },
+   {
+    "q": "L06-v1 (changes L06; (changed-number variant, a NEW problem graded only against its recomputed key, never the original letter/value; all factors are exercise assumptions, not verified code rules; no time or no coach? re-solve the original IDs instead and label them repeat, not fresh)): Supplied model: 125% of 10,400 VA continuous + 100% of 7,600 VA noncontinuous. Total VA?",
+    "a": "20,600 VA. 1.25 x 10,400 = 13,000; + 7,600 = 20,600 VA. Arithmetic model only; no code-compliance conclusion.",
+    "src": "Original arithmetic under the stated assumptions; no NEC/NFPA compliance conclusion."
+   },
+   {
     "q": "W04 re-solve (from Day 04): neutral counting with nonlinear load.",
     "a": "See Day 04 W04 (Book lookup required).",
     "src": "2020 Article 310 current-carrying-conductor provisions"
@@ -530,12 +572,12 @@
   "objective": "Use table FLC for conductors and protection, nameplate current for overloads, every time. (2 h, suggested 7:00-9:00 PM)",
   "steps": [
    "0:00-0:05 (5 min) Launch/recall: open due retests in the Error Log; recall one fact from the last session without looking.",
-   "0:05-0:30 (25 min) Main learning: four separate boxes on scratch paper: branch conductor, overload, branch short-circuit/ground-fault, feeder. Box 1 and 3 use table FLC; box 2 uses nameplate. Never reuse one number for all four.",
+   "0:05-0:30 (25 min) Main learning: Main, 25 min: four separate boxes on scratch paper: branch conductor, overload, branch short-circuit/ground-fault, feeder. Before EACH decision choose the current basis under 430.6: table FLC commonly governs ordinary conductor and branch fault-protection cases; nameplate current is used for the applicable overload decision. Confirm motor type, duty and exceptions. The four decisions stay separate; never reuse one number for all four (book route; confirm final text).",
    "0:30-0:35 (5 min) Break.",
-   "0:35-1:00 (25 min) Practice: M01, M02, M03, M04.",
+   "0:35-1:00 (25 min) Practice: Practice, 25 min: M01, M02, M03, M04.",
    "1:00-1:05 (5 min) Break.",
    "1:05-1:25 (20 min) Rotating law/NFPA/plans: NC Law & Business cards 46-50.",
-   "1:25-1:55 (30 min) Correct and re-solve: Re-solve M02-M04 with changed currents (e.g. 34 A, 18 A, 11 A).",
+   "1:25-1:55 (30 min) Correct and re-solve: Solve variants M02-v1, M03-v1 and M04-v1 below (new recomputed keys).",
    "1:55-2:00 (5 min) Record: fill the record table (actual minutes; attempted/verified/pending; score; hardest 2; next retest date); log real misses."
   ],
   "questions": [
@@ -560,6 +602,21 @@
     "src": "Original arithmetic under the stated assumptions; no NEC/NFPA compliance conclusion."
    },
    {
+    "q": "M02-v1 (changes M02, Keyed): Arithmetic-only motor drill: supplied conductor rule = 125% of supplied table FLC. Table FLC 34 A. Calculated ampacity before terminal/adjustment checks?",
+    "a": "42.50 A. 34 x 1.25 = 42.50 A. Arithmetic model only; no code-compliance conclusion.",
+    "src": "Original arithmetic under the stated assumptions; no NEC/NFPA compliance conclusion."
+   },
+   {
+    "q": "M03-v1 (changes M03, Keyed): Hypothetical overload exercise: supplied 125% multiplier on nameplate current 18 A. Result only (no actual setting selected)?",
+    "a": "22.50 A. 18 x 1.25 = 22.50 A. Arithmetic model only; no code-compliance conclusion.",
+    "src": "Original arithmetic under the stated assumptions; no NEC/NFPA compliance conclusion."
+   },
+   {
+    "q": "M04-v1 (changes M04, Keyed): Supplied feeder-conductor model: 125% of largest motor FLC + 100% of the others. Currents 34 A, 18 A, 11 A. Model ampacity?",
+    "a": "71.50 A. 1.25 x 34 = 42.50; + 18 + 11 = 71.50 A. Not a feeder OCP calculation. Arithmetic model only; no code-compliance conclusion.",
+    "src": "Original arithmetic under the stated assumptions; no NEC/NFPA compliance conclusion."
+   },
+   {
     "q": "Coach motor set: ask for two original motor problems (supplied horsepower, voltage, phase) and solve all four boxes.",
     "a": "Coach generated; no key supplied.",
     "src": "Coach"
@@ -578,12 +635,12 @@
   "objective": "Size motor branch short-circuit protection with Table 430.52 and the feeder OCP, and identify disconnect/controller rules. (2 h, suggested 7:00-9:00 PM)",
   "steps": [
    "0:00-0:05 (5 min) Launch/recall: open due retests in the Error Log; recall one fact from the last session without looking.",
-   "0:05-0:30 (25 min) Main learning: Table 430.52 percentage x FLC, round up rules and exceptions; feeder OCP = largest branch device + sum of other FLCs (not a 'round up'). Controller is not a disconnect unless it qualifies.",
+   "0:05-0:30 (25 min) Main learning: Main, 25 min: Table 430.52 percentage x FLC, with its next-size and starting conditions/exceptions. Feeder conductor sizing (430.24) and feeder short-circuit/ground-fault protection (430.62) are different checks: use the actual motor currents, the applicable permitted branch-device basis, other loads, rating/setting limits and exceptions. No generic feeder sum/round-up slogan (book route; confirm final text). Controller is not a disconnect unless it qualifies.",
    "0:30-0:35 (5 min) Break.",
-   "0:35-1:00 (25 min) Practice: M05, M06, M08, M09, E03.",
+   "0:35-1:00 (25 min) Practice: Practice, 25 min: M05, M06, M08, M09, E03.",
    "1:00-1:05 (5 min) Break.",
    "1:05-1:25 (20 min) Rotating law/NFPA/plans: NC Law & Business cards 51-55 (finance).",
-   "1:25-1:55 (30 min) Correct and re-solve: Re-solve M05 with 175% and 52 A. E03: separate the MCA (conductor) and MOCP (device) decisions.",
+   "1:25-1:55 (30 min) Correct and re-solve: Solve variant M05-v1 below. E03: separate the MCA (conductor) and MOCP (device) decisions.",
    "1:55-2:00 (5 min) Record: fill the record table (actual minutes; attempted/verified/pending; score; hardest 2; next retest date); log real misses."
   ],
   "questions": [
@@ -608,6 +665,11 @@
     "src": "2020 NEC, exact final answer must be verified in this edition"
    },
    {
+    "q": "M05-v1 (changes M05, Keyed): Branch fault-protection arithmetic drill: supplied factor 175% x table current 52 A. Product before any standard size or exception?",
+    "a": "91.00 A. 52 x 1.75 = 91.00 A. Arithmetic model only; no code-compliance conclusion.",
+    "src": "Original arithmetic under the stated assumptions; no NEC/NFPA compliance conclusion."
+   },
+   {
     "q": "E03 (Appliances, equipment, and lighting, Book lookup required): An HVAC nameplate states MCA 28 A and MOCP 45 A. Determine the separate conductor and protective-device decisions. What facts prevent sizing the conductor only from the 45 A number?",
     "a": "Book lookup required. Verify exact section/page, conditions, exception in the named edition before scoring. Starting route: 2020 Article 440 and applicable ampacity/termination rules. Read the equipment markings and Article 440 conditions separately; no conductor size is asserted. Pending verification: record a readable designated-book citation before scoring; the suggested route is not a verified exact section.",
     "src": "2020 NEC, exact final answer must be verified in this edition"
@@ -626,12 +688,12 @@
   "objective": "Compute primary and secondary currents separately, then apply 450.3, 240.21(C) and 250.30 one at a time. (2 h, suggested 7:00-9:00 PM)",
   "steps": [
    "0:00-0:05 (5 min) Launch/recall: open due retests in the Error Log; recall one fact from the last session without looking.",
-   "0:05-0:30 (25 min) Main learning: I = VA / (1.732 x V line-to-line) for three-phase. Primary OCP does not automatically protect secondary conductors. The system bonding jumper is at one point only.",
+   "0:05-0:30 (25 min) Main learning: Main, 25 min: BALANCED three-phase: I = VA / (1.732 x V line-to-line). Primary OCP does not automatically protect secondary conductors. Identify the permitted system-bonding-jumper location(s) and conditions under 250.30(A)(1), including exceptions. Trace neutral current and fault return (book route; confirm final text).",
    "0:30-0:35 (5 min) Break.",
-   "0:35-1:00 (25 min) Practice: E01, E02, E04, G06, G07.",
+   "0:35-1:00 (25 min) Practice: Practice, 25 min: E01, E02, E04, G06, G07.",
    "1:00-1:05 (5 min) Break.",
    "1:05-1:25 (20 min) Rotating law/NFPA/plans: NC Law & Business cards 56-60.",
-   "1:25-1:55 (30 min) Correct and re-solve: Re-solve E01 with 112.5 kVA. E02: redo with 3.5% impedance.",
+   "1:25-1:55 (30 min) Correct and re-solve: Solve variants E01-v1 and E02-v1 below (new recomputed keys).",
    "1:55-2:00 (5 min) Record: fill the record table (actual minutes; attempted/verified/pending; score; hardest 2; next retest date); log real misses."
   ],
   "questions": [
@@ -643,6 +705,16 @@
    {
     "q": "E02 (Appliances, equipment, and lighting, Keyed): A 500 kVA three-phase transformer has a 480 V secondary (line-to-line) and 5.75% impedance. Under the supplied stiff-source, secondary-terminal bolted-fault model, use I_FL = 500,000/(sqrt(3) x 480 V line-to-line), then I_SC = I_FL/0.0575. Choose the approximate result. A. 1.046 kA  B. 6.014 kA  C. 10.459 kA  D. 104.59 kA",
     "a": "C - approximately 10.459 kA. I_FL = 601.4065 A. Convert 5.75% to 0.0575. I_SC = 601.4065/0.0575 = 10,459.24 A. Upstream/conductor impedance and motor contributions are outside this simplified model.",
+    "src": "Original arithmetic under the stated assumptions; no NEC/NFPA compliance conclusion."
+   },
+   {
+    "q": "E01-v1 (changes E01, Keyed): Balanced 112.5 kVA three-phase transformer, 480 V primary and 208 V secondary (line-to-line). I = VA/(sqrt(3) x V_LL). Primary and secondary currents (0.1 A)?",
+    "a": "135.3 A and 312.3 A. 112,500/(1.7320508 x 480) = 135.316 A; 112,500/(1.7320508 x 208) = 312.269 A. Arithmetic model only; no code-compliance conclusion.",
+    "src": "Original arithmetic under the stated assumptions; no NEC/NFPA compliance conclusion."
+   },
+   {
+    "q": "E02-v1 (changes E02, Keyed): 500 kVA three-phase transformer, 480 V secondary line-to-line, 3.5% impedance. Stiff-source bolted-fault model: I_FL = VA/(sqrt(3) x V_LL), I_SC = I_FL / (Z%/100). I_FL and I_SC?",
+    "a": "I_FL = approx. 601.4 A; I_SC = approx. 17.18 kA. 500,000/(1.7320508 x 480) = 601.4065 A; / 0.0350 = 17,183 A. Arithmetic model only; no code-compliance conclusion.",
     "src": "Original arithmetic under the stated assumptions; no NEC/NFPA compliance conclusion."
    },
    {
@@ -674,12 +746,12 @@
   "objective": "Pick the right sizing table every time and solve voltage-drop and fault-current problems with stated assumptions. (2 h, suggested 7:00-9:00 PM)",
   "steps": [
    "0:00-0:05 (5 min) Launch/recall: open due retests in the Error Log; recall one fact from the last session without looking.",
-   "0:05-0:30 (25 min) Main learning: GEC by service conductor size, EGC by OCPD, supply-side jumper by conductor size. Voltage drop: VD = 1.732 x K x I x D / CM for three-phase; 2 x K x I x D / CM single-phase. State the assumptions given.",
+   "0:05-0:30 (25 min) Main learning: Main, 25 min: GEC by service conductor size, EGC by OCPD, supply-side jumper by conductor size. Voltage drop: VD = 1.732 x K x I x D / CM for three-phase; 2 x K x I x D / CM single-phase. State the assumptions given.",
    "0:30-0:35 (5 min) Break.",
-   "0:35-1:00 (25 min) Practice: G04, G08 (delayed re-solve from Day 07), M07, W09, and E02 with changed impedance (750 kVA, 480 V line-to-line secondary, 5.5% impedance).",
+   "0:35-1:00 (25 min) Practice: Practice, 25 min: G04, G08 (delayed re-solve from Day 07), M07, W09, and variant E02-v2 below.",
    "1:00-1:05 (5 min) Break.",
-   "1:05-1:25 (20 min) Rotating law/NFPA/plans: Plans, 20 min: trace one lighting circuit on the official Lighting & Power plans (handbook p.70, https://www.ncbeec.org/psi-exam-book-2026-002-2/#page=70): count fixtures and lamps.",
-   "1:25-1:55 (30 min) Correct and re-solve: Re-solve M07 with 150 ft and 26,240 CM.",
+   "1:05-1:25 (20 min) Rotating law/NFPA/plans: Plans, 20 min: trace one lighting circuit on the official Lighting & Power plans (handbook printed pp. 69-70 / PDF pp. 70-71, https://www.ncbeec.org/psi-exam-book-2026-002-2/#page=70): count fixtures and lamps.",
+   "1:25-1:55 (30 min) Correct and re-solve: Solve variant M07-v1 below.",
    "1:55-2:00 (5 min) Record: fill the record table (actual minutes; attempted/verified/pending; score; hardest 2; next retest date); log real misses."
   ],
   "questions": [
@@ -704,8 +776,13 @@
     "src": "2020 NEC, exact final answer must be verified in this edition"
    },
    {
-    "q": "E02 changed numbers (re-solve with the Day 12 E02 method): 750 kVA, 480 V line-to-line secondary, 5.5% impedance.",
-    "a": "No key supplied on the page; use I_FL = 750,000/(sqrt(3) x 480), then I_SC = I_FL/0.055 and check your own arithmetic.",
+    "q": "E02-v2 (changes E02, Keyed): 750 kVA three-phase transformer, 480 V secondary line-to-line, 5.5% impedance. Stiff-source bolted-fault model: I_FL = VA/(sqrt(3) x V_LL), I_SC = I_FL / (Z%/100). I_FL and I_SC?",
+    "a": "I_FL = approx. 902.1 A; I_SC = approx. 16.40 kA. 750,000/(1.7320508 x 480) = 902.1098 A; / 0.0550 = 16,402 A. Arithmetic model only; no code-compliance conclusion.",
+    "src": "Original arithmetic under the stated assumptions; no NEC/NFPA compliance conclusion."
+   },
+   {
+    "q": "M07-v1 (changes M07, Keyed): Use ONLY VD = sqrt(3) x K x I x D / CM with K = 12.9, I = 40 A, one-way D = 150 ft, CM = 26,240, line voltage 480 V. Volts dropped and percent (2 decimals)?",
+    "a": "5.11 V; 1.06%. 1.7320508 x 12.9 x 40 x 150 / 26,240 = 5.1090 V; 100 x 5.1090 / 480 = 1.0644%. D is one-way; do not double. Arithmetic model only; no code-compliance conclusion.",
     "src": "Original arithmetic under the stated assumptions; no NEC/NFPA compliance conclusion."
    }
   ],
@@ -872,7 +949,7 @@
     "src": "Original arithmetic under the stated assumptions; no NEC/NFPA compliance conclusion."
    },
    {
-    "q": "Mock A miss re-solves: ask the coach for changed scenarios, one at a time.",
+    "q": "Mock A miss re-solves: ask the coach for changed scenarios, one at a time. Coach-made changed scenarios must state complete inputs, assumptions and rounding, and use a newly recomputed key revealed only after your answer (never the original bank letter/value). If the coach is unavailable, re-solve the original items as explicit repeats.",
     "a": "Coach generated; no key supplied.",
     "src": "Coach"
    }
@@ -928,15 +1005,15 @@
    "Record table filled; real misses logged in the Error Log",
    "Status checked in this row only after the work is actually done"
   ],
-  "notes": "2020 NEC article map (confirm in book): 110 Part III (over 1,000 V); 230 Part VIII; 240 Part IX; 250 Part X (incl. impedance grounding 250.36 and 250.187); 300 Part II; Article 311 medium-voltage conductors (new in 2020; it became 315 in 2023); Article 490. Study notes and practice keys are linked pages in Notion (nested study targets: three study-note pages, practice keys page and two practice pages). Reference link: https://link.nfpa.org/free-access/publications/70/2020. Book lookup required = grade only after reading the exact 2020 NEC / 2013 NFPA 72 / NASCLA text. Article maps are navigation starting points. Answer every question before opening the key; write answer, exact source (edition, section/page), condition/exception, elapsed time. Choices may be shuffled; track the answer, not the letter. Difficult day (20 min): recall one due item (5 min), solve one question from today's list (10 min), record actual 20 min (5 min). Carry unfinished items into the next two rows' correction slots (at most two per day). Never double tomorrow; never drop a domain. Pre-Oct 31 version (old plan) omitted."
+  "notes": "2020 NEC article map (confirm in book): 110 Part III (over 1,000 V); 230 Part VIII; 240 Part IX; 250 Part X for the over-1,000 V case, including 250.187 as applicable; compare 250.36 separately within its own lower-voltage high-impedance scope (250.36 is not in Part X). Check 2020 thresholds and systems; 300 Part II; Article 311 medium-voltage conductors (new in 2020; it became 315 in 2023); Article 490. Study notes and practice keys are linked pages in Notion (nested study targets: three study-note pages, practice keys page and two practice pages). Reference link: https://link.nfpa.org/free-access/publications/70/2020. Book lookup required = grade only after reading the exact 2020 NEC / 2013 NFPA 72 / NASCLA text. Article maps are navigation starting points. Answer every question before opening the key; write answer, exact source (edition, section/page), condition/exception, elapsed time. Choices may be shuffled; track the answer, not the letter. Difficult day (20 min): recall one due item (5 min), solve one question from today's list (10 min), record actual 20 min (5 min). Carry unfinished items into the next two rows' correction slots (at most two per day). Never double tomorrow; never drop a domain. Pre-Oct 31 version (old plan) omitted."
  },
  "18": {
   "objective": "Classify a location (class, division or zone, group, T-code) before choosing any wiring method. (2 h, suggested 7:00-9:00 PM)",
   "steps": [
    "0:00-0:05 (5 min) Launch/recall: open due retests in the Error Log; recall one fact from the last session without looking.",
-   "0:05-0:30 (25 min) Main learning: Division 1 = present in normal operation; Division 2 = abnormal only. Zone 0/1/2 split it further. Seal rules depend on boundary and enclosure.",
+   "0:05-0:30 (25 min) Main learning: Main, 25 min (book navigation route; confirm final text): identify the hazardous material and the framework first. Read ALL the 500.5 conditions, including normal operation, repair/maintenance, equipment failure, ventilation and adjacent areas, as applicable; \"Division 1 = normal, Division 2 = abnormal only\" is too absolute. Division and Zone are alternative classification frameworks, not simple subdivisions. Seal rules depend on boundary and enclosure. Keep C1-C3 as book lookups pending final text.",
    "0:30-0:35 (5 min) Break.",
-   "0:35-1:00 (25 min) Practice: H01 plus the three classification prompts below (C1-C3).",
+   "0:35-1:00 (25 min) Practice: Practice, 25 min: H01 plus the three classification prompts below.",
    "1:00-1:05 (5 min) Break.",
    "1:05-1:25 (20 min) Rotating law/NFPA/plans: NFPA 72 Chapter 17 initiating devices: locate smoke detector spacing and heat detector sections (no numbers memorized yet).",
    "1:25-1:55 (30 min) Correct and re-solve: Each answer: class/division/group + exact section.",
@@ -1020,7 +1097,7 @@
   "objective": "Separate emergency, legally required standby and optional standby loads, and find health-care grounding rules. (2 h, suggested 7:00-9:00 PM)",
   "steps": [
    "0:00-0:05 (5 min) Launch/recall: open due retests in the Error Log; recall one fact from the last session without looking.",
-   "0:05-0:30 (25 min) Main learning: 700 vs 701 vs 702: who requires it and what transfer/separation rules apply. Patient care spaces need redundant grounding.",
+   "0:05-0:30 (25 min) Main learning: 700 vs 701 vs 702: who requires it and what transfer/separation rules apply. Qualify 517.13 by the actual patient-care space category and circuit, with its applicable requirements and exceptions (book route; confirm final text).",
    "0:30-0:35 (5 min) Break.",
    "0:35-1:00 (25 min) Practice: H06, H07, H09, plus one coach question (one original 700/701/702 classification question).",
    "1:00-1:05 (5 min) Break.",
@@ -1057,7 +1134,7 @@
    "Record table filled; real misses logged in the Error Log",
    "Status checked in this row only after the work is actually done"
   ],
-  "notes": "2020 NEC article map (confirm in book): 517 health care (517.13 grounding in patient care spaces); 518 assembly; 520 theaters; 700 emergency; 701 legally required standby; 702 optional standby. Study notes and practice keys are linked Notion pages (three study-note pages, practice keys page, two practice pages). Reference link: https://link.nfpa.org/free-access/publications/70/2020. Book lookup required = grade only after reading the exact 2020 NEC / 2013 NFPA 72 / NASCLA text. Article maps are navigation starting points. Answer every question before opening the key; write answer, exact source (edition, section/page), condition/exception, elapsed time. Choices may be shuffled; track the answer, not the letter. Difficult day (20 min): recall one due item (5 min), solve one question from today's list (10 min), record actual 20 min (5 min). Carry unfinished items into the next two rows' correction slots (at most two per day). Never double tomorrow; never drop a domain. Pre-Oct 31 version (old plan: H06-H09, W07 incl. Articles 550/680/620) omitted."
+  "notes": "2020 NEC article map (confirm in book): 517 health care (517.13 grounding, qualified by patient-care space category, circuit and exceptions); 518 assembly; 520 theaters; 700 emergency; 701 legally required standby; 702 optional standby. Study notes and practice keys are linked Notion pages (three study-note pages, practice keys page, two practice pages). Reference link: https://link.nfpa.org/free-access/publications/70/2020. Book lookup required = grade only after reading the exact 2020 NEC / 2013 NFPA 72 / NASCLA text. Article maps are navigation starting points. Answer every question before opening the key; write answer, exact source (edition, section/page), condition/exception, elapsed time. Choices may be shuffled; track the answer, not the letter. Difficult day (20 min): recall one due item (5 min), solve one question from today's list (10 min), record actual 20 min (5 min). Carry unfinished items into the next two rows' correction slots (at most two per day). Never double tomorrow; never drop a domain. Pre-Oct 31 version (old plan: H06-H09, W07 incl. Articles 550/680/620) omitted."
  },
  "21": {
   "objective": "Cover Chapter 4 and Chapter 6 breadth and close any domain with no practice yet. (2 h, suggested 7:00-9:00 PM)",
@@ -1136,7 +1213,7 @@
    "0:00-0:05 (5 min) Launch/recall: open due retests in the Error Log; recall one fact from the last session without looking.",
    "0:05-0:30 (25 min) Main learning: sort Mock B misses; compare with Mock A.",
    "0:30-0:35 (5 min) Break.",
-   "0:35-1:00 (25 min) Practice: 10 changed-scenario re-solves of Mock B misses (coach).",
+   "0:35-1:00 (25 min) Practice: 10 changed-scenario re-solves of Mock B misses (coach). Coach-made changed scenarios must state complete inputs, assumptions and rounding, and use a newly recomputed key revealed only after your answer (never the original bank letter/value). If the coach is unavailable, re-solve the original items as explicit repeats.",
    "1:00-1:05 (5 min) Break.",
    "1:05-1:25 (20 min) Rotating law/NFPA/plans: NFPA 72 Chapter 14 ITM tables (locate).",
    "1:25-1:55 (30 min) Correct and re-solve: Each block 30 min.",
@@ -1272,7 +1349,7 @@
    "0:00-0:05 (5 min) Launch/recall: open due retests in the Error Log; recall one fact from the last session without looking.",
    "0:05-0:30 (25 min) Main learning: navigation only. Write the section number for each topic. If the 2013 book is not in hand, keep numbers pending; do not substitute another edition.",
    "0:30-0:35 (5 min) Break.",
-   "0:35-1:00 (25 min) Practice: P11, P13 (delayed re-solve), P14, and P12 with the coach's changed assumptions.",
+   "0:35-1:00 (25 min) Practice: P11, P13 (delayed re-solve), P14, and variant P12-v1 below.",
    "1:00-1:05 (5 min) Break.",
    "1:05-1:25 (20 min) Rotating law/NFPA/plans: NC Law & Business scenarios 1-5 delayed recall.",
    "1:25-1:55 (30 min) Correct and re-solve: Exact 2013 section or pending.",
@@ -1295,9 +1372,9 @@
     "src": "2013 NFPA 72, exact final answer must be verified in this edition (https://link.nfpa.org/free-access/publications/72/2013)"
    },
    {
-    "q": "P12 variant (coach, changed assumptions): standby 0.30 A, alarm 2.5 A, same supplied durations and 1.25 factor.",
-    "a": "Coach generated; no key supplied (original P12 durations come from the coach's P12 worksheet; not on this page).",
-    "src": "Coach"
+    "q": "P12-v1 (changes P12; Changed-number variant, new problem, grade only against its recomputed key; STUDY assumptions, not prescribed 2013 durations): standby 0.3 A for 24 h, alarm 2.5 A for 5 min, multiply the sum by 1.25. Capacity to two decimals?",
+    "a": "9.26 Ah. 0.3 x 24 = 7.2000 Ah; 2.5 x 5/60 = 0.2083 Ah; sum x 1.25 = 9.2604 -> 9.26 Ah.",
+    "src": "Original arithmetic under the stated assumptions; no NEC/NFPA compliance conclusion."
    }
   ],
   "checks": [
@@ -1306,7 +1383,7 @@
    "Record table filled; real misses logged in the Error Log",
    "Status checked in this row only after the work is actually done"
   ],
-  "notes": "2013 NFPA 72 chapter map (confirm in book): Ch 10 (power supplies, monitoring for integrity), Ch 12 (pathway classes and survivability), Ch 14 (ITM tables), Ch 26 (supervising stations). NFPA lookups need the 2013 text. P11, P13, P14 are Book lookup required / Pending verification. Book lookup required = grade only after reading the exact 2020 NEC / 2013 NFPA 72 / NASCLA text. Article maps are navigation starting points. Answer every question before opening the key; write answer, exact source (edition, section/page), condition/exception, elapsed time. Choices may be shuffled; track the answer, not the letter. Difficult day (20 min): recall one due item (5 min), solve one question from today's list (10 min), record actual 20 min (5 min). Carry unfinished items into the next two rows' correction slots (at most two per day). Never double tomorrow; never drop a domain. Pre-Oct 31 version (old plan; repeats P01, P02, P06, P11 keys and adds P09 = 566 W) is reference only and omitted."
+  "notes": "2013 NFPA 72 chapter map (confirm in book): Ch 10 (power supplies, monitoring for integrity), Ch 12 (pathway classes and survivability), Ch 14 (ITM tables), Ch 26 (supervising stations). NFPA lookups need the 2013 text. Variants are new problems: grade only against the recomputed key, never the original bank letter or value; all factors are exercise assumptions (not verified code rules); no time or no coach = re-solve the original IDs and label them repeat (not fresh). P11, P13, P14 are Book lookup required / Pending verification. Book lookup required = grade only after reading the exact 2020 NEC / 2013 NFPA 72 / NASCLA text. Article maps are navigation starting points. Answer every question before opening the key; write answer, exact source (edition, section/page), condition/exception, elapsed time. Choices may be shuffled; track the answer, not the letter. Difficult day (20 min): recall one due item (5 min), solve one question from today's list (10 min), record actual 20 min (5 min). Carry unfinished items into the next two rows' correction slots (at most two per day). Never double tomorrow; never drop a domain. Pre-Oct 31 version (old plan; repeats P01, P02, P06, P11 keys and adds P09 = 566 W) is reference only and omitted."
  },
  "27": {
   "objective": "Keep the streak with 30 minutes of light recall, or rest without guilt. (0.5 h, any 30 minutes, or rest)",
@@ -1337,13 +1414,23 @@
    "0:00-0:05 (5 min) Launch/recall: open due retests in the Error Log; recall one fact from the last session without looking.",
    "0:05-0:30 (25 min) Main learning: fill each worksheet line with value + system type + exact 2013 section. Leave blank if the book is not in hand. Never use 2010/2016/2019 numbers.",
    "0:30-0:35 (5 min) Break.",
-   "0:35-1:00 (25 min) Practice: P09 and P10 changed-number variants; P12 battery calc using your verified 2013 durations (if verified).",
+   "0:35-1:00 (25 min) Practice: variants P09-v1 and P10-v1 below; P12 battery calc using your verified 2013 durations (if verified; no pre-written key, so it stays pending until you verify the durations).",
    "1:00-1:05 (5 min) Break.",
    "1:05-1:25 (20 min) Rotating law/NFPA/plans: NC Law & Business cards 11-20 delayed recall.",
    "1:25-1:55 (30 min) Correct and re-solve: Mark every worksheet line verified or pending.",
    "1:55-2:00 (5 min) Record: fill the record table (actual minutes; attempted/verified/pending; score; hardest 2; next retest date); log real misses."
   ],
   "questions": [
+   {
+    "q": "P09-v1 (Keyed): Changed-number variant (changes P09; new problem, grade only against this recomputed key). Original plan mini-case: 6 Type A fixtures x 2 lamps x 28 W and 4 Type B fixtures x 1 lamp x 17 W. Connected lamp wattage only?",
+    "a": "404 W. A: 6 x 2 x 28 = 336 W; B: 4 x 1 x 17 = 68 W; total 404 W.",
+    "src": "Original arithmetic under the stated assumptions; no NEC/NFPA compliance conclusion."
+   },
+   {
+    "q": "P10-v1 (Keyed): Changed-number variant (changes P10; new problem, grade only against this recomputed key). Original plan mini-case: 7 two-lamp fixtures and 6 one-lamp fixtures on the traced circuit. Fixture count and lamp count?",
+    "a": "13 fixtures; 20 lamps. Fixtures 7 + 6 = 13; lamps 7 x 2 + 6 = 20.",
+    "src": "Original arithmetic under the stated assumptions; no NEC/NFPA compliance conclusion."
+   },
    {
     "q": "Plan-to-estimate: count one circuit's fixtures from the official plan, then price it at $85 labor + $60 material per fixture with 15% markup.",
     "a": "Coach/self-checked; no key supplied. Count from the official Lighting & Power plans (handbook p.70, https://www.ncbeec.org/psi-exam-book-2026-002-2/#page=70). Arithmetic: fixtures x ($85 + $60), then x 1.15 under the stated markup-on-cost model.",
@@ -1353,11 +1440,11 @@
   "checks": [
    "Worksheet lines verified or marked pending (values only from the 2013 book)",
    "Plan estimate done",
-   "P09/P10/P12 changed-number variants attempted (coach-generated; no keys on this page)",
+   "P09-v1/P10-v1 changed-number variants attempted and graded against recomputed keys (404 W; 13 fixtures, 20 lamps); P12 pending until 2013 durations verified",
    "Record table filled; real misses logged in the Error Log",
    "Status checked in this row only after the work is actually done"
   ],
-  "notes": "References: Fire Alarms & Plan Reading NFPA 72 numerical worksheet; 2013 NFPA 72 (Ch 10 secondary power durations, Ch 17 spacing, Ch 18 candela/audibility, Ch 14 test frequencies); official Lighting & Power plans (handbook p.70). Worksheet values only from the 2013 book; technical worksheet lines are Book lookup required. Book lookup required = grade only after reading the exact 2020 NEC / 2013 NFPA 72 / NASCLA text. Article maps are navigation starting points. Answer every question before opening the key; write answer, exact source (edition, section/page), condition/exception, elapsed time. Choices may be shuffled; track the answer, not the letter. Difficult day (20 min): recall one due item (5 min), solve one question from today's list (10 min), record actual 20 min (5 min). Carry unfinished items into the next two rows' correction slots (at most two per day). Never double tomorrow; never drop a domain. Pre-Oct 31 version (old plan; repeats P01, P02, P04, P06, P11 with the same keys) is reference only and omitted."
+  "notes": "References: Fire Alarms & Plan Reading NFPA 72 numerical worksheet; 2013 NFPA 72 (Ch 10 secondary power durations, Ch 17 spacing, Ch 18 candela/audibility, Ch 14 test frequencies); official Lighting & Power plans (handbook p.70). Variants are new problems: grade only against the recomputed key, never the original bank letter or value; factors are exercise assumptions; no time or no coach = re-solve original IDs labeled repeat (not fresh). Worksheet values only from the 2013 book; technical worksheet lines are Book lookup required. Book lookup required = grade only after reading the exact 2020 NEC / 2013 NFPA 72 / NASCLA text. Article maps are navigation starting points. Answer every question before opening the key; write answer, exact source (edition, section/page), condition/exception, elapsed time. Choices may be shuffled; track the answer, not the letter. Difficult day (20 min): recall one due item (5 min), solve one question from today's list (10 min), record actual 20 min (5 min). Carry unfinished items into the next two rows' correction slots (at most two per day). Never double tomorrow; never drop a domain. Pre-Oct 31 version (old plan; repeats P01, P02, P04, P06, P11 with the same keys) is reference only and omitted."
  },
  "29": {
   "objective": "Final full rehearsal: six hours, 100 questions, actual score and time recorded. (6 h, 10:00 AM-4:00 PM, exam-time rehearsal)",
@@ -1388,7 +1475,7 @@
    "0:00-0:05 (5 min) Launch/recall: open due retests in the Error Log; recall one fact from the last session without looking.",
    "0:05-0:30 (25 min) Main learning: Mock C sort and repair.",
    "0:30-0:35 (5 min) Break.",
-   "0:35-1:00 (25 min) Practice: 10 changed-scenario re-solves of Mock C misses.",
+   "0:35-1:00 (25 min) Practice: 10 changed-scenario re-solves of Mock C misses. Coach-made changed scenarios must state complete inputs, assumptions and rounding, and use a newly recomputed key revealed only after your answer (never the original bank letter/value). If the coach is unavailable, re-solve the original items as explicit repeats.",
    "1:00-1:05 (5 min) Break.",
    "1:05-1:25 (20 min) Rotating law/NFPA/plans: NC Law & Business cards 21-40 delayed recall.",
    "1:25-1:55 (30 min) Correct and re-solve: Each block 30 min.",
@@ -1458,111 +1545,127 @@
  "32": {
   "objective": "Solve every calculation type cleanly with changed numbers. (2 h, suggested 7:00-9:00 PM)",
   "steps": [
-   "0:00-0:05 (5 min) Launch/recall: open due retests in the Error Log; recall one fact from the last session without looking.",
-   "0:05-0:30 (25 min) Main learning: Main, 25 min: one-line formula list from memory (VA/amps 1-phase and 3-phase, VD, fault current, motor boxes, fill, pull box, markup/margin, battery Ah).",
-   "0:30-0:35 (5 min) Break.",
-   "0:35-1:00 (25 min) Practice: coach changed-number set from L01, L02, L03, L06, E01, E02, M04, M05, M07, O03, W02, W03, B03, S02, P06, P12.",
-   "1:00-1:05 (5 min) Break.",
-   "1:05-1:25 (20 min) Rotating law/NFPA/plans: Plans: one fixture/lamp count from the official drawings.",
-   "1:25-1:55 (30 min) Correct and re-solve: Due Error Log retests, 30 min.",
-   "1:55-2:00 (5 min) Record: fill the record table (actual minutes; attempted/verified/pending; score; hardest 2; next retest date); log real misses."
+   "0:00-0:05 (5 min) Launch/recall: open due retests in the Error Log.",
+   "0:05-0:15 (10 min) Formula list: one-line list from memory (VA/amps 1-phase and balanced 3-phase, VD, fault current, motor boxes, fill, pull box, markup/margin, battery Ah).",
+   "0:15-0:20 (5 min) Break.",
+   "0:20-1:20 (60 min) Practice: the 16 variants below, in order. Stop at 60 min.",
+   "1:20-1:25 (5 min) Break.",
+   "1:25-1:55 (30 min) Correct and retest: grade with the recomputed keys, then due Error Log retests. Plans fixture/lamp count only if time remains.",
+   "1:55-2:00 (5 min) Record: attempted / correct / pending; log real misses."
   ],
   "questions": [
    {
-    "q": "L01 (Load calculations, Keyed): A single-phase load is 28,800 VA at 240 V. With no additional factors to apply, what is the current? A. 60 A  B. 100 A  C. 120 A  D. 240 A",
-    "a": "C - 120 A. I = 28,800 / 240 = 120 A. The apparent load is already given; do not introduce an unstated demand factor.",
+    "q": "L01-v1 (changes L01; Changed-number variant, new problem; Keyed): Single-phase load 19,200 VA at 240 V, no other factors. Current?",
+    "a": "80.00 A. 19,200 / 240 = 80.00 A. Arithmetic model only; no code-compliance conclusion.",
     "src": "Original arithmetic under the stated assumptions; no NEC/NFPA compliance conclusion."
    },
    {
-    "q": "L02 (Load calculations, Keyed): A balanced three-phase load is 138.6 kVA at 480 V line-to-line. Use I = 1,000 x kVA / (sqrt(3) x V_LL). What is line current to the nearest ampere? A. 96 A  B. 167 A  C. 289 A  D. 500 A",
-    "a": "B - 167 A. 138,600 / (1.7320508 x 480) = 166.7179 A, rounded to 167 A. Do not use line-to-neutral voltage in this stated formula.",
+    "q": "L02-v3 (changes L02; Changed-number variant, new problem; Keyed): Balanced three-phase load 300 kVA at 480 V line-to-line. Use I = 1,000 x kVA / (sqrt(3) x V_LL). Line current to the nearest ampere?",
+    "a": "361 A. 300,000 / (1.7320508 x 480) = 360.8439 A -> 361 A. Arithmetic model only; no code-compliance conclusion.",
     "src": "Original arithmetic under the stated assumptions; no NEC/NFPA compliance conclusion."
    },
    {
-    "q": "E01 (Appliances, equipment, and lighting, Keyed): A balanced 75 kVA three-phase transformer has 480 V primary and 208 V secondary, both line-to-line. Use I = 75,000/(sqrt(3) x V_LL). What are approximate primary and secondary line currents? A. 90.2 A and 208.2 A  B. 156.3 A and 360.6 A  C. 208.2 A and 90.2 A  D. 75 A and 75 A",
-    "a": "A - 90.2 A and 208.2 A. Primary = 75,000/(1.7320508 x 480) = 90.211 A. Secondary = 75,000/(1.7320508 x 208) = 208.179 A. These are current calculations only; OCP, conductors and bonding need separate rules.",
+    "q": "L03-v1 (changes L03; Changed-number variant, new problem; Keyed): Load 54 kW at power factor 0.90. Model S = P / PF. Apparent power?",
+    "a": "60.00 kVA. 54 / 0.90 = 60.00 kVA. Arithmetic model only; no code-compliance conclusion.",
     "src": "Original arithmetic under the stated assumptions; no NEC/NFPA compliance conclusion."
    },
    {
-    "q": "E02 (Appliances, equipment, and lighting, Keyed): A 500 kVA, 480 V three-phase transformer has 5.75% impedance. Under the supplied stiff-source, secondary-terminal bolted-fault model, use I_FL = 500,000/(sqrt(3) x 480), then I_SC = I_FL/0.0575. Choose the approximate result. A. 1.046 kA  B. 6.014 kA  C. 10.459 kA  D. 104.59 kA",
-    "a": "C - approximately 10.459 kA. I_FL = 601.4065 A. Convert 5.75% to 0.0575. I_SC = 601.4065/0.0575 = 10,459.24 A. Upstream/conductor impedance and motor contributions are outside this simplified model.",
+    "q": "L06-v3 (changes L06; Changed-number variant, new problem; Keyed): Supplied model: 125% of 6,400 VA continuous + 100% of 15,000 VA noncontinuous. Total VA?",
+    "a": "23,000 VA. 1.25 x 6,400 = 8,000; + 15,000 = 23,000 VA. Arithmetic model only; no code-compliance conclusion.",
     "src": "Original arithmetic under the stated assumptions; no NEC/NFPA compliance conclusion."
    },
    {
-    "q": "M02 (Motors and control wiring, Keyed): For an arithmetic-only motor drill, the supplied conductor rule is 125% of the supplied table FLC. Table FLC is 28 A. What is the calculated ampacity before terminal/adjustment checks? A. 22 A  B. 28 A  C. 35 A  D. 44 A",
-    "a": "C - 35 A. 28 x 1.25 = 35 A. The problem supplies the current basis and multiplier. A real installation still needs duty, exception, terminal and installation checks.",
+    "q": "E01-v3 (changes E01; Changed-number variant, new problem; Keyed): Balanced 150 kVA three-phase transformer, 480 V primary and 208 V secondary (line-to-line). I = VA/(sqrt(3) x V_LL). Primary and secondary currents (0.1 A)?",
+    "a": "180.4 A and 416.4 A. 150,000/(1.7320508 x 480) = 180.422 A; 150,000/(1.7320508 x 208) = 416.358 A. Arithmetic model only; no code-compliance conclusion.",
     "src": "Original arithmetic under the stated assumptions; no NEC/NFPA compliance conclusion."
    },
    {
-    "q": "M04 (Motors and control wiring, Keyed): A supplied feeder-conductor model adds 125% of the largest motor FLC to 100% of the others. The three currents are 40 A, 20 A and 15 A. What model ampacity results? A. 75 A  B. 80 A  C. 85 A  D. 93.75 A",
-    "a": "C - 85 A. Largest contribution = 1.25 x 40 = 50 A. Other contributions = 20 + 15 = 35 A. Total = 85 A. This does not calculate feeder OCP.",
+    "q": "E02-v3 (changes E02; Changed-number variant, new problem; Keyed): 1000 kVA three-phase transformer, 480 V secondary line-to-line, 5.75% impedance. Stiff-source bolted-fault model: I_FL = VA/(sqrt(3) x V_LL), I_SC = I_FL / (Z%/100). I_FL and I_SC?",
+    "a": "I_FL approx 1202.8 A; I_SC approx 20.92 kA. 1,000,000/(1.7320508 x 480) = 1202.8131 A; / 0.0575 = 20,918 A. Arithmetic model only; no code-compliance conclusion.",
     "src": "Original arithmetic under the stated assumptions; no NEC/NFPA compliance conclusion."
    },
    {
-    "q": "M07 (Motors and control wiring, Keyed): Use ONLY this balanced three-phase resistance-only approximation: VD = sqrt(3) x K x I x D / CM. K = 12.9, I = 40 A, one-way D = 180 ft, CM = 41,740 circular mils, line voltage 480 V. Find approximate volts dropped and percent drop. A. 1.93 V; 0.40%  B. 3.85 V; 0.80%  C. 7.71 V; 1.61%  D. 3.85 V; 1.85%",
-    "a": "B - approximately 3.85 V and 0.80%. VD = 1.7320508 x 12.9 x 40 x 180 / 41,740 = 3.8542 V. Percent = 100 x 3.8542 / 480 = 0.80297%. D is one-way; do not double it in this supplied three-phase formula. AC reactance, actual temperature and power factor are not modeled.",
+    "q": "M04-v3 (changes M04; Changed-number variant, new problem; Keyed): Supplied feeder-conductor model: 125% of largest motor FLC + 100% of the others. Currents 65 A, 40 A, 22 A. Model ampacity?",
+    "a": "143.25 A. 1.25 x 65 = 81.25; + 40 + 22 = 143.25 A. Not a feeder OCP calculation. Arithmetic model only; no code-compliance conclusion.",
     "src": "Original arithmetic under the stated assumptions; no NEC/NFPA compliance conclusion."
    },
    {
-    "q": "B01 (Boxes and fittings, Keyed): This fictional small-box arithmetic exercise stipulates: six conductor allowances, two device allowances, one clamp allowance and two grounding allowances, all at 2.25 in3 each. What required volume follows from those stated allowances? A. 20.25 in3  B. 22.50 in3  C. 24.75 in3  D. 27.00 in3",
-    "a": "C - 24.75 in3. Allowances total 6 + 2 + 1 + 2 = 11. Volume = 11 x 2.25 = 24.75 in3. This does not verify that the supplied grounding/device/clamp counts match a real 2020 installation.",
+    "q": "M05-v3 (changes M05; Changed-number variant, new problem; Keyed): Branch fault-protection arithmetic drill: supplied factor 175% x table current 36 A. Product before any standard size or exception?",
+    "a": "63.00 A. 36 x 1.75 = 63.00 A. Arithmetic model only; no code-compliance conclusion.",
     "src": "Original arithmetic under the stated assumptions; no NEC/NFPA compliance conclusion."
    },
    {
-    "q": "B04 (Boxes and fittings, Keyed): For a fictional angle-pull model, the supplied formula is six times the largest raceway in the relevant row plus the sum of the other raceway sizes in that row. Sizes are 3, 2 and 1 inches. Calculate that model dimension only. A. 18 in  B. 21 in  C. 24 in  D. 36 in",
-    "a": "B - 21 in. 6 x 3 + 2 + 1 = 21 inches. Other required dimensions, same-conductor raceway spacing and actual applicability remain separate checks.",
+    "q": "M07-v3 (changes M07; Changed-number variant, new problem; Keyed): Use ONLY VD = sqrt(3) x K x I x D / CM with K = 12.9, I = 50 A, one-way D = 120 ft, CM = 33,100, line voltage 208 V. Volts dropped and percent (2 decimals)?",
+    "a": "4.05 V; 1.95%. 1.7320508 x 12.9 x 50 x 120 / 33,100 = 4.0502 V; 100 x 4.0502 / 208 = 1.9472%. D is one-way; do not double. Arithmetic model only; no code-compliance conclusion.",
     "src": "Original arithmetic under the stated assumptions; no NEC/NFPA compliance conclusion."
    },
    {
-    "q": "W03 (Wiring methods and terminations, Keyed): A fictitious raceway has 2.00 in2 of internal area. This exercise stipulates a 40% permitted fill and 0.12 in2 per identical conductor. How many whole conductors fit under those assumptions? A. 6  B. 7  C. 8  D. 16",
-    "a": "A - 6. Permitted area = 2.00 x 0.40 = 0.80 in2. 0.80 / 0.12 = 6.666...; round DOWN to 6 whole conductors. Check the actual wiring method and Chapter 9 data before using this in a design.",
+    "q": "O03-v4 (changes O03; Changed-number variant, new problem; Keyed): Model: required current = 1.25 x continuous + noncontinuous. Inputs: 48 A continuous, 20 A noncontinuous. Calculated minimum before selecting conductors or a device?",
+    "a": "80 A. 1.25 x 48 = 60 A; + 20 A = 80 A. Arithmetic model only; no code-compliance conclusion.",
+    "src": "Original arithmetic under the stated assumptions; no NEC/NFPA compliance conclusion."
+   },
+   {
+    "q": "W02-v4 (changes W02; Changed-number variant, new problem; Keyed): Model: start at 75 A, multiply by 0.82 ambient and 0.8 conductor-count factors, then separately limit to a 50 A terminal value. Usable maximum under ONLY these assumptions (round to 0.01 A)?",
+    "a": "49.20 A. 75 x 0.82 x 0.8 = 49.20 A; terminal cap 50 A; min = 49.20 A. Arithmetic model only; no code-compliance conclusion.",
+    "src": "Original arithmetic under the stated assumptions; no NEC/NFPA compliance conclusion."
+   },
+   {
+    "q": "W03-v6 (changes W03; Changed-number variant, new problem; Keyed): Fictitious raceway: 1.00 in2 internal area; stipulated 40% permitted fill; 0.06 in2 per identical conductor. Whole conductors that fit under these assumptions?",
+    "a": "6. 1.00 x 0.40 = 0.40 in2; 0.40 / 0.06 = 6.667; round DOWN to 6. Arithmetic model only; no code-compliance conclusion.",
+    "src": "Original arithmetic under the stated assumptions; no NEC/NFPA compliance conclusion."
+   },
+   {
+    "q": "B03-v3 (changes B03; Changed-number variant, new problem; Keyed): Supplied model: straight-pull length >= 8 x largest raceway trade size. Largest size is 3.5 in. Minimum model length?",
+    "a": "28 in. 8 x 3.5 = 28 in. Arithmetic model only; no code-compliance conclusion.",
+    "src": "Original arithmetic under the stated assumptions; no NEC/NFPA compliance conclusion."
+   },
+   {
+    "q": "S02-v2 (changes S02; Changed-number variant, new problem; Keyed): Balanced single-phase 120/240 V service, calculated apparent load 38,400 VA (all required treatment already applied). Line current?",
+    "a": "160.00 A. 38,400 / 240 = 160.00 A (use 240 V, not 120 V). Arithmetic model only; no code-compliance conclusion.",
+    "src": "Original arithmetic under the stated assumptions; no NEC/NFPA compliance conclusion."
+   },
+   {
+    "q": "P06-v2 (changes P06; Changed-number variant, new problem; Keyed): Defined total cost basis $7,800. Compare a 30% markup price with a 30% margin price, rounded to cents.",
+    "a": "Markup $10,140.00; margin $11,142.86. 7,800 x 1.30 = 10,140.00; 7,800 / 0.70 = 11,142.86. Markup uses cost; margin uses selling price. Arithmetic model only; no code-compliance conclusion.",
+    "src": "Original arithmetic under the stated assumptions; no NEC/NFPA compliance conclusion."
+   },
+   {
+    "q": "P12-v2 (changes P12; Changed-number variant, new problem; Keyed): STUDY assumptions (not prescribed 2013 durations): standby 0.18 A for 24 h, alarm 1.6 A for 5 min, multiply the sum by 1.25. Capacity to two decimals?",
+    "a": "5.57 Ah. 0.18 x 24 = 4.3200 Ah; 1.6 x 5/60 = 0.1333 Ah; sum x 1.25 = 5.5667 -> 5.57 Ah. Arithmetic model only; no code-compliance conclusion.",
     "src": "Original arithmetic under the stated assumptions; no NEC/NFPA compliance conclusion."
    }
   ],
   "checks": [
-   "16 changed-number calcs graded",
+   "Variants: attempted __ / 16, correct __, pending __ (actuals only)",
    "Due retests done",
+   "Grade variants only with the recomputed keys (never the original bank values)",
    "Record table filled; real misses logged in the Error Log",
    "Status checked in this row only after the work is actually done"
   ],
-  "notes": "References: Electrical Study Guide formulas; Error Log due retests. Page lists 10 starter items (L01, L02, E01, E02, M02, M04, M07, B01, B04, W03); the 16-item changed-number set (L01, L02, L03, L06, E01, E02, M04, M05, M07, O03, W02, W03, B03, S02, P06, P12) is coach-generated, so only the 10 starters carry keys. Verify before scoring: keyed arithmetic under supplied assumptions only; the numerical key verifies the supplied arithmetic model, not an NEC/NFPA rule. Book lookup required = grade only after reading the exact 2020 NEC / 2013 NFPA 72 / NASCLA text. Article maps are navigation starting points. Answer every question before opening the key; write answer, exact source (edition, section/page), condition/exception, elapsed time. Choices may be shuffled; track the answer, not the letter. Difficult day (20 min): recall one due item (5 min), solve one question from today's list (10 min), record actual 20 min (5 min). Carry unfinished items into the next two rows' correction slots (at most two per day). Never double tomorrow; never drop a domain. Pre-Oct 31 version of this row (old plan) is reference only and omitted."
+  "notes": "References: Electrical Study Guide formulas; Error Log due retests. Each variant is a NEW problem: grade it only against its recomputed key, never against the original bank letter or value. All factors are exercise assumptions (not verified code rules); round only where stated. No time or no coach? Re-solve the original IDs instead and label them repeat (not fresh). The numerical key verifies the supplied arithmetic model, not an NEC/NFPA rule. Book lookup required = grade only after reading the exact 2020 NEC / 2013 NFPA 72 / NASCLA text. Article maps are navigation starting points. Answer every question before opening the key; write answer, exact source (edition, section/page), condition/exception, elapsed time. Choices may be shuffled; track the answer, not the letter. Difficult day (20 min): recall one due item (5 min), solve one question from today's list (10 min), record actual 20 min (5 min). Carry unfinished items into the next two rows' correction slots (at most two per day). Never double tomorrow; never drop a domain. Pre-Oct 31 version of this row (old plan: 20 timed questions, starters L01 28,800 VA etc.) is reference only and omitted."
  },
  "33": {
   "objective": "Take a fresh targeted checkpoint and make the final readiness decision from actual evidence. (2 h, suggested 7:00-9:00 PM)",
   "steps": [
-   "0:00-0:05 (5 min) Launch/recall: open due retests in the Error Log; recall one fact from the last session without looking.",
-   "0:05-0:30 (25 min) Launch + decision prep: list Mock A/B/C results (with labels), checkpoint scores, weakest domains, pending items.",
-   "0:30-0:35 (5 min) Break.",
-   "0:35-1:00 (25 min) Checkpoint, 25 + 20 min: 20 fresh targeted items (coach or provider) on the weakest 2 domains, timed. Not previously seen.",
-   "1:00-1:05 (5 min) Break.",
-   "1:05-1:25 (20 min) (Used by the checkpoint today; continue the 20-item checkpoint.)",
-   "1:25-1:55 (30 min) Correct and re-solve: grade, log misses, then write the final readiness decision on Exam Plan & Readiness. The personal scheduling decision deadline is Fri Dec 4.",
-   "1:55-2:00 (5 min) Record: fill the record table (actual minutes; attempted/verified/pending; score; hardest 2; next retest date); log real misses."
+   "0:00-1:15 (75 min) Timed targeted checkpoint: 20 items on the weakest 2 domains, not previously seen. Commit all answers first; blanks count 0.",
+   "1:15-1:50 (35 min) Grading and priority repairs: grade; only items with verified keys are scorable. Unverified fresh AI items stay LEARNING. If no qualifying fresh source was available, label the whole set LEARNING. Repair the highest-weight misses; log them.",
+   "1:50-2:00 (10 min) Final readiness decision and record: list Mock A/B/C results (with labels), checkpoint scores, weakest domains, pending items; write the final readiness decision on Exam Plan & Readiness. The personal scheduling decision deadline is Fri Dec 4."
   ],
   "questions": [
    {
-    "q": "P04 (Law, business, and practical applications, Keyed): A firm adds or loses employment of a listed qualified individual. Under G.S. 87-43.2(a)(3), what reporting deadline is specified? A. Five days  B. Ten days  C. 30 days  D. One year",
-    "a": "A - Five days. The statute ties the five-day report to additions or loss of employment of listed QIs. State actor, trigger and deadline together.",
-    "src": "Current law/rule practice, verified October 5, 2026: G.S. 87-43.2, current Legislature text (https://www.ncleg.gov/EnactedLegislation/Statutes/HTML/BySection/Chapter_87/GS_87-43.2.html); G.S. 87-43.2(a)(3). An older NASCLA example or an undated question may use a different date; preserve source/date and resolve conflict."
-   },
-   {
-    "q": "G02 (Bonding and grounding, Book lookup required): A service label says 200 A. Is that fact alone enough to select a GEC? List the additional data needed before finding the minimum size. Write: answer -> exact source -> condition/exception -> elapsed time.",
-    "a": "Book lookup required. Verify exact section/page, conditions, exception in the named edition before scoring. Starting route: Article 250; GEC sizing and electrode provisions. Look for ungrounded conductor material/size and electrode-specific provisions. Explain why one ampere label is an incomplete set of inputs.",
-    "src": "2020 NEC, exact final answer must be verified in this edition"
-   },
-   {
-    "q": "M01 (Motors and control wiring, Book lookup required): A motor nameplate current is 22 A while the relevant NEC table value is 28 A. Identify which current basis applies to the branch conductor, overload device and branch fault-protection calculation. Write: answer -> exact source -> condition/exception -> elapsed time.",
-    "a": "Book lookup required. Verify exact section/page, conditions, exception in the named edition before scoring. Starting route: 2020 Article 430; existing plan starts current-basis selection at 430.6. Make three separate decisions with references and exceptions; do not average the two currents.",
-    "src": "2020 NEC, exact final answer must be verified in this edition"
+    "q": "Fresh 20-item targeted checkpoint on the weakest 2 domains, not previously seen, timed 75 min; commit all answers first; blanks count 0.",
+    "a": "No items or keys on this page; items come from a fresh qualifying source. Only items with verified keys are scorable; unverified fresh AI items remain LEARNING; if no qualifying fresh source was available, label the whole set LEARNING. Raw score = correct / 20 (blanks 0); pending items listed separately.",
+    "src": "Fresh source (coach or provider); Exam Plan & Readiness"
    }
   ],
   "checks": [
    "20-item checkpoint graded",
-   "Final readiness decision written on Exam Plan & Readiness (from actual evidence: Mock A/B/C results with labels, checkpoint score, weakest domains, pending items)",
+   "Final readiness decision written",
+   "Scorable only with verified keys. Unverified fresh AI items remain learning. No qualifying fresh source = label the set LEARNING. Raw score = correct / 20 (blanks 0); pending items listed separately",
    "Record table filled; real misses logged in the Error Log",
    "Status checked in this row only after the work is actually done"
   ],
-  "notes": "FINAL READINESS DECISION: made from actual evidence, written on Exam Plan & Readiness (final gate); personal scheduling decision deadline is Fri Dec 4. Old-plan coaching gate (reference, from the Pre-Oct 31 version): two fresh full mocks at 82%+ within six hours and no persistent category below 70% across adequate samples; use the actual appointment/authorization/cancellation terms for any date decision. Start with actual prior misses: choose the two highest-impact categories from real results; the 3 starter items are a learning fallback, may be repeats, and cannot replace fresh readiness evidence. Verify before scoring: fresh items with unverified keys count as learning only. References: Exam Plan & Readiness; all mock and checkpoint records. Book lookup required = grade only after reading the exact 2020 NEC / 2013 NFPA 72 / NASCLA text. Article maps are navigation starting points. Answer every question before opening the key; write answer, exact source (edition, section/page), condition/exception, elapsed time. Choices may be shuffled; track the answer, not the letter. Difficult day (20 min): recall one due item (5 min), solve one question from today's list (10 min), record actual 20 min (5 min). Carry unfinished items into the next two rows' correction slots (at most two per day). Never double tomorrow; never drop a domain. Pre-Oct 31 version of this row (old plan) is reference only and omitted."
+  "notes": "FINAL READINESS DECISION: made from actual evidence (Mock A/B/C results with labels, checkpoint scores, weakest domains, pending items) and written on Exam Plan & Readiness (final gate); personal scheduling decision deadline is Fri Dec 4. The page states no numeric pass thresholds. References: Exam Plan & Readiness (final gate); all mock and checkpoint records. Book lookup required = grade only after reading the exact 2020 NEC / 2013 NFPA 72 / NASCLA text. Article maps are navigation starting points. Answer every question before opening the key; write answer, exact source (edition, section/page), condition/exception, elapsed time. Choices may be shuffled; track the answer, not the letter. Difficult day (20 min): recall one due item (5 min), solve one question from today's list (10 min), record actual 20 min (5 min). Carry unfinished items into the next two rows' correction slots (at most two per day). Never double tomorrow; never drop a domain. Pre-Oct 31 version of this row (old plan; its starters P04, G02, M01 and its 82%/70% coaching gate) is reference only and omitted."
  },
  "34": {
   "objective": "Close the last precision gaps in category 11 (law, business, plans, fire alarm). (2 h, suggested 7:00-9:00 PM)",
