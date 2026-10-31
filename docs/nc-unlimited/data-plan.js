@@ -15,7 +15,7 @@
     books: [
       ["2020 NEC (complete bound)", "Required and permitted. Timed navigation, exact 2020 provisions, calculations, exceptions."],
       ["2013 NFPA 72 (complete bound)", "Required and permitted for Unlimited. Chapter navigation plus system-specific numbers."],
-      ["NASCLA North Carolina Electrical, current edition (the publisher offers the 14th, ISBN 978-1-948558-50-1)", "Admitted reference. NASCLA's store page says both the 13th and 14th were allowed in testing centers through June 15, 2026 and only the 14th from June 16, 2026. Your Notion plan now says only 'current edition, confirm your copy'. Confirm in the current NCBEEC handbook or your PSI confirmation; if your copy is the 13th, plan on the 14th. Recall first, then verify and add page references in your own book."],
+      ["NASCLA North Carolina Electrical, current edition (the publisher's live page lists the 14th, ISBN 978-1-948558-50-1)", "Admitted reference: the July 2026 handbook says 'current NASCLA guide'. An older NASCLA page (now 404) said 13th and 14th were allowed through June 15, 2026 and only the 14th from June 16; that is not proof of the current cutoff. Which edition you own is unconfirmed: check the handbook reference list or your PSI confirmation. Recall first, then verify and add page references in your own book."],
       ["G.S. 87 Art. 4 and 21 NCAC 18B", "STUDY sources only. Separate law/rules documents are not on the admitted list. Content inside NASCLA can be consulted."],
       ["Official Lighting and Power Plans", "Tested. Study drawings are at the back of the NCBEEC/PSI handbook (printed pp. 69-70). No personal plan packet is authorized."],
       ["2023 NEC (saved copy)", "Supporting explanation only. NOT the exam edition. Article 220 and higher-voltage layout differ from 2020."]
@@ -28,6 +28,7 @@
       "NFPA 13 is outside this exam's reference set. NFPA 70E is optional enrichment, not an admitted reference.",
       "Test center supplies calculator, scratch paper and pencils."
     ],
+    handbook: { url: "https://www.ncbeec.org/psi-exam-book-2026-002-2/", note: "July 2026 NCBEEC/PSI handbook, linked from ncbeec.org/examinations. Read by Harrison/Codex; this app's author could not reach ncbeec.org.", facts: [["Printed p3", "Unlimited: 100 questions, six hours; references are the 2020 NEC, 2013 NFPA 72 and the current NASCLA guide."], ["Printed p6", "70% to pass."], ["Printed p7", "Ampere answers use ordinary .5-up rounding, and permitted NEC exceptions apply unless the question excludes them."], ["Printed p26", "Limited license: 1,000 V (matches G.S. 87-43.3(a)(1)); the Board's licensing webpage still says 600 V."]] },
     ids: "Two valid, unexpired signed IDs, at least one government photo ID, names matching registration.",
     contacts: "NCBEEC office@ncbeec.org (919) 733-9042. PSI examschedule@psionline.com (855) 746-8173. Verify details in your actual confirmation.",
     links: [
@@ -89,7 +90,8 @@
   g.NC.catNames = { S: "Code speed", P: "OCP and services", W: "Wiring and boxes", C: "Load calcs", R: "Review and readiness", L: "Law and business", G: "Grounding/bonding", M: "Math/transformers", V: "Motors/VD", H: "High voltage", O: "Special occupancies", F: "NFPA 72", X: "Full mock" };
 
   g.NC.verification = [
-    "Board authorization start and expiry dates (the Sept 10 eligibility email gives no expiry; Dec 9 was an old inference, not a limit).",
+    "Board authorization start and expiry dates: unconfirmed until Harrison's actual approval notice supports them. Do not infer them.",
+    "Which physical NASCLA book you own (edition printed on the cover): unconfirmed.",
     "2020 NEC: check edition-sensitive values and exceptions in the book: ampacity, box-fill grounds, GFCI scope, service disconnects, lighting factors, higher voltage.",
     "2013 NFPA 72: complete the numerical worksheet (system type, number, unit, condition, exception, exact section).",
     "NASCLA 14th: add page references to the 60 law/business cards; read every chapter.",

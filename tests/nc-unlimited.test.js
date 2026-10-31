@@ -245,11 +245,48 @@ test('NEC standard sizes, box volume and the dwelling lighting demand tiers', ()
   assert.equal(N.dwellingLighting(2000), 2000); assert.equal(N.dwellingLighting(130000), 3000 + 117000 * 0.35 + 10000 * 0.25);
 });
 
-test('NEC rules data: every rule has a confidence tag, no markup, and nothing claims verification', () => {
+test('NEC rules data: every rule has a tag; V rows carry NFPA LiNK provenance; nothing is overclaimed', () => {
   const ids = new Set();
-  for (const r of NC.nec.rules) { assert.ok(!ids.has(r[0]), 'dup ' + r[0]); ids.add(r[0]); assert.ok(['S', 'R'].includes(r[4]), r[0]); assert.ok(r[1] >= 0 && r[1] < NC.nec.groups.length, r[0]); assert.ok(!/[<>]/.test(r[3]), r[0]); }
-  assert.ok(/Not verified/.test(NC.nec.status));
+  for (const r of NC.nec.rules) { assert.ok(!ids.has(r[0]), 'dup ' + r[0]); ids.add(r[0]); assert.ok(['S', 'R', 'V'].includes(r[4]), r[0]); assert.ok(r[1] >= 0 && r[1] < NC.nec.groups.length, r[0]); assert.ok(!/[<>]/.test(r[3]), r[0]); if (r[4] === 'V') assert.match(r[5], /NFPA LiNK/, r[0] + ' is V without provenance'); }
+  assert.match(NC.nec.status, /Mostly NOT verified/);
   assert.ok(NC.nec.gaps.length > 0);
+  for (const [id, v] of Object.entries(NC.nec.vtab)) { assert.match(v.url, /^https:\/\/link\.nfpa\.org\/publications\/70\/2020\//, id); assert.ok(v.scope && v.open, id + ' must say what is verified and what is open'); }
+});
+
+test('lookup resolutions: only resolved or partial, partial ones say what is still needed, none is scored or auto-verified', () => {
+  const ids = new Set(NC.bank.filter((b) => b.lookup).map((b) => b.id));
+  for (const [id, r] of Object.entries(NC.nec.lookups)) { assert.ok(ids.has(id), id + ' is not a lookup item'); assert.ok(['resolved', 'partial'].includes(r.status), id); assert.ok(r.answer && r.refs.length, id); assert.equal(r.status === 'resolved', r.needs.length === 0, id + ': resolved means nothing is still needed'); }
+  assert.deepEqual(Object.keys(NC.nec.lookups).sort(), ['B02', 'G02', 'G04', 'G05', 'G08', 'L08', 'L09', 'O07', 'W01', 'W04']);
+  assert.deepEqual(Object.entries(NC.nec.lookups).filter(([, r]) => r.status === 'resolved').map(([id]) => id).sort(), ['B02', 'G02', 'W01', 'W04']);
+  assert.match(NC.nec.lookups.W01.answer, /not a universal 90 C shortcut/); assert.match(NC.nec.lookups.W04.answer, /MAJOR PORTION/); assert.match(NC.nec.lookups.W04.answer, /'Substantial nonlinear load' does not by itself prove/); assert.match(NC.nec.lookups.G04.answer, /TABLE MINIMUM/);
+  assert.match(NC.nec.lookups.B02.answer, /1\.5 allowances/);
+});
+
+test('every cell Harrison/Codex read in NFPA LiNK on Oct 31 matches the app tables exactly', () => {
+  const N2 = NC.nec;
+  // Table 250.66, copper ungrounded -> copper GEC
+  for (const [size, gec] of [['2', '8'], ['14', '8'], ['1', '6'], ['1/0', '6'], ['2/0', '4'], ['3/0', '4'], ['4/0', '2'], ['250', '2'], ['350', '2'], ['400', '1/0'], ['600', '1/0'], ['700', '2/0'], ['1100', '2/0'], ['1200', '3/0']]) assert.equal(N.gec(size, 'cu'), gec, '250.66 cu ' + size);
+  // Table 250.122: (OCPD, Cu, Al)
+  const t122 = [[15, '14', '12'], [20, '12', '10'], [60, '10', '8'], [100, '8', '6'], [200, '6', '4'], [300, '4', '2'], [400, '3', '1'], [500, '2', '1/0'], [600, '1', '2/0'], [800, '1/0', '3/0'], [1000, '2/0', '4/0'], [1200, '3/0', '250'], [1600, '4/0', '350'], [2000, '250', '400'], [2500, '350', '600'], [3000, '400', '600'], [4000, '500', '750'], [5000, '700', '1250'], [6000, '800', '1250']];
+  assert.deepEqual(N2.t250122, t122);
+  for (const [o, cu, al] of t122) { assert.equal(N.egc(o, 'cu'), cu); assert.equal(N.egc(o, 'al'), al); }
+  assert.equal(N.egc(61, 'cu'), '8', 'between rows takes the next row up');
+  // Table 314.16(B)
+  assert.deepEqual(N2.box, { '18': 1.5, '16': 1.75, '14': 2.0, '12': 2.25, '10': 2.5, '8': 3.0, '6': 5.0 });
+  // Table 310.16 copper 14 to 500 kcmil: (size, 60, 75, 90)
+  for (const [z, a, b, c2] of [['14', 15, 20, 25], ['12', 20, 25, 30], ['10', 30, 35, 40], ['8', 40, 50, 55], ['6', 55, 65, 75], ['4', 70, 85, 95], ['3', 85, 100, 115], ['2', 95, 115, 130], ['1', 110, 130, 145], ['1/0', 125, 150, 170], ['2/0', 145, 175, 195], ['3/0', 165, 200, 225], ['4/0', 195, 230, 260], ['250', 215, 255, 290], ['300', 240, 285, 320], ['350', 260, 310, 350], ['400', 280, 335, 380], ['500', 320, 380, 430]]) assert.deepEqual(N2.t31016.cu[z], [a, b, c2], '310.16 cu ' + z);
+  // Table 310.15(C)(1) and (B)(1) rows 31-60 C
+  assert.deepEqual([4, 6, 7, 9, 10, 20, 21, 30, 31, 40, 41].map(N.adjFactor), [0.8, 0.8, 0.7, 0.7, 0.5, 0.5, 0.45, 0.45, 0.4, 0.4, 0.35]);
+  for (const [tc, f60, f75, f90] of [[35, 0.91, 0.94, 0.96], [40, 0.82, 0.88, 0.91], [45, 0.71, 0.82, 0.87], [50, 0.58, 0.75, 0.82], [55, 0.41, 0.67, 0.76], [60, null, 0.58, 0.71]]) assert.deepEqual([N.ambientFactor(tc, 60), N.ambientFactor(tc, 75), N.ambientFactor(tc, 90)], [f60, f75, f90], 'ambient ' + tc);
+  // 314.16(B)(5): six EGCs = 1 + 2 x 1/4 allowances
+  assert.equal(1 + (6 - 4) * 0.25, 1.5); assert.equal(1.5 * N2.box['12'], 3.375);
+});
+
+test('handbook facts relayed from the July 2026 Board PDF are present and attributed', () => {
+  const h = NC.exam.handbook; assert.match(h.url, /psi-exam-book-2026-002-2/); assert.match(h.note, /Harrison\/Codex/);
+  const by = Object.fromEntries(h.facts); assert.match(by['Printed p3'], /100 questions, six hours/); assert.match(by['Printed p6'], /70%/); assert.match(by['Printed p7'], /\.5-up/); assert.match(by['Printed p26'], /1,000 V/);
+  assert.doesNotMatch(JSON.stringify([NC.verification, NC.exam, NC.keyDates]), /Dec 9/, 'the old Dec 9 inference must not appear');
+  assert.match(NC.cards.find((c) => c[0] === 2)[3], /do not treat 600 V as uncontested statute/);
 });
 
 // ---- date sanity: independent of Notion, so a drifted date fails loudly ----
@@ -400,8 +437,27 @@ test('wire sizes sort by area, and the corrected NEC rows say what they should',
   assert.deepEqual(sorted.slice(0, 14), ['14', '12', '10', '8', '6', '4', '3', '2', '1', '1/0', '2/0', '3/0', '4/0', '250']);
   assert.equal(sorted[sorted.length - 1], '2000');
   const rule = (id) => NC.nec.rules.find((r) => r[0] === id)[3];
-  assert.match(rule('b1'), /from outside the box/); assert.match(rule('b1'), /start AND end inside the box/); assert.doesNotMatch(rule('b1'), /originates and ends in the box counts 1/);
+  assert.match(rule('b1'), /wholly inside the box counts 0/); assert.match(rule('b1'), /enters and terminates or is spliced/); assert.match(rule('b2'), /up to FOUR together count as ONE allowance/); assert.match(rule('b2'), /1\/4 allowance/);
   assert.match(rule('s3'), /18 ft \(public streets[^)]*truck traffic[^)]*other land/);
   assert.match(rule('l7'), /3-wire circuit taken from a 4-wire 3-phase wye/);
   assert.doesNotMatch(rule('m5'), /Design B energy-efficient starting exception, not the base table/);
+});
+
+test('Table 430.52 and Table 220.42 cells read in NFPA LiNK match the app; pending list covers every unresolved lookup exactly', () => {
+  const N2 = NC.nec;
+  assert.deepEqual(N2.t43052cols, ['Nontime-delay fuse', 'Dual-element (time-delay) fuse', 'Instantaneous-trip breaker', 'Inverse-time breaker']);
+  assert.deepEqual(N2.t43052.map((r) => r.slice(1)), [[300, 175, 800, 250], [300, 175, 800, 250], [300, 175, 1100, 250], [300, 175, 800, 250], [150, 150, 800, 150], [150, 150, 250, 150]]);
+  assert.match(N2.t43052ex.join(' '), /400% of FLC[^.]*225%[^.]*400% if FLC is 100 A or less and 300% if FLC is over 100 A[^.]*300%/);
+  assert.deepEqual(N2.t22042, { dwelling: [[3000, 100], [120000, 35], [1e12, 25]], hotel: [[20000, 60], [100000, 50], [1e12, 35]], warehouse: [[12500, 100], [1e12, 50]], other: [[1e12, 100]] });
+  assert.equal(N.lightingDemand(130000, 'dwelling'), 3000 + 117000 * 0.35 + 10000 * 0.25);
+  assert.equal(N.lightingDemand(50000, 'hotel'), 20000 * 0.6 + 30000 * 0.5); assert.equal(N.lightingDemand(120000, 'hotel'), 12000 + 40000 + 20000 * 0.35);
+  assert.equal(N.lightingDemand(20000, 'warehouse'), 12500 + 7500 * 0.5); assert.equal(N.lightingDemand(77777, 'other'), 77777);
+  // every Book lookup is either resolved (nothing pending), partial (and still pending for the rest) or pending
+  const lookupIds = NC.bank.filter((b) => b.lookup).map((b) => b.id);
+  const pendingIds = new Set(N2.pending.flatMap((g) => g.ids)); const resolved = Object.entries(N2.lookups).filter(([, r]) => r.status === 'resolved').map(([id]) => id);
+  for (const id of lookupIds) assert.ok(resolved.includes(id) || pendingIds.has(id), id + ' is neither resolved nor listed as pending');
+  for (const id of resolved) assert.ok(!pendingIds.has(id), id + ' is resolved but still listed pending');
+  for (const id of pendingIds) assert.ok(lookupIds.includes(id), id + ' is pending but is not a lookup question');
+  for (const g of N2.pending) assert.ok(g.needs.length > 0 && g.ids.length > 0);
+  assert.match(N2.rules.find((r) => r[0] === 'w1')[3], /not a universal 90 C shortcut/); assert.match(N2.rules.find((r) => r[0] === 'w6')[3], /MAJOR PORTION/); assert.match(N2.rules.find((r) => r[0] === 'g7')[3], /qualified person/);
 });

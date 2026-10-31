@@ -131,7 +131,8 @@
   N.egc = (ocpd, gecMat) => { const r = tbl().t250122.find((x) => ocpd <= x[0]); return r ? r[gecMat === "al" ? 2 : 1] : null; };
   N.nextStd = (a) => tbl().std.find((x) => x >= a) || null;
   N.boxVolume = (awg) => tbl().box[String(awg)] || null;
-  N.dwellingLighting = (va) => { let left = va, out = 0, prev = 0; for (const [ceil, p] of tbl().t22042) { const part = Math.max(0, Math.min(left, ceil - prev)); out += (part * p) / 100; left -= part; prev = ceil; if (left <= 0) break; } return r(out); };
+  N.lightingDemand = (va, occ) => { const rows = tbl().t22042[occ || "dwelling"]; let left = va, out = 0, prev = 0; for (const [ceil, p] of rows) { const part = Math.max(0, Math.min(left, ceil - prev)); out += (part * p) / 100; left -= part; prev = ceil; if (left <= 0) break; } return r(out); };
+  N.dwellingLighting = (va) => N.lightingDemand(va, "dwelling");
   // Ampacity worksheet: insulation column drives table value, ambient and adjustment; termination column caps the result.
   N.worksheet = ({ size, mat, ins, term, n, ambient }) => {
     const table = N.ampacity(size, mat, ins), cap = N.ampacity(size, mat, term), af = N.ambientFactor(ambient == null ? 30 : ambient, ins), jf = N.adjFactor(n == null ? 3 : n);
