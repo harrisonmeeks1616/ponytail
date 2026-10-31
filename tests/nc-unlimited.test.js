@@ -244,3 +244,37 @@ test('NEC rules data: every rule has a confidence tag, no markup, and nothing cl
   assert.ok(/Not verified/.test(NC.nec.status));
   assert.ok(NC.nec.gaps.length > 0);
 });
+
+// ---- date sanity: independent of Notion, so a drifted date fails loudly ----
+const dow = (iso) => new Date(iso + 'T12:00:00Z').getUTCDay(); // 0 Sun .. 6 Sat
+
+test('exam date and PSI cutoff are consistent: Monday Dec 7, 10 AM EST, cutoff exactly 48 hours earlier', () => {
+  assert.equal(NC.exam.date, '2026-12-07'); assert.equal(dow(NC.exam.date), 1);
+  assert.equal(Date.parse(NC.exam.startISO) - Date.parse(NC.exam.cutoffISO), 48 * 3600 * 1000);
+  assert.equal(dow('2026-12-05'), 6); // Saturday
+  // 10:00 AM Eastern on Dec 7 is 15:00 UTC (EST, UTC-5): daylight saving ended Nov 1, 2026
+  assert.equal(new Intl.DateTimeFormat('en-US', { timeZone: 'America/New_York', hour: 'numeric', hour12: false }).format(new Date(NC.exam.startISO)), '10');
+  assert.equal(new Intl.DateTimeFormat('en-US', { timeZone: 'America/New_York', hour: 'numeric', hour12: false }).format(new Date(NC.exam.cutoffISO)), '10');
+});
+
+test('named dates fall on the weekdays the plan says', () => {
+  const day = (iso) => ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'][dow(iso)];
+  const want = { '2026-10-31': 'Sat', '2026-11-03': 'Tue', '2026-11-06': 'Fri', '2026-11-13': 'Fri', '2026-11-14': 'Sat', '2026-11-21': 'Sat', '2026-11-23': 'Mon', '2026-11-26': 'Thu', '2026-11-28': 'Sat', '2026-12-02': 'Wed', '2026-12-04': 'Fri', '2026-12-06': 'Sun' };
+  for (const [d, w] of Object.entries(want)) assert.equal(day(d), w, d);
+  // Thanksgiving is the fourth Thursday of November: the 0.5 h row
+  const thursdays = []; for (let d = 1; d <= 30; d++) { const iso = '2026-11-' + String(d).padStart(2, '0'); if (dow(iso) === 4) thursdays.push(iso); }
+  assert.equal(thursdays[3], '2026-11-26');
+  assert.equal(NC.sessions.find((s) => s[1] === '2026-11-26')[3], 0.5);
+  // every key date matches a real sprint day or the exam
+  const inSprint = new Set(NC.sessions.map((s) => s[1]).concat([NC.exam.date]));
+  for (const k of NC.keyDates) assert.ok(inSprint.has(k[0]) || k[0] === '2026-12-05', k[0]);
+});
+
+test('behind-schedule and date arithmetic around the sprint edges', () => {
+  assert.equal(L.diffDays('2026-10-31', '2026-12-07'), 37);
+  assert.equal(L.addDays('2026-11-01', -1), '2026-10-31');
+  assert.equal(L.nyDate(new Date('2026-11-01T04:30:00Z')), '2026-11-01'); // 12:30 AM EDT? no: 04:30Z on Nov 1 is 12:30 AM EDT (DST ends 2 AM)
+  assert.equal(L.nyDate(new Date('2026-11-01T06:30:00Z')), '2026-11-01'); // after the fall-back hour, still Nov 1 in New York
+  assert.equal(L.nyDate(new Date('2026-12-07T04:59:00Z')), '2026-12-06'); // just before midnight EST
+  assert.equal(L.nyDate(new Date('2026-12-07T05:00:00Z')), '2026-12-07');
+});
