@@ -521,7 +521,7 @@ test('deleteCapture: proposals and FTS row go; accepted items keep text with sou
   assert.equal(await count(d, "SELECT COUNT(*) FROM fts_work WHERE ref = 'capture:cap-del-001'"), 1);
 
   const res = await db.deleteCapture(d, 'cap-del-001', 'work', T3);
-  assert.deepEqual(res, { captures: 1, proposals: 3, itemsDeleted: 0, itemsDetached: 2, checkpointsDetached: 1 });
+  assert.deepEqual(res, { captures: 1, proposals: 3, itemsDeleted: 0, itemsDetached: 2, checkpointsDetached: 1, attachments: 0 });
   const cpAfter = (await db.getProject(d, proj.project.id, 'work')).checkpoint;
   assert.equal(cpAfter.source_ref, null, 'checkpoint loses the link to the deleted capture');
   assert.equal(cpAfter.stopped_at_text, cp.checkpoint.stopped_at_text, 'the saved words stay (user-saved, like accepted items)');
@@ -545,7 +545,7 @@ test('deleteCapture: proposals and FTS row go; accepted items keep text with sou
 
   // Repeat and wrong scope are harmless.
   assert.deepEqual(await db.deleteCapture(d, 'cap-del-001', 'work', T4), {
-    captures: 0, proposals: 0, itemsDeleted: 0, itemsDetached: 0, checkpointsDetached: 0,
+    captures: 0, proposals: 0, itemsDeleted: 0, itemsDetached: 0, checkpointsDetached: 0, attachments: 0,
   });
   await capture(d, 'cap-del-002', 'other');
   assert.equal((await db.deleteCapture(d, 'cap-del-002', 'personal', T4)).captures, 0);

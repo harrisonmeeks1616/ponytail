@@ -6,7 +6,14 @@
 // - ordinal: 1-based, in sentence order.
 // - sourceQuote: the exact sentence from the capture (a substring of `text`).
 // - title: always taken verbatim from the sentence (words may be dropped, never added, never
-//   re-cased), so it cannot contain a number, name or status word that the sentence lacks.
+//   re-cased), so it cannot contain a number, name or status word that the sentence lacks. The one
+//   exception is a task corrected by the next sentence ("Order 12 sheets for Friday. Actually make that
+//   14, and Thursday not Friday."): its title takes the corrected words from that sentence, and
+//   fields.replaced / fields.correctionQuote keep what was replaced and the correction itself.
+// - A sentence starting with an action verb ("Order ...", "Call ...") is his task. A possibility of his
+//   own ("Maybe we should ...", "I might ...") is an idea with claim status 'proposed', never a task and
+//   never confirmed. A reported promise ("Mike said he'd send it by Tuesday") is a confirmed Waiting item
+//   with who and promisedOn.
 //
 // fields by kind (every string value is a verbatim substring of sourceQuote, except `when`,
 // which is a parseWhen result whose `original` is verbatim):
@@ -61,6 +68,7 @@ const STATUS_WORDS = new Map([
   ['might', 'proposed'],
   ['confirmed', 'confirmed'],
   ['agreed', 'confirmed'],
+  ['promised', 'confirmed'],
   ['done', 'reported_complete'],
   ['finished', 'reported_complete'],
   ['completed', 'reported_complete'],
@@ -104,6 +112,14 @@ const LOOKUP_RE = /\blook\s+up\s+(.+)$/i;
 const REFERENCE_RE = /\b(?:reference|spec|specs)\b/i;
 const CORRECTION_RE = /^\s*(?:actually|no)\b\s*[,:]?\s*(?:make\s+it\s+|it's\s+|it\s+is\s+)?(.+?)[\s.!?]*$/i;
 const FOLLOW_UP_ONLY_RE = /^follow[\s-]?up(?:\s+on\s+(?:it|that|this))?$/i;
+// A sentence that starts with an action verb is his own task ("Order 12 sheets of drywall for Friday").
+const IMPERATIVE_RE =
+  /^(?:please\s+)?(?:order|call|email|text|send|buy|book|schedule|pay|fix|submit|return|print|renew|mail|ship|install|replace|finish|prepare|draft|pick\s+up|drop\s+off)\b\s+\S/i;
+// A possibility of his own is an idea, never a commitment: "Maybe we should repaint the shop someday",
+// "I might call the inspector". (Someone else's "might" is a statement, read as Waiting.)
+const POSSIBILITY_RE = /^(?:(maybe|perhaps)\s*,?\s+)?(?:i|we)\s+(should|could|might|may|can|ought\s+to)\s+(.+)$/i;
+// "Actually make that 14, and Thursday not Friday": a correction of the task just before it.
+const TASK_CORRECTION_RE = /^\s*(?:actually|no|sorry|correction)\b\s*[,:]?\s*(.+?)[\s.!?]*$/i;
 // Day and month words that, left in a reminder's title, mean the date was not read from them.
 const UNREAD_DAY_RE = /\b(?:monday|tuesday|wednesday|thursday|friday|saturday|sunday)\b/i;
 const UNREAD_DAY_ABBR_RE =
@@ -149,7 +165,9 @@ export function claimStatus(sentence) {
   for (let i = 0; i < words.length; i++) {
     const w = words[i];
     let status = STATUS_WORDS.get(w);
-    if (!status && (w === 'will' || /^[a-z]+'ll$/.test(w))) {
+    // Reported promise: "Mike said he'd send it" is Mike's commitment, like "Mike will send it".
+    const reported = /^(?:he|she|they|we|i)'d$/.test(w) && ['said', 'says', 'promised', 'me'].includes(words[i - 1]);
+    if (!status && (w === 'will' || /^[a-z]+'ll$/.test(w) || reported)) {
       const next = words[i + 1];
       if (!next) continue;
       if (NEGATION.has(next)) {
@@ -231,8 +249,77 @@ function promisedOnFrom(found, status) {
 
 function idea(s) {
   const m = s.match(IDEA_RE);
+  if (m) return { kind: 'idea', title: stripTrail(m[1]), fields: {}, needsReview: [] };
+  const p = s.match(POSSIBILITY_RE);
+  // "We should order wire" without maybe/perhaps is left to the other rules; might/may/could always count.
+  if (!p || (!p[1] && !/^(?:might|may|could)$/i.test(p[2]))) return null;
+  const title = stripTrail(p[3]);
+  if (!title) return null;
+  // Never confirmed: a stated possibility is 'proposed' (by him), and stays that way until he edits it.
+  return { kind: 'idea', title, fields: { claim: { by: null, status: 'proposed' } }, needsReview: [] };
+}
+
+function imperative(s, ctx) {
+  if (!IMPERATIVE_RE.test(s)) return null;
+  const title = stripTrail(s);
+  const fields = {};
+  const reasons = [];
+  mentionedWhen(s, ctx, fields, reasons);
+  return { kind: 'task', title, fields, needsReview: reasons };
+}
+
+// Reads a task correction into edits, or null when any part of it cannot be read (then nothing is applied).
+function taskCorrectionEdits(s, ctx) {
+  const m = s.match(TASK_CORRECTION_RE);
   if (!m) return null;
-  return { kind: 'idea', title: stripTrail(m[1]), fields: {}, needsReview: [] };
+  const edits = [];
+  for (let clause of m[1].split(/\s*,\s*(?:and\s+)?|\s+and\s+/i).filter(Boolean)) {
+    clause = clause.replace(/^(?:make\s+(?:that|it)|change\s+(?:that|it)\s+to|it'?s|it\s+is)\s+/i, '');
+    let old = null;
+    const not = clause.match(/^(.+?)\s+(?:not|instead\s+of)\s+(.+)$/i);
+    if (not) [, clause, old] = not;
+    if (/^\d+(?:\.\d+)?$/.test(clause)) {
+      edits.push({ type: 'number', value: clause, old });
+      continue;
+    }
+    const detail = parseWhenDetail(clause, ctx);
+    if (detail.result.kind === 'none') return null;
+    edits.push({ type: 'when', value: clause, old, detail });
+  }
+  return edits.length ? edits : null;
+}
+
+function escapeRe(t) {
+  return t.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+// Applies a correction to the task proposal: the title takes the corrected words, the when the corrected
+// date; the replaced values and the correction sentence are kept in fields. Returns false if it cannot apply.
+function applyTaskCorrection(task, edits, sentence) {
+  let title = task.title;
+  const prevWhen = task.fields.when;
+  let when = prevWhen;
+  const notes = [];
+  for (const e of edits) {
+    if (e.type === 'number') {
+      // Without "not N" the title must hold exactly one plain quantity ("12 sheets"); sizes like 200A,
+      // 12/2 or times like 3:30 are never guessed at.
+      const re = new RegExp(`(?<![\\w.:/])${e.old ? escapeRe(e.old) : '\\d+(?:\\.\\d+)?'}(?![\\w.:/])`, 'g');
+      const hits = title.match(re) || [];
+      if (hits.length !== 1) return false;
+      title = title.replace(re, e.value);
+    } else {
+      const was = e.old || (prevWhen && prevWhen.original);
+      if (was) title = title.replace(new RegExp(`\\b${escapeRe(was)}\\b`, 'i'), e.value);
+      when = e.detail.result;
+      notes.push(...e.detail.notes);
+    }
+  }
+  task.fields = { ...task.fields, replaced: { title: task.title, ...(prevWhen ? { when: prevWhen } : {}) }, correctionQuote: sentence };
+  if (when) task.fields.when = when;
+  task.title = title;
+  task.needsReview = unique([...task.needsReview.filter((r) => r !== 'check_date'), ...(when ? ['check_date'] : []), ...notes, 'corrected']);
+  return true;
 }
 
 function decision(s) {
@@ -438,6 +525,7 @@ const RULES = [
   (s, ctx) => request(s, ctx),
   (s, ctx) => statement(s, ctx),
   (s, ctx) => todo(s, ctx),
+  (s, ctx) => imperative(s, ctx),
   (s) => reference(s),
 ];
 
@@ -492,6 +580,13 @@ export function interpret(text, opts) {
   if (typeof text !== 'string' || text.trim() === '') return { proposals };
   let lastReminder = null;
   for (const sentence of splitSentences(text)) {
+    // A correction right after a task replaces that task's quantity or date in place: one proposal, the
+    // original sentence kept as sourceQuote, no live proposal left holding the old values.
+    const last = proposals.at(-1);
+    if (last && last.kind === 'task') {
+      const edits = taskCorrectionEdits(sentence, ctx);
+      if (edits && applyTaskCorrection(last, edits, sentence)) continue;
+    }
     if (lastReminder) {
       const corr = correctionOf(sentence, ctx, lastReminder);
       if (corr && corr.detail) {

@@ -152,7 +152,11 @@ export function buildToday(rows, opts) {
   }
   const items = [...itemsById.values()];
   const tasks = items.filter((t) => t.kind === 'task');
-  const openTasks = tasks.filter((t) => t.state === 'open');
+  // A deferred task (start_on after today) stays off Today and out of Next, unless its hard date is
+  // today or has passed: a deferral never hides a real deadline. It still counts as open.
+  const deferred = (t) => isDate(t.start_on) && t.start_on > todayOn && !(isDate(t.due_on) && t.due_on <= todayOn);
+  const allOpenTasks = tasks.filter((t) => t.state === 'open');
+  const openTasks = allOpenTasks.filter((t) => !deferred(t));
 
   const overdue = openTasks.filter((t) => isDate(t.due_on) && t.due_on < todayOn).sort(byKeys('due_on', 'created_at', 'id'));
   const dueToday = openTasks.filter((t) => t.due_on === todayOn).sort(byKeys('created_at', 'id'));
@@ -282,7 +286,7 @@ export function buildToday(rows, opts) {
     needsYou: { inboxCount },
     waiting,
     // Every open task, dated or not, picked or not, so Today can link to the full list.
-    tasks: { openCount: openTasks.length },
+    tasks: { openCount: allOpenTasks.length, deferredCount: allOpenTasks.length - openTasks.length },
     resume,
     returnView,
   };

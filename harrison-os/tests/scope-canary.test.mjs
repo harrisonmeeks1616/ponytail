@@ -64,6 +64,11 @@ async function seed(d, scope) {
   );
   await db.insertDelivery(d, { id: `del-${tag}-01`, reminderId: rem.reminder.id, scheduledFor: rem.reminder.next_fire_at, localLabel: 'label' }, T0);
   await db.recordDeliveryOutcome(d, `del-${tag}-01`, { state: 'sent', pushStatus: 201, attempts: 1, sentAt: T1 });
+  // Attachments on a capture and on the accepted task (names and bytes carry the canary), and a preference.
+  const bytes = new TextEncoder().encode(`${c} attachment bytes`);
+  await db.saveAttachment(d, { id: `att-${tag}-cap-01`, captureId: `cap-${tag}-proj-01`, name: `${c} photo.jpg`, mime: 'image/jpeg', bytes }, scope, T1);
+  await db.saveAttachment(d, { id: `att-${tag}-item-01`, itemId: `cap_cap-${tag}-proj-01_0`, name: `${c} note.txt`, mime: 'text/plain', bytes }, scope, T1);
+  await db.putPreference(d, 'site.arrival', { value: `${c} preference`, note: `${c} note` }, scope, T1);
   return ids;
 }
 
@@ -116,6 +121,15 @@ for (const scope of ['work', 'personal']) {
 
     assert.equal(text(await db.listProjects(d, scope)).includes(theirs), false, 'listProjects');
     assert.equal(text(await db.listReminders(d, scope)).includes(theirs), false, 'listReminders');
+    assert.equal(text(await db.listPreferences(d, scope)).includes(theirs), false, 'listPreferences');
+    const items = await db.listItems(d, scope);
+    assert.ok(items.some((i) => i.attachments.length === 2), 'the accepted task shows its own file and its capture photo');
+    assert.equal(text(items).includes(theirs), false, 'listItems with attachments');
+    const otherTag = scope === 'work' ? 'p' : 'w';
+    assert.equal(await db.getAttachment(d, `att-${otherTag}-cap-01`, scope), null, 'the other scope attachment is not found');
+    const mineAtt = await db.getAttachment(d, `att-${scope === 'work' ? 'w' : 'p'}-cap-01`, scope);
+    assert.ok(new TextDecoder().decode(mineAtt.data).includes(mine));
+    assert.equal(text((await db.search(d, 'photo', scope)).map((h) => h.attachments)).includes(theirs), false, 'search by file name');
 
     const exp = await db.exportData(d, scope);
     assert.ok(text(exp).includes(mine));

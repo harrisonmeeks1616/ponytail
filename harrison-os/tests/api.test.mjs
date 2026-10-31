@@ -407,7 +407,7 @@ test('an undated task is listed as open, counted on Today, and can be picked for
 
   const today = async () => (await call('GET', `/api/today?${q({ scope: 'all', tz: TZ })}`)).data;
   let t = await today();
-  assert.deepEqual(t.tasks, { openCount: 1 }, 'Today counts the undated task');
+  assert.deepEqual(t.tasks, { openCount: 1, deferredCount: 0 }, 'Today counts the undated task');
   assert.deepEqual(t.today, []);
   const open = await call('GET', `/api/items?${q({ scope: 'work', kind: 'task', state: 'open' })}`);
   assert.deepEqual(open.data.items.map((i) => i.id), [id], 'Open tasks lists it');
@@ -429,7 +429,7 @@ test('an undated task is listed as open, counted on Today, and can be picked for
   assert.equal(bad.status, 400);
 });
 
-test('a late outbox retry of a deleted capture is answered 200 and never stores the words again', async () => {
+test('a late outbox retry of a deleted capture is answered 410 capture_deleted and never stores the words again', async () => {
   const { call } = setup();
   // The phone's POST committed but its response was lost, so the outbox still holds the capture.
   await capture(call, { id: 'cap-ghost-0001', text: 'Call Zelda about the 4417 gate.', scope: 'work' });
@@ -437,11 +437,9 @@ test('a late outbox retry of a deleted capture is answered 200 and never stores 
   assert.equal(del.data.deleted.captures, 1);
 
   const retry = await capture(call, { id: 'cap-ghost-0001', text: 'Call Zelda about the 4417 gate.', scope: 'work' });
-  assert.equal(retry.status, 200, 'the outbox treats 200 as synced and stops retrying');
-  assert.equal(retry.data.deleted, true);
-  assert.equal(retry.data.duplicate, true);
-  assert.equal(retry.data.capture, null);
-  assert.deepEqual(retry.data.proposals, []);
+  assert.equal(retry.status, 410, 'terminal for the outbox: never resent');
+  assert.equal(retry.data.error.code, 'capture_deleted');
+  assert.ok(!retry.text.includes('Zelda'));
   assert.equal((await call('GET', `/api/inbox?${q({ scope: 'work' })}`)).data.captures.length, 0);
   assert.equal((await call('GET', `/api/search?${q({ q: 'Zelda', scope: 'work' })}`)).data.results.length, 0);
   const exp = await call('GET', `/api/export?${q({ scope: 'all' })}`);
@@ -453,8 +451,8 @@ test('a late outbox retry of a deleted capture is answered 200 and never stores 
   assert.equal(sc1.status, 201);
   await call('DELETE', `/api/captures/sc_ghost-ref-01?${q({ scope: 'work' })}`);
   const sc2 = await call('POST', '/api/shortcut/capture', { body: { text: 'Shortcut sample note', client_ref: 'ghost-ref-01', scope: 'work' } });
-  assert.equal(sc2.status, 200);
-  assert.equal(sc2.data.deleted, true);
+  assert.equal(sc2.status, 410);
+  assert.equal(sc2.data.error.code, 'capture_deleted');
   assert.equal((await call('GET', `/api/inbox?${q({ scope: 'work' })}`)).data.captures.length, 0);
 });
 

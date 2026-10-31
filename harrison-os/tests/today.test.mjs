@@ -81,7 +81,7 @@ test('empty rows give an empty Today', () => {
     today: [],
     needsYou: { inboxCount: 0 },
     waiting: { count: 0, dueCount: 0 },
-    tasks: { openCount: 0 },
+    tasks: { openCount: 0, deferredCount: 0 },
     resume: [],
     returnView: null,
   });
@@ -102,7 +102,7 @@ test('tasks.openCount counts every open task, undated and unpicked ones included
   const due = task({ due_on: TODAY, today_pick: 1 });
   const done = task({ state: 'done', today_pick: 1 });
   const out = build({ tasks: [undated, later, picked, due, done], waiting: [waitingItem({ follow_up_on: TODAY })] });
-  assert.deepEqual(out.tasks, { openCount: 4 });
+  assert.deepEqual(out.tasks, { openCount: 4, deferredCount: 0 });
   assert.deepEqual(out.today.map((t) => [t.ref, t.picked]), [
     [`item:${due.id}`, true],
     [`item:${picked.id}`, true],

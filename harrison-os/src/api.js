@@ -6,7 +6,7 @@
 // Rules (CONTRACT.md):
 // - src/db.js is the only module that touches the database. This file never builds SQL.
 // - A scope query or body field is required wherever db.js needs one. It is never defaulted to 'all';
-//   'all' is accepted only by today, inbox, the projects list and export.
+//   'all' is accepted only by today, inbox, the projects list, export, the preferences list and restore.
 // - Every request that changes something must carry X-Requested-With: XMLHttpRequest (CSRF), except the
 //   Shortcut's service identity, which only ever reaches POST /api/shortcut/capture.
 // - Logging: events and console output carry ids, states, timestamps, counts and status codes only.
@@ -23,7 +23,7 @@ import {
   HttpError, json, apiError, iso, clampInt, readJson, readJsonLenient, requireText, requireScope, queryScope, validTimeZone,
   MAX_TEXT, DATE_RE,
 } from './http.js';
-import { FEATURE_ROUTES } from './features.js';
+import { FEATURE_ROUTES, SCHEDULED } from './features.js';
 
 export { HttpError, json, apiError, requireScope };
 
@@ -136,6 +136,7 @@ function dbErrorResponse(err) {
   }
   if (err instanceof db.ConflictError) return apiError(409, err.reason || 'conflict', err.message);
   if (err instanceof db.NotFoundError) return apiError(404, 'not_found', err.message);
+  if (err instanceof db.GoneError) return apiError(410, 'gone', err.message);
   return null;
 }
 
@@ -455,22 +456,25 @@ async function postCapture(ctx) {
   const text = requireText(body.text);
   const scope = requireScope(body.scope);
   const clientCreatedAt = clientCreatedAtFrom(body.client_created_at);
+  // The app sends 'share' for words that arrived through the share sheet; everything else is 'app'.
+  const source = body.source === undefined || body.source === null ? 'app' : body.source;
+  if (source !== 'app' && source !== 'share') throw new HttpError(400, 'invalid_source', "source must be 'app' or 'share'");
   const deviceTz = validTimeZone(body.time_zone, ctx.nowMs);
   const timeZone = deviceTz || (await lastKnownTimeZone(ctx));
   const { capture, duplicate, deleted } = await db.saveCapture(
     ctx.env.DB,
-    { id: body.id, text, scope, source: 'app', clientCreatedAt, timeZone },
+    { id: body.id, text, scope, source, clientCreatedAt, timeZone },
     iso(ctx.nowMs),
   );
   await rememberTimeZone(ctx, deviceTz);
   if (deleted) {
-    // A late retry of a capture he deleted: answer 200 so the outbox marks it synced; nothing is stored.
-    await logEvent(ctx.env, ctx.nowMs, 'capture_received', body.id, { source: 'app', scope, duplicate: true, deleted: true, identity: ctx.identity.kind });
-    return json(200, { capture: null, duplicate: true, deleted: true, proposals: [] });
+    // A late retry of a capture he deleted: 410, terminal for the outbox (never resent); nothing is stored.
+    await logEvent(ctx.env, ctx.nowMs, 'capture_received', body.id, { source, scope, duplicate: true, deleted: true, identity: ctx.identity.kind });
+    return apiError(410, 'capture_deleted', 'This capture was deleted earlier. Nothing was saved.');
   }
   const proposals = await proposalsFor(ctx.env, ctx.nowMs, capture);
   await logEvent(ctx.env, ctx.nowMs, 'capture_received', capture.id, {
-    source: 'app',
+    source,
     scope,
     duplicate,
     proposals: proposals.length,
@@ -479,7 +483,8 @@ async function postCapture(ctx) {
   });
   const chaos = await maybeChaos(ctx, capture.id);
   if (chaos) return chaos;
-  return json(duplicate ? 200 : 201, { capture, duplicate, proposals });
+  const [withFiles] = await db.withCaptureAttachments(ctx.env.DB, [capture]);
+  return json(duplicate ? 200 : 201, { capture: withFiles, duplicate, proposals });
 }
 
 // Spike rules: service identity, scope defaults to personal, dedup by client_ref or by a minute bucket.
@@ -505,7 +510,7 @@ async function postShortcutCapture(ctx) {
   );
   if (deleted) {
     await logEvent(ctx.env, ctx.nowMs, 'capture_received', id, { source: 'shortcut', scope, duplicate: true, deleted: true, dedup, identity: ctx.identity.kind });
-    return json(200, { ok: true, id, duplicate: true, deleted: true, message: 'This capture was deleted earlier. Nothing was saved.', dedup, proposals: 0 });
+    return apiError(410, 'capture_deleted', 'This capture was deleted earlier. Nothing was saved.');
   }
   const proposals = await proposalsFor(ctx.env, ctx.nowMs, capture);
   await logEvent(ctx.env, ctx.nowMs, 'capture_received', id, {
@@ -616,6 +621,33 @@ async function getToday(ctx) {
 
 // ---------------------------------------------------------------- items
 
+// The user's local date for a completion: today_on from the device when it is within one day of the
+// server's UTC date, else the last known time zone's date, else the UTC date.
+async function localTodayOn(ctx, asked) {
+  const utc = iso(ctx.nowMs).slice(0, 10);
+  if (typeof asked === 'string' && DATE_RE.test(asked)) {
+    const diff = Math.abs(Date.parse(`${asked}T00:00:00Z`) - Date.parse(`${utc}T00:00:00Z`));
+    if (Number.isFinite(diff) && diff <= DAY_MS) return asked;
+  }
+  const tz = await lastKnownTimeZone(ctx);
+  return tz ? instantToZonedParts(ctx.nowMs, tz).date : utc;
+}
+
+async function getItemRoute(ctx, id) {
+  const scope = queryScope(ctx);
+  const item = await db.getItem(ctx.env.DB, id, scope);
+  if (!item) throw new HttpError(404, 'not_found', 'No such item');
+  const [out] = await db.withItemAttachments(ctx.env.DB, [item]);
+  return json(200, { item: out });
+}
+
+async function deleteItemRoute(ctx, id) {
+  const scope = queryScope(ctx);
+  const res = await db.deleteItem(ctx.env.DB, id, scope, iso(ctx.nowMs));
+  await logEvent(ctx.env, ctx.nowMs, 'item_deleted', id, { scope, ...res });
+  return json(200, res);
+}
+
 async function getItems(ctx) {
   const scope = queryScope(ctx);
   const q = ctx.url.searchParams;
@@ -647,7 +679,8 @@ async function patchItem(ctx, id) {
   const scope = requireScope(body.scope);
   const res = await db.updateItem(ctx.env.DB, id, body, scope, iso(ctx.nowMs));
   await logEvent(ctx.env, ctx.nowMs, 'item_updated', id, { scope, change: res.changeId, fields: Object.keys(body).filter((k) => k !== 'scope') });
-  return json(200, { item: res.item, changeId: res.changeId });
+  const [item] = await db.withItemAttachments(ctx.env.DB, [res.item]);
+  return json(200, { item, changeId: res.changeId });
 }
 
 async function itemAction(ctx, id, action) {
@@ -655,8 +688,14 @@ async function itemAction(ctx, id, action) {
   const scope = requireScope(body.scope);
   const nowIso = iso(ctx.nowMs);
   let res;
-  if (action === 'complete') res = await db.completeItem(ctx.env.DB, id, scope, nowIso);
-  else if (action === 'reopen') res = await db.reopenItem(ctx.env.DB, id, scope, nowIso);
+  if (action === 'complete') res = await db.completeItem(ctx.env.DB, id, scope, nowIso, { todayOn: await localTodayOn(ctx, body.today_on) });
+  else if (action === 'defer') {
+    const on = body.start_on !== undefined ? body.start_on : body.startOn;
+    if (on === undefined || (on !== null && (typeof on !== 'string' || !DATE_RE.test(on)))) {
+      throw new HttpError(400, 'invalid_start_on', 'start_on must be YYYY-MM-DD or null');
+    }
+    res = await db.deferItem(ctx.env.DB, id, on, scope, nowIso);
+  } else if (action === 'reopen') res = await db.reopenItem(ctx.env.DB, id, scope, nowIso);
   else if (action === 'archive') res = await db.archiveItem(ctx.env.DB, id, scope, nowIso);
   else if (action === 'reply') res = await db.recordReply(ctx.env.DB, id, scope, nowIso);
   else if (action === 'snooze') {
@@ -666,8 +705,10 @@ async function itemAction(ctx, id, action) {
   } else {
     throw new HttpError(404, 'not_found', 'Not found');
   }
-  await logEvent(ctx.env, ctx.nowMs, `item_${action}`, id, { scope, change: res.changeId });
-  return json(200, { item: res.item, changeId: res.changeId });
+  await logEvent(ctx.env, ctx.nowMs, `item_${action}`, id, { scope, change: res.changeId, ...(action === 'complete' ? { next: res.next ? res.next.id : null } : {}) });
+  const [item, next] = await db.withItemAttachments(ctx.env.DB, res.next ? [res.item, res.next] : [res.item]);
+  if (action === 'complete') return json(200, { item, next: next || null, changeId: res.changeId });
+  return json(200, { item, changeId: res.changeId });
 }
 
 async function postUndo(ctx, changeId) {
@@ -745,6 +786,94 @@ async function getExport(ctx) {
   await logEvent(ctx.env, ctx.nowMs, 'export', null, { scope, counts });
   const filename = `harrison-os-${scope}-${iso(ctx.nowMs).slice(0, 10)}.json`;
   return json(200, { ...data, exported_at: iso(ctx.nowMs) }, { 'Content-Disposition': `attachment; filename="${filename}"` });
+}
+
+// ---------------------------------------------------------------- attachments, preferences, restore
+
+const ATTACHMENT_BODY_MAX = 1_500_000;
+const RESTORE_BODY_MAX = 8_000_000;
+const PREF_KEY = '[a-z0-9_.-]{1,60}';
+
+function optParentId(value, field) {
+  if (value === undefined || value === null) return null;
+  if (typeof value !== 'string' || !new RegExp(`^${ID}$`).test(value)) throw new HttpError(400, `invalid_${field}`, `${field} is not a valid id`);
+  return value;
+}
+
+async function postAttachment(ctx) {
+  const body = await readJson(ctx.request, ATTACHMENT_BODY_MAX);
+  if (typeof body.id !== 'string' || !CAPTURE_ID_RE.test(body.id)) throw new HttpError(400, 'invalid_id', 'id must match ^[A-Za-z0-9_-]{8,80}$');
+  const scope = requireScope(body.scope);
+  const captureId = optParentId(body.capture_id, 'capture_id');
+  const itemId = optParentId(body.item_id, 'item_id');
+  if ((captureId === null) === (itemId === null)) throw new HttpError(400, 'invalid_parent', 'Give exactly one of capture_id or item_id');
+  if (typeof body.mime !== 'string' || !db.ATTACHMENT_MIMES.includes(body.mime)) {
+    throw new HttpError(415, 'unsupported_type', `mime must be one of ${db.ATTACHMENT_MIMES.join(', ')}`);
+  }
+  const bytes = db.b64decode(body.data_b64);
+  if (!bytes || bytes.length === 0) throw new HttpError(400, 'invalid_data', 'data_b64 must be non-empty base64');
+  if (bytes.length > db.MAX_ATTACHMENT_BYTES) throw new HttpError(413, 'too_large', `A file may be at most ${db.MAX_ATTACHMENT_BYTES} bytes`);
+  const res = await db.saveAttachment(
+    ctx.env.DB,
+    { id: body.id, captureId, itemId, name: body.name, mime: body.mime, bytes },
+    scope,
+    iso(ctx.nowMs),
+  );
+  await logEvent(ctx.env, ctx.nowMs, 'attachment_saved', body.id, {
+    scope, parent: captureId ? 'capture' : 'item', mime: body.mime, size: bytes.length, duplicate: res.duplicate,
+  });
+  return json(res.duplicate ? 200 : 201, res);
+}
+
+// The bytes come back sandboxed: their own CSP with sandbox, nosniff, never cached, and only images inline.
+async function getAttachmentRoute(ctx, id) {
+  const scope = queryScope(ctx);
+  const a = await db.getAttachment(ctx.env.DB, id, scope);
+  if (!a) throw new HttpError(404, 'not_found', 'No such attachment');
+  const ascii = a.name.replace(/[^\x20-\x7e]|["\\]/g, '_');
+  const disposition = a.mime.startsWith('image/') ? 'inline' : 'attachment';
+  return new Response(a.data, {
+    status: 200,
+    headers: {
+      'Content-Type': a.mime,
+      'Content-Security-Policy': "default-src 'none'; sandbox",
+      'X-Content-Type-Options': 'nosniff',
+      'Cache-Control': 'no-store',
+      'Referrer-Policy': 'no-referrer',
+      'Content-Disposition': `${disposition}; filename="${ascii}"; filename*=UTF-8''${encodeURIComponent(a.name)}`,
+    },
+  });
+}
+
+async function getPreferences(ctx) {
+  const scope = queryScope(ctx, { allowAll: true });
+  return json(200, { scope, preferences: await db.listPreferences(ctx.env.DB, scope) });
+}
+
+async function putPreferenceRoute(ctx, key) {
+  const body = await readJson(ctx.request);
+  const scope = requireScope(body.scope);
+  const value = requireText(body.value, 'value', 500);
+  if (body.note !== undefined && body.note !== null && typeof body.note !== 'string') throw new HttpError(400, 'invalid_note', 'note must be text');
+  const res = await db.putPreference(ctx.env.DB, key, { value, note: body.note ?? null }, scope, iso(ctx.nowMs));
+  await logEvent(ctx.env, ctx.nowMs, 'preference_saved', null, { scope, change: res.changeId });
+  return json(200, res);
+}
+
+async function deletePreferenceRoute(ctx, key) {
+  const scope = queryScope(ctx);
+  const res = await db.deletePreference(ctx.env.DB, key, scope, iso(ctx.nowMs));
+  await logEvent(ctx.env, ctx.nowMs, 'preference_deleted', null, { scope, ...res });
+  return json(200, res);
+}
+
+async function postRestore(ctx) {
+  const body = await readJson(ctx.request, RESTORE_BODY_MAX);
+  const scope = requireScope(body.scope, { allowAll: true });
+  if (!body.data || typeof body.data !== 'object' || Array.isArray(body.data)) throw new HttpError(400, 'invalid_data', 'data must be an export document');
+  const res = await db.restoreData(ctx.env.DB, body.data, scope, iso(ctx.nowMs));
+  await logEvent(ctx.env, ctx.nowMs, 'restore', null, { scope, ...res });
+  return json(200, res);
 }
 
 // ---------------------------------------------------------------- reminders
@@ -1010,8 +1139,10 @@ export const ROUTES = [
   ['GET', r('/api/today'), getToday],
   ['GET', r('/api/items'), getItems],
   ['POST', r('/api/items'), postItem],
+  ['GET', r(`/api/items/(${ID})`), getItemRoute],
   ['PATCH', r(`/api/items/(${ID})`), patchItem],
-  ['POST', r(`/api/items/(${ID})/(complete|reopen|archive|reply|snooze)`), itemAction],
+  ['DELETE', r(`/api/items/(${ID})`), deleteItemRoute],
+  ['POST', r(`/api/items/(${ID})/(complete|reopen|archive|reply|snooze|defer)`), itemAction],
   ['POST', r('/api/undo/([^/]{1,40})'), postUndo],
   ['GET', r('/api/projects'), getProjects],
   ['POST', r('/api/projects'), postProject],
@@ -1021,6 +1152,12 @@ export const ROUTES = [
   ['POST', r(`/api/projects/(${ID})/checkpoint`), postCheckpoint],
   ['GET', r('/api/search'), getSearch],
   ['GET', r('/api/export'), getExport],
+  ['POST', r('/api/restore'), postRestore],
+  ['POST', r('/api/attachments'), postAttachment],
+  ['GET', r(`/api/attachments/(${CAP})`), getAttachmentRoute],
+  ['GET', r('/api/preferences'), getPreferences],
+  ['PUT', r(`/api/preferences/(${PREF_KEY})`), putPreferenceRoute],
+  ['DELETE', r(`/api/preferences/(${PREF_KEY})`), deletePreferenceRoute],
   ['POST', r('/api/reminders'), postReminder],
   ['GET', r('/api/reminders'), getReminders],
   ['POST', r(`/api/reminders/(${ID})/cancel`), postCancelReminder],
@@ -1290,6 +1427,17 @@ export async function runScheduled(env, nowMs = Date.now()) {
       await db.pruneEvents(env.DB, EVENTS_KEEP);
     } catch (err) {
       console.error(JSON.stringify({ evt: 'events_prune_error', err: err && err.name }));
+    }
+  }
+
+  // Connector refreshes (calendar, PM): each does at most one bounded unit per run and is isolated, so a
+  // failing or slow connector never blocks reminders above or the other connector.
+  for (const job of SCHEDULED) {
+    try {
+      await job(env, nowMs);
+    } catch (err) {
+      stats.errors++;
+      console.error(JSON.stringify({ evt: 'cron_feature_error', err: err && err.name }));
     }
   }
 

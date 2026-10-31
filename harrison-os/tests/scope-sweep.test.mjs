@@ -71,7 +71,7 @@ const FIXTURES = {
     own: ['PATCH', `/api/items/${P.task}`, { scope: 'personal', body: `${CANARY} edited` }],
     reads: true,
   }),
-  'POST /api/items/([A-Za-z0-9_.:-]{1,120})/(complete|reopen|archive|reply|snooze)': (P) => ({
+  'POST /api/items/([A-Za-z0-9_.:-]{1,120})/(complete|reopen|archive|reply|snooze|defer)': (P) => ({
     cross: ['POST', `/api/items/${P.waiting}/reply`, { scope: 'work' }],
     own: ['POST', `/api/items/${P.waiting}/reply`, { scope: 'personal' }],
     reads: true,
@@ -200,7 +200,35 @@ const FIXTURES = {
     reads: true,
     crossOk: (r) => r.status === 200 && /"busy_only":\s*(true|1)/.test(r.text),
   }),
+  'GET /api/items/([A-Za-z0-9_.:-]{1,120})': (P) => ({ cross: ['GET', `/api/items/${P.task}?scope=work`], own: ['GET', `/api/items/${P.task}?scope=personal`], reads: true, crossOk: (r) => r.status === 404 }),
+  'POST /api/attachments': (P) => ({
+    cross: ['POST', '/api/attachments', { id: 'att-sweep-cross-01', scope: 'work', capture_id: P.capture, name: 'x.txt', mime: 'text/plain', data_b64: btoa('sweep') }],
+    own: ['POST', '/api/attachments', { id: 'att-sweep-own-001', scope: 'personal', capture_id: P.capture, name: `${CANARY}.txt`, mime: 'text/plain', data_b64: btoa(CANARY) }],
+    reads: true,
+    crossOk: (r) => r.status === 404,
+  }),
+  'GET /api/attachments/([A-Za-z0-9_-]{8,80})': (P) => ({ cross: ['GET', `/api/attachments/${P.attachment}?scope=work`], own: ['GET', `/api/attachments/${P.attachment}?scope=personal`], reads: true, crossOk: (r) => r.status === 404 }),
+  'GET /api/preferences': () => ({ cross: ['GET', '/api/preferences?scope=work'], own: ['GET', '/api/preferences?scope=personal'], reads: true }),
+  'PUT /api/preferences/([a-z0-9_.-]{1,60})': () => ({
+    cross: ['PUT', '/api/preferences/sweep.tone', { scope: 'work', value: 'plain' }],
+    own: ['PUT', '/api/preferences/sweep.tone', { scope: 'personal', value: `${CANARY} edited` }],
+    reads: true,
+  }),
+  // Restore of a personal export: into work every row is rejected; into personal every row already exists.
+  'POST /api/restore': async (P, call) => {
+    const data = JSON.parse((await call('GET', '/api/export?scope=personal')).text);
+    return {
+      cross: ['POST', '/api/restore', { scope: 'work', data }],
+      own: ['POST', '/api/restore', { scope: 'personal', data }],
+    };
+  },
   // Mutations that remove or rewrite the seed run last.
+  'DELETE /api/preferences/([a-z0-9_.-]{1,60})': () => ({ cross: ['DELETE', '/api/preferences/sweep.tone?scope=work'], own: ['DELETE', '/api/preferences/sweep.tone?scope=personal'] }),
+  'DELETE /api/items/([A-Za-z0-9_.:-]{1,120})': (P) => ({
+    cross: ['DELETE', `/api/items/${P.decision}?scope=work`],
+    own: ['DELETE', `/api/items/${P.decision}?scope=personal`],
+    ownOk: (r) => r.status === 200 && /"deleted":\s*1/.test(r.text),
+  }),
   'DELETE /api/calendar/connections/([A-Za-z0-9_-]{1,80})': (P) => ({
     cross: ['DELETE', `/api/calendar/connections/${P.calendar}?scope=work`],
     own: ['DELETE', `/api/calendar/connections/${P.calendar}?scope=personal`],
@@ -229,7 +257,7 @@ const FIXTURES = {
     own: ['DELETE', `/api/captures/${P.capture}?scope=personal`],
   }),
 };
-const LATE = new Set(['DELETE /api/calendar/connections/([A-Za-z0-9_-]{1,80})', 'DELETE /api/drafts/([A-Za-z0-9_-]{8,80})', 'DELETE /api/pm/sources/([A-Za-z0-9_-]{1,120})', 'POST /api/captures/([A-Za-z0-9_-]{8,80})/review', 'POST /api/undo/([^/]{1,40})', 'DELETE /api/captures/([A-Za-z0-9_-]{8,80})']);
+const LATE = new Set(['DELETE /api/preferences/([a-z0-9_.-]{1,60})', 'DELETE /api/items/([A-Za-z0-9_.:-]{1,120})', 'DELETE /api/calendar/connections/([A-Za-z0-9_-]{1,80})', 'DELETE /api/drafts/([A-Za-z0-9_-]{8,80})', 'DELETE /api/pm/sources/([A-Za-z0-9_-]{1,120})', 'POST /api/captures/([A-Za-z0-9_-]{8,80})/review', 'POST /api/undo/([^/]{1,40})', 'DELETE /api/captures/([A-Za-z0-9_-]{8,80})']);
 
 function routeKey(method, re) {
   return `${method} ${re.source.replace(/^\^/, '').replace(/\$$/, '').replace(/\\\//g, '/')}`;
@@ -268,6 +296,9 @@ async function seedPersonal(call) {
   P.pmSource = (await j(call('POST', '/api/pm/import', { scope: 'personal', label: `${CANARY} PM import`, format: 'json', content: PM_CONTENT }))).source.id;
   P.draft = (await j(call('POST', '/api/drafts', { scope: 'personal', kind: 'email', facts: `${CANARY} facts. We requested 2 lifts for Monday.`, source_refs: [`project:${P.project}`] }))).draft.id;
   P.calendar = (await j(call('POST', '/api/calendar/import', { scope: 'personal', label: `${CANARY} calendar`, ics_text: ICS }))).connection.id;
+  P.attachment = 'att-sweep-personal-01';
+  await j(call('POST', '/api/attachments', { id: P.attachment, scope: 'personal', capture_id: P.capture, name: 'note.txt', mime: 'text/plain', data_b64: btoa(`${CANARY} attachment bytes`) }));
+  await j(call('PUT', '/api/preferences/sweep.tone', { scope: 'personal', value: `${CANARY} tone` }));
   return P;
 }
 
@@ -305,7 +336,7 @@ test('routes: every fixture reaches its handler for its own scope and never show
   const ordered = [...keys.filter((k) => !LATE.has(k)), ...keys.filter((k) => LATE.has(k))];
   const problems = [];
   for (const key of ordered) {
-    const fx = FIXTURES[key](P);
+    const fx = await FIXTURES[key](P, call);
     const cross = await call(...fx.cross);
     if (cross.text.includes(CANARY)) problems.push(`LEAK ${key}: work request returned personal content (${cross.status})`);
     if (fx.crossOk && !fx.crossOk(cross)) problems.push(`CROSS ${key}: work request on personal record got ${cross.status}`);
@@ -316,4 +347,22 @@ test('routes: every fixture reaches its handler for its own scope and never show
     else if (fx.reads && !own.text.includes(CANARY)) problems.push(`EMPTY ${key}: own-scope response lacks the seeded canary, so the cross check proves nothing`);
   }
   assert.deepEqual(problems, [], problems.join('\n'));
+});
+
+test('wiring: feature purgers and scheduled jobs are registered with the core', async () => {
+  const db = await import('../src/db.js');
+  const features = await import('../src/features.js');
+  assert.ok(features.PURGERS.length >= 2 && features.PURGERS.every((p) => db.DERIVED_PURGERS.includes(p)), 'purgers wired into db.DERIVED_PURGERS');
+  assert.ok(features.SCHEDULED.length >= 2, 'calendar and PM refresh jobs registered');
+});
+
+test('derived deletion: deleting a personal item removes the draft built from it', async () => {
+  const { call, DB } = setup();
+  const P = await seedPersonal(call);
+  const d = JSON.parse((await call('POST', '/api/drafts', { scope: 'personal', kind: 'update', facts: 'x', source_refs: [`item:${P.task}`] })).text).draft.id;
+  assert.equal((await call('GET', `/api/drafts/${d}?scope=personal`)).status, 200);
+  assert.equal((await call('DELETE', `/api/items/${P.task}?scope=personal`)).status, 200);
+  assert.equal((await call('GET', `/api/drafts/${d}?scope=personal`)).status, 404, 'draft citing the deleted item is gone');
+  const left = await DB.prepare('SELECT COUNT(*) AS n FROM drafts WHERE source_refs LIKE ?').bind(`%${P.task}%`).first('n');
+  assert.equal(left, 0);
 });
