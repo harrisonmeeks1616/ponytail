@@ -558,7 +558,7 @@
   "steps": [
    "BLOCK 1 (2 h)",
    "0:00-0:05 (5 min) Launch/recall: open due retests in the Error Log; recall one fact from the last session without looking.",
-   "0:05-0:30 (25 min) Main learning: continuous lighting at 125% where the governing rule applies; receptacle outlets per the applicable 2020 220.14(I) treatment, which is per single or multiple receptacle on one yoke, with its conditions/exceptions (do not count each duplex outlet as another 180 VA), then 220.44 demand only where allowed; motors via 430.24 (book route; confirm final text).",
+   "0:05-0:30 (25 min) Main learning: continuous lighting at 125% where the governing rule applies; receptacle outlets per the applicable 2020 220.14(I) treatment, which is per single or multiple receptacle on one yoke, with its conditions/exceptions. The two receptacles on one duplex yoke do not create two separate 180 VA allowances; additional yokes still count under the applicable rule. Then 220.44 demand only where allowed; motors via 430.24 (book route; confirm final text).",
    "0:30-0:35 (5 min) Break.",
    "0:35-1:00 (25 min) Practice: L02, L03, L06, L09, L10.",
    "1:00-1:05 (5 min) Break.",
@@ -1163,7 +1163,6 @@
   "checks": [
    "Four items done or pending",
    "Occupancy map (511/513/514/515/516) written",
-   "All Book lookup required in 2020",
    "Record table filled; real misses logged in the Error Log",
    "Status checked in this row only after the work is actually done"
   ],
@@ -1206,7 +1205,6 @@
   "checks": [
    "Three items + coach question done",
    "700/701/702 table written",
-   "All Book lookup required in 2020",
    "Record table filled; real misses logged in the Error Log",
    "Status checked in this row only after the work is actually done"
   ],
@@ -1254,7 +1252,6 @@
   "checks": [
    "Five items done or pending",
    "Mock B materials laid out",
-   "All Book lookup required in 2020",
    "Record table filled; real misses logged in the Error Log",
    "Status checked in this row only after the work is actually done"
   ],
@@ -1317,18 +1314,17 @@
    },
    {
     "q": "Write five plan questions from the official drawings (count, circuit, panel, note), answer them, then check against the drawing.",
-    "a": "Self-generated from the official Lighting & Power plans (handbook p.70, https://www.ncbeec.org/psi-exam-book-2026-002-2/#page=70); check against the drawing. No key supplied.",
-    "src": "Official Lighting & Power plans, handbook p.70"
+    "a": "Self-generated from the official Lighting & Power plans (handbook printed pp. 69-70 / PDF pp. 70-71, https://www.ncbeec.org/psi-exam-book-2026-002-2/#page=70); check against the drawing. No key supplied.",
+    "src": "Official Lighting & Power plans, handbook printed pp. 69-70 / PDF pp. 70-71"
    }
   ],
   "checks": [
    "Every Mock B miss logged",
    "P09/P10 graded; five plan questions done",
-   "P09 and P10 keyed arithmetic for original mini-cases",
    "Record table filled; real misses logged in the Error Log",
    "Status checked in this row only after the work is actually done"
   ],
-  "notes": "References: official Lighting & Power plans (handbook p.70, https://www.ncbeec.org/psi-exam-book-2026-002-2/#page=70); Fire Alarms & Plan Reading page (plans chapters). Study notes and practice keys are linked Notion pages. P09, P10 keyed arithmetic. Book lookup required = grade only after reading the exact 2020 NEC / 2013 NFPA 72 / NASCLA text. Article maps are navigation starting points. Answer every question before opening the key; write answer, exact source (edition, section/page), condition/exception, elapsed time. Choices may be shuffled; track the answer, not the letter. Difficult day (20 min): recall one due item (5 min), solve one question from today's list (10 min), record actual 20 min (5 min). Carry unfinished items into the next two rows' correction slots (at most two per day). Never double tomorrow; never drop a domain. Pre-Oct 31 version (old plan: P14 smoke detector door-release, P11 2013 NFPA 72 definitions; both Book lookup/Pending verification) omitted."
+  "notes": "References: official Lighting & Power plans (handbook printed pp. 69-70 / PDF pp. 70-71, https://www.ncbeec.org/psi-exam-book-2026-002-2/#page=70); Fire Alarms & Plan Reading page (plans chapters). Study notes and practice keys are linked Notion pages. P09, P10 keyed arithmetic. Book lookup required = grade only after reading the exact 2020 NEC / 2013 NFPA 72 / NASCLA text. Article maps are navigation starting points. Answer every question before opening the key; write answer, exact source (edition, section/page), condition/exception, elapsed time. Choices may be shuffled; track the answer, not the letter. Difficult day (20 min): recall one due item (5 min), solve one question from today's list (10 min), record actual 20 min (5 min). Carry unfinished items into the next two rows' correction slots (at most two per day). Never double tomorrow; never drop a domain. Pre-Oct 31 version (old plan: P14 smoke detector door-release, P11 2013 NFPA 72 definitions; both Book lookup/Pending verification) omitted."
  },
  "24": {
   "objective": "Make the 14-day readiness call from actual evidence, then lock in NC licensing law. (2 h, suggested 7:00-9:00 PM)",
@@ -1386,7 +1382,7 @@
    "0:35-1:00 (25 min) Practice: P06, P07, P08, P15.",
    "1:00-1:05 (5 min) Break.",
    "1:05-1:25 (20 min) Rotating law/NFPA/plans: Plans, 20 min: one panel schedule load total from the official drawings.",
-   "1:25-1:55 (30 min) Correct and re-solve: Re-solve P06 with $12,400 and 25%.",
+   "1:25-1:55 (30 min) Correct and re-solve: Solve variant P06-v1 below.",
    "1:55-2:00 (5 min) Record: fill the record table below; log real misses."
   ],
   "questions": [
@@ -1409,6 +1405,11 @@
     "q": "P15 (Law, business, and practical applications, Book lookup required): An owner asks for additional work before a change price is agreed. In NASCLA 14th, locate contract-change documentation and notice topics, then write the facts/authorization/cost/schedule records needed for this case.",
     "a": "Book lookup required. Verify exact section/page, conditions, exception in the named edition before scoring. Starting route: NASCLA NC Electrical 14th, contract/project-management topics. Record page; no page is invented. Identify actual contract authority, notice and documentation; a verbal request does not settle every entitlement question. Pending verification: record a readable designated-book citation before scoring; suggested route is not a verified exact section.",
     "src": "NASCLA North Carolina Electrical, 14th edition (https://store.nascla.org/products/north-carolina-electrical); page confirmation required"
+   },
+   {
+    "q": "P06-v1 (Changed-number variant of P06; a new problem, grade only against its recomputed key, never the original bank letter or value; no time or no coach: re-solve the original IDs and label them repeat): Defined total cost basis $12,400. Compare a 25% markup price with a 25% margin price, rounded to cents.",
+    "a": "Markup $15,500.00; margin $16,533.33. 12,400 x 1.25 = 15,500.00; 12,400 / 0.75 = 16,533.33. Markup uses cost; margin uses selling price. Arithmetic model only; no code-compliance conclusion.",
+    "src": "Original arithmetic under the stated assumptions; no NEC/NFPA compliance conclusion."
    }
   ],
   "checks": [
@@ -1723,23 +1724,22 @@
   "steps": [
    "0:00-1:15 (75 min) Timed targeted checkpoint: 20 items on the weakest 2 domains, not previously seen. Commit all answers first; blanks count 0.",
    "1:15-1:50 (35 min) Grading and priority repairs: grade; only items with verified keys are scorable. Unverified fresh AI items stay LEARNING. If no qualifying fresh source was available, label the whole set LEARNING. Repair the highest-weight misses; log them.",
-   "1:50-2:00 (10 min) Final readiness decision and record: list Mock A/B/C results (with labels), checkpoint scores, weakest domains, pending items; write the final readiness decision on Exam Plan & Readiness. The personal scheduling decision deadline is Fri Dec 4."
+   "1:50-2:00 (10 min) Final readiness decision and record: list Mock A/B/C results (with labels), checkpoint results with their mode labels (raw vs VERIFIED PRACTICE + pending), weakest domains, pending items; write the final readiness decision on Exam Plan & Readiness. The personal scheduling decision deadline is Fri Dec 4."
   ],
   "questions": [
    {
     "q": "Fresh 20-item targeted checkpoint on the weakest 2 domains, not previously seen, timed 75 min; commit all answers first; blanks count 0.",
-    "a": "No items or keys on this page; items come from a fresh qualifying source. Only items with verified keys are scorable; unverified fresh AI items remain LEARNING; if no qualifying fresh source was available, label the whole set LEARNING. Raw score = correct / 20 (blanks 0); pending items listed separately.",
+    "a": "No items or keys on this page; items come from a fresh qualifying source. Only items with verified keys are scorable; unverified fresh AI items remain LEARNING; if no qualifying fresh source was available, label the whole set LEARNING. Only if all 20 keys are source-verified is it raw correct / 20 (blanks 0). Otherwise it is LEARNING: record A = 20 / T / S / C / P and report VERIFIED PRACTICE C / S + P pending (not a readiness score; unresolved keys never counted wrong).",
     "src": "Fresh source (coach or provider); Exam Plan & Readiness"
    }
   ],
   "checks": [
    "20-item checkpoint graded",
    "Final readiness decision written",
-   "Scorable only with verified keys. Unverified fresh AI items remain learning. No qualifying fresh source = label the set LEARNING. Raw score = correct / 20 (blanks 0); pending items listed separately",
    "Record table filled; real misses logged in the Error Log",
    "Status checked in this row only after the work is actually done"
   ],
-  "notes": "FINAL READINESS DECISION: made from actual evidence (Mock A/B/C results with labels, checkpoint scores, weakest domains, pending items) and written on Exam Plan & Readiness (final gate); personal scheduling decision deadline is Fri Dec 4. The page states no numeric pass thresholds. References: Exam Plan & Readiness (final gate); all mock and checkpoint records. Book lookup required = grade only after reading the exact 2020 NEC / 2013 NFPA 72 / NASCLA text. Article maps are navigation starting points. Answer every question before opening the key; write answer, exact source (edition, section/page), condition/exception, elapsed time. Choices may be shuffled; track the answer, not the letter. Difficult day (20 min): recall one due item (5 min), solve one question from today's list (10 min), record actual 20 min (5 min). Carry unfinished items into the next two rows' correction slots (at most two per day). Never double tomorrow; never drop a domain. Pre-Oct 31 version of this row (old plan; its starters P04, G02, M01 and its 82%/70% coaching gate) is reference only and omitted."
+  "notes": "Verify before scoring: Scorable only with verified keys. Unverified fresh AI items remain learning. No qualifying fresh source = label the set LEARNING. Only if all 20 keys are source-verified is it raw correct / 20 (blanks 0). Otherwise it is LEARNING: record A = 20 / T / S / C / P and report VERIFIED PRACTICE C / S + P pending (not a readiness score; unresolved keys never counted wrong). FINAL READINESS DECISION: made from actual evidence (Mock A/B/C results with labels, checkpoint scores, weakest domains, pending items) and written on Exam Plan & Readiness (final gate); personal scheduling decision deadline is Fri Dec 4. The page states no numeric pass thresholds. References: Exam Plan & Readiness (final gate); all mock and checkpoint records. Book lookup required = grade only after reading the exact 2020 NEC / 2013 NFPA 72 / NASCLA text. Article maps are navigation starting points. Answer every question before opening the key; write answer, exact source (edition, section/page), condition/exception, elapsed time. Choices may be shuffled; track the answer, not the letter. Difficult day (20 min): recall one due item (5 min), solve one question from today's list (10 min), record actual 20 min (5 min). Carry unfinished items into the next two rows' correction slots (at most two per day). Never double tomorrow; never drop a domain. Pre-Oct 31 version of this row (old plan; its starters P04, G02, M01 and its 82%/70% coaching gate) is reference only and omitted."
  },
  "34": {
   "objective": "Close the last precision gaps in category 11 (law, business, plans, fire alarm). (2 h, suggested 7:00-9:00 PM)",
