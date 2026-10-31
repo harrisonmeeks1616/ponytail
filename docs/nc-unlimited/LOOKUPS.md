@@ -40,7 +40,7 @@ Questions: G05, G03, G06, G07, G10, G11
 Questions: W05, W10
 - Table 310.4 and 310.10 wet-location markings (THHN vs THWN-2)
 - 110.14(D) torque and aluminum termination marking
-- App reference rows only (no question blocked): Table 310.16 copper 600 to 2000 kcmil; 110.14(C)(1) 60 vs 75 C detail; 310.15(B)(1) rows at or below 30 C and above 60 C; 310.15(C)(1) 24 in condition and mixed-system sentence
+- App reference rows only (no question blocked): 110.14(C)(1) 60 vs 75 C detail; 310.15(C)(1) 24 in condition and mixed-system sentence
 
 ### 314.16(B) remainder, 314.28, 314.16(C), 300.14
 Questions: B05, B06, B07

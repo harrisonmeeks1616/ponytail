@@ -38,7 +38,7 @@ Progress is saved in this browser (`localStorage`). **Progress, Backup** exports
 
 ## Check
 
-`node --test tests/nc-unlimited.test.js` runs 42 checks: the data counts (100 bank items, 37 sprint days, 37 packets, 60 cards, 15 scenarios), the 11-category blueprint, the sprint calendar (one session per day, Oct 31 to Dec 6; mocks on Nov 14, 21 and 28 only), the Eastern-time countdown, every worked example from the Notion guide, the business scenarios, the NEC table structure and lookups (anchored to your Notion worked examples), the error-log mastery rule, the Leitner boxes and the readiness gates.
+`node --test tests/nc-unlimited.test.js` runs 43 checks: the data counts (100 bank items, 37 sprint days, 37 packets, 60 cards, 15 scenarios), the 11-category blueprint, the sprint calendar (one session per day, Oct 31 to Dec 6; mocks on Nov 14, 21 and 28 only), the Eastern-time countdown, every worked example from the Notion guide, the business scenarios, the NEC table structure and lookups (anchored to your Notion worked examples), the error-log mastery rule, the Leitner boxes and the readiness gates.
 
 ## Known open items
 
@@ -46,6 +46,6 @@ Progress is saved in this browser (`localStorage`). **Progress, Backup** exports
 - Which physical NASCLA edition you own is unconfirmed (the publisher's page lists the 14th).
 - Limited license voltage cap (law card 2, disputed and never scored): Harrison's rule is 600 V, only Unlimited above it. The Board licensing webpage still says 600 V (historical). Reported by Harrison/Codex: S.L. 2024-49 section 3.2(a) replaced 600 with 1,000 V and section 3.2(b) took effect Jan 1, 2025; G.S. 87-43.3(a)(2) gives Intermediate a project value limit and no voltage cap; the July 2026 handbook p26 says 1,000 V. "Only Unlimited is past 600 V" is therefore not verified current law. Study, Unlimited and high voltage lays this out.
 - Book lookups: 6 of 68 are resolved from NFPA LiNK readings relayed by Harrison/Codex (B02, D03, G02, O04, W01, W04), 6 more are partly resolved (G04, G05, G08, L08, L09, O07), and the rest are open. See `LOOKUPS.md`. Lookup items are never scored.
-- Verified tables (relayed, read in NFPA LiNK): all of Table 250.66 (copper and aluminum ungrounded rows, both GEC columns), 250.122, Table 310.16 aluminum and copper-clad aluminum 12 AWG to 2000 kcmil and copper 14 to 500 kcmil, 310.15(B)(1) and (C)(1), 314.16(B), 430.52, 220.42, 240.6(A). Not verified: 310.16 copper 600 to 2000 kcmil, 250.102(C) bonding jumpers, Chapter 9, 220.12 and the other groups in `LOOKUPS.md`.
+- Verified tables (relayed, read in NFPA LiNK): all of Table 250.66 (copper and aluminum ungrounded rows, both GEC columns), 250.122, every cell of Table 310.16 (copper 14 AWG to 2000 kcmil, aluminum and copper-clad aluminum 12 AWG to 2000 kcmil), all 16 bands of Table 310.15(B)(1), Table 310.15(C)(1), 314.16(B), 430.52, 220.42, 240.6(A). Not verified: 250.102(C) bonding jumpers, Chapter 9, 220.12 and the other groups in `LOOKUPS.md`.
 - NFPA 72 (2013) and the NASCLA guide content have not been checked against the books.
 - The author's own network could not reach ncbeec.org or any code-text site. Board facts come from Notion and the July 2026 handbook as read by Harrison/Codex.

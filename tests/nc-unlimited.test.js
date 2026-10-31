@@ -491,3 +491,17 @@ test('Limited voltage cap card is disputed, shown but never scored, and the evid
   for (const need of [/600 V/, /1,000 V/, /2024-49/, /87-43\.3\(a\)\(2\)/, /Intermediate/, /not verified law/i, /handbook p26/]) assert.match(c2, need);
   assert.equal(NC.cards.length, 60);
 });
+
+test('Table 310.15(B)(1) full ambient table read in NFPA LiNK matches, with boundaries and n/a cells', () => {
+  const rows = [[10, 1.29, 1.20, 1.15], [15, 1.22, 1.15, 1.12], [20, 1.15, 1.11, 1.08], [25, 1.08, 1.05, 1.04], [30, 1, 1, 1], [35, .91, .94, .96], [40, .82, .88, .91], [45, .71, .82, .87], [50, .58, .75, .82], [55, .41, .67, .76], [60, null, .58, .71], [65, null, .47, .65], [70, null, .33, .58], [75, null, null, .50], [80, null, null, .41], [85, null, null, .29]];
+  assert.deepEqual(NC.nec.ambient, rows);
+  // every band: lowest and highest whole degree land in that band
+  rows.forEach((r, i) => { const hi = r[0], lo = i === 0 ? -20 : rows[i - 1][0] + 1; for (const tc of [lo, hi]) [60, 75, 90].forEach((c, k) => assert.equal(N.ambientFactor(tc, c), r[k + 1], tc + 'C col ' + c)); });
+  // the old first-band bug: 10 C must not get the 21-25 C factor
+  assert.equal(N.ambientFactor(10, 90), 1.15); assert.equal(N.ambientFactor(15, 75), 1.15); assert.equal(N.ambientFactor(20, 60), 1.15); assert.equal(N.ambientFactor(25, 90), 1.04);
+  assert.equal(N.ambientFactor(26, 90), 1); assert.equal(N.ambientFactor(30, 60), 1); assert.equal(N.ambientFactor(65, 60), null); assert.equal(N.ambientFactor(70, 75), .33); assert.equal(N.ambientFactor(71, 75), null); assert.equal(N.ambientFactor(85, 90), .29); assert.equal(N.ambientFactor(86, 90), null);
+  // copper 600 to 2000 kcmil cells read in NFPA LiNK
+  const cu = '600:350/420/475;700:385/460/520;750:400/475/535;800:410/490/555;900:435/520/585;1000:455/545/615;1250:495/590/665;1500:525/625/705;1750:545/650/735;2000:555/665/750'.split(';');
+  for (const x of cu) { const [sz, v] = x.split(':'); assert.deepEqual(NC.nec.t31016.cu[sz], v.split('/').map(Number), 'Cu ' + sz); }
+  assert.equal(Object.keys(NC.nec.t31016.cu).length, 28);
+});
