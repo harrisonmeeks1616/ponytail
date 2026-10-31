@@ -278,3 +278,9 @@ test('behind-schedule and date arithmetic around the sprint edges', () => {
   assert.equal(L.nyDate(new Date('2026-12-07T04:59:00Z')), '2026-12-06'); // just before midnight EST
   assert.equal(L.nyDate(new Date('2026-12-07T05:00:00Z')), '2026-12-07');
 });
+
+test('topic packets carry the days that use them and every id exists', () => {
+  assert.equal(NC.weeklyPackets.length, 8);
+  for (const [, , ids, days] of NC.weeklyPackets) { assert.match(days, /^Days? \d/); assert.equal(ids.length, 10); }
+  assert.ok(NC.exam.links.every((l) => !/north-carolina-electrical-14th-edition/.test(l[1])), 'the old NASCLA URL returns 404');
+});

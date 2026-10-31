@@ -175,7 +175,7 @@
       const acc = s.tried ? pct(s.right, s.tried) : null;
       return `<div class="catbar"><div><div class="row between"><span>${id}. ${t(name)}</span><span class="xs dim">${s.keyed} keyed &middot; ${s.lookupDone}/${s.lookup} lookups verified</span></div>${bar(acc == null ? 0 : acc)}</div><b class="mono" style="text-align:right">${acc == null ? "n/a" : acc + "%"}</b></div>`;
     }).join("");
-    const wk = NC.weeklyPackets.map(([n, name]) => `<button class="btn sm" data-act="startWeek" data-n="${n}">Wk ${n}: ${t(name)}</button>`).join(" ");
+    const wk = NC.weeklyPackets.map(([n, name, , days]) => `<button class="btn sm" data-act="startWeek" data-n="${n}" title="${esc(days)}">Packet ${n}: ${t(name)}</button>`).join(" ");
     return sect("Practice", "100-item learning bank, weekly sets, article navigation drills.") + `
     <div class="notice sm">Honest labels: 32 items are keyed arithmetic or current-law drills and are scored. The other 68 are <b>Book lookup required</b>: you answer from the designated book, record the citation, and mark yourself. Nothing here counts as a fresh mock, because you have seen the answers and AI-written keys are not independently validated.</div>
     <div class="grid g2" style="margin-top:14px">
@@ -185,7 +185,7 @@
         <div><label class="f">Questions</label><input type="number" id="pCount" min="1" max="100" value="${pcfg.count}"></div>
         <div><label class="f">Order</label><select id="pOrder"><option value="shuffle">Shuffled</option><option value="bank" ${pcfg.order === "bank" ? "selected" : ""}>Bank order</option></select></div></div>
         <button class="btn pri" data-act="startSet">Start set</button>
-        <hr><h4>Weekly 10-question learning sets</h4><div class="row">${wk}</div>
+        <hr><h4>Topic packets (ten questions each; use by topic, not calendar week)</h4><p class="xs dim">${NC.weeklyPackets.map((w) => "Packet " + w[0] + " = " + w[3]).join(" &middot; ")}. Reuse is delayed retrieval, not fresh mock evidence.</p><div class="row">${wk}</div>
         <div class="row"><button class="btn sm" data-act="startMisses">Retry my misses</button><button class="btn sm" data-act="navDrill">Article navigation drill</button></div></div>
       <div class="card"><h3>By domain</h3><p class="xs dim">Bar = keyed accuracy so far. Domain 11 mixes law, plans and NFPA 72.</p>${doms}</div>
     </div>`;
@@ -488,7 +488,7 @@
       let ids = bank.filter((b) => (!pcfg.domain || b.d === pcfg.domain) && (pcfg.kind === "all" || (pcfg.kind === "lookup") === !!b.lookup)).map((b) => b.id);
       if (pcfg.order === "shuffle") ids = shuffle(ids); startQueue(ids.slice(0, pcfg.count), "Custom set");
     },
-    startWeek: (el) => { const w = NC.weeklyPackets.find((x) => x[0] === +el.dataset.n); startQueue(w[2].slice(), "Week " + w[0] + ": " + w[1]); },
+    startWeek: (el) => { const w = NC.weeklyPackets.find((x) => x[0] === +el.dataset.n); startQueue(w[2].slice(), "Packet " + w[0] + ": " + w[1]); },
     startMisses: () => { const ids = bank.filter((b) => S.attempts[b.id] && !S.attempts[b.id].ok).map((b) => b.id); if (view !== "practice") { view = "practice"; } startQueue(ids, "Retry misses"); },
     drillDomain: (el) => { pcfg.domain = +el.dataset.d; go("practice"); },
     navDrill: () => { view = "practice"; P = { nav: { q: shuffle(NC.nav.map((_, i) => i)).slice(0, 15), i: 0, show: false, res: [], times: [], t0: Date.now() }, queue: [0], i: 0, label: "nav" }; render(); },

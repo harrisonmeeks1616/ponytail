@@ -2,7 +2,7 @@
 (function (g) {
   g.NC = g.NC || {};
 
-  g.NC.meta = { syncedAt: "2026-10-31T18:42:00Z", note: "Plan content mirrors the Harrison OS Notion pages, which were still being rewritten on Oct 31. If a date or number looks wrong, Notion wins: tell me and I will re-sync." };
+  g.NC.meta = { syncedAt: "2026-10-31T18:43:00Z", note: "Plan content mirrors the Harrison OS Notion pages, which were still being rewritten on Oct 31. If a date or number looks wrong, Notion wins: tell me and I will re-sync." };
 
   g.NC.exam = {
     startISO: "2026-12-07T15:00:00Z", // Mon Dec 7 2026 10:00 AM EST (UTC-5)
@@ -37,7 +37,7 @@
       ["Board rules, 21 NCAC 18B", "https://www.ncbeec.org/title-21-ncac-18b/"],
       ["G.S. Chapter 87", "https://www.ncleg.gov/EnactedLegislation/Statutes/HTML/ByChapter/Chapter_87.html"],
       ["PSI NCBEEC portal", "https://test-takers.psiexams.com/ncbeec"],
-      ["NASCLA NC Electrical 14th notice", "https://store.nascla.org/products/north-carolina-electrical-14th-edition"],
+      ["NASCLA NC Electrical (publisher page; the old -14th-edition URL returns 404)", "https://store.nascla.org/products/north-carolina-electrical"],
       ["NFPA free access: NEC 2020", "https://link.nfpa.org/free-access/publications/70/2020"],
       ["NFPA free access: NFPA 72 (2013)", "https://link.nfpa.org/free-access/publications/72/2013"]
     ]

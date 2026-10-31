@@ -192,13 +192,13 @@
   g.NC.starterExit = ["All 30 baseline answers completed, scored, labeled for prior exposure.", "Every miss tagged by category and error type.", "First 15 law cards at least 12/15 on the first scored recall pass.", "NFPA 72 and Article 250 median lookup times recorded; routine goal below 90 seconds.", "Load and motor problems each re-solved cleanly from blank paper.", "Category 7 targeted set at least 70%, every miss corrected.", "One next priority chosen from measured weakness."];
 
   g.NC.weeklyPackets = [
-    [1, "Navigation, circuits and fill", ["D01", "D02", "W01", "W02", "W03", "B01", "B03", "S01", "O03", "P09"]],
-    [2, "NC law, business, alarms and plans", ["P01", "P02", "P03", "P04", "P05", "P06", "P07", "P08", "P11", "P15"]],
-    [3, "Grounding and bonding", ["G01", "G02", "G03", "G04", "G05", "G06", "G07", "G08", "G10", "G11"]],
-    [4, "Loads and transformers", ["L01", "L02", "L03", "L04", "L05", "L06", "L07", "L08", "E01", "E02"]],
-    [5, "Motors, voltage drop and equipment", ["M01", "M02", "M03", "M04", "M05", "M06", "M07", "M08", "E03", "W09"]],
-    [6, "Higher voltage and special occupancies", ["W08", "O08", "H01", "H02", "H03", "H04", "H05", "H06", "H08", "H09"]],
-    [7, "NFPA 72, plans and timed calculations", ["P11", "P12", "P13", "P14", "P09", "P10", "L02", "E01", "M07", "B04"]],
-    [8, "Precision, law refresh and delayed retrieval", ["P02", "P04", "P06", "G02", "W01", "O04", "M01", "L10", "E04", "H09"]]
+    [1, "Navigation, circuits and fill", ["D01", "D02", "W01", "W02", "W03", "B01", "B03", "S01", "O03", "P09"], "Days 02-07"],
+    [2, "NC law, business, alarms and plans", ["P01", "P02", "P03", "P04", "P05", "P06", "P07", "P08", "P11", "P15"], "Days 24-25, 31"],
+    [3, "Grounding and bonding", ["G01", "G02", "G03", "G04", "G05", "G06", "G07", "G08", "G10", "G11"], "Days 02, 12-13, 17"],
+    [4, "Loads and transformers", ["L01", "L02", "L03", "L04", "L05", "L06", "L07", "L08", "E01", "E02"], "Days 08-09, 12"],
+    [5, "Motors, voltage drop and equipment", ["M01", "M02", "M03", "M04", "M05", "M06", "M07", "M08", "E03", "W09"], "Days 10-11, 13, 21"],
+    [6, "Higher voltage and special occupancies", ["W08", "O08", "H01", "H02", "H03", "H04", "H05", "H06", "H08", "H09"], "Days 17-20"],
+    [7, "NFPA 72, plans and timed calculations", ["P11", "P12", "P13", "P14", "P09", "P10", "L02", "E01", "M07", "B04"], "Days 16, 23, 26, 28, 32"],
+    [8, "Precision, law refresh and delayed retrieval", ["P02", "P04", "P06", "G02", "W01", "O04", "M01", "L10", "E04", "H09"], "Days 33-36"]
   ];
 })(typeof window !== "undefined" ? window : globalThis);
