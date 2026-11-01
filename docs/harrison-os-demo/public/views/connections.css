@@ -28,3 +28,58 @@
   margin: 0 0 0.5rem;
   font-size: 1rem;
 }
+
+/* AI client access (Off / Read only / Full, and scopes). Reuses .segmented and .seg from styles.css. */
+.conn-grant {
+  margin-top: 0.75rem;
+  padding: 0.75rem;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--surface);
+}
+
+.conn-grant-title {
+  margin: 0 0 0.25rem;
+  font-size: 1rem;
+}
+
+.conn-grant-modes .seg input:checked + span {
+  background: var(--surface-2);
+  border-color: var(--primary);
+  box-shadow: inset 0 0 0 1px var(--primary);
+}
+
+.conn-grant-scopes {
+  border: 0;
+  margin: 0.5rem 0;
+  padding: 0;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.25rem 1.5rem;
+}
+
+.conn-grant-scopes legend {
+  font-weight: 600;
+  padding: 0;
+  margin-bottom: 0.25rem;
+  width: 100%;
+}
+
+.conn-check {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  min-height: var(--tap);
+}
+
+.conn-check input {
+  width: 1.5rem;
+  height: 1.5rem;
+  margin: 0;
+  accent-color: var(--primary);
+}
+
+.conn-check label {
+  font-weight: 600;
+  padding: 0.5rem 0;
+}

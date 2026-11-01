@@ -67,15 +67,12 @@ function summarizeRows({ ai, calendar = [], pm = [], mcp, apps = null }, { forma
   else if (!mcp.data.configured) {
     rows.push({ name: 'AI clients (MCP)', status: 'Not set up', tone: 'none', detail: null, need: 'A separate Cloudflare Access service token for AI clients. Steps are in docs/MCP.md.' });
   } else {
-    const can = (mcp.data.scopes || []).map(word);
-    const detail =
-      `${can.length ? `Can read ${can.join(' and ')} records` : 'Can read nothing'}. ` +
-      `${mcp.data.allow_capture ? 'Can add captures to your inbox for review.' : 'Cannot change anything.'} ` +
-      (mcp.data.last_call_at ? `Last used ${formatAt(mcp.data.last_call_at)}.` : 'No AI client has connected yet.');
+    const g = grantOf(mcp.data);
+    const detail = `${grantWords(g)} ` + (mcp.data.last_call_at ? `Last used ${formatAt(mcp.data.last_call_at)}.` : 'No AI client has connected yet.');
     rows.push({
       name: 'AI clients (MCP)',
-      status: mcp.data.last_call_at ? 'Set up, used' : 'Set up, not used yet',
-      tone: mcp.data.last_call_at ? 'good' : 'warn',
+      status: g.mode === 'off' ? 'Set up, turned off' : mcp.data.last_call_at ? 'Set up, used' : 'Set up, not used yet',
+      tone: g.mode === 'off' ? 'none' : mcp.data.last_call_at ? 'good' : 'warn',
       detail,
       need: null,
     });
@@ -121,6 +118,56 @@ function word(scope) {
   return scope === 'work' ? 'Work' : scope === 'personal' ? 'Personal' : 'no';
 }
 
+// The access in force, from the status route. An older server has no grant: read only, as it reports.
+function grantOf(data) {
+  return data.grant || { mode: 'read', scopes: data.scopes || [], allow_capture: !!data.allow_capture, set_by: 'default' };
+}
+
+/** Pure: the grant in plain words. */
+export function grantWords(g) {
+  const can = (g.scopes || []).map(word).join(' and ');
+  if (g.mode === 'off') return 'Turned off: AI clients cannot read or change anything.';
+  if (g.mode === 'full') return `Full access to ${can} records: can add, change, review, archive and delete them. Cannot change this setting.`;
+  return `${can ? `Can read ${can} records` : 'Can read nothing'}. ${g.allow_capture ? 'Can add captures to your inbox for review.' : 'Cannot change anything.'}`;
+}
+
+// The owner's control for AI client access: Off, Read only or Full, and which scopes. Saved through the owner-only
+// route; an AI client can never reach it. onSaved gets the stored grant.
+function grantForm(kit, grant, onSaved) {
+  const { h } = kit;
+  const modes = [['off', 'Off'], ['read', 'Read only'], ['full', 'Full']];
+  const modeInputs = modes.map(([value]) => h('input', { type: 'radio', name: 'mcp-grant-mode', value, checked: grant.mode === value }));
+  const scopeInputs = ['work', 'personal'].map((s) => h('input', { type: 'checkbox', id: `mcp-grant-${s}`, value: s, checked: grant.mode !== 'off' && grant.scopes.includes(s) }));
+  const note = h('p', { class: 'small', role: 'status' });
+  const save = h('button', { type: 'submit', class: 'btn btn-primary', text: 'Save access' });
+  async function submit(e) {
+    e.preventDefault();
+    const mode = (modeInputs.find((i) => i.checked) || {}).value;
+    const scopes = scopeInputs.filter((i) => i.checked).map((i) => i.value);
+    if (!mode) return void (note.textContent = 'Choose Off, Read only or Full.');
+    if (mode !== 'off' && !scopes.length) return void (note.textContent = 'Choose Work, Personal or both, or choose Off.');
+    await kit.guarded(save, async () => {
+      const res = await kit.api('/api/connections/mcp/grant', { method: 'PUT', body: { mode, scopes } });
+      if (res.ok && res.data) onSaved(res.data);
+      else note.textContent = kit.failWords(res, 'save AI client access');
+    });
+  }
+  return h(
+    'form',
+    { class: 'conn-grant', onsubmit: submit },
+    h('h4', { class: 'conn-grant-title', text: 'AI client access' }),
+    h('p', { class: 'conn-grant-now', text: `Now: ${grantWords(grant)}${grant.set_by === 'default' ? ' This is the server default until you save a choice here.' : ''}` }),
+    h('fieldset', { class: 'segmented conn-grant-modes' }, h('legend', { text: 'What a connected AI client may do' }),
+      ...modes.map(([, label], i) => h('label', { class: 'seg' }, modeInputs[i], h('span', { text: label })))),
+    h('fieldset', { class: 'conn-grant-scopes' }, h('legend', { text: 'In which records' }),
+      ...scopeInputs.map((box) => h('span', { class: 'conn-check' }, box, h('label', { for: box.id, text: word(box.value) })))),
+    h('p', { class: 'small', text: 'Read only lets a connected AI client look up records in the chosen scopes. Full lets a connected AI client add, change, review, archive and delete records in the chosen scopes. It cannot change this setting.' }),
+    h('p', { class: 'subtle small', text: 'Calendar events and company projects stay read-only copies: they change in their own apps. A change here applies from the next request; Off stops every request.' }),
+    note,
+    h('div', { class: 'button-row' }, save),
+  );
+}
+
 const TONE_CLASS = { good: 'chip-good', warn: 'chip-sample', bad: 'chip-bad', none: 'chip-status' };
 
 export function register(kit) {
@@ -137,30 +184,48 @@ export function register(kit) {
       each(has.calendar, '/api/calendar/connections'),
       each(has.pm, '/api/pm/sources'),
     ]);
-    const rows = summarize({ ai, mcp, calendar, pm, apps: await appLinks() }, { formatAt });
-    const listOf = (group) => h(
-      'ul',
-      { class: 'list conn-list' },
-      ...rows.filter((r) => r.group === group).map((r) =>
-        h(
-          'li',
-          { class: 'plain-row conn-row' },
-          h('span', { class: 'conn-head' }, h('span', { class: 'row-title', text: r.name }), chip(TONE_CLASS[r.tone], r.status, 'Status: ')),
-          r.detail ? h('span', { class: 'row-meta', text: r.detail }) : null,
-          r.need ? h('span', { class: 'row-meta conn-need', text: `Needs: ${r.need}` }) : null,
-          r.url ? appLink(r.url, `Open ${r.name}`) : null,
-        ),
-      ),
-    );
-    const sub = (title, body) => h('div', { class: 'conn-group' }, h('h3', { class: 'conn-group-title', text: title }), body);
-    const content = h(
-      'div',
-      null,
-      sub('Kept in Harrison OS', h('p', { class: 'subtle', text: 'Tasks, waiting-on, notes, ideas, decisions, projects and reminders live here: open one and edit it.' })),
-      sub('Copies and links: edit them in their own app', listOf('source')),
-      sub('Optional, needs setup', listOf('setup')),
-    );
+    const input = { ai, mcp, calendar, pm, apps: await appLinks() };
+    let content = build();
     return section('Connections', content, 'connections');
+
+    // After the owner saves AI client access, the card is redrawn in place with the stored grant (no reload).
+    function saved(grant) {
+      input.mcp = { ...mcp, data: { ...mcp.data, grant, scopes: grant.scopes, allow_capture: grant.allow_capture } };
+      const fresh = build();
+      content.replaceWith(fresh);
+      content = fresh;
+      kit.showToast(`Saved. AI clients: ${grantWords(grant)}`);
+      const btn = fresh.querySelector('.conn-grant button[type="submit"]');
+      if (btn) btn.focus();
+    }
+
+    function build() {
+      const rows = summarize(input, { formatAt });
+      const listOf = (group) => h(
+        'ul',
+        { class: 'list conn-list' },
+        ...rows.filter((r) => r.group === group).map((r) =>
+          h(
+            'li',
+            { class: 'plain-row conn-row' },
+            h('span', { class: 'conn-head' }, h('span', { class: 'row-title', text: r.name }), chip(TONE_CLASS[r.tone], r.status, 'Status: ')),
+            r.detail ? h('span', { class: 'row-meta', text: r.detail }) : null,
+            r.need ? h('span', { class: 'row-meta conn-need', text: `Needs: ${r.need}` }) : null,
+            r.url ? appLink(r.url, `Open ${r.name}`) : null,
+          ),
+        ),
+      );
+      const sub = (title, ...body) => h('div', { class: 'conn-group' }, h('h3', { class: 'conn-group-title', text: title }), ...body);
+      // Only a server with the grant route reports a grant; an older one gets no control it cannot honour.
+      const grant = input.mcp.ok && input.mcp.data && input.mcp.data.grant;
+      return h(
+        'div',
+        null,
+        sub('Kept in Harrison OS', h('p', { class: 'subtle', text: 'Tasks, waiting-on, notes, ideas, decisions, projects and reminders live here: open one and edit it.' })),
+        sub('Copies and links: edit them in their own app', listOf('source')),
+        sub('Optional, needs setup', listOf('setup'), grant ? grantForm(kit, grant, saved) : null),
+      );
+    }
   });
 
   // The session (which carries the links) loads alongside the first screen, so it may not be here yet.

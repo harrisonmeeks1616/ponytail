@@ -80,7 +80,7 @@ test('AI status and consent: default off, per scope, validated', async () => {
   const s = await call('GET', '/api/ai/status');
   assert.equal(s.status, 200);
   // Web is allowed by default but not available: no key.
-  assert.deepEqual(s.data, { configured: false, consent: { work: false, personal: false }, web_allowed: true, web_server_off: false, web_available: false });
+  assert.deepEqual(s.data, { configured: false, consent: { work: false, personal: false }, web_allowed: true, web_server_off: false, web_available: false, actions: { mode: 'read', scopes: [] } });
   const on = await call('PUT', '/api/ai/consent', { scope: 'work', allowed: true });
   assert.equal(on.status, 200, on.text);
   assert.deepEqual(on.data.consent, { work: true, personal: false });

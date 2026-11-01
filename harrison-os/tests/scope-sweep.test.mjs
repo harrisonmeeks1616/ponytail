@@ -56,6 +56,7 @@ const EXEMPT = {
   'GET /api/ai/status': 'configured flag and per-scope consent booleans only',
   'PUT /api/ai/consent': 'sets a per-scope boolean; returns flags only',
   'PUT /api/ai/web': 'sets the owner web-search boolean; returns flags only',
+  'PUT /api/ai/actions': 'owner-only Ask actions setting: stores mode and scope names, returns flags only; tests/ask-actions.test.mjs',
 };
 
 // P: seeded personal ids. Each entry: { cross: [method, path, body], own: [method, path, body], reads }.

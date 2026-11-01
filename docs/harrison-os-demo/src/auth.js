@@ -276,9 +276,18 @@ export async function authenticate(request, env = {}, { fetchImpl = fetch, nowMs
   throw new AuthError(401, 'invalid', 'no_identity');
 }
 
+// The in-process identities of an AI with Full access: 'mcp_client' (an MCP client) and 'ask_ai' (Ask inside the
+// app), both from src/api.js internalDispatcher; authenticate() never returns either. Only the app-owned record
+// routes: never the MCP or Ask grant, AI consent, settings, export/restore, push, sessions, attachments, test
+// hooks, calendar or PM sources, Ask itself or a project brief (which can call AI).
+const AI_CLIENT_ROUTES = /^\/api\/(items|captures\/[^/]+|inbox|projects|reminders|undo|preferences|drafts|review\/weekly)(\/|$)/;
+const AI_CLIENT_BLOCKED = /^\/api\/projects\/[^/]+\/brief$/;
+export const AI_CLIENT_KINDS = Object.freeze(['mcp_client', 'ask_ai']);
+
 export function authorizeRoute(identity, method, pathname) {
   if (!identity || typeof pathname !== 'string') return false;
   const m = typeof method === 'string' ? method.toUpperCase() : '';
+  if (AI_CLIENT_KINDS.includes(identity.kind)) return AI_CLIENT_ROUTES.test(pathname) && !AI_CLIENT_BLOCKED.test(pathname);
   // The MCP client reaches only its endpoint (every method, so GET is answered 405 by the route table, as
   // MCP's HTTP transport expects). Any other service token is the Shortcut's.
   if (identity.kind === 'service') {

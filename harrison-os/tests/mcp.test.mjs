@@ -204,7 +204,7 @@ test('read tools return bounded, labelled records in scope; get_project carries 
   const events = await db.listEvents(s.DB, 50);
   const mcpEvents = events.filter((e) => e.kind === 'mcp_tool');
   assert.ok(mcpEvents.length >= 6);
-  assert.ok(mcpEvents.every((e) => Object.keys(e.detail).every((k) => ['tool', 'scope', 'count', 'ok', 'code'].includes(k))));
+  assert.ok(mcpEvents.every((e) => e.detail.actor === 'mcp_client' && Object.keys(e.detail).every((k) => ['actor', 'tool', 'scope', 'count', 'ok', 'code', 'ids', 'change_ids'].includes(k))));
   assert.ok(!JSON.stringify(events).includes('lobby'), 'no query or record text in events');
 });
 

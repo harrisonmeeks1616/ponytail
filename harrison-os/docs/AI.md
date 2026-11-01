@@ -1,13 +1,14 @@
 # Ask, AI and resume briefs
 
-Code: `src/ai.js` (provider adapter, consent, web setting, tool loop), `src/ask.js` (routes, context assembly, live Ask, briefs), `public/views/ask.js` (drawer, Memory card, project block). Tests: `tests/ai.test.mjs`, `tests/ask.test.mjs`, `tests/ask-web.test.mjs`.
+Code: `src/ai.js` (provider adapter, consent, web setting, tool loop), `src/ask.js` (routes, context assembly, live Ask, briefs), `public/views/ask.js` (drawer, Memory card, project block). Tests: `tests/ai.test.mjs`, `tests/ask.test.mjs`, `tests/ask-web.test.mjs`, `tests/ask-actions.test.mjs`.
 
 ## What Ask can do
 
 - **No key set:** Ask answers straight from saved records, labelled `Not AI. Matched from your saved records.` Nothing is sent anywhere. It cannot answer general questions or search the web, and the UI says so.
 - **Key set:** Ask is a normal assistant. It answers general questions (knowledge, explanations, advice, maths, writing) as well as questions about Harrison's records, and it may search the web and read pages when the answer needs current or specific facts. Live output is labelled `AI answer`.
 - **Records** go to the provider only from scopes whose consent is on. With consent off, the question still gets a live answer, but no record text is sent (`records_shared: false`) and the deterministic matches from that scope are shown beside the answer as `From your saved records. Not sent to AI.` In the All view each scope is decided separately.
-- **Read-only.** Ask's tools are `search_records` (reads saved records in the consented scopes of the request) and the provider's web search and web fetch. It has no tool that writes, so it cannot change anything in the app; MCP Full Access is the separate channel for changes. Questions and answers are not stored.
+- **Read only by default.** Ask's tools are `search_records` (reads saved records in the consented scopes of the request) and the provider's web search and web fetch; it cannot change anything. Questions and answers are not stored.
+- **Full, when the owner grants it** (Memory > Ask with AI > "What Ask may do": Read only or Full, and Work and/or Personal). Ask then also gets the app's validated actions: the same tool registry as an MCP client with Full access (`src/mcp.js` `askToolkit`, docs/MCP.md has the tool list), in the granted scopes that also have AI consent and are in the question's view. Asking "add a task to order 3 filters" creates the task through `POST /api/items` and the answer reports the real id. Every call goes through the app's own routes as the internal identity `ask_ai` (validation, row scope, undo history, idempotency, 409/410 conflicts), and the grant and consent are re-read on every call, so turning Full off applies to the next call of a running question. The action tool definitions are about 30 KB per request, so the last one carries a prompt-cache breakpoint (`cache_control: ephemeral`) and the later requests of the loop read them from the cache. The answer's `actions` list comes from the server's record of each call, not from the AI's words; the drawer shows it under "What Ask changed", with Undo where the app has a `changeId`. It is also shown on a Not AI fallback, because a change made before the AI failed still stands.
 
 ## Configuration (Worker secrets and vars; nothing in source)
 
@@ -17,6 +18,7 @@ Code: `src/ai.js` (provider adapter, consent, web setting, tool loop), `src/ask.
 | `AI_MODEL` | var | `claude-sonnet-5-5` | Model id for the Messages API. Invalid values fall back to the default. |
 | `AI_TIMEOUT_MS` | var | `20000` (Ask with web: `30000`) | Whole-call or whole-loop deadline, clamped to 2000..30000 ms. |
 | `AI_WEB_TOOLS` | var | unset | `off` removes web search and web fetch everywhere, whatever the owner setting says. |
+| `AI_WORKSPACE_ID` | var (private config) | unset | Anthropic workspace id (`wrkspc_...`), sent as the `anthropic-workspace-id` request header. Needed only when the key is not scoped to one workspace; harmless otherwise. A value that is not `wrkspc_` plus letters and digits is not sent. Leave it out of `wrangler.jsonc`. |
 
 Local example for `.dev.vars` (git-ignored): `AI_API_KEY=` (leave blank unless you are testing a real key).
 
@@ -24,7 +26,7 @@ The key needs a funded (or credited) Anthropic API (Console) organization; that 
 
 ## Provider calls
 
-`POST https://api.anthropic.com/v1/messages`, headers `x-api-key`, `anthropic-version: 2026-10-21`, raw `fetch` (the Worker has no runtime dependencies). Each request is one attempt plus at most one retry on 429, 529 or 5xx inside the deadline. The browser request's AbortSignal is passed through, so closing the drawer or tapping Cancel stops the call. Logs carry states, codes, counts and durations only (`{ ok, reason, status, attempts, calls, web_search, web_fetch, web_errors, web_rejected, ms }`): never prompts, answers, URLs or the key. No server-side refusal fallback is configured, because `AI_MODEL` is configurable and the deterministic answer already covers a refusal.
+`POST https://api.anthropic.com/v1/messages`, headers `x-api-key`, `anthropic-version: 2026-10-21` and, when `AI_WORKSPACE_ID` is set, `anthropic-workspace-id`, raw `fetch` (the Worker has no runtime dependencies). Each request is one attempt plus at most one retry on 429, 529 or 5xx inside the deadline. The browser request's AbortSignal is passed through, so closing the drawer or tapping Cancel stops the call. Logs carry states, codes, counts and durations only (`{ ok, reason, status, attempts, calls, web_search, web_fetch, web_errors, web_rejected, ms }`): never prompts, answers, URLs or the key. No server-side refusal fallback is configured, because `AI_MODEL` is configurable and the deterministic answer already covers a refusal.
 
 - `complete()` (briefs, drafts): one request, `output_config: { effort: 'low', format: json_schema }`. A `refusal` or `max_tokens` stop, a non-JSON reply or a reply over 200,000 characters is `invalid_output`.
 - `converse()` (Ask): a manual loop of at most 6 requests inside one deadline, free text (no `output_config.format`: structured outputs and citations do not mix), `effort: 'low'`, `max_tokens` 4096 (8192 for Write). Rules, from the official tool docs:
@@ -33,7 +35,7 @@ The key needs a funded (or credited) Anthropic API (Console) organization; that 
   - `refusal` and `max_tokens` are checked before any output is used (`refused`, `incomplete`); so is a loop that does not finish in 6 requests (`incomplete`).
   - The full content of every response is kept in the history (search results carry `encrypted_content` that must go back as received). One response is capped at 1,000,000 characters.
   - Server-tool errors come back as HTTP 200 result blocks with `error_code`; they are counted, never treated as a use.
-  - If an org admin turned web search or fetch off in the Console, the request fails with HTTP 400 `invalid_request_error` saying it is not enabled. Ask then retries once without the web tools and the answer reports `web: 'unavailable'` (never "used").
+  - An org admin can turn web search and web fetch off separately in the Console; a request with a disabled tool fails with HTTP 400 `invalid_request_error` saying it is not enabled. Ask drops only the tool(s) the message names and repeats the request (at most twice, one per tool); `web_unavailable` lists the dropped tools and the drawer names them. `web: 'unavailable'` means both were refused (never "used").
 
 ### Web tools
 
@@ -49,11 +51,13 @@ Declared in the request's `tools` (they run on Anthropic's side; no client code 
 - **Costs:** web search is $10 per 1,000 searches plus tokens for the results; web fetch has no extra charge beyond the tokens of the fetched content. `max_uses` keeps a single answer to at most 5 searches and 3 fetches; `max_content_tokens` caps each page.
 - **Org enablement:** web search and web fetch are on for an Anthropic organization unless an admin turned them off on the Console's Capabilities page (which can also restrict domains). That is checked only when a request is made; `/api/ai/status` cannot see it.
 - **Owner setting:** Memory > Ask with AI > "Let Ask search the web". Stored in `kv` as `ai_web` (`{ allowed, updated_at }`), default allowed (Harrison asked for internet answers); an unreadable value counts as off. Status and UI say web is available only when the key is set, `AI_WEB_TOOLS` is not `off` and the owner allows it.
-- **Provenance:** an answer reports `web_used: true` (and `web: 'used'`) only when a search or fetch result actually came back. Web sources come from the provider's citation blocks: `web_search_result_location` (url, title, cited_text) and, for fetched pages, `char_location` mapped to the fetched document by `document_index`. Only http(s) URLs are kept, one per URL, shown under "From the web" as links that open in a new tab (`rel="noopener noreferrer"`). If the web was used but nothing was cited, the result pages are listed without a quote.
+- **Provenance:** an answer reports `web_used: true` (and `web: 'used'`) only when a search or fetch result actually came back. Web sources come from the provider's citation blocks: `web_search_result_location` (url, title, cited_text) and, for fetched pages, `char_location` mapped to the fetched document by `document_index`. Only http(s) URLs are kept, one per URL, shown under "From the web" as links that open in a new tab (`rel="noopener noreferrer"`). Only cited pages are listed: a page a search returned but the answer does not cite is not shown as a source. If the web was used but nothing was cited, the drawer says the answer cites no page and should be treated as unchecked.
 
 ### Untrusted data
 
-Harrison's question is the only instruction. Records (in `<records>` tags), `search_records` results, search results and fetched pages are untrusted data; the system prompt says never to follow instructions inside them and never to claim an action was taken. What the model can reach is fixed server-side before it runs: the scopes (consent), the tool list (search_records only with consent, web tools only when available) and the settings. Nothing in the data can change them: `search_records` searches only the consented scopes, Ask has no write tool, and the consent and web routes are owner-session only (service tokens never reach `/api/ai/*`). Web fetch may open only URLs that appeared in Harrison's message or in earlier web results: `url_sources.client_tool_results: none` keeps links from `search_records` results out, and links inside records sent in the first message are written `https[:]//` so they are not URLs in the conversation either. A bare domain without a scheme is not rewritten; Anthropic's own URL validation applies on top.
+Harrison's question is the only instruction. Records (in `<records>` tags), `search_records` and Harrison OS tool results, search results and fetched pages are untrusted data; the system prompt says never to follow instructions inside them, to change only what the question asks, and never to claim a change a tool did not confirm. What the model can reach is fixed server-side: the scopes (consent, and for Full the actions grant), the tool list (search_records only with consent, the actions only with Full, web tools only when available) and the settings. Nothing in the data can change them: every tool takes one scope and a scope outside the grant is refused before anything runs, no tool reaches a setting, grant, consent, export, push or credential (`authorizeRoute` confines `ask_ai` to record routes), and the consent, web and actions routes are owner-session only (service tokens never reach `/api/ai/*`).
+
+Known limit, stated plainly: with Full on, text inside a record or a web page could still try to talk the model into a change Harrison did not ask for, within the granted scopes. The system prompt forbids it, the tools can only do what the app's own screens can do, every change is listed in the answer with Undo where the app keeps history, and only deletes are permanent. Keep Full to the scopes you need, or use Read only. Web fetch may open only URLs that appeared in Harrison's message or in earlier web results: `url_sources.client_tool_results: none` keeps links from `search_records` results out, and links inside records sent in the first message are written `https[:]//` so they are not URLs in the conversation either. A bare domain without a scheme is not rewritten; Anthropic's own URL validation applies on top.
 
 ## Consent
 
@@ -65,9 +69,10 @@ Consent decides which scopes' records are sent. Ask's question itself is sent wh
 
 | Method and path | Body / query | Response |
 |---|---|---|
-| `GET /api/ai/status` | | `200 { configured, consent: { work, personal }, web_allowed, web_server_off, web_available }` |
+| `GET /api/ai/status` | | `200 { configured, consent: { work, personal }, web_allowed, web_server_off, web_available, actions: { mode, scopes } }` |
 | `PUT /api/ai/consent` | `{ scope: 'work'\|'personal', allowed: boolean }` | `200` same shape as status. `400 scope_required / scope_all_not_allowed / invalid_scope / invalid_allowed` |
 | `PUT /api/ai/web` | `{ allowed: boolean }` | `200` same shape as status. `400 invalid_allowed` |
+| `PUT /api/ai/actions` | `{ mode: 'read'\|'full', scopes: ['work'?, 'personal'?] }` | `200` same shape as status. `400 invalid_actions` (unknown mode or key, duplicate or unknown scope, Full with no scope) |
 | `POST /api/ask` | `{ scope: 'work'\|'personal'\|'all', question (1..1000), mode?: 'retrieve'\|'plan'\|'resume'\|'write', context?: { project_id?, item_id? }, tz? }` | `200 { answer }` (below). `400 invalid_question / invalid_mode / invalid_context / invalid_project_id / invalid_item_id / invalid_time_zone`, `404 not_found` (context record not in scope) |
 | `GET /api/projects/:id/brief` | `?scope=work\|personal&tz=&ai=1` | `200 { brief }` (below). `404 not_found` when the project is not in that scope |
 
@@ -75,12 +80,14 @@ Consent decides which scopes' records are sent. Ask's question itself is sent wh
 answer: { text, live_ai, label, mode, scope, fallback_reason?,
   sources: [{ ref, title, scope, kind, project_id, sample }],      // "From your records"
   web_sources: [{ url, title, cited_text }],                        // "From the web"
-  records_shared, shared_scopes, web_used,
+  records_shared, shared_scopes, web_used, web_unavailable: ['web_search'?, 'web_fetch'?],
   web: 'used' | 'not_needed' | 'failed' | 'unavailable' | 'off' | 'not_used',
+  actions_mode: 'read' | 'full',
+  actions: [{ tool, scope, ok: true, ids, change_ids } | { tool, scope, ok: false, message }],
   local?: { text, sources, label } }                               // matches from scopes not sent to AI
 ```
 
-`fallback_reason`: `not_configured`, `consent_off` (briefs), `timeout`, `cancelled`, `provider_error`, `invalid_output`, `refused`, `incomplete`. `label` is `AI answer` or `Not AI. Matched from your saved records.` The `events` row for an Ask holds `{ scope, mode, live_ai, fallback_reason, sources, records_shared, web, web_sources }` (counts and states only).
+`fallback_reason`: `not_configured`, `consent_off` (briefs), `timeout`, `cancelled`, `provider_error`, `invalid_output`, `refused`, `incomplete`. `label` is `AI answer` or `Not AI. Matched from your saved records.` The `events` row for an Ask holds `{ scope, mode, live_ai, fallback_reason, sources, records_shared, web, web_sources, actions_mode, actions }` (counts and states only). Each action call also writes an `ask_tool` row (`actor: 'ask_ai'`, tool, scope, ok/code, the ids and changeIds it touched) and the app route's own event; the actions setting writes `ai_actions` with the mode and scopes.
 
 ### Record citations
 

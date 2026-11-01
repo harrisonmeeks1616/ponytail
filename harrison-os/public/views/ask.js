@@ -1,5 +1,6 @@
 // Ask (Lumen): the top-bar Ask drawer, the Memory card "Ask with AI" and the project block "Catch me up".
-// Talks to /api/ask, /api/ai/status, /api/ai/consent, /api/ai/web and /api/projects/:id/brief (src/ask.js).
+// Talks to /api/ask, /api/ai/status, /api/ai/consent, /api/ai/web, /api/ai/actions, /api/undo and
+// /api/projects/:id/brief (src/ask.js).
 // Plain language only: no model names, ids or diagnostics. "AI answer" and "Not AI" are always labelled;
 // record sources are listed under "From your records", web sources (linked, new tab) under "From the web".
 
@@ -22,7 +23,7 @@ const REASON_WORDS = {
 };
 // What the answer says about the web. Only "used" means a search or a page actually came back.
 const WEB_WORDS = {
-  used: 'It searched the web; the pages it relied on are linked below.',
+  used: 'It searched the web; the pages it cites are linked below.',
   not_needed: 'It did not search the web for this.',
   failed: 'It tried the web, but the search did not work just now, so this is from what it already knows.',
   unavailable: 'Web search is turned off for this Anthropic account, so this is from what it already knows.',
@@ -33,7 +34,18 @@ const SCOPE_WORDS = { all: 'Work and Personal', work: 'Work', personal: 'Persona
 let kit;
 let drawer = null;
 let inFlight = null;
-let status = null; // last /api/ai/status: { configured, consent: { work, personal }, web_allowed, web_server_off, web_available }
+let status = null; // last /api/ai/status: { configured, consent: { work, personal }, web_allowed, web_server_off, web_available, actions: { mode, scopes } }
+const WEB_TOOL_WORDS = { web_search: 'Web search', web_fetch: 'Reading web pages' };
+
+// Full access in force for at least one scope that also has consent (what Ask can actually change).
+function canChange(s) {
+  return !!(s && s.configured && s.actions && s.actions.mode === 'full' && s.actions.scopes.some((x) => s.consent && s.consent[x]));
+}
+
+// What a stop or a timeout means for records: with Full, a change Ask already made stays.
+function stoppedWords() {
+  return canChange(status) ? 'Any change Ask had already made stays; check your records.' : 'Nothing was changed.';
+}
 
 /** An http(s) link for a web source, else null: nothing else (javascript:, data:, relative) becomes a link. */
 export function webLinkHref(url) {
@@ -142,7 +154,52 @@ function liveNote(a) {
   const sent = a.records_shared
     ? `Your ${(a.shared_scopes || []).map((s) => SCOPE_WORDS[s] || s).join(' and ')} records were sent to AI for this answer.`
     : 'No saved records were sent to AI for this answer.';
-  return [sent, WEB_WORDS[a.web], 'Ask cannot change anything. AI can be wrong: check anything important.'].filter(Boolean).join(' ');
+  const web = a.web === 'used' && !(a.web_sources || []).length ? 'It searched the web, but the answer cites no page: treat it as unchecked.' : WEB_WORDS[a.web];
+  const partly = a.web !== 'unavailable' && (a.web_unavailable || []).length
+    ? `${a.web_unavailable.map((t) => WEB_TOOL_WORDS[t] || t).join(' and ')} is turned off for this Anthropic account.`
+    : null;
+  const can = a.actions_mode === 'full' ? 'Ask has Full access here: the list below shows exactly what it changed.' : 'Ask cannot change anything.';
+  return [sent, web, partly, `${can} AI can be wrong: check anything important.`].filter(Boolean).join(' ');
+}
+
+const TOOL_WORDS = { create_item: 'Added', update_item: 'Changed', item_action: 'Updated', record_decision: 'Recorded a decision', delete_item: 'Deleted an item', undo_change: 'Undid a change',
+  create_project: 'Added a project', update_project: 'Changed a project', save_place: 'Saved a place', review_capture: 'Reviewed a capture', delete_capture: 'Deleted a capture',
+  capture_text: 'Captured', create_reminder: 'Added a reminder', edit_reminder: 'Changed a reminder', cancel_reminder: 'Cancelled a reminder', set_preference: 'Saved a preference',
+  delete_preference: 'Deleted a preference', create_draft: 'Prepared a draft', edit_draft: 'Changed a draft', check_draft: 'Checked a draft', delete_draft: 'Deleted a draft',
+  weekly_review_select: 'Picked for the week', weekly_review_defer: 'Moved to a later week', weekly_review_complete: 'Marked the weekly review done' };
+
+// Every change Ask attempted, from the server's own record of each call (not from the AI's words), each with
+// Undo where the app keeps history. Shown also on a Not AI answer: a change made before the AI failed still stands.
+function actionsList(actions) {
+  const { h } = kit;
+  if (!Array.isArray(actions) || !actions.length) return null;
+  const ul = h('ul', { class: 'list ask-actions', 'aria-label': 'What Ask changed' });
+  for (const a of actions) {
+    const what = `${a.ok ? 'Done' : 'Not done'}: ${TOOL_WORDS[a.tool] || String(a.tool || '').replaceAll('_', ' ')}${a.scope ? ` (${SCOPE_WORDS[a.scope] || a.scope})` : ''}`;
+    const detail = a.ok ? (a.ids || []).join(', ') : a.message || '';
+    const li = h('li', { class: 'plain-row' }, h('span', { class: 'row-title', text: what }), detail ? h('span', { class: 'row-meta', text: detail }) : null);
+    const changes = a.ok && a.tool !== 'undo_change' ? (a.change_ids || []).filter((c) => /^[0-9]{1,15}$/.test(String(c))) : [];
+    if (changes.length) {
+      const undo = h('button', { type: 'button', class: 'btn btn-ghost', text: 'Undo' });
+      const note = h('span', { class: 'subtle small', 'aria-live': 'polite' });
+      undo.addEventListener('click', () =>
+        kit.guarded(undo, async () => {
+          for (const c of [...changes].reverse()) {
+            const r = await kit.api(`/api/undo/${kit.enc(c)}`, { method: 'POST', body: {} });
+            if (!r.ok) {
+              note.textContent = r.status === 409 ? 'Could not undo: it was changed again since.' : kit.failWords(r, 'undo');
+              return;
+            }
+          }
+          undo.hidden = true;
+          note.textContent = 'Undone.';
+        }),
+      );
+      li.append(undo, note);
+    }
+    ul.append(li);
+  }
+  return ul;
 }
 
 function renderAnswer(a) {
@@ -151,6 +208,8 @@ function renderAnswer(a) {
   if (!a.live_ai && REASON_WORDS[a.fallback_reason]) out.append(h('p', { class: 'subtle small', text: REASON_WORDS[a.fallback_reason] }));
   out.append(h('div', { class: 'ask-text', text: a.text || '' }));
   if (a.live_ai) out.append(h('p', { class: 'subtle small ask-note', text: liveNote(a) }));
+  const acts = actionsList(a.actions);
+  if (acts) out.append(h('h3', { class: 'ask-sub', text: 'What Ask changed' }), acts);
   const list = sourcesList(a.sources, () => closeDrawer());
   if (list) out.append(h('h3', { class: 'ask-sub', text: 'From your records' }), list);
   else if (!a.live_ai) out.append(h('p', { class: 'subtle small', text: 'No saved records were used.' }));
@@ -238,7 +297,7 @@ function renderContext() {
   const scope = drawer.dataset.projectScope || kit.state.scope;
   const words = SCOPE_WORDS[scope] || 'this view';
   document.getElementById('ask-where').textContent = status && status.configured
-    ? `Your question goes to AI${status.web_available ? ', which may search the web' : ''}. Records from ${words} are sent only where allowed in Memory. Ask never changes anything.`
+    ? `Your question goes to AI${status.web_available ? ', which may search the web' : ''}. Records from ${words} are sent only where allowed in Memory. ${canChange(status) ? 'Ask has Full access where set in Memory: it can make the changes you ask for, and lists each one.' : 'Ask never changes anything.'}`
     : `Looks only in ${words}. Ask reads your records and never changes them.`;
 }
 
@@ -291,9 +350,9 @@ async function runAsk() {
       result.replaceChildren(renderAnswer(r.data.answer));
       live.textContent = r.data.answer.live_ai ? 'AI answer ready.' : 'Answer ready. Not AI.';
     } else if (r.cancelled) {
-      live.textContent = 'Stopped. Nothing was changed.';
+      live.textContent = `Stopped. ${stoppedWords()}`;
     } else if (r.timedOut) {
-      live.textContent = 'No answer within 40 seconds. Nothing was changed. Try again, or ask a narrower question.';
+      live.textContent = `No answer within 40 seconds. ${stoppedWords()} Try again, or ask a narrower question.`;
     } else if (r.offline) {
       live.textContent = 'No connection. Ask needs the server; try again when you are back online.';
     } else if (r.signin) {
@@ -352,8 +411,58 @@ async function memoryCard() {
     });
     card.append(h('div', { class: 'ask-toggle' }, box, h('label', { for: id, text: `Allow ${SCOPE_WORDS[scope]} text to be sent to AI` }), note));
   }
-  card.append(webToggle());
+  card.append(webToggle(), actionsForm());
   return kit.section('Ask with AI', card, 'memory-ask-ai');
+}
+
+/** Pure: what Ask may do, in plain words. */
+export function actionsWords(s) {
+  const a = (s && s.actions) || { mode: 'read', scopes: [] };
+  if (a.mode !== 'full') return 'Read only: Ask reads and answers; it never changes your records.';
+  const on = a.scopes.filter((x) => s.consent && s.consent[x]);
+  const off = a.scopes.filter((x) => !on.includes(x));
+  const words = (list) => list.map((x) => SCOPE_WORDS[x]).join(' and ');
+  return `Full access to ${words(a.scopes)} records: when you ask, Ask can add, change, review, archive and delete them, and lists each change with Undo where the app has it.${off.length ? ` Not in ${words(off)} until sending its text to AI is allowed above.` : ''}${s.configured ? '' : ' Nothing happens until AI is set up.'}`;
+}
+
+// The owner's choice of what Ask may do: Read only (default) or Full, and in which scopes. Only this owner
+// screen can change it; Ask's own tools cannot reach the setting.
+function actionsForm() {
+  const { h } = kit;
+  const a = status.actions || { mode: 'read', scopes: [] };
+  const modes = [['read', 'Read only'], ['full', 'Full']];
+  const modeInputs = modes.map(([value]) => h('input', { type: 'radio', name: 'ask-actions-mode', value, checked: a.mode === value }));
+  const scopeInputs = ['work', 'personal'].map((x) => h('input', { type: 'checkbox', id: `ask-actions-${x}`, value: x, checked: a.mode === 'full' && a.scopes.includes(x) }));
+  const now = h('p', { class: 'conn-grant-now', text: `Now: ${actionsWords(status)}` });
+  const note = h('p', { class: 'small', role: 'status' });
+  const save = h('button', { type: 'submit', class: 'btn btn-primary', text: 'Save what Ask may do' });
+  async function submit(e) {
+    e.preventDefault();
+    const mode = (modeInputs.find((i) => i.checked) || {}).value || 'read';
+    const scopes = mode === 'full' ? scopeInputs.filter((i) => i.checked).map((i) => i.value) : [];
+    if (mode === 'full' && !scopes.length) return void (note.textContent = 'Choose Work, Personal or both, or choose Read only.');
+    await kit.guarded(save, async () => {
+      const res = await kit.api('/api/ai/actions', { method: 'PUT', body: { mode, scopes } });
+      if (res.ok && res.data) {
+        status = res.data;
+        now.textContent = `Now: ${actionsWords(status)}`;
+        note.textContent = 'Saved.';
+      } else note.textContent = kit.failWords(res, 'save that');
+    });
+  }
+  return h(
+    'form',
+    { class: 'conn-grant ask-actions-form', onsubmit: submit },
+    h('h4', { class: 'conn-grant-title', text: 'What Ask may do' }),
+    now,
+    h('fieldset', { class: 'segmented conn-grant-modes' }, h('legend', { text: 'Ask may' }),
+      ...modes.map(([, label], i) => h('label', { class: 'seg' }, modeInputs[i], h('span', { text: label })))),
+    h('fieldset', { class: 'conn-grant-scopes' }, h('legend', { text: 'Full access in' }),
+      ...scopeInputs.map((box) => h('span', { class: 'conn-check' }, box, h('label', { for: box.id, text: SCOPE_WORDS[box.value] })))),
+    h('p', { class: 'subtle small', text: 'Full works only where sending that scope\'s text to AI is allowed above. Deleting is permanent; most other changes can be undone. Calendar and company project copies stay read-only, and nothing is ever sent to anyone.' }),
+    note,
+    h('div', { class: 'button-row' }, save),
+  );
 }
 
 // Says "on" only when it really is offered: the key is set, the server allows it and so does the owner.

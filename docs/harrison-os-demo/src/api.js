@@ -16,7 +16,7 @@
 import * as db from './db.js';
 import { interpret } from './interpret.js';
 import { buildToday } from './today.js';
-import { authenticate, authorizeRoute } from './auth.js';
+import { authenticate, authorizeRoute, MCP_PATH } from './auth.js';
 import { instantToZonedParts, nextDailyOccurrence, formatLocal } from './time.js';
 import { isAllowedPushEndpoint, sendWebPush, b64urlDecode } from './webpush.js';
 import {
@@ -24,6 +24,7 @@ import {
   MAX_TEXT, DATE_RE, scopeAllowlist,
 } from './http.js';
 import { FEATURE_ROUTES, SCHEDULED } from './features.js';
+import { askToolkit } from './mcp.js';
 import { exportFeatures, restoreFeatures } from './featuredata.js';
 
 export { HttpError, json, apiError, requireScope };
@@ -1291,9 +1292,20 @@ export async function handleApi(request, env, url, { nowMs = Date.now(), authent
   }
 
   const ctx = { request, env, url, nowMs, identity, hooks, path };
+  if (path === MCP_PATH) ctx.dispatch = internalDispatcher(ctx, 'mcp_client');
+  else if (path === '/api/ask') {
+    // Ask's Full mode: the MCP action registry under Ask's own grant (src/ask.js decides whether it is offered).
+    ctx.dispatch = internalDispatcher(ctx, 'ask_ai');
+    ctx.toolkit = (opts) => askToolkit({ env, nowMs, dispatch: ctx.dispatch, ...opts });
+  }
+  return route(ctx, method);
+}
+
+// Runs one request through the route table. Errors from handlers and db.js become the app's JSON answers.
+async function route(ctx, method) {
   let pathMatched = false;
   for (const [m, re, handler] of ROUTES) {
-    const match = path.match(re);
+    const match = ctx.path.match(re);
     if (!match) continue;
     pathMatched = true;
     if (m !== method) continue;
@@ -1308,6 +1320,22 @@ export async function handleApi(request, env, url, { nowMs = Date.now(), authent
   }
   if (pathMatched) return apiError(405, 'method_not_allowed', 'Method not allowed');
   return apiError(404, 'not_found', 'Not found');
+}
+
+// One fixed in-process request for a Full-access AI tool (src/mcp.js builds each one, for an MCP client or for
+// Ask). It runs through this same route table, so validation, row scopes, undo history (changeId), idempotency
+// and 409/410 answers are exactly the app's. The caller is an internal identity ('mcp_client' or 'ask_ai'), which
+// authorizeRoute confines to the app-owned record routes; test hooks are off.
+function internalDispatcher(parent, kind) {
+  const identity = { kind };
+  return async (method, path, body) => {
+    const url = new URL(path, parent.url.origin);
+    if (!authorizeRoute(identity, method, url.pathname)) return apiError(403, 'forbidden', 'This identity may not call this route');
+    const init = { method, headers: { 'Content-Type': 'application/json' } };
+    if (body !== undefined) init.body = JSON.stringify(body);
+    const request = new Request(url, init);
+    return route({ request, env: parent.env, url, nowMs: parent.nowMs, identity, hooks: false, path: url.pathname }, method);
+  };
 }
 
 // ---------------------------------------------------------------- the Worker (fetch + scheduled)

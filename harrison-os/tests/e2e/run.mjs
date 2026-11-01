@@ -1263,18 +1263,32 @@ const scenarios = [
         check(/Not set up|Not checked here/.test(shortcut), `Shortcut row: ${shortcut}`);
         check(!rows.some((r) => /Connected|Working|OK\b/i.test(r)), `a state claims more than was checked: ${rows.join(' | ')}`);
         // The owner sets AI client access in the card: Full for Work, saved through the owner-only route.
-        const form = page.locator('form.conn-grant');
+        const form = page.locator('form.conn-grant:not(.ask-actions-form)');
         await form.locator('input[name="mcp-grant-mode"][value="full"]').check();
         await form.locator('#mcp-grant-work').check();
         await form.locator('#mcp-grant-personal').uncheck();
         await form.getByRole('button', { name: 'Save access' }).click();
-        await page.locator('form.conn-grant .conn-grant-now', { hasText: 'Now: Full access to Work records' }).waitFor({ timeout: 15000 });
+        await form.locator('.conn-grant-now', { hasText: 'Now: Full access to Work records' }).waitFor({ timeout: 15000 });
         const stored = await apiOk('GET', '/api/connections/mcp/grant');
         check(stored.mode === 'full' && stored.scopes.join() === 'work' && stored.set_by === 'owner', `grant after Save: ${JSON.stringify(stored)}`);
         const focused = await page.evaluate(() => document.activeElement && document.activeElement.textContent);
         check(focused === 'Save access', `focus after Save: ${focused}`);
         await apiOk('PUT', '/api/connections/mcp/grant', { mode: 'read', scopes: ['work'] });
-        return `connection rows: ${rows.join(' | ')}; access saved as Full (Work) from the card, focus kept on Save`;
+        // What Ask may do: Read only by default; the owner saves Full for Work in the Ask card, and it says
+        // honestly that nothing happens without AI set up and Work consent.
+        const askForm = page.locator('form.ask-actions-form');
+        await askForm.locator('.conn-grant-now', { hasText: 'Now: Read only' }).waitFor({ timeout: 15000 });
+        await askForm.locator('input[name="ask-actions-mode"][value="full"]').check();
+        await askForm.locator('#ask-actions-work').check();
+        await askForm.getByRole('button', { name: 'Save what Ask may do' }).click();
+        const askNow = askForm.locator('.conn-grant-now', { hasText: 'Now: Full access to Work records' });
+        await askNow.waitFor({ timeout: 15000 });
+        const askWords = await askNow.textContent();
+        check(/Not in Work until sending its text to AI is allowed/.test(askWords) && /Nothing happens until AI is set up/.test(askWords), `Ask access words: ${askWords}`);
+        const askStored = (await apiOk('GET', '/api/ai/status')).actions;
+        check(askStored.mode === 'full' && askStored.scopes.join() === 'work', `Ask actions after Save: ${JSON.stringify(askStored)}`);
+        await apiOk('PUT', '/api/ai/actions', { mode: 'read', scopes: [] });
+        return `connection rows: ${rows.join(' | ')}; MCP access saved as Full (Work) from the card, focus kept on Save; Ask access saved as Full (Work) with honest consent and setup words`;
       } finally {
         await context.close();
       }

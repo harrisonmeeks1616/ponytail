@@ -24,6 +24,7 @@ import {
   MAX_TEXT, DATE_RE, scopeAllowlist,
 } from './http.js';
 import { FEATURE_ROUTES, SCHEDULED } from './features.js';
+import { askToolkit } from './mcp.js';
 import { exportFeatures, restoreFeatures } from './featuredata.js';
 
 export { HttpError, json, apiError, requireScope };
@@ -1291,7 +1292,12 @@ export async function handleApi(request, env, url, { nowMs = Date.now(), authent
   }
 
   const ctx = { request, env, url, nowMs, identity, hooks, path };
-  if (path === MCP_PATH) ctx.dispatch = mcpDispatcher(ctx);
+  if (path === MCP_PATH) ctx.dispatch = internalDispatcher(ctx, 'mcp_client');
+  else if (path === '/api/ask') {
+    // Ask's Full mode: the MCP action registry under Ask's own grant (src/ask.js decides whether it is offered).
+    ctx.dispatch = internalDispatcher(ctx, 'ask_ai');
+    ctx.toolkit = (opts) => askToolkit({ env, nowMs, dispatch: ctx.dispatch, ...opts });
+  }
   return route(ctx, method);
 }
 
@@ -1316,12 +1322,12 @@ async function route(ctx, method) {
   return apiError(404, 'not_found', 'Not found');
 }
 
-// One fixed in-process request for an MCP Full-access tool (src/mcp.js builds each one). It runs through this
-// same route table, so validation, row scopes, undo history (changeId), idempotency and 409/410 answers are
-// exactly the app's. The caller is the internal 'mcp_client' identity (labelled so in events), which
+// One fixed in-process request for a Full-access AI tool (src/mcp.js builds each one, for an MCP client or for
+// Ask). It runs through this same route table, so validation, row scopes, undo history (changeId), idempotency
+// and 409/410 answers are exactly the app's. The caller is an internal identity ('mcp_client' or 'ask_ai'), which
 // authorizeRoute confines to the app-owned record routes; test hooks are off.
-function mcpDispatcher(parent) {
-  const identity = { kind: 'mcp_client' };
+function internalDispatcher(parent, kind) {
+  const identity = { kind };
   return async (method, path, body) => {
     const url = new URL(path, parent.url.origin);
     if (!authorizeRoute(identity, method, url.pathname)) return apiError(403, 'forbidden', 'This identity may not call this route');

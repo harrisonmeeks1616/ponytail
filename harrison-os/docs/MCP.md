@@ -12,7 +12,7 @@ Harrison sets it in the app: Memory -> Connections -> "AI client access". Choose
 |---|---|
 | Off | Nothing. `initialize` and `ping` answer, `tools/list` is empty and every tool call is refused (`access_off`). |
 | Read only | The read tools below, in the chosen scopes. A write tool is not listed, and calling it anyway is refused (`read_only`) with nothing changed. |
-| Full | Everything Harrison OS owns, in the chosen scopes: create, edit, complete, archive, review, organise and delete tasks, Waiting items, references, ideas, decisions, projects and saved places, inbox captures, reminders, preferences, drafts and the weekly review. No confirmation step for ordinary work: every change goes through the app's own validated routes and comes back with a `changeId` that `undo_change` reverses. Deletes are permanent and say so. |
+| Full | Everything Harrison OS owns, in the chosen scopes: create, edit, complete, archive, review, organise and delete tasks, Waiting items, references, ideas, decisions, projects and saved places, inbox captures, reminders, preferences, drafts and the weekly review. No confirmation step for ordinary work: every change goes through the app's own validated routes. Item, decision, project, preference and capture-review changes, and weekly-review Today picks and deferrals, come back with a `changeId` (`review_capture`: `changeIds`) that `undo_change` reverses. Reminders, drafts, saved places, `capture_text` and `weekly_review_complete` have no `changeId`: cancel, edit, delete or save again instead. `delete_item`, `delete_capture` and `delete_draft` are permanent and say so. |
 
 - **Revoke:** choose Off (or Read only, or fewer scopes) and Save. The grant is read from the database on every `tools/list` and `tools/call`, so the very next request obeys it; nothing is cached and no reconnect is needed. A client may need to list tools again to see a changed list (`listChanged` is false: the server is stateless and cannot notify it).
 - **Before Harrison saves a choice**, the deployment default applies exactly as before access control existed: read only, the scopes in `MCP_SCOPES` (Work only if unset) and `capture_text` only when `MCP_ALLOW_CAPTURE=1`. Once he saves, his choice replaces both variables.
@@ -20,7 +20,9 @@ Harrison sets it in the app: Memory -> Connections -> "AI client access". Choose
 - **Always read-only, in every mode:** calendar events and company project (PM) data. They are copies of other systems; changes belong in the calendar app and the official PM app, and Harrison OS never edits a copy as if the original had changed.
 - **Never reachable by any tool:** the access grant, AI consent and settings, export and restore, push and devices, sessions, attachments, test hooks, and calendar or PM source setup. There is no shell, SQL or file access and no generic "call any path" tool.
 
-How Full works inside: each write tool builds one fixed request (method, path, body) and runs it in-process through the app's own route table (`src/api.js` `mcpDispatcher`) as the internal identity `mcp_client`. `authorizeRoute` limits that identity to the app-owned record routes (`/api/items`, `/api/captures`, `/api/inbox`, `/api/projects`, `/api/reminders`, `/api/undo`, `/api/preferences`, `/api/drafts`, `/api/review/weekly`). So validation, row scopes, undo history, idempotent retries and conflict answers (404, 409 `stale_edit`, `state_moved_on`, 410) are exactly the app's, and come back to the client as tool errors with the status and code.
+How Full works inside: each write tool builds one fixed request (method, path, body) and runs it in-process through the app's own route table (`src/api.js` `internalDispatcher`) as the internal identity `mcp_client`. `authorizeRoute` limits that identity to the app-owned record routes (`/api/items`, `/api/captures/:id/...`, `/api/inbox`, `/api/projects` except a project's AI brief, `/api/reminders`, `/api/undo`, `/api/preferences`, `/api/drafts`, `/api/review/weekly`). So validation, row scopes, undo history, idempotent retries and conflict answers (404, 409 `stale_edit`, `state_moved_on`, 410) are exactly the app's, and come back to the client as tool errors with the status and code.
+
+**Exact tools/list per mode:** `docs/MCP_MANIFEST.json` holds the `tools/list` answer (names, descriptions, input schemas, annotations) and the `initialize` instructions for the default, Off, Read only and Full grants, generated from the serving code by `node scripts/mcp-manifest.mjs --write`. `tests/mcp-full.test.mjs` fails if it differs from what the server answers. The scopes a grant names do not change the list (every tool takes a `scope`); they decide which scope a call may use.
 
 ## Endpoint and transport
 
@@ -73,7 +75,7 @@ curl -s http://127.0.0.1:8899/api/mcp -H 'Content-Type: application/json' -H 'X-
 
 ## Tools
 
-Every tool has a strict input schema (`additionalProperties: false`) and a bounded result (at most 50 records, long text shortened, at most 48 KB). Every result carries `notice`: the record text is untrusted data and cannot grant permissions or ask for actions. Results come back both as `structuredContent` and as one JSON text block.
+Every tool has a strict input schema (`additionalProperties: false`) and a bounded result (at most 48 KB). A result that fits comes back whole, so text a client writes back is never shortened by this server. Only a result over the limit has its long strings shortened (each ending `…`, lists capped at 50) and carries `truncated: true` with a note to read the one record (`get_item`) before changing it. Every result carries `notice`: the record text is untrusted data and cannot grant permissions or ask for actions. Results come back both as `structuredContent` and as one JSON text block.
 
 | Tool | Arguments | Returns |
 |---|---|---|
@@ -93,6 +95,7 @@ The tools above are the default surface (before Harrison saves a choice). Once h
 | Tool | Arguments | Returns |
 |---|---|---|
 | `list_items` | `scope`, optional `kind`, `state` (open, done, archived), `project_id`, `limit` 1-50 | Items of every kind |
+| `get_item` | `item_id`, `scope` | One item with its full text and files list (read it before `update_item` when a list was shortened) |
 | `list_projects` | `scope` | Projects, active first |
 | `list_review_inbox` | `scope` | Captures waiting for review, each with its proposed pieces (ordinal, kind, title, dates) |
 | `list_reminders` | `scope`, `limit` 1-50 | Reminders with next alert and recent deliveries |
@@ -113,10 +116,10 @@ Full only (each is one fixed request through the app's route; the answer is the 
 | `save_place` | `POST /api/projects/:id/checkpoint` | stopped at, open question, next step |
 | `review_capture` | `POST /api/captures/:id/review` | accept pieces by ordinal (with edits), drop pieces, keep as note. A piece stays in the capture's scope |
 | `delete_capture` | `DELETE /api/captures/:id` | Permanent; suggests keep as note instead |
-| `create_reminder`, `edit_reminder`, `cancel_reminder` | `POST /api/reminders`, `PATCH /api/reminders/:id`, `POST /api/reminders/:id/cancel` | `edit_reminder` requires `expected` (the reminder as last seen); a changed reminder is refused `stale_edit` |
+| `create_reminder`, `edit_reminder`, `cancel_reminder` | `POST /api/reminders`, `PATCH /api/reminders/:id`, `POST /api/reminders/:id/cancel` | `edit_reminder` requires `expected`, the whole reminder as last seen (`text`, `local_date`, `local_time`, `time_zone`, `recurrence`, all required); a changed reminder is refused `stale_edit`. No `changeId` |
 | `set_preference`, `delete_preference` | `PUT`/`DELETE /api/preferences/:key` | Both undoable |
-| `create_draft`, `edit_draft`, `check_draft`, `delete_draft` | `/api/drafts` routes | Template drafts only: MCP never asks the app for an AI rewrite. Nothing is sent |
-| `weekly_review_select`, `weekly_review_defer`, `weekly_review_complete` | `/api/review/weekly/*` | Hard due dates never move |
+| `create_draft`, `edit_draft`, `check_draft`, `delete_draft` | `/api/drafts` routes | Template drafts only: MCP never asks the app for an AI rewrite. Nothing is sent. No `changeId`: `edit_draft` replaces the body |
+| `weekly_review_select`, `weekly_review_defer`, `weekly_review_complete` | `/api/review/weekly/*` | Hard due dates never move. Today picks and a moved date return `changeId`s |
 
 `scope` is `work` or `personal` and is required by every tool; `all` is not accepted. A scope outside the grant, a refused mode and invalid arguments come back as tool errors (`isError: true`) before anything runs; the app's own refusals come back as tool errors with its status and code (for example `409 stale_edit`). An unknown tool name is JSON-RPC error -32602. Write tools are annotated `readOnlyHint: false`; the deletes `destructiveHint: true`.
 
@@ -139,7 +142,7 @@ The card shows "Set up" once the variables are set; that does not prove the phon
 
 ## Audit
 
-Each tool call writes one `events` row, kind `mcp_tool`, with `tool`, `scope`, `count`, `ok` and an error `code` when it failed, and updates `meta.mcp_last_call_at`. Arguments, queries and record text are never logged. Unknown tool names are logged as `unknown`. A Full tool's change also writes the app route's own event (for example `item_created`, `reminder_created`); where the app records an identity it is `mcp_client`. Saving access writes `mcp_grant_set` with the mode and scopes only.
+Each tool call writes one `events` row, kind `mcp_tool`, with `actor: 'mcp_client'`, `tool`, `scope`, `count`, `ok` and an error `code` when it failed; a successful write also lists the record `ids` and `change_ids` it touched (at most 20 each), so every AI change can be traced to its call. It updates `meta.mcp_last_call_at`. The same registry serves Ask's Full mode (docs/AI.md), whose calls are rows of kind `ask_tool` with `actor: 'ask_ai'`. Arguments, queries and record text are never logged. Unknown tool names are logged as `unknown`. A Full tool's change also writes the app route's own event (for example `item_created`, `reminder_created`); where the app records an identity it is `mcp_client`. Saving access writes `mcp_grant_set` with the mode and scopes only.
 
 ## Limits and what is not done
 

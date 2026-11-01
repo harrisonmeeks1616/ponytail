@@ -128,6 +128,14 @@ test('web search and fetch results become web sources with citations; unsafe and
   assert.equal(failed.web_used, false);
   assert.equal(failed.web, 'failed');
   assert.deepEqual(failed.web_sources, []);
+  // Results that came back but are not cited are not shown as sources the answer relied on.
+  const uncited = await ask(env, provider(msg([
+    { type: 'server_tool_use', id: 'srvtoolu_4', name: 'web_search', input: { query: 'q' } },
+    { type: 'web_search_tool_result', tool_use_id: 'srvtoolu_4', content: [{ type: 'web_search_result', url: 'https://example.org/seen', title: 'Seen', page_age: null, encrypted_content: 'E4' }] },
+    text('It is usually mild.'),
+  ])).aiImpl);
+  assert.equal(uncited.web, 'used');
+  assert.deepEqual(uncited.web_sources, []);
 });
 
 test('pause_turn: the paused content goes back unchanged as the assistant turn, with no extra user message', async () => {
@@ -187,24 +195,52 @@ test('search_records: consented scopes only, every result in one user message, t
   assert.equal(a.records_shared, true);
 });
 
-test('org-disabled web tools (HTTP 400): one retry without them, and the answer says web was unavailable', async () => {
+test('org-disabled web tools (HTTP 400): only the tool the provider names is dropped, and the answer says which', async () => {
   const { env } = setup();
-  const disabled = () => new Response(JSON.stringify({ type: 'error', error: { type: 'invalid_request_error', message: 'Web search is not enabled for this organization.' } }), { status: 400, headers: { 'content-type': 'application/json' } });
-  const p = provider(disabled, msg([text('From what I know, it is usually mild in November; I could not check the web.')]));
+  const off = (what) => () => new Response(JSON.stringify({ type: 'error', error: { type: 'invalid_request_error', message: `${what} is not enabled for this organization.` } }), { status: 400, headers: { 'content-type': 'application/json' } });
+  // Only web fetch is off: search stays offered, and the answer is not "web unavailable".
+  const p = provider(off('Web fetch'), msg([text('It is usually mild in November.')]));
   const a = await ask(env, p.aiImpl, { question: 'Weather in Boston?' });
   assert.equal(p.calls.length, 2);
   assert.deepEqual(p.calls[0].body.tools.map((t) => t.name), ['web_search', 'web_fetch']);
-  assert.equal(p.calls[1].body.tools, undefined, 'retried without the web tools');
+  assert.deepEqual(p.calls[1].body.tools.map((t) => t.name), ['web_search'], 'only web_fetch dropped');
   assert.equal(a.live_ai, true);
-  assert.equal(a.web, 'unavailable');
-  assert.equal(a.web_used, false);
+  assert.equal(a.web, 'not_needed');
+  assert.deepEqual(a.web_unavailable, ['web_fetch']);
+  // Search off, then fetch off: two retries, each dropping the named tool; then no web at all.
+  const both = provider(off('The web_search tool'), off('web fetch'), msg([text('From what I know, it is usually mild; I could not check the web.')]));
+  const b = await ask(env, both.aiImpl, { question: 'Weather in Boston?' });
+  assert.equal(both.calls.length, 3);
+  assert.deepEqual(both.calls[1].body.tools.map((t) => t.name), ['web_fetch']);
+  assert.equal(both.calls[2].body.tools, undefined);
+  assert.equal(b.web, 'unavailable');
+  assert.deepEqual(b.web_unavailable, ['web_search', 'web_fetch']);
+  // One message naming both drops both at once.
+  const one = provider(off('Web search and web fetch'), msg([text('I could not check the web.')]));
+  const c = await ask(env, one.aiImpl, { question: 'Weather?' });
+  assert.equal(one.calls.length, 2);
+  assert.equal(one.calls[1].body.tools, undefined);
+  assert.equal(c.web, 'unavailable');
   // Any other 400 is not retried.
   const q = provider(() => new Response(JSON.stringify({ type: 'error', error: { type: 'invalid_request_error', message: 'max_tokens is too large' } }), { status: 400 }), msg([text('never')]));
-  const b = await ask(env, q.aiImpl);
+  const d = await ask(env, q.aiImpl);
   assert.equal(q.calls.length, 1);
-  assert.equal(b.live_ai, false);
-  assert.equal(b.label, NOT_AI_LABEL);
-  assert.equal(b.fallback_reason, 'provider_error');
+  assert.equal(d.live_ai, false);
+  assert.equal(d.label, NOT_AI_LABEL);
+  assert.equal(d.fallback_reason, 'provider_error');
+});
+
+test('AI_WORKSPACE_ID: a valid id is sent as anthropic-workspace-id; unset or malformed sends no header', async () => {
+  const seen = [];
+  const fetchImpl = async (_url, init) => {
+    seen.push(init.headers['anthropic-workspace-id']);
+    return new Response(JSON.stringify(msg([text('ok')])), { status: 200, headers: { 'content-type': 'application/json' } });
+  };
+  const messages = [{ role: 'user', content: 'hi' }];
+  await converse({ AI_API_KEY: 'k', AI_WORKSPACE_ID: ' wrkspc_01AbC ' }, { messages, fetchImpl });
+  await converse({ AI_API_KEY: 'k', AI_WORKSPACE_ID: 'wrkspc_01\r\nx-evil: 1' }, { messages, fetchImpl });
+  await converse({ AI_API_KEY: 'k' }, { messages, fetchImpl });
+  assert.deepEqual(seen, ['wrkspc_01AbC', undefined, undefined]);
 });
 
 test('web setting: default on, owner can turn it off, AI_WEB_TOOLS=off removes it; status stays honest', async () => {
@@ -272,7 +308,7 @@ test('converse: refusal, max_tokens and a runaway tool loop are failures, never 
   const r3 = await converse(env, { messages, tools: [{ name: 'search_records', input_schema: { type: 'object' } }], toolHandlers: { search_records: async () => 'none' }, fetchImpl: loop.fetchImpl });
   assert.equal(r3.reason, 'incomplete');
   assert.equal(loop.calls.length, 6);
-  assert.deepEqual(await converse({}, { messages }), { ok: false, reason: 'not_configured', web: { used: false, search: 0, fetch: 0, errors: [], results: [] }, web_rejected: false, calls: 0 });
+  assert.deepEqual(await converse({}, { messages }), { ok: false, reason: 'not_configured', web: { used: false, search: 0, fetch: 0, errors: [], results: [] }, web_rejected: [], calls: 0 });
 });
 
 test('the drawer links only http(s) web sources', () => {

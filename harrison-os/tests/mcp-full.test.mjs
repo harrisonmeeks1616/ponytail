@@ -7,6 +7,8 @@ import { createTestDb } from './helpers/d1.mjs';
 import { createWorker } from '../src/api.js';
 import { authorizeRoute } from '../src/auth.js';
 import * as db from '../src/db.js';
+import { readFileSync } from 'node:fs';
+import { manifest } from '../scripts/mcp-manifest.mjs';
 
 const BASE = 'http://127.0.0.1:8908';
 const NOW = Date.UTC(2026, 9, 29, 12, 0, 0); // Thursday 08:00 New York
@@ -342,4 +344,52 @@ test('Full: decisions, preferences, drafts and the weekly review go through thei
   const def = await s.ok('weekly_review_defer', { scope: 'work', ref: `item:${task.id}`, start_on: '2026-11-09' });
   assert.equal(def.applied, 'start_on');
   assert.ok((await s.ok('weekly_review_complete', { scope: 'work' })).completed_at);
+});
+
+test('(j) long text comes back whole when it fits; only an oversized result is shortened, and says so; edit_reminder needs the whole snapshot; the audit names the ids', async () => {
+  const s = setup();
+  await s.grant('full', ['work']);
+  const long = `Panel schedule ${'x'.repeat(19000)} end`;
+  const id = (await s.ok('create_item', { scope: 'work', kind: 'reference', title: 'Panel notes', notes: long })).item.id;
+  // A 19 KB note fits the result limit: returned exactly, so writing it back cannot shorten it.
+  assert.equal((await s.ok('get_item', { scope: 'work', item_id: id })).item.body, long);
+  const listed = await s.ok('list_items', { scope: 'work' });
+  assert.equal(listed.records[0].body, long);
+  assert.equal(listed.truncated, undefined);
+  // Three such notes do not fit: the long strings are shortened, marked, and the result says so.
+  for (let i = 0; i < 2; i++) await s.ok('create_item', { scope: 'work', kind: 'reference', title: `More notes ${i}`, notes: long });
+  const big = await s.ok('list_items', { scope: 'work' });
+  assert.equal(big.truncated, true);
+  assert.match(big.truncated_note, /never save shortened text back/);
+  assert.ok(big.records.every((r) => r.body.endsWith('…') && r.body.length < long.length));
+
+  // expected must be the whole editable reminder: an empty or partial snapshot is refused before anything runs.
+  const made = await s.ok('create_reminder', { scope: 'work', text: 'Call the inspector', local_date: '2026-10-30', local_time: '09:00', time_zone: 'America/New_York' });
+  const r = made.reminder;
+  for (const expected of [{}, { text: r.text }]) {
+    const res = await s.call('edit_reminder', { scope: 'work', reminder_id: r.id, expected, text: 'Overwrite' });
+    assert.equal(res.isError, true);
+    assert.match(res.content[0].text, /missing argument: expected\./);
+  }
+  assert.equal((await db.listReminders(s.DB, 'work')).find((x) => x.id === r.id).text, 'Call the inspector');
+
+  // Undo as documented: reminders and drafts have no changeId; items do. The audit carries the ids, never text.
+  assert.equal(made.changeId, undefined);
+  const events = (await db.listEvents(s.DB, 200)).filter((e) => e.kind === 'mcp_tool' && e.detail.tool === 'create_item');
+  assert.ok(events.every((e) => e.detail.actor === 'mcp_client' && e.detail.ids.length === 1 && e.detail.change_ids.length === 1));
+  assert.ok(events.some((e) => e.detail.ids[0] === id));
+  assert.ok(!JSON.stringify(events).includes('Panel'), 'no record text in the audit');
+});
+
+test('docs/MCP_MANIFEST.json is exactly what the code serves (regenerate: node scripts/mcp-manifest.mjs --write)', async () => {
+  const saved = JSON.parse(readFileSync(new URL('../docs/MCP_MANIFEST.json', import.meta.url), 'utf8'));
+  assert.deepEqual(saved, JSON.parse(JSON.stringify(manifest())));
+  // And the served tools/list for a saved Full (Work) grant is the manifest's full list, byte for byte.
+  const s = setup();
+  await s.grant('full', ['work']);
+  assert.deepEqual((await s.rpc('tools/list', {})).result.tools, saved.modes.full.tools);
+  await s.grant('read', ['work']);
+  assert.deepEqual((await s.rpc('tools/list', {})).result.tools, saved.modes.read.tools);
+  await s.grant('off', []);
+  assert.deepEqual((await s.rpc('tools/list', {})).result.tools, saved.modes.off.tools);
 });

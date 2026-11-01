@@ -7,6 +7,8 @@
 //   AI_TIMEOUT_MS   optional overall deadline per call or loop, clamped to 2000..30000. Default 20000
 //                   (Ask with web tools defaults to 30000).
 //   AI_WEB_TOOLS    optional; 'off' removes the web search and web fetch server tools everywhere.
+//   AI_WORKSPACE_ID optional Anthropic workspace id (wrkspc_...), sent as the anthropic-workspace-id header.
+//                   Needed only when the key is not scoped to one workspace. A malformed value is not sent.
 //
 // Rules: each request is one attempt plus at most one retry on 429/529/5xx inside the same deadline; the
 // caller's AbortSignal is honoured; https only; response size capped; model output is typed-validated by the
@@ -38,6 +40,14 @@ export function aiConfigured(env) {
 export function aiModel(env) {
   const m = env && typeof env.AI_MODEL === 'string' ? env.AI_MODEL.trim() : '';
   return MODEL_RE.test(m) ? m : DEFAULT_MODEL;
+}
+
+const WORKSPACE_RE = /^wrkspc_[A-Za-z0-9]{1,100}$/;
+
+/** The workspace header value, or null (unset or malformed: never sent as given). */
+export function aiWorkspaceId(env) {
+  const w = env && typeof env.AI_WORKSPACE_ID === 'string' ? env.AI_WORKSPACE_ID.trim() : '';
+  return WORKSPACE_RE.test(w) ? w : null;
 }
 
 export function aiTimeoutMs(env, fallback = DEFAULT_TIMEOUT_MS) {
@@ -97,6 +107,31 @@ export async function webState(env) {
   const allowed = await aiWebAllowed(env.DB);
   const serverOff = !webToolsEnabled(env);
   return { web_allowed: allowed, web_server_off: serverOff, web_available: aiConfigured(env) && !serverOff && allowed };
+}
+
+// ---------------------------------------------------------------- what Ask may do: the owner's actions grant
+// Stored like consent (key ai_actions, JSON { mode, scopes, updated_at }). No row, or one that cannot be read,
+// is read: Ask only reads. full: Ask may change records through the app's validated actions (src/mcp.js
+// askToolkit) in these scopes, and only where AI consent is also on. Only the owner's PUT /api/ai/actions writes it.
+
+const ACTIONS_KEY = 'ai_actions';
+export const ACTION_MODES = Object.freeze(['read', 'full']);
+
+export async function aiActions(DB) {
+  try {
+    const v = JSON.parse(await db.kvGet(DB, ACTIONS_KEY, Date.now()));
+    const scopes = Array.isArray(v.scopes) ? [...SCOPES].filter((s) => v.scopes.includes(s)) : [];
+    return v.mode === 'full' && scopes.length ? { mode: 'full', scopes, updated_at: typeof v.updated_at === 'string' ? v.updated_at : null } : { mode: 'read', scopes: [], updated_at: null };
+  } catch {
+    return { mode: 'read', scopes: [], updated_at: null };
+  }
+}
+
+export async function setAiActions(DB, { mode, scopes }, nowIso) {
+  if (!ACTION_MODES.includes(mode)) throw new TypeError('mode must be read or full');
+  if (!Array.isArray(scopes) || !scopes.every((s) => SCOPES.has(s)) || new Set(scopes).size !== scopes.length) throw new TypeError('scopes must list work and/or personal once each');
+  if (mode === 'full' && !scopes.length) throw new TypeError('full needs at least one scope');
+  await db.kvPut(DB, ACTIONS_KEY, JSON.stringify({ mode, scopes: mode === 'full' ? scopes : [], updated_at: nowIso }));
 }
 
 // The dynamic-filtering versions need Claude 4.6 or later; older ids get the basic versions. An id that does
@@ -175,7 +210,7 @@ const callTimeout = (opts, env) => (opts.timeoutMs ? clampInt(opts.timeoutMs, { 
 async function post(env, body, dl, fetchImpl, stats, maxChars) {
   const init = {
     method: 'POST',
-    headers: { 'content-type': 'application/json', 'x-api-key': env.AI_API_KEY.trim(), 'anthropic-version': API_VERSION },
+    headers: { 'content-type': 'application/json', 'x-api-key': env.AI_API_KEY.trim(), 'anthropic-version': API_VERSION, ...(aiWorkspaceId(env) ? { 'anthropic-workspace-id': aiWorkspaceId(env) } : {}) },
     body: JSON.stringify(body),
     signal: dl.signal,
   };
@@ -279,7 +314,8 @@ export async function complete(env, opts = {}) {
 // ---------------------------------------------------------------- the tool loop
 
 const WEB_OFF_RE = /\bnot (?:enabled|allowed|available)\b|\bdisabled\b/i;
-const WEB_NAME_RE = /\bweb[ _]?(?:search|fetch)\b/i;
+const WEB_SEARCH_RE = /\bweb[ _]?search\b/i;
+const WEB_FETCH_RE = /\bweb[ _]?fetch\b/i;
 
 /** An http(s) URL as a normalised href, else null (never a javascript: or data: link). */
 export function webHref(u) {
@@ -311,8 +347,9 @@ async function runTool(handlers, use) {
  * assistant content is sent back unchanged and the call repeated, with no extra user message. tool_use: the
  * client tools in toolHandlers run and every call is answered in one user message of tool_result blocks.
  * Server tools (web search, web fetch) run on the provider's side. The full content of every response is kept
- * in the history. If the provider rejects the web tools (an org admin turned them off: HTTP 400 saying they
- * are not enabled), the request is retried once without them and web_rejected is set.
+ * in the history. An org admin can turn web search and web fetch off separately: when the provider rejects a
+ * request with HTTP 400 saying a named web tool is not enabled, only the tool(s) it names are dropped and the
+ * request is repeated; web_rejected lists their names ('web_search', 'web_fetch').
  * -> { ok: true, text, content, citations, model, web, web_rejected, calls }
  *  | { ok: false, reason, status?, web, web_rejected, calls }
  * reason: complete()'s, plus 'refused' (stop_reason refusal) and 'incomplete' (max_tokens or too many steps).
@@ -324,9 +361,9 @@ async function runTool(handlers, use) {
 export async function converse(env, opts = {}) {
   const { system = '', messages, tools = [], toolHandlers = {}, maxTokens = 4096, effort = 'low', signal } = opts;
   const web = { used: false, search: 0, fetch: 0, errors: [], results: [] };
-  if (!aiConfigured(env)) return { ok: false, reason: 'not_configured', web, web_rejected: false, calls: 0 };
+  if (!aiConfigured(env)) return { ok: false, reason: 'not_configured', web, web_rejected: [], calls: 0 };
   if (!Array.isArray(messages) || !messages.length || JSON.stringify(messages).length > MAX_PROMPT_CHARS || String(system).length > MAX_PROMPT_CHARS) {
-    return { ok: false, reason: 'invalid_output', web, web_rejected: false, calls: 0 };
+    return { ok: false, reason: 'invalid_output', web, web_rejected: [], calls: 0 };
   }
   const maxCalls = clampInt(opts.maxCalls, { min: 1, max: MAX_CALLS, fallback: MAX_CALLS });
   const fetchImpl = opts.fetchImpl || globalThis.fetch;
@@ -335,7 +372,7 @@ export async function converse(env, opts = {}) {
   const stats = { attempts: 0, calls: 0 };
   const history = messages.slice();
   let toolList = Array.isArray(tools) ? tools.slice() : [];
-  let webRejected = false;
+  const webRejected = [];
   const fetched = []; // fetched documents in order: char_location citations name them by document_index
   const seen = new Set();
   const note = (url, title) => {
@@ -396,10 +433,13 @@ export async function converse(env, opts = {}) {
       if (toolList.length) body.tools = toolList;
       const r = await post(env, body, dl, fetchImpl, stats, MAX_TURN_RESPONSE_CHARS);
       if (!r.ok) {
-        if (r.status === 400 && !webRejected && toolList.some(isWebTool) && r.message && WEB_NAME_RE.test(r.message) && WEB_OFF_RE.test(r.message)) {
-          webRejected = true;
-          toolList = toolList.filter((t) => !isWebTool(t));
-          continue;
+        const named = r.status === 400 && r.message && WEB_OFF_RE.test(r.message)
+          ? toolList.filter((t) => isWebTool(t) && (t.name === 'web_fetch' ? WEB_FETCH_RE : WEB_SEARCH_RE).test(r.message))
+          : [];
+        if (named.length) {
+          webRejected.push(...named.map((t) => t.name));
+          toolList = toolList.filter((t) => !named.includes(t));
+          continue; // each retry drops a tool, so this repeats at most twice
         }
         result = { ok: false, reason: r.reason, ...(r.status !== undefined ? { status: r.status } : {}) };
         break;
@@ -450,6 +490,6 @@ export async function converse(env, opts = {}) {
   } finally {
     dl.done();
   }
-  log({ kind: 'converse', ok: result.ok, reason: result.reason || null, status: result.status ?? null, attempts: stats.attempts, calls: stats.calls, web_search: web.search, web_fetch: web.fetch, web_errors: web.errors.length, web_rejected: webRejected, ms: Date.now() - dl.started });
+  log({ kind: 'converse', ok: result.ok, reason: result.reason || null, status: result.status ?? null, attempts: stats.attempts, calls: stats.calls, web_search: web.search, web_fetch: web.fetch, web_errors: web.errors.length, web_rejected: webRejected.length, ms: Date.now() - dl.started });
   return { ...result, web, web_rejected: webRejected, calls: stats.calls };
 }
