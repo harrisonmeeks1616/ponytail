@@ -1,7 +1,7 @@
 // Opens with no signal (basements, electrical rooms). Each release is one versioned cache filled in a single
 // install, so the page never runs a new app.mjs against an old extras.mjs. Bump CACHE with every release.
 // Only this folder's own files are cached; records live in IndexedDB.
-const CACHE = 'extras-log-v2';
+const CACHE = 'extras-log-v3';
 const SHELL = ['./', 'index.html', 'app.mjs', 'extras.mjs', 'manifest.webmanifest', 'icon.png'];
 self.addEventListener('install', e => e.waitUntil(caches.open(CACHE)
   .then(c => c.addAll(SHELL.map(f => new Request(f, { cache: 'reload' }))))

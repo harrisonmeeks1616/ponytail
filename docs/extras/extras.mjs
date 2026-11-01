@@ -29,8 +29,10 @@ export function deadline(ev, job) {
 const firstWritten = ev => Math.min(...[ev.noticeSentAt, ev.coSubmittedAt].filter(Boolean).map(Date.parse));
 // How long after the window the first written notice went out (0 if on time or no window). A late notice is
 // still the item where the GC can raise a notice defense, so it stays visible.
+// ponytail: for a 0-day ("before proceeding") window a notice the same day counts as on time, because the log
+// cannot know when work started. Open 0-day items still turn red at once (flag() is unchanged).
 export function lateBy(ev, job) {
-  const d = deadline(ev, job), first = firstWritten(ev);
+  const d = job?.noticeDays === 0 ? new Date(new Date(ev.at).setHours(23, 59, 59, 999)) : deadline(ev, job), first = firstWritten(ev);
   return d && Number.isFinite(first) && first > d ? first - d : 0;
 }
 
@@ -66,14 +68,14 @@ export function canEdit(ev, field) {
 
 // The words the rep signs, stored with the signature. Conservative: an acknowledgement of facts, not of cost.
 export const ack = kind => kind === 'delay'
-  ? 'I acknowledge that the condition described below occurred on the date shown.'
-  : 'I acknowledge that the work described below was directed on the date shown. Labor and material listed are recorded to date. Cost and time to follow.';
+  ? 'I acknowledge that the condition described in this record occurred on the date shown.'
+  : 'I acknowledge that the work described in this record was directed on the date shown. Labor and material listed are recorded to date. Cost and time to follow.';
 
 // Correcting a signed event: the original stays (void, with its number and reason), a fresh copy gets the next
 // number and links back. The notice already sent still counts, so the copy keeps it and the deadline stays met.
 export function reissue(ev, events, reason, id, now = new Date().toISOString()) {
   const voided = { ...ev, voidedAt: now, voidReason: reason, updatedAt: now };
-  const fresh = { ...ev, id, no: nextNo(events, ev.job), sig: null, voidedAt: null, voidReason: '', replaces: ev.id, createdAt: now, updatedAt: now };
+  const fresh = { ...ev, id, no: nextNo(events, ev.job), sig: null, voidedAt: null, voidReason: '', replaces: ev.id, replacesNo: ev.no, createdAt: now, updatedAt: now };
   return { voided, fresh };
 }
 
@@ -148,14 +150,23 @@ export function facts(ev, tz) {
   ].filter(Boolean).join('\n');
 }
 
+// True when hours, material or equipment changed after the rep signed (or refused). The When line is left out
+// of the comparison: it is formatted in the phone's time zone, which can differ from the one at signing.
+export function addedSince(ev) {
+  const q = s => s.split('\n').filter(l => !l.startsWith('When: ')).join('\n');
+  return !!ev.sig?.shown && q(ev.sig.shown) !== q(facts(ev));
+}
+
 // The whole record as text, for sharing or printing. It can reach the GC, so it states facts only: no deadline
 // analysis, no "not sent yet". Photos and the signature travel as files beside it.
 export function record(ev, job, tz) {
   const s = ev.sig;
   return [
     facts(ev, tz),
+    addedSince(ev) && `Added after the signature. What the rep was shown:\n${s.shown}`,
     s?.text && `Acknowledged: ${s.text}`,
     s?.refused ? `Signature: refused by the rep (${s.reason || 'no reason given'}), ${when(s.at, tz)}` : s && `Signed: ${s.name}, ${when(s.at, tz)}`,
+    ev.replacesNo && `Corrects item ${pad(ev.replacesNo)}. Notice for this event went out under item ${pad(ev.replacesNo)}.`,
     ev.noticeSentAt && `Notice sent: ${when(ev.noticeSentAt, tz)}`,
     ev.coSubmittedAt && `CO ${ev.coNo || '(no number)'} submitted ${day(ev.coSubmittedAt, tz)}${ev.coAmount != null ? `, ${usd(ev.coAmount)}` : ''}`,
     ev.decision && `Decision: ${STATUS[ev.decision]} ${day(ev.decidedAt, tz)}`,
@@ -223,6 +234,7 @@ export function validEvent(e) {
     optIso(e.noticeSentAt) && optStr(e.noticeText, 10000) && optStr(e.coNo, 40) && optNum(e.coAmount) && optIso(e.coSubmittedAt) &&
     (e.decision == null || ((e.decision === 'approved' || e.decision === 'rejected') && iso(e.decidedAt) && iso(e.coSubmittedAt))) &&
     optIso(e.decidedAt) && optIso(e.voidedAt) && optStr(e.voidReason, 300) && (e.replaces == null || (typeof e.replaces === 'string' && ID.test(e.replaces))) &&
+    (e.replacesNo == null || (Number.isInteger(e.replacesNo) && e.replacesNo > 0 && e.replacesNo < 1e6)) &&
     iso(e.createdAt) && iso(e.updatedAt);
 }
 

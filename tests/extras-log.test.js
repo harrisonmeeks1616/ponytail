@@ -49,6 +49,9 @@ test('notice deadline keeps the wall-clock time across the DST change and flags 
   assert.equal(lateBy(ev({ at, noticeSentAt: '2026-11-03T22:00:00.000Z' }), job), 24 * H, 'a late notice stays visible as late');
   assert.equal(lateBy(ev({ at, noticeSentAt: '2026-11-03T22:00:00.000Z', coSubmittedAt: '2026-11-01T22:00:00.000Z' }), job), 0, 'the first written date counts');
   assert.equal(lateBy(e, job), 0);
+  const zero = { ...job, noticeDays: 0 };
+  assert.equal(lateBy(ev({ at, noticeSentAt: '2026-10-31T21:15:00.000Z' }), zero), 0, '0-day: a same-day notice is on time');
+  assert.ok(lateBy(ev({ at, noticeSentAt: '2026-11-01T14:00:00.000Z' }), zero) > 0, '0-day: the next day is late');
 });
 
 test('the notice has all four parts, never blames our foreman or the GC person for a delay, and leaves out empty fields', async () => {
@@ -74,6 +77,17 @@ test('the shared record states facts only: no deadline analysis, and the signed 
   assert.ok(!/due|not sent|window/i.test(open), open);
   const signed = record(ev({ sig: { name: 'Pat Sample', at: '2026-11-02T13:00:00.000Z', strokes: [], text: 'I acknowledge X.' }, noticeSentAt: '2026-11-02T14:00:00.000Z' }), job, TZ);
   assert.ok(signed.includes('Acknowledged: I acknowledge X.\nSigned: Pat Sample, Mon, Nov 2, 8:00 AM\nNotice sent: Mon, Nov 2, 9:00 AM'));
+  const { facts, addedSince, reissue } = await X;
+  const base = ev({ labor: [{ who: 'Crew A', st: 6, ot: 2 }] });
+  const sig = { name: 'Pat Sample', at: '2026-11-02T13:00:00.000Z', strokes: [], text: 'I acknowledge X.', shown: facts(base, TZ) };
+  assert.equal(addedSince({ ...base, sig }), false);
+  assert.equal(addedSince({ ...base, sig: { ...sig, shown: facts(base, 'America/Denver') } }), false, 'another time zone is not a change');
+  const grown = { ...base, sig, labor: [...base.labor, { who: 'Crew B', st: 30, ot: 12 }] };
+  const shared = record(grown, job, TZ);
+  const snap = shared.indexOf('Added after the signature. What the rep was shown:\n' + sig.shown);
+  assert.ok(snap > 0 && snap < shared.indexOf('Acknowledged:'), 'the shared record carries the snapshot, right above the signature');
+  const { fresh } = reissue({ ...base, noticeSentAt: '2026-11-02T14:00:00.000Z' }, [base], 'wrong level', 'e2');
+  assert.match(record(fresh, job, TZ), /Corrects item 001\. Notice for this event went out under item 001\.\nNotice sent:/);
 });
 
 test('the Friday line counts open, unnoticed, late, pending, noticed-late and rejected per job', async () => {
@@ -110,7 +124,7 @@ test('a signature or refusal fixes the description; hours, material and photos k
   assert.equal(canEdit(ev({ voidedAt: '2026-11-03T12:00:00.000Z' }), 'coNo'), false);
   assert.match(ack('directive'), /directed on the date shown.*recorded to date.*Cost and time to follow/);
   assert.ok(!/performed/.test(ack('directive')), 'the rep is not asked to confirm work not yet done');
-  assert.match(ack('delay'), /condition described below occurred/);
+  assert.match(ack('delay'), /condition described in this record occurred/);
 });
 
 test('re-issuing keeps the original, links the copy, and the notice already sent still counts', async () => {

@@ -4,7 +4,7 @@
 import * as X from './extras.mjs';
 
 const app = document.getElementById('app');
-const S = { jobs: {}, events: [], filter: 'all', showVoid: false, shared: null, photos: new Map(), mount: [] };
+const S = { jobs: {}, events: [], filter: 'all', showVoid: false, shared: null, typed: {}, photos: new Map(), mount: [] };
 const now = () => new Date().toISOString();
 const ls = {
   get: k => { try { return localStorage.getItem('extras-log.' + k); } catch { return null; } },
@@ -60,6 +60,15 @@ async function copy(text, what) {
 const localInput = iso => { const d = new Date(iso); return new Date(d - d.getTimezoneOffset() * 6e4).toISOString().slice(0, 16); };
 const money = v => { const s = String(v ?? '').replace(/[$,\s]/g, ''); if (!s) return null; const n = Number(s); return Number.isFinite(n) && n >= 0 && n < 1e9 ? n : NaN; };
 const mb = n => `${(n / 1048576).toFixed(1)} MB`;
+// A "when did this go out" field: shows now until he changes it, and an unchanged field means the moment of the
+// tap, never the moment the screen was drawn (a resumed app can show a screen drawn hours ago).
+function whenInput(key) {
+  const typed = S.typed[key];
+  const el = h('input', { type: 'datetime-local', value: typed ?? localInput(now()), oninput: e => { S.typed[key] = e.target.value; delete el.dataset.now; } });
+  if (typed == null) el.dataset.now = '1';
+  return el;
+}
+const whenValue = key => S.typed[key] != null ? new Date(S.typed[key]) : new Date();
 
 // ---------- storage
 let db = null;
@@ -124,7 +133,7 @@ let lastHash = null;
 function render() {
   const hash = location.hash || '#/';
   const [, a = '', id = '', b = ''] = hash.match(/^#\/([^/]*)\/?([^/]*)\/?([^/]*)/) || [];
-  const prev = document.activeElement, keep = prev && prev !== app && app.contains(prev) ? prev.textContent : null;
+  const prev = document.activeElement, keep = prev && prev !== app && app.contains(prev) ? prev.textContent : null, keepId = keep != null && prev.id;
   S.mount = [];
   let view;
   try {
@@ -144,12 +153,21 @@ function render() {
   app.replaceChildren(...[view].flat(Infinity).filter(Boolean));
   S.mount.forEach(f => f());
   if (hash !== lastHash) { lastHash = hash; window.scrollTo(0, 0); app.querySelector('h1')?.focus({ preventScroll: true }); }
-  else if (keep != null) ([...app.querySelectorAll('button')].find(x => x.textContent === keep) || app.querySelector('h1'))?.focus({ preventScroll: true });
+  else if (keep != null) ((keepId && document.getElementById(keepId)) || [...app.querySelectorAll('button')].find(x => x.textContent === keep) || app.querySelector('h1'))?.focus({ preventScroll: true });
 }
 window.addEventListener('hashchange', render);
 // A Home Screen app resumes without reloading, so deadline colours would freeze at the last render.
-// Only the log refreshes on its own: it has no fields that a refresh could wipe.
-const tick = () => { if (!document.hidden && (location.hash || '#/') === '#/' && Object.keys(S.jobs).length) render(); };
+// The log re-renders (it has no fields); a detail screen swaps only its status banner and moves untouched
+// "now" times forward, so nothing he is typing is wiped.
+const tick = () => {
+  if (document.hidden) return;
+  const hash = location.hash || '#/', m = hash.match(/^#\/e\/([^/]+)$/), e = m && findEv(m[1]);
+  if (hash === '#/' && Object.keys(S.jobs).length) render();
+  else if (e) {
+    app.querySelector('.banner')?.replaceWith(statusBanner(e, S.jobs[e.job], Date.now()));
+    app.querySelectorAll('input[data-now]').forEach(i => { i.value = localInput(now()); });
+  }
+};
 document.addEventListener('visibilitychange', tick);
 setInterval(tick, 60000);
 const findEv = id => S.events.find(e => e.id === id);
@@ -166,10 +184,10 @@ function flagText(e, job, t = Date.now()) {
   const base = s === 'noticed' ? `Notice sent ${X.day(e.noticeSentAt)}` : s === 'co_submitted' ? `CO submitted${e.coAmount != null ? ' ' + X.usd(e.coAmount) : ''}` : X.STATUS[s];
   return late && (s === 'noticed' || s === 'co_submitted') ? `${base}, ${X.span(late)} after the window` : base;
 }
-const tone = (e, job, t) => { const f = X.flag(e, job, t); return f === 'done' && X.lateBy(e, job) ? 'late' : f; };
+const tone = (e, job, t) => { const f = X.flag(e, job, t); return f === 'done' && X.status(e) !== 'approved' && X.lateBy(e, job) ? 'late' : f; };
 function evCard(e) {
   const job = S.jobs[e.job], t = Date.now(), c = tone(e, job, t);
-  return h('button', { class: `ev ${c}`, onclick: () => go('#/e/' + e.id) },
+  return h('button', { class: `ev ${c}`, id: 'ev-' + e.id, onclick: () => go('#/e/' + e.id) },
     h('span', { class: 'head' }, h('span', null, `${S.filter === 'all' ? e.job + ' · ' : ''}#${X.pad(e.no)} ${X.KINDS[e.kind]}`), h('span', null, `${X.span(t - Date.parse(e.at))} ago`)),
     h('span', { class: 'what' }, e.what),
     h('span', { class: `tag ${c}` }, flagText(e, job, t)));
@@ -339,7 +357,7 @@ function formScreen(id) {
   if (!S.jobs[f.job]) f.job = pick;
   f.photos = old ? [...old.photos] : [];
   const added = new Set(), removed = new Set();
-  let saving = false, dirtyFlag = false, timer, busy = Promise.resolve();
+  let saving = false, dirtyFlag = false, gone = false, timer, busy = Promise.resolve();
   const dirty = () => {
     dirtyFlag = true;
     if (old) return;
@@ -351,9 +369,11 @@ function formScreen(id) {
 
   const jobBox = h('div', { class: 'chips wrap', role: 'group', 'aria-label': 'Job' }, jobs.map(j => h('button', { type: 'button', 'data-v': j.name, 'aria-pressed': String(f.job === j.name), onclick: () => { f.job = j.name; pressed(jobBox, j.name); dirty(); } }, j.name)));
   const kindBox = h('div', { class: 'kinds', role: 'group', 'aria-label': 'Kind of change' }, Object.entries(X.KINDS).map(([k, label]) => h('button', { type: 'button', disabled: lock, 'data-v': k, 'aria-pressed': String(f.kind === k), onclick: () => { f.kind = k; pressed(kindBox, k); dirty(); } }, label)));
-  const roleBox = h('div', { class: 'chips wrap', role: 'group', 'aria-label': 'Role' }, X.ROLES.map(r => h('button', { type: 'button', disabled: lock, 'data-v': r, 'aria-pressed': String(f.byRole === r), onclick: () => { f.byRole = f.byRole === r ? '' : r; pressed(roleBox, f.byRole); dirty(); } }, r)));
+  const nameLabel = () => f.byRole === X.RELAYED ? "Your foreman's name" : 'Name (optional)';
+  const roleBox = h('div', { class: 'chips wrap', role: 'group', 'aria-label': 'Role' }, X.ROLES.map(r => h('button', { type: 'button', disabled: lock, 'data-v': r, 'aria-pressed': String(f.byRole === r), onclick: () => { f.byRole = f.byRole === r ? '' : r; pressed(roleBox, f.byRole); nameField.querySelector('label').textContent = nameLabel(); dirty(); } }, r)));
   const at = h('input', { type: 'datetime-local', disabled: lock, value: localInput(f.at), onchange: e => { const d = new Date(e.target.value); if (!Number.isNaN(d.getTime())) f.at = d.toISOString(); dirty(); } });
   const text = (k, props = {}) => h(props.rows ? 'textarea' : 'input', { value: f[k] || '', readOnly: lock, autocomplete: 'off', oninput: e => { f[k] = e.target.value; dirty(); }, ...props });
+  const nameField = field(nameLabel(), text('byName', { maxLength: 120 }));
 
   const photoBox = h('div', { class: 'photos' });
   const photoNote = h('p', { class: 'hint', role: 'status' });
@@ -393,6 +413,7 @@ function formScreen(id) {
     saving = true; err.textContent = '';
     try {
       await busy;
+      if (gone) return; // he discarded the entry while photos were still being added
       if (!f.job) throw new Error('Pick the job.');
       if (!f.kind) throw new Error('Pick what kind of change this is.');
       if (!f.what.trim()) throw new Error('Say what changed. Tap the microphone on the keyboard to dictate.');
@@ -416,6 +437,7 @@ function formScreen(id) {
   }
   function cancel() {
     if (dirtyFlag && !confirm('Discard this entry?')) return;
+    gone = true;
     clearTimeout(timer);
     if (!old) ls.set('draft', null);
     added.forEach(pid => S.photos.delete(pid));
@@ -434,8 +456,8 @@ function formScreen(id) {
       h('div', { class: 'field' }, h('label', null, 'What kind'), kindBox),
       field('When it was directed or happened', at),
       h('div', { class: 'field' }, h('label', null, 'Who directed it'),
-        h('p', { class: 'hint' }, 'For a delay: who you raised it with. If your foreman passed the direction on, pick Our foreman (relayed): the notice then credits the GC.'),
-        roleBox, h('div', { style: 'margin-top: 8px' }, field('Name (optional)', text('byName', { maxLength: 120 })))),
+        h('p', { class: 'hint' }, "For a delay: who you raised it with. If your foreman passed the direction on, pick Our foreman (relayed), enter your foreman's name, and say who gave him the direction in What changed. The notice then credits the GC."),
+        roleBox, h('div', { style: 'margin-top: 8px' }, nameField)),
       field('Where', text('area', { placeholder: 'Level, area, room, gridline', maxLength: 200 })),
       field('What changed', text('what', { rows: 4, maxLength: 5000, placeholder: 'What you were told to do, or what held you up' }), lock ? null : 'Tap the microphone on the keyboard to dictate.'),
       field('References', text('refs', { placeholder: 'RFI, ASI, drawing, paper T&M ticket number', maxLength: 300 })),
@@ -490,7 +512,7 @@ async function shareRecord(e, job) {
 }
 async function sendNotice(e, job) {
   const { subject, body } = X.notice(e, job);
-  const done = () => { S.shared = e.id; render(); toast('Once it has left your Outbox, tap Mark notice sent.'); };
+  const done = () => { S.shared = { id: e.id, text: `${subject}\n\n${body}` }; render(); toast('Once it has left your Outbox, tap Mark notice sent.'); };
   if (navigator.share) {
     try { await navigator.share({ title: subject, text: `${subject}\n\n${body}` }); done(); }
     catch (err) { if (err.name !== 'AbortError') { location.href = mailto(subject, body); done(); } }
@@ -504,7 +526,7 @@ async function update(e, patch, msg) {
 const confirmed = (q, fn) => () => { if (confirm(q)) fn(); };
 // Deadline readings are his own analysis: shown on screen, never printed into a record that can reach the GC.
 function statusBanner(e, job, t) {
-  const f = X.flag(e, job, t), d = X.deadline(e, job), s = X.status(e), late = X.lateBy(e, job);
+  const f = X.flag(e, job, t), d = X.deadline(e, job), s = X.status(e), late = s !== 'approved' && X.lateBy(e, job);
   if (f === 'late') return h('div', { class: 'banner late noprint' }, `Notice overdue by ${X.span(t - d)}`, h('p', null, `It was due ${X.when(d)}. Send it now; a late notice is still better than none.`));
   if (f === 'soon') return h('div', { class: 'banner soon noprint' }, `Notice due in ${X.span(d - t)}`, h('p', null, `Due ${X.when(d)}.`));
   if (f === 'ok') return h('div', { class: 'banner ok noprint' }, `Notice due ${X.when(d)}`, h('p', null, `${job.noticeDays} day window for ${job.name}.`));
@@ -527,7 +549,7 @@ function detailScreen(id) {
     photo(pid).then(src => { if (src) img.src = src; });
     return h('figure', null, img);
   }));
-  const changedSince = e.sig?.shown && e.sig.shown !== X.facts(e);
+  const changedSince = X.addedSince(e);
   const record = h('div', { class: 'card' }, h('h2', null, 'Record'),
     h('dl', null, dtdd('When', X.when(e.at)), w && dtdd(w.label, w.text), dtdd('Where', e.area), dtdd('What changed', e.what), dtdd('References', e.refs)),
     table(['Labor', 'Reg h', 'OT h'], (e.labor || []).map(r => [r.who || 'Unnamed', r.st, r.ot])),
@@ -551,21 +573,22 @@ function detailScreen(id) {
       h('button', { class: 'link noprint', onclick: confirmed('Clear the sent time and the text as sent? They cannot be restored.', () => update(e, { noticeSentAt: null, noticeText: null }, 'Marked not sent')) }, 'Undo: it did not go out'));
   } else if (live) {
     const err = errBox();
-    const sentAt = h('input', { type: 'datetime-local', value: localInput(now()) });
+    const key = e.id + ':sent', sentAt = whenInput(key);
     const mark = () => {
-      const v = new Date(sentAt.value);
+      const v = whenValue(key);
       if (Number.isNaN(v.getTime())) return void (err.textContent = 'Enter when it was sent.');
       if (v - Date.now() > 6e4) return void (err.textContent = 'The sent time cannot be in the future.');
-      const n = X.notice(e, job); S.shared = null;
-      update(e, { noticeSentAt: v.toISOString(), noticeText: `${n.subject}\n\n${n.body}` }, 'Notice marked sent');
+      const n = X.notice(e, job), text = S.shared?.id === e.id ? S.shared.text : `${n.subject}\n\n${n.body}`; // the words he actually sent
+      S.shared = null; delete S.typed[key];
+      update(e, { noticeSentAt: v.toISOString(), noticeText: text }, 'Notice marked sent');
     };
     noticeCard = h('div', { class: 'card noprint' }, h('h2', null, 'Written notice'),
       h('p', null, 'Send it from your work email so it lands in the company record. It covers the event, the cause, the impact (to be determined) and a reservation of rights.'),
       h('div', { class: 'row' },
-        h('button', { class: S.shared === e.id ? '' : 'primary', onclick: () => sendNotice(e, job) }, 'Send notice'),
-        h('button', { onclick: () => { const n = X.notice(e, job); copy(`${n.subject}\n\n${n.body}`, 'Notice'); S.shared = e.id; render(); } }, 'Copy text')),
+        h('button', { class: S.shared?.id === e.id ? '' : 'primary', onclick: () => sendNotice(e, job) }, 'Send notice'),
+        h('button', { onclick: () => { const n = X.notice(e, job), text = `${n.subject}\n\n${n.body}`; copy(text, 'Notice'); S.shared = { id: e.id, text }; render(); } }, 'Copy text')),
       h('div', { style: 'margin-top: 14px' }, field('Sent at', sentAt, 'When it actually left your Outbox. Change it if you sent it earlier.')), err,
-      h('button', { class: S.shared === e.id ? 'primary' : '', onclick: mark }, 'Mark notice sent'));
+      h('button', { class: S.shared?.id === e.id ? 'primary' : '', onclick: mark }, 'Mark notice sent'));
   }
 
   let coCard = null;
@@ -573,24 +596,28 @@ function detailScreen(id) {
     const err = errBox();
     const no = h('input', { value: e.coNo || '', maxLength: 40, autocomplete: 'off' });
     const amt = h('input', { inputMode: 'decimal', autocomplete: 'off', value: e.coAmount ?? '', placeholder: '$' });
-    const on = h('input', { type: 'date', value: localInput(now()).slice(0, 10) });
+    const key = e.id + ':co', on = whenInput(key);
     coCard = h('div', { class: 'card noprint' }, h('h2', null, 'Change order'), h('p', { class: 'hint' }, 'After the office prices it and it goes to the GC.'),
-      field('CO number', no), field('Amount submitted', amt), field('Submitted on', on), err,
+      field('CO number', no), field('Amount submitted', amt), field('Submitted at', on, 'When it went to the GC. A CO request counts as written notice.'), err,
       h('button', { onclick: () => {
-        const a = money(amt.value);
+        const a = money(amt.value), v = whenValue(key);
         if (Number.isNaN(a)) return void (err.textContent = 'Enter the amount as a number, like 4500 or 4,500.50.');
-        if (!on.value) return void (err.textContent = 'Enter the date it was submitted.');
-        update(e, { coNo: no.value.trim(), coAmount: a, coSubmittedAt: new Date(`${on.value}T12:00`).toISOString() }, 'CO marked submitted');
+        if (Number.isNaN(v.getTime())) return void (err.textContent = 'Enter when it was submitted.');
+        if (v - Date.now() > 6e4) return void (err.textContent = 'The submitted time cannot be in the future.');
+        delete S.typed[key];
+        update(e, { coNo: no.value.trim(), coAmount: a, coSubmittedAt: v.toISOString() }, 'CO marked submitted');
       } }, 'Mark CO submitted'));
   } else if (live) {
+    const decided = h('input', { type: 'date', value: localInput(now()).slice(0, 10) });
+    const decide = (decision, msg) => decided.value ? update(e, { decision, decidedAt: new Date(`${decided.value}T12:00`).toISOString() }, msg) : toast('Enter the date of the decision.');
     coCard = h('div', { class: 'card' }, h('h2', null, 'Change order'),
       h('p', null, `CO ${e.coNo || '(no number)'}${e.coAmount != null ? `, ${X.usd(e.coAmount)}` : ''}, submitted ${X.day(e.coSubmittedAt)}.`),
       e.decision ? [h('p', null, `${X.STATUS[e.decision]} ${X.day(e.decidedAt)}.`),
         h('button', { class: 'link noprint', onclick: confirmed('Clear the decision and its date?', () => update(e, { decision: null, decidedAt: null })) }, 'Undo the decision')]
-        : h('div', { class: 'row noprint' },
-          h('button', { onclick: () => update(e, { decision: 'approved', decidedAt: now() }, 'Marked approved') }, 'Approved'),
-          h('button', { onclick: () => update(e, { decision: 'rejected', decidedAt: now() }, 'Marked rejected') }, 'Rejected'),
-          h('button', { class: 'link', onclick: confirmed('Clear the submitted date?', () => update(e, { coSubmittedAt: null }, 'Submission undone')) }, 'Undo submission')));
+        : [field('Decided on', decided, 'The date on the GC\'s answer.'), h('div', { class: 'row noprint' },
+          h('button', { onclick: () => decide('approved', 'Marked approved') }, 'Approved'),
+          h('button', { onclick: () => decide('rejected', 'Marked rejected') }, 'Rejected'),
+          h('button', { class: 'link', onclick: confirmed('Clear the submitted date?', () => update(e, { coSubmittedAt: null }, 'Submission undone')) }, 'Undo submission'))]);
   }
 
   const actions = h('div', { class: 'card noprint' }, h('h2', null, 'Share and fix'),
@@ -682,15 +709,18 @@ function voidScreen(id) {
         const r = reason.value.trim();
         if (!r) return void (err.textContent = 'Say why, so the log explains the gap.');
         if (busy) return;
-        busy = true;
-        if (!again.checked) { await saveEv({ ...e, voidedAt: now(), voidReason: r }); go('#/e/' + id, true); toast('Voided'); return; }
-        const { voided, fresh } = X.reissue(e, S.events, r, crypto.randomUUID());
-        const copies = [];
-        for (const pid of e.photos) { const data = await photo(pid); if (data) { const n = crypto.randomUUID(); S.photos.set(n, data); copies.push({ id: n, data }); } }
-        fresh.photos = copies.map(p => p.id); // the copy owns its photos, so editing it never touches the void original
-        await write({ events: [voided, fresh], photos: copies });
-        S.events = [...S.events.filter(x => x.id !== e.id), voided, fresh];
-        go(`#/e/${fresh.id}/edit`, true); toast(`Corrected copy is #${X.pad(fresh.no)}`);
+        busy = true; err.textContent = '';
+        try {
+          if (!again.checked) { await saveEv({ ...e, voidedAt: now(), voidReason: r }); go('#/e/' + id, true); toast('Voided'); return; }
+          const { voided, fresh } = X.reissue(e, S.events, r, crypto.randomUUID());
+          const copies = [];
+          for (const pid of e.photos) { const data = await photo(pid); if (data) copies.push({ id: crypto.randomUUID(), data }); }
+          fresh.photos = copies.map(p => p.id); // the copy owns its photos, so editing it never touches the void original
+          await write({ events: [voided, fresh], photos: copies });
+          copies.forEach(p => S.photos.set(p.id, p.data));
+          S.events = [...S.events.filter(x => x.id !== e.id), voided, fresh];
+          go(`#/e/${fresh.id}/edit`, true); toast(`Corrected copy is #${X.pad(fresh.no)}`);
+        } catch (x) { err.textContent = x?.message || 'Could not save on this phone.'; } finally { busy = false; }
       } }, 'Void'))];
 }
 
