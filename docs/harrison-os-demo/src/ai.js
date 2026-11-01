@@ -29,6 +29,8 @@ export const MAX_CALLS = 6;
 const MAX_PROMPT_CHARS = 120_000;
 const MAX_TOOL_RESULT_CHARS = 20_000;
 const RETRY_STATUSES = new Set([429, 529]);
+// Statuses the owner can act on; any other failure is provider_error. 401/403 are never retried.
+const STATUS_REASONS = { 401: 'auth_rejected', 403: 'permission_denied', 429: 'rate_limited' };
 const RETRY_DELAY_MS = 800;
 const MODEL_RE = /^[a-z0-9][a-z0-9.@:_-]{1,99}$/i;
 const SCOPES = new Set(['work', 'personal']);
@@ -239,7 +241,7 @@ async function post(env, body, dl, fetchImpl, stats, maxChars) {
         await wait(RETRY_DELAY_MS, dl.signal);
         continue;
       }
-      return { ok: false, reason: 'provider_error', status: res.status, ...(message ? { message } : {}) };
+      return { ok: false, reason: STATUS_REASONS[res.status] || 'provider_error', status: res.status, ...(message ? { message } : {}) };
     }
     const declared = Number(res.headers.get('content-length') || '0');
     if (declared > maxChars) return { ok: false, reason: 'invalid_output', status: res.status };
@@ -262,7 +264,8 @@ async function post(env, body, dl, fetchImpl, stats, maxChars) {
 /**
  * complete(env, { system, prompt, maxTokens, timeoutMs, signal, expectJson, schema, fetchImpl })
  * -> { ok: true, text, data?, model } | { ok: false, reason, status? }
- * reason: 'not_configured' | 'timeout' | 'cancelled' | 'provider_error' | 'invalid_output'.
+ * reason: 'not_configured' | 'timeout' | 'cancelled' | 'auth_rejected' (401) | 'permission_denied' (403) |
+ * 'rate_limited' (429 after the retry) | 'provider_error' | 'invalid_output'.
  * expectJson parses the text as JSON into data (invalid_output when it isn't); schema, when given, is sent
  * as output_config.format so the provider constrains the shape (the caller still validates it).
  */

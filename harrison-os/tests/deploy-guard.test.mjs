@@ -40,6 +40,17 @@ test('services: only the exact private PM digest binding is allowed; the PM Work
   const ok = { binding: 'PM_DIGEST_SERVICE', service: 'harrison-os-pm-digest', entrypoint: 'HarrisonOsDigest' };
   const errs = (t) => checkConfig(t, { preAccess: true }).errors.filter((e) => !e.includes('placeholder'));
   assert.deepEqual(errs(withServices([ok])), []);
+  // The private PM command connection: exactly the PM Worker's named HarrisonOsCommands entrypoint, alone or with the digest.
+  const cmd = { binding: 'PM_COMMANDS_SERVICE', service: 'harrison-electrical-pm', entrypoint: 'HarrisonOsCommands' };
+  assert.deepEqual(errs(withServices([cmd])), []);
+  assert.deepEqual(errs(withServices([ok, cmd])), []);
+  for (const bad of [
+    [{ ...cmd, entrypoint: 'Default' }], // never PM's default HTTP entrypoint
+    [{ binding: 'PM_COMMANDS_SERVICE', service: 'harrison-electrical-pm' }],
+    [{ ...cmd, service: 'harrison-os-pm-digest' }],
+    [cmd, cmd],
+    [{ ...cmd, binding: 'PM_DIGEST_SERVICE' }],
+  ]) assert.ok(errs(withServices(bad)).length > 0, JSON.stringify(bad));
   for (const bad of [
     [{ ...ok, service: 'harrison-electrical-pm' }], // the PM Worker itself
     [{ binding: 'PM_DIGEST_SERVICE', service: 'harrison-os-pm-digest' }], // default entrypoint

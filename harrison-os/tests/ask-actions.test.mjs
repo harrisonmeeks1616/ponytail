@@ -163,3 +163,12 @@ test('a write made before the AI fails is still reported on the Not AI fallback'
   assert.equal(answer.fallback_reason, 'refused');
   assert.deepEqual(answer.actions.map((a) => [a.tool, a.ok]), [['create_item', true]]);
 });
+
+test('change list words: in another app only a saved receipt is done; pending and unconfirmed are said as such', async () => {
+  const { actionWords } = await import('../public/views/ask.js');
+  assert.match(actionWords({ tool: 'pm_update_record', app: 'pm', ok: true, receipt: { status: 'saved' } }), /^Done: Changed a record in Electrical PM/);
+  assert.match(actionWords({ tool: 'field_edit_record', app: 'field', ok: true, receipt: { status: 'pending' } }), /^Sent, waiting for Field Hub to confirm/);
+  assert.match(actionWords({ tool: 'pm_create_record', app: 'pm', ok: true, receipt: null }), /^Sent, not confirmed as saved/);
+  assert.match(actionWords({ tool: 'create_item', app: 'hos', ok: true, scope: 'work' }), /^Done: Added \(Work\)/);
+  assert.match(actionWords({ tool: 'pm_create_record', app: 'pm', ok: false }), /^Not done/);
+});

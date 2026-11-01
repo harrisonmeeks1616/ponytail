@@ -37,7 +37,7 @@ export function summarize(input, opts) {
   return rows;
 }
 
-function summarizeRows({ ai, calendar = [], pm = [], mcp, apps = null }, { formatAt = (v) => v } = {}) {
+function summarizeRows({ ai, calendar = [], pm = [], mcp, apps = null, crossapp = null }, { formatAt = (v) => v } = {}) {
   // The MCP status route says which other routes exist; if it did not answer (offline, server error), nothing is known.
   if (!mcp || (!mcp.ok && mcp.status !== 404)) return NAMES.map(UNCHECKED);
   const rows = [];
@@ -91,12 +91,13 @@ function summarizeRows({ ai, calendar = [], pm = [], mcp, apps = null }, { forma
         ? { name: 'iPhone Shortcut', status: 'Not set up', tone: 'none', detail: shortcutDetail, need: shortcutNeed }
         : { name: 'iPhone Shortcut', status: 'Not checked here', tone: 'none', detail: shortcutDetail, need: shortcutNeed },
   );
+  const changes = crossWords(crossapp);
   for (const [key, name, setting] of APPS) {
     const url = apps && apps[key];
     rows.push(
       url
-        ? { name, status: 'Linked', tone: 'none', detail: `Opens ${hostOf(url)}. It stays the official record; Harrison OS does not read or change it.`, need: null, url }
-        : { name, status: 'Not linked', tone: 'none', detail: 'Add its web address to open it from Harrison OS.', need: `${setting} in the server settings (docs/DEPLOY.md).` },
+        ? { name, status: 'Linked', tone: 'none', detail: `Opens ${hostOf(url)}. It stays the official record. ${changes}`, need: null, url }
+        : { name, status: 'Not linked', tone: 'none', detail: `Add its web address to open it from Harrison OS. ${changes}`, need: `${setting} in the server settings (docs/DEPLOY.md).` },
     );
   }
   return rows;
@@ -112,6 +113,72 @@ function hostOf(url) {
   } catch {
     return 'the app';
   }
+}
+
+const CROSS_WRITES = ['record.create', 'record.update', 'record.archive', 'record.restore', 'field.edit', 'field.retry'];
+
+/** Pure: whether AI may change the official apps, from the cross-app status (null: this server has none). */
+export function crossWords(c) {
+  const data = c && c.ok && c.data;
+  if (!data) return 'Harrison OS does not change it.';
+  const g = data.grant || { clients: [], actions: [], projects: [] };
+  const writes = g.actions.filter((a) => CROSS_WRITES.includes(a));
+  if (!g.clients.length || !g.actions.length || !g.projects.length) return 'AI clients may not read or change it (AI actions below are off).';
+  const who = g.clients.map((x) => (x === 'ask' ? 'Ask' : 'MCP clients')).join(' and ');
+  const what = writes.length ? 'read and change' : 'read';
+  const sens = g.includeSensitive ? ', financial records and private fields included' : '';
+  return `${who} may ${what} it through the private PM connection, in ${g.projects.length === 1 ? 'one project' : `${g.projects.length} projects`}${sens}${data.configured ? '' : ', once that connection is set up (it is not yet)'}.`;
+}
+
+// The owner's control for AI actions on Electrical PM and Field Hub: which clients, which projects, which actions.
+// Saved through the owner-only route; an AI client can never reach it. Nothing is allowed until saved here.
+const CROSS_GROUPS = [
+  ['Read Electrical PM', ['project.read', 'metadata.read', 'records.list', 'record.read']],
+  ['Change Electrical PM records', ['record.create', 'record.update', 'record.archive', 'record.restore']],
+  ['Read Field Hub', ['field.status', 'field.read', 'field.pending']],
+  ['Change Field Hub records', ['field.edit', 'field.retry']],
+];
+function crossForm(kit, data, onSaved) {
+  const { h } = kit;
+  const g = data.grant;
+  const clientBoxes = [['ask', 'Ask'], ['mcp', 'MCP clients']].map(([v, label]) => [h('input', { type: 'checkbox', id: `cross-client-${v}`, value: v, checked: g.clients.includes(v) }), label]);
+  const groupBoxes = CROSS_GROUPS.map(([label, acts], i) => [h('input', { type: 'checkbox', id: `cross-group-${i}`, checked: acts.every((a) => g.actions.includes(a)) }), label, acts]);
+  // Projects by name, from the approved Electrical PM copy; the ids stay internal. A project the grant still holds
+  // that the copy no longer lists is shown so it can be unticked.
+  const choices = Array.isArray(data.projects) ? data.projects : [];
+  const projectBoxes = choices.map((p, i) => [h('input', { type: 'checkbox', id: `cross-project-${i}`, value: p.id, checked: g.projects.includes(p.id) }), p.name || 'A project no longer in the Electrical PM copy']);
+  const sensitive = h('input', { type: 'checkbox', id: 'cross-sensitive', checked: g.includeSensitive === true });
+  const note = h('p', { class: 'small', role: 'status' });
+  const save = h('button', { type: 'submit', class: 'btn btn-primary', text: 'Save AI actions' });
+  async function submit(e) {
+    e.preventDefault();
+    const body = {
+      clients: clientBoxes.filter(([b]) => b.checked).map(([b]) => b.value),
+      projects: projectBoxes.filter(([b]) => b.checked).map(([b]) => b.value),
+      actions: groupBoxes.filter(([b]) => b.checked).flatMap(([, , acts]) => acts),
+      includeSensitive: sensitive.checked,
+    };
+    await kit.guarded(save, async () => {
+      const res = await kit.api('/api/connections/crossapp/grant', { method: 'PUT', body });
+      if (res.ok && res.data) onSaved(res.data);
+      else note.textContent = kit.failWords(res, 'save AI actions');
+    });
+  }
+  const check = ([b, label]) => h('span', { class: 'conn-check' }, b, h('label', { for: b.id, text: label }));
+  return h(
+    'form',
+    { class: 'conn-grant cross-grant', onsubmit: submit },
+    h('h4', { class: 'conn-grant-title', text: 'AI actions in Electrical PM and Field Hub' }),
+    h('p', { class: 'conn-grant-now', text: `Now: ${crossWords({ ok: true, data })}` }),
+    h('fieldset', { class: 'conn-grant-scopes' }, h('legend', { text: 'Which AI' }), ...clientBoxes.map(check)),
+    h('fieldset', { class: 'conn-grant-scopes' }, h('legend', { text: 'May' }), ...groupBoxes.map(check)),
+    h('fieldset', { class: 'conn-grant-scopes' }, h('legend', { text: 'In these projects' }),
+      ...(projectBoxes.length ? projectBoxes.map(check) : [h('p', { class: 'subtle small', text: 'No Electrical PM projects to choose from yet: they appear once the private Electrical PM copy has loaded.' })])),
+    h('span', { class: 'conn-check' }, sensitive, h('label', { for: 'cross-sensitive', text: 'Also financial records and private fields (off unless you turn it on)' })),
+    h('p', { class: 'subtle small', text: 'Every change goes through Electrical PM itself, which checks it, keeps its history and can refuse it; Field Hub changes go through Electrical PM too. Ask also needs Full access for Work above, and an MCP client needs Full for Work, to change anything. The AI cannot change this setting.' }),
+    note,
+    h('div', { class: 'button-row' }, save),
+  );
 }
 
 function word(scope) {
@@ -179,12 +246,13 @@ export function register(kit) {
     const mcp = await api('/api/connections/mcp');
     const has = (mcp.ok && mcp.data && mcp.data.features) || {};
     const each = (on, path) => (on ? Promise.all(scopes.map((s) => api(`${path}?scope=${s}`))) : []);
-    const [ai, calendar, pm] = await Promise.all([
+    const [ai, calendar, pm, crossapp] = await Promise.all([
       has.ai ? api('/api/ai/status') : null,
       each(has.calendar, '/api/calendar/connections'),
       each(has.pm, '/api/pm/sources'),
+      has.crossapp ? api('/api/connections/crossapp') : null,
     ]);
-    const input = { ai, mcp, calendar, pm, apps: await appLinks() };
+    const input = { ai, mcp, calendar, pm, crossapp, apps: await appLinks() };
     let content = build();
     return section('Connections', content, 'connections');
 
@@ -196,6 +264,16 @@ export function register(kit) {
       content = fresh;
       kit.showToast(`Saved. AI clients: ${grantWords(grant)}`);
       const btn = fresh.querySelector('.conn-grant button[type="submit"]');
+      if (btn) btn.focus();
+    }
+
+    function crossSaved(data) {
+      input.crossapp = { ok: true, status: 200, data };
+      const fresh = build();
+      content.replaceWith(fresh);
+      content = fresh;
+      kit.showToast(`Saved. ${crossWords(input.crossapp)}`);
+      const btn = fresh.querySelector('.cross-grant button[type="submit"]');
       if (btn) btn.focus();
     }
 
@@ -223,7 +301,8 @@ export function register(kit) {
         null,
         sub('Kept in Harrison OS', h('p', { class: 'subtle', text: 'Tasks, waiting-on, notes, ideas, decisions, projects and reminders live here: open one and edit it.' })),
         sub('Copies and links: edit them in their own app', listOf('source')),
-        sub('Optional, needs setup', listOf('setup'), grant ? grantForm(kit, grant, saved) : null),
+        sub('Optional, needs setup', listOf('setup'), grant ? grantForm(kit, grant, saved) : null,
+          input.crossapp && input.crossapp.ok && input.crossapp.data ? crossForm(kit, input.crossapp.data, crossSaved) : null),
       );
     }
   });

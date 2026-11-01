@@ -11,12 +11,15 @@ const MODES = [
   ['resume', 'Catch up'],
   ['write', 'Write'],
 ];
-const REASON_WORDS = {
+export const REASON_WORDS = {
   not_configured: 'AI is not set up, so this comes straight from your saved records.',
   consent_off: 'AI is off for this view. You can turn it on per scope in Memory, under Ask with AI. In All, both Work and Personal need it on.',
   timeout: 'AI took too long, so this comes straight from your saved records.',
   cancelled: 'Stopped. This comes straight from your saved records.',
   provider_error: 'AI could not be reached just now, so this comes straight from your saved records.',
+  auth_rejected: "The AI service rejected the server's API key, so this comes straight from your saved records. The key needs to be replaced in the server settings.",
+  permission_denied: "The AI service refused this request for the server's API key (its account or workspace settings), so this comes straight from your saved records.",
+  rate_limited: 'The AI service is busy for this account right now, so this comes straight from your saved records. Try again in a minute.',
   invalid_output: 'The AI reply could not be checked against your records, so it is not shown.',
   refused: 'The AI declined to answer this one, so this comes straight from your saved records.',
   incomplete: 'The AI answer was cut off, so it is not shown. This comes straight from your saved records.',
@@ -34,6 +37,25 @@ const SCOPE_WORDS = { all: 'Work and Personal', work: 'Work', personal: 'Persona
 let kit;
 let drawer = null;
 let inFlight = null;
+// The conversation, in this page's memory only (never stored): [{ q, a }] for live answers, and the view it
+// belongs to. A new view (scope or project) or "New conversation" starts again.
+let thread = [];
+let threadKey = null;
+export const HISTORY_LIMITS = Object.freeze({ exchanges: 6, question: 1000, answer: 6000, total: 30000 });
+
+/** Pure: the history to send for a thread, newest exchanges kept, within the server's limits. */
+export function historyFor(turns, limits = HISTORY_LIMITS) {
+  const out = [];
+  let total = 0;
+  for (const t of turns.slice(-limits.exchanges).reverse()) {
+    const q = String(t.q || '').slice(0, limits.question);
+    const a = String(t.a || '').slice(0, limits.answer);
+    if (!q.trim() || !a.trim() || total + q.length + a.length > limits.total) break;
+    total += q.length + a.length;
+    out.unshift({ role: 'user', text: q }, { role: 'assistant', text: a });
+  }
+  return out;
+}
 let status = null; // last /api/ai/status: { configured, consent: { work, personal }, web_allowed, web_server_off, web_available, actions: { mode, scopes } }
 const WEB_TOOL_WORDS = { web_search: 'Web search', web_fetch: 'Reading web pages' };
 
@@ -166,7 +188,18 @@ const TOOL_WORDS = { create_item: 'Added', update_item: 'Changed', item_action: 
   create_project: 'Added a project', update_project: 'Changed a project', save_place: 'Saved a place', review_capture: 'Reviewed a capture', delete_capture: 'Deleted a capture',
   capture_text: 'Captured', create_reminder: 'Added a reminder', edit_reminder: 'Changed a reminder', cancel_reminder: 'Cancelled a reminder', set_preference: 'Saved a preference',
   delete_preference: 'Deleted a preference', create_draft: 'Prepared a draft', edit_draft: 'Changed a draft', check_draft: 'Checked a draft', delete_draft: 'Deleted a draft',
-  weekly_review_select: 'Picked for the week', weekly_review_defer: 'Moved to a later week', weekly_review_complete: 'Marked the weekly review done' };
+  weekly_review_select: 'Picked for the week', weekly_review_defer: 'Moved to a later week', weekly_review_complete: 'Marked the weekly review done',
+  pm_create_record: 'Created a record', pm_update_record: 'Changed a record', pm_archive_record: 'Archived a record', pm_restore_record: 'Restored a record',
+  field_edit_record: 'Changed a Field Hub record', field_retry_operation: 'Retried a Field Hub change' };
+const APP_WORDS = { pm: 'Electrical PM', field: 'Field Hub, through Electrical PM' };
+
+/** Pure: one change Ask attempted, in plain words. A source answer of "pending" is never called done. */
+export function actionWords(a) {
+  const pending = a.ok && a.app && a.app !== 'hos' && a.receipt && a.receipt.status === 'pending';
+  const state = !a.ok ? 'Not done' : pending ? 'Sent, waiting for Field Hub to confirm' : 'Done';
+  const where = APP_WORDS[a.app] ? ` in ${APP_WORDS[a.app]}` : a.scope ? ` (${SCOPE_WORDS[a.scope] || a.scope})` : '';
+  return `${state}: ${TOOL_WORDS[a.tool] || String(a.tool || '').replaceAll('_', ' ')}${where}`;
+}
 
 // Every change Ask attempted, from the server's own record of each call (not from the AI's words), each with
 // Undo where the app keeps history. Shown also on a Not AI answer: a change made before the AI failed still stands.
@@ -175,8 +208,8 @@ function actionsList(actions) {
   if (!Array.isArray(actions) || !actions.length) return null;
   const ul = h('ul', { class: 'list ask-actions', 'aria-label': 'What Ask changed' });
   for (const a of actions) {
-    const what = `${a.ok ? 'Done' : 'Not done'}: ${TOOL_WORDS[a.tool] || String(a.tool || '').replaceAll('_', ' ')}${a.scope ? ` (${SCOPE_WORDS[a.scope] || a.scope})` : ''}`;
-    const detail = a.ok ? (a.ids || []).join(', ') : a.message || '';
+    const what = actionWords(a);
+    const detail = a.ok ? [(a.ids || []).join(', '), a.receipt && a.receipt.status ? `PM: ${a.receipt.status}` : ''].filter(Boolean).join(' · ') : a.message || '';
     const li = h('li', { class: 'plain-row' }, h('span', { class: 'row-title', text: what }), detail ? h('span', { class: 'row-meta', text: detail }) : null);
     const changes = a.ok && a.tool !== 'undo_change' ? (a.change_ids || []).filter((c) => /^[0-9]{1,15}$/.test(String(c))) : [];
     if (changes.length) {
@@ -253,6 +286,15 @@ function buildDrawer() {
   const cancel = h('button', { type: 'button', id: 'ask-cancel', class: 'btn btn-secondary btn-block', text: 'Cancel', hidden: true });
   const live = h('p', { id: 'ask-status', class: 'subtle', role: 'status', 'aria-live': 'polite' });
   const result = h('div', { id: 'ask-result' });
+  const earlier = h('div', { id: 'ask-thread' });
+  const fresh = h('button', { type: 'button', id: 'ask-new', class: 'btn btn-ghost', text: 'New conversation', hidden: true });
+  fresh.addEventListener('click', () => {
+    thread = [];
+    renderThread();
+    result.replaceChildren();
+    live.textContent = 'New conversation. Earlier questions are forgotten.';
+    question.focus();
+  });
   form.append(
     h('div', { class: 'sheet-head' }, h('h2', { id: 'ask-title', text: 'Ask' }), h('button', { type: 'button', class: 'btn btn-ghost', text: 'Close', onclick: () => closeDrawer() })),
     h('label', { for: 'ask-question', text: 'What do you want to know?' }),
@@ -262,9 +304,10 @@ function buildDrawer() {
     where,
     submit,
     cancel,
+    fresh,
     live,
   );
-  d.append(form, result);
+  d.append(form, earlier, result);
   form.addEventListener('submit', (e) => {
     e.preventDefault();
     runAsk();
@@ -273,6 +316,20 @@ function buildDrawer() {
   d.addEventListener('close', () => inFlight && inFlight.abort());
   document.body.append(d);
   return d;
+}
+
+// The earlier exchanges of this conversation, collapsed, above the newest answer.
+function renderThread() {
+  const { h } = kit;
+  const box = document.getElementById('ask-thread');
+  const btn = document.getElementById('ask-new');
+  if (!box || !btn) return;
+  btn.hidden = !thread.length;
+  const before = thread.slice(0, -1);
+  if (!before.length) return void box.replaceChildren();
+  const ul = h('ul', { class: 'list ask-earlier', 'aria-label': 'Earlier in this conversation' });
+  for (const t of before) ul.append(h('li', { class: 'stack' }, h('p', { class: 'row-title', text: t.q }), h('p', { class: 'subtle small', text: kit.excerpt(t.a, 400) })));
+  box.replaceChildren(h('details', { class: 'ask-more' }, h('summary', { class: 'btn btn-ghost', text: `Earlier in this conversation (${before.length})` }), ul));
 }
 
 function renderContext() {
@@ -336,6 +393,13 @@ async function runAsk() {
   const mode = (drawer.querySelector('input[name="ask-mode"]:checked') || {}).value || 'retrieve';
   const projectId = drawer.dataset.projectId || null;
   const scope = projectId ? drawer.dataset.projectScope : kit.state.scope;
+  // A conversation belongs to one view: switching scope or project starts a new one.
+  const key = `${scope}|${projectId || ''}`;
+  if (key !== threadKey) {
+    thread = [];
+    threadKey = key;
+    renderThread();
+  }
   const submit = document.getElementById('ask-submit');
   const cancel = document.getElementById('ask-cancel');
   const controller = new AbortController();
@@ -345,8 +409,15 @@ async function runAsk() {
   live.textContent = status && status.configured ? 'Working on an answer…' : 'Looking through your records…';
   result.replaceChildren();
   try {
-    const r = await postAsk({ scope, question: q, mode, context: projectId ? { project_id: projectId } : undefined, tz: kit.deviceTimeZone() }, controller);
+    const history = historyFor(thread);
+    const r = await postAsk({ scope, question: q, mode, context: projectId ? { project_id: projectId } : undefined, tz: kit.deviceTimeZone(), ...(history.length ? { history } : {}) }, controller);
     if (r.ok && r.data && r.data.answer) {
+      // Only live answers continue the conversation; a Not AI answer is not something the AI said.
+      if (r.data.answer.live_ai && r.data.answer.text) {
+        thread.push({ q, a: r.data.answer.text });
+        document.getElementById('ask-question').value = '';
+      }
+      renderThread();
       result.replaceChildren(renderAnswer(r.data.answer));
       live.textContent = r.data.answer.live_ai ? 'AI answer ready.' : 'Answer ready. Not AI.';
     } else if (r.cancelled) {

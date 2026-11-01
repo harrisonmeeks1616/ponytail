@@ -1263,7 +1263,7 @@ const scenarios = [
         check(/Not set up|Not checked here/.test(shortcut), `Shortcut row: ${shortcut}`);
         check(!rows.some((r) => /Connected|Working|OK\b/i.test(r)), `a state claims more than was checked: ${rows.join(' | ')}`);
         // The owner sets AI client access in the card: Full for Work, saved through the owner-only route.
-        const form = page.locator('form.conn-grant:not(.ask-actions-form)');
+        const form = page.locator('form.conn-grant:not(.ask-actions-form):not(.cross-grant)');
         await form.locator('input[name="mcp-grant-mode"][value="full"]').check();
         await form.locator('#mcp-grant-work').check();
         await form.locator('#mcp-grant-personal').uncheck();
@@ -1288,7 +1288,16 @@ const scenarios = [
         const askStored = (await apiOk('GET', '/api/ai/status')).actions;
         check(askStored.mode === 'full' && askStored.scopes.join() === 'work', `Ask actions after Save: ${JSON.stringify(askStored)}`);
         await apiOk('PUT', '/api/ai/actions', { mode: 'read', scopes: [] });
-        return `connection rows: ${rows.join(' | ')}; MCP access saved as Full (Work) from the card, focus kept on Save; Ask access saved as Full (Work) with honest consent and setup words`;
+        // AI actions in Electrical PM and Field Hub: off by default, no project ids to type, honest about the
+        // missing private PM command connection; nothing is enabled by this check.
+        const cross = page.locator('form.cross-grant');
+        const crossNow = (await cross.locator('.conn-grant-now').textContent()) || '';
+        check(/AI clients may not read or change it/.test(crossNow), `cross-app words: ${crossNow}`);
+        check((await cross.locator('textarea, input[type="text"]').count()) === 0, 'no project id box to type into');
+        check(!(await cross.locator('#cross-sensitive').isChecked()), 'financial records and private fields are off by default');
+        const crossStored = await apiOk('GET', '/api/connections/crossapp');
+        check(crossStored.configured === false && crossStored.grant.clients.length === 0, `cross-app status: ${JSON.stringify(crossStored.grant)}`);
+        return `connection rows: ${rows.join(' | ')}; MCP access saved as Full (Work) from the card, focus kept on Save; Ask access saved as Full (Work) with honest consent and setup words; Electrical PM / Field Hub AI actions off, no id typing, sensitive off`;
       } finally {
         await context.close();
       }

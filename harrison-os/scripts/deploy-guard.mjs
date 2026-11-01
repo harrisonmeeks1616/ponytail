@@ -29,10 +29,14 @@ export const FORBIDDEN_REFERENCES = [
 export const LINK_VARS = ['PM_APP_URL', 'FIELD_APP_URL'];
 const LINK_VAR_RE = new RegExp(`"(${LINK_VARS.join('|')})"\\s*:\\s*"[^"\\\\]*"`, 'g');
 const OTHER_CONFIG_FILES = ['wrangler.json', 'wrangler.toml'];
-// The one cross-Worker binding allowed: the optional private PM digest connection, after Harrison approves it.
-// A service binding to the separate digest Worker's named entrypoint only: never the PM Worker itself, its
+// The only cross-Worker bindings allowed, each after Harrison approves it: the private PM digest connection (the
+// separate digest Worker's named entrypoint) and the private PM command connection (the PM Worker's named
+// HarrisonOsCommands entrypoint, docs/CROSS_APP_ACTIONS.md; never its default HTTP entrypoint). Never PM's
 // database or any other resource.
 export const PM_DIGEST_SERVICE = Object.freeze({ binding: 'PM_DIGEST_SERVICE', service: 'harrison-os-pm-digest', entrypoint: 'HarrisonOsDigest' });
+export const PM_COMMANDS_SERVICE = Object.freeze({ binding: 'PM_COMMANDS_SERVICE', service: 'harrison-electrical-pm', entrypoint: 'HarrisonOsCommands' });
+const ALLOWED_SERVICES = [PM_DIGEST_SERVICE, PM_COMMANDS_SERVICE];
+const PM_COMMANDS_SERVICE_RE = /\{\s*"binding"\s*:\s*"PM_COMMANDS_SERVICE"\s*,\s*"service"\s*:\s*"harrison-electrical-pm"\s*,\s*"entrypoint"\s*:\s*"HarrisonOsCommands"\s*\}/g;
 // Binding kinds that would reach resources outside this app. None is allowed in a deploy.
 const CROSS_RESOURCE_KEYS = ['kv_namespaces', 'r2_buckets', 'durable_objects', 'queues', 'hyperdrive', 'vectorize', 'analytics_engine_datasets',
   'dispatch_namespaces', 'mtls_certificates', 'workflows', 'tail_consumers', 'send_email', 'browser', 'ai', 'secrets_store_secrets', 'pipelines', 'unsafe'];
@@ -119,7 +123,9 @@ export function checkConfig(rawText, { preAccess = false } = {}) {
 
   // The two app-link vars may name the other apps' web addresses (links only, never bindings): their values are
   // left out of the forbidden-reference scan. Everything else, including their names, is still scanned.
-  const lower = rawText.replace(LINK_VAR_RE, '"$1": ""').toLowerCase();
+  // The PM command binding names the PM Worker by design: only that exact service value next to its own binding
+  // and entrypoint is left out of the scan (the services check below still requires the whole entry to be exact).
+  const lower = rawText.replace(LINK_VAR_RE, '"$1": ""').replace(PM_COMMANDS_SERVICE_RE, '').toLowerCase();
   for (const ref of FORBIDDEN_REFERENCES) {
     if (lower.includes(ref)) errors.push(`config references "${ref}"; harrison-os must not touch other projects`);
   }
@@ -160,13 +166,13 @@ export function checkConfig(rawText, { preAccess = false } = {}) {
     const list = Array.isArray(cfg.services) ? cfg.services : null;
     const exact = (b) =>
       b && typeof b === 'object' && Object.keys(b).sort().join(',') === 'binding,entrypoint,service' &&
-      b.binding === PM_DIGEST_SERVICE.binding && b.service === PM_DIGEST_SERVICE.service && b.entrypoint === PM_DIGEST_SERVICE.entrypoint;
-    if (!list || list.length > 1 || (list.length === 1 && !exact(list[0]))) {
-      errors.push(`services may hold only ${JSON.stringify(PM_DIGEST_SERVICE)} (the approved private PM digest connection), nothing else`);
+      ALLOWED_SERVICES.some((a) => b.binding === a.binding && b.service === a.service && b.entrypoint === a.entrypoint);
+    if (!list || !list.every(exact) || new Set(list.map((b) => b.binding)).size !== list.length) {
+      errors.push(`services may hold only ${ALLOWED_SERVICES.map((a) => JSON.stringify(a)).join(' and ')} (the approved private PM connections), each once, nothing else`);
     }
   }
   for (const key of CROSS_RESOURCE_KEYS) {
-    if (cfg[key] !== undefined) errors.push(`${key} is not allowed: harrison-os binds only its own D1 database (and, if approved, the PM digest service)`);
+    if (cfg[key] !== undefined) errors.push(`${key} is not allowed: harrison-os binds only its own D1 database (and, if approved, the private PM services)`);
   }
 
   const vars = cfg.vars && typeof cfg.vars === 'object' ? cfg.vars : {};

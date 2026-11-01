@@ -105,4 +105,9 @@ The repository as a whole is not green; only the `harrison-os` job is.
   - Optional `AI_WORKSPACE_ID` (`anthropic-workspace-id` header; malformed values not sent). Exact MCP `tools/list` manifests per mode in `docs/MCP_MANIFEST.json`, checked against the server by the unit suite.
   - Phone results from Codex recorded in ACCEPTANCE.md (visible alert + acknowledgement, offline capture across a force-close, two-way sync: pass; received beacon: not observed; AI key set with consent off, no live answer yet).
   - Cache hos-v23. Not deployed by this session.
+- Ask conversation and cross-app round:
+  - Ask keeps conversation context: up to 6 earlier exchanges from the drawer's memory, validated by the server, nothing stored; a new view or "New conversation" starts again.
+  - Cross-app AI actions on the PM contract root confirmed (docs/CROSS_APP_ACTIONS.md): 13 `pm_*` / `field_*` tools in the shared registry for MCP clients and Ask Full, only with the `PM_COMMANDS_SERVICE` binding and Harrison's separate owner-only grant (AI clients, projects ticked by name, actions, includeSensitive), re-read every call. Changes read PM's metadata and the complete record first, send whole sections merged from it (nothing lost, secure values kept), hide financial types and secure fields unless allowed (conflict DTOs too), pass PM's receipts and refusals on, never call pending saved, and refresh the company-project copy once through pm.js's fenced path after a saved change. Deploy guard accepts exactly the `PM_COMMANDS_SERVICE` -> `harrison-electrical-pm` / `HarrisonOsCommands` entry.
+  - AI key rejection: HTTP 401 / 403 / 429 are `auth_rejected` / `permission_denied` / `rate_limited` with plain words (Ask, briefs, drafts), from a parallel task reviewed and merged.
+  - Cache hos-v25 (`/live-sync.js` kept). Not deployed by this session; no grant or consent enabled.
 

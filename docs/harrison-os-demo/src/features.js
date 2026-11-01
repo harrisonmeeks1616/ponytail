@@ -8,8 +8,10 @@ import * as calendar from './calendar.js';
 import * as pm from './pm.js';
 import * as review from './review.js';
 import * as mcp from './mcp.js';
+import * as syncState from './sync-state.js';
+import * as crossapp from './crossapp.js';
 
-const MODULES = [ask, drafts, calendar, pm, review, mcp];
+const MODULES = [ask, drafts, calendar, pm, review, mcp, syncState, crossapp];
 
 export const FEATURE_ROUTES = MODULES.flatMap((m) => m.ROUTES);
 
