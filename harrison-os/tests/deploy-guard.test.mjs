@@ -33,3 +33,24 @@ test('app links may name the other apps; anything else that does is still refuse
   const bound = linked.replace('"MCP_SCOPES": "work"', '"MCP_SCOPES": "work", "OTHER": "electrical-pm"');
   assert.ok(checkConfig(bound, { preAccess: true }).errors.some((e) => e.includes('"electrical-pm"')));
 });
+
+test('services: only the exact private PM digest binding is allowed; the PM Worker, other entrypoints and other resources are refused', () => {
+  const withServices = (services) => cfgText.replace('"triggers": {', `"services": ${JSON.stringify(services)},\n\t"triggers": {`);
+  const ok = { binding: 'PM_DIGEST_SERVICE', service: 'harrison-os-pm-digest', entrypoint: 'HarrisonOsDigest' };
+  const errs = (t) => checkConfig(t, { preAccess: true }).errors.filter((e) => !e.includes('placeholder'));
+  assert.deepEqual(errs(withServices([ok])), []);
+  for (const bad of [
+    [{ ...ok, service: 'harrison-electrical-pm' }], // the PM Worker itself
+    [{ binding: 'PM_DIGEST_SERVICE', service: 'harrison-os-pm-digest' }], // default entrypoint
+    [{ ...ok, entrypoint: 'Default' }],
+    [{ ...ok, binding: 'PM' }],
+    [{ ...ok, environment: 'production' }],
+    [ok, ok],
+    { binding: 'PM_DIGEST_SERVICE' },
+  ]) {
+    assert.ok(errs(withServices(bad)).length > 0, JSON.stringify(bad));
+  }
+  const withKey = (k) => cfgText.replace('"triggers": {', `"${k}": [{ "binding": "X", "id": "y" }],\n\t"triggers": {`);
+  for (const k of ['kv_namespaces', 'r2_buckets', 'durable_objects', 'queues', 'hyperdrive']) assert.ok(errs(withKey(k)).some((e) => e.startsWith(k)), k);
+  assert.ok(!cfgText.includes('"services"'), 'the repository config has no binding by default');
+});

@@ -222,7 +222,7 @@ test('digest link: not connected without config; https only; bearer token; failu
   const list = await off.call('GET', '/api/pm/sources?scope=work');
   const link = list.data.sources.find((s) => s.kind === 'http');
   assert.equal(link.state, 'not_connected');
-  assert.equal(link.message, 'Not connected: needs an authorized digest link');
+  assert.equal(link.message, 'Not connected: needs the approved private PM connection or an authorized digest link');
   assert.equal((await off.call('POST', '/api/pm/sources/pm-http/refresh', { scope: 'work' })).data.error.code, 'not_connected');
   assert.equal((await off.call('GET', '/api/pm/sources?scope=personal')).data.sources.length, 0);
   assert.equal(pm.httpConfigured({ ...LINK_ENV, PM_DIGEST_URL: 'http://pm.example.com/d.json' }), false);
@@ -340,4 +340,53 @@ test('injection: export text cannot pick its scope, sample flag, link scheme or 
   assert.equal(await DB.prepare("SELECT COUNT(*) AS n FROM pm_records WHERE scope = 'personal'").first('n'), 0);
   const dg = await call('GET', '/api/pm/digest?scope=work');
   assert.ok(dg.data.projects.some((p) => p.overdue.some((i) => i.title.startsWith('Ignore previous instructions'))), 'kept as plain text');
+});
+
+// ---------------------------------------------------------------- optional private connection (service binding)
+
+const rpcEnv = (getDigest) => ({ PM_DIGEST_SERVICE: { getDigest } });
+
+test('private PM connection: set up is not connected until a real read; same contract, limits and kept copy as the link', async () => {
+  assert.equal(pm.rpcConfigured({}), false);
+  assert.equal(pm.rpcConfigured({ PM_DIGEST_SERVICE: {} }), false, 'a binding without getDigest is not the digest connection');
+  const fixture = JSON.parse(JSON_FIX);
+  let mode = 'ok';
+  const s = setup(rpcEnv(async () => {
+    if (mode === 'throw') throw new Error('service binding failed');
+    if (mode === 'hang') return new Promise(() => {});
+    if (mode === 'huge') return { ...fixture, padding: 'x'.repeat(1_100_000) };
+    if (mode === 'bad') return 'not a digest';
+    return structuredClone(fixture);
+  }));
+  // Set up, never read: says so, never "connected".
+  let src = (await s.call('GET', '/api/pm/sources?scope=work')).data.sources.find((x) => x.kind === 'http');
+  assert.equal(src.state, 'never');
+  assert.equal(src.label, 'Company PM digest (private connection)');
+  assert.equal((await s.call('GET', '/api/pm/sources?scope=personal')).data.sources.length, 0, 'Work only');
+  // A real read.
+  const ok = await pm.refreshHttpSource(s.env, NOW, { fetchImpl: () => { throw new Error('the link must not be used'); } });
+  assert.equal(ok.ok, true, JSON.stringify(ok));
+  src = (await s.call('GET', '/api/pm/sources?scope=work')).data.sources.find((x) => x.kind === 'http');
+  assert.equal(src.state, 'ok');
+  assert.equal(src.system, 'Example PM');
+  const records = async () => (await s.env.DB.prepare("SELECT COUNT(*) AS n FROM pm_records WHERE source_id = 'pm-http'").first('n'));
+  const before = await records();
+  assert.ok(before > 0);
+  const ev = await s.env.DB.prepare("SELECT detail FROM events WHERE kind = 'pm_refresh' ORDER BY id DESC LIMIT 1").first('detail');
+  assert.equal(JSON.parse(ev).via, 'rpc');
+  // Failures: error code recorded, the previous copy kept.
+  for (const [m, code] of [['throw', 'rpc_error'], ['hang', 'timeout'], ['huge', 'too_large'], ['bad', 'invalid_format']]) {
+    mode = m;
+    const r = await pm.refreshHttpSource(s.env, NOW + HOUR, { timeoutMs: 20 });
+    assert.equal(r.code, code, m);
+    assert.equal(await records(), before, `${m}: previous copy kept`);
+    src = (await s.call('GET', '/api/pm/sources?scope=work')).data.sources.find((x) => x.kind === 'http');
+    assert.equal(src.state, 'error');
+    assert.equal(src.last_error_code, code);
+  }
+  // Hourly cron claim applies the same way.
+  mode = 'ok';
+  const s2 = setup(rpcEnv(async () => structuredClone(fixture)));
+  assert.equal((await pm.onScheduled(s2.env, NOW)).ok, true);
+  assert.equal((await pm.onScheduled(s2.env, NOW + 59 * 60 * 1000)).code, 'not_due');
 });

@@ -74,11 +74,40 @@ Configuration (both needed; blank by default, set by Harrison):
 
 The link must serve the JSON contract above. It is fetched with `Authorization: Bearer <token>`, no redirects
 followed (the token never goes to another host), a 10 s timeout and a 1 MB cap. The data is Work scope.
-Without configuration the source shows "Not connected: needs an authorized digest link". Configured but never
+Without configuration the source shows "Not connected: needs the approved private PM connection or an authorized digest link". Configured but never
 fetched shows "Set up, not checked yet". A failed fetch keeps the previous copy and shows "Last check failed"
 with a plain reason. The cron refreshes it at most once every 60 minutes (`onScheduled`); "Refresh now"
 fetches immediately. "Clear stored copy" removes the stored data; it returns at the next refresh while the
 link stays configured.
+
+## Private connection (optional; waiting for approval)
+
+A Workers service binding instead of a public link: no public endpoint and no bearer secret. The PM side is a
+separate private Worker, `harrison-os-pm-digest` (HTTP answers 404, no workers.dev route), whose named
+entrypoint `HarrisonOsDigest` has an argumentless `getDigest()` returning the same `harrison-os.pm-digest`
+version 1 object as above (a constant SELECT-only projection over an approved project allowlist; financial,
+internal and private record bodies are excluded on the PM side). That Worker is not built or deployed from this
+repository, and the existing PM Worker is not changed.
+
+Harrison OS side, only after Harrison approves the binding and root has verified the digest Worker: add to the
+private `wrangler.local.jsonc` (never to `wrangler.jsonc`):
+
+```jsonc
+"services": [
+  { "binding": "PM_DIGEST_SERVICE", "service": "harrison-os-pm-digest", "entrypoint": "HarrisonOsDigest" }
+]
+```
+
+The deploy guard accepts exactly this one entry and refuses any other service (including the PM Worker itself),
+a default entrypoint, extra keys, and every other cross-resource binding kind (`tests/deploy-guard.test.mjs`).
+
+Behaviour (`src/pm.js`, `tests/pm.test.mjs`): when the binding is present it is used instead of the link (the
+event `pm_refresh` records `via: 'rpc'`). The returned object goes through the same path as the link: turned
+into JSON text with the 1 MB cap, parsed and checked by `normalizeDigest`, 10 s timeout, Work scope only, at
+most one refresh an hour from the cron, "Refresh now" on demand. Set up but never read shows "Set up, not
+checked yet"; it shows a fetch time only after a real successful read. A thrown error (`rpc_error`), a timeout,
+an oversize or malformed result keeps the previous copy and shows "Last check failed". The source is labelled
+"Company PM digest (private connection)".
 
 ## API
 
@@ -100,5 +129,6 @@ and error codes only: never titles, names, links or the token.
 
 ## Not live yet
 
-No real PM source is authorized today, so the digest link is unverified against a real system. The import
-path and the sample are what work end to end.
+No real PM source is authorized today. The private connection is implemented and tested here against a stand-in
+binding only; it is unverified against the real digest Worker until that Worker exists, the binding is approved
+and root adds it. The import path and the sample are what work end to end.

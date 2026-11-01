@@ -19,6 +19,8 @@ export const FORMAT = 'harrison-os.pm-digest';
 export const CSV_HEADER = ['project_id', 'project_name', 'item_id', 'title', 'status', 'due_on', 'owner_label', 'url', 'updated_at'];
 export const LIMITS = Object.freeze({ projects: 200, items: 300, records: 1500, fetchBytes: 1_000_000, fetchMs: 10_000 });
 export const HTTP_SOURCE_ID = 'pm-http';
+const LIVE_LABEL_HTTP = 'Company PM digest link';
+const LIVE_LABEL_RPC = 'Company PM digest (private connection)';
 export const STALE_MS = 48 * 3600 * 1000;
 export const REFRESH_MS = 60 * 60 * 1000;
 const HTTP_SCOPE = 'work'; // the authorized digest link is company data
@@ -370,6 +372,48 @@ export function httpConfigured(env) {
   return !!(env && safeUrl(env.PM_DIGEST_URL) && typeof env.PM_DIGEST_TOKEN === 'string' && env.PM_DIGEST_TOKEN.trim());
 }
 
+// Optional private connection: a Workers service binding PM_DIGEST_SERVICE to the separate digest Worker
+// (service harrison-os-pm-digest, named entrypoint HarrisonOsDigest), whose argumentless getDigest() returns
+// the same harrison-os.pm-digest v1 object as the link. No public endpoint and no bearer secret. Present only
+// when root adds the binding to the private config after approval; the repository config never has it.
+export function rpcConfigured(env) {
+  return !!(env && env.PM_DIGEST_SERVICE && typeof env.PM_DIGEST_SERVICE.getDigest === 'function');
+}
+
+/** A live digest source is set up (the private connection, or the link). Set up is not connected: see state. */
+export function liveConfigured(env) {
+  return rpcConfigured(env) || httpConfigured(env);
+}
+
+/**
+ * One bounded call of the private connection: the same 10 s limit and byte cap as the link, the value is
+ * turned into JSON text and parsed by the same path, so the contract and limits are identical.
+ */
+async function fetchDigestRpc(env, timeoutMs) {
+  let timer;
+  try {
+    const value = await Promise.race([
+      env.PM_DIGEST_SERVICE.getDigest(),
+      new Promise((_, reject) => {
+        timer = setTimeout(() => reject(new Error('pm_rpc_timeout')), timeoutMs);
+      }),
+    ]);
+    let text;
+    try {
+      text = JSON.stringify(value);
+    } catch {
+      return { ok: false, code: 'invalid_format' };
+    }
+    if (typeof text !== 'string') return { ok: false, code: 'invalid_format' };
+    if (new TextEncoder().encode(text).byteLength > LIMITS.fetchBytes) return { ok: false, code: 'too_large' };
+    return { ok: true, text };
+  } catch (e) {
+    return { ok: false, code: e && e.message === 'pm_rpc_timeout' ? 'timeout' : 'rpc_error' };
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
 async function readCapped(res, cap) {
   if (!res.body) return '';
   const reader = res.body.getReader();
@@ -429,15 +473,16 @@ async function fetchDigest(env, fetchImpl, timeoutMs) {
  * On failure the previous copy is kept and marked with the error; it is never wiped.
  */
 export async function refreshHttpSource(env, nowMs, { fetchImpl = globalThis.fetch, claimOlderThanMs = null, timeoutMs = LIMITS.fetchMs } = {}) {
-  if (!httpConfigured(env)) return { ok: false, code: 'not_connected' };
+  if (!liveConfigured(env)) return { ok: false, code: 'not_connected' };
+  const via = rpcConfigured(env) ? 'rpc' : 'http'; // the private connection wins when both are set
   const d = env.DB;
   const nowIso = iso(nowMs);
   await d
     .prepare(
-      `INSERT INTO pm_sources (id, scope, label, kind, state, sample, created_at) VALUES (?, ?, 'Company PM digest link', 'http', 'never', 0, ?)
-       ON CONFLICT(id) DO NOTHING`,
+      `INSERT INTO pm_sources (id, scope, label, kind, state, sample, created_at) VALUES (?, ?, ?, 'http', 'never', 0, ?)
+       ON CONFLICT(id) DO UPDATE SET label = excluded.label`,
     )
-    .bind(HTTP_SOURCE_ID, HTTP_SCOPE, nowIso)
+    .bind(HTTP_SOURCE_ID, HTTP_SCOPE, via === 'rpc' ? LIVE_LABEL_RPC : LIVE_LABEL_HTTP, nowIso)
     .run();
   const claim =
     claimOlderThanMs == null
@@ -448,7 +493,7 @@ export async function refreshHttpSource(env, nowMs, { fetchImpl = globalThis.fet
           .run();
   if (!claim.meta.changes) return { ok: false, code: 'not_due' };
 
-  const got = await fetchDigest(env, fetchImpl, timeoutMs);
+  const got = via === 'rpc' ? await fetchDigestRpc(env, timeoutMs) : await fetchDigest(env, fetchImpl, timeoutMs);
   let result;
   if (got.ok) {
     try {
@@ -471,14 +516,14 @@ export async function refreshHttpSource(env, nowMs, { fetchImpl = globalThis.fet
     await d.prepare("UPDATE pm_sources SET state = 'error', last_error_code = ? WHERE id = ?").bind(result.code, HTTP_SOURCE_ID).run();
   }
   await logEvent(d, nowMs, 'pm_refresh', HTTP_SOURCE_ID, result.ok
-    ? { state: 'ok', projects: result.projects, items: result.items, ...result.changes.counts }
-    : { state: 'error', code: result.code, ...(result.status ? { status: result.status } : {}) });
+    ? { via, state: 'ok', projects: result.projects, items: result.items, ...result.changes.counts }
+    : { via, state: 'error', code: result.code, ...(result.status ? { status: result.status } : {}) });
   return result;
 }
 
 /** Cron: at most one digest-link fetch per REFRESH_MS. One bounded unit of work per call. */
 export async function onScheduled(env, nowMs = Date.now(), opts = {}) {
-  if (!httpConfigured(env)) return { skipped: 'not_connected' };
+  if (!liveConfigured(env)) return { skipped: 'not_connected' };
   return refreshHttpSource(env, nowMs, { ...opts, claimOlderThanMs: REFRESH_MS });
 }
 
@@ -488,7 +533,7 @@ function sourceEntry(row, nowMs, env) {
   const exportedMs = row.exported_at ? Date.parse(row.exported_at) : null;
   const basisMs = exportedMs ?? (row.last_import_at ? Date.parse(row.last_import_at) : null);
   let state = row.state;
-  if (row.kind === 'http' && env && !httpConfigured(env)) state = 'not_connected';
+  if (row.kind === 'http' && env && !liveConfigured(env)) state = 'not_connected';
   let changes = null;
   try {
     changes = row.last_changes ? JSON.parse(row.last_changes) : null;
@@ -528,7 +573,7 @@ function notConnectedEntry() {
     system: null,
     url: null,
     state: 'not_connected',
-    message: 'Not connected: needs an authorized digest link',
+    message: 'Not connected: needs the approved private PM connection or an authorized digest link',
     last_error_code: null,
     fetched_at: null,
     last_attempt_at: null,
@@ -566,7 +611,7 @@ export async function listSources(d, scope, { nowMs, env } = {}) {
     s.items = Number(bySource.get(s.id)?.items || 0);
   }
   if (env && scope !== 'personal' && !sources.some((s) => s.id === HTTP_SOURCE_ID)) {
-    if (httpConfigured(env)) sources.push({ ...notConnectedEntry(), state: 'never', message: 'Set up, not checked yet' });
+    if (liveConfigured(env)) sources.push({ ...notConnectedEntry(), label: rpcConfigured(env) ? LIVE_LABEL_RPC : LIVE_LABEL_HTTP, state: 'never', message: 'Set up, not checked yet' });
     else sources.push(notConnectedEntry());
   }
   return sources;
@@ -739,7 +784,7 @@ async function postRefresh(ctx, id) {
     throw new HttpError(409, 'import_source', 'This source is a file import. Import an updated file to refresh it.');
   }
   if (scope !== HTTP_SCOPE) throw new db.NotFoundError('source not found');
-  if (!httpConfigured(ctx.env)) throw new HttpError(409, 'not_connected', 'Not connected: needs an authorized digest link');
+  if (!liveConfigured(ctx.env)) throw new HttpError(409, 'not_connected', 'Not connected: needs the approved private PM connection or an authorized digest link');
   const res = await refreshHttpSource(ctx.env, ctx.nowMs);
   return sourceResponse(ctx, HTTP_SOURCE_ID, scope, 200, { refreshed: res.ok, error_code: res.ok ? null : res.code, changes: res.ok ? res.changes : null });
 }

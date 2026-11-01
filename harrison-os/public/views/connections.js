@@ -59,7 +59,7 @@ function summarizeRows({ ai, calendar = [], pm = [], mcp, apps = null }, { forma
     problem: 'A calendar could not be updated.',
   }));
   rows.push(sourcesRow('Company projects', pm, 'sources', {
-    none: 'Import a project export file from Electrical PM. A live link would need a digest endpoint in Electrical PM, which it does not have yet.',
+    none: 'Import a project export file from Electrical PM. A live copy needs the private PM digest connection, which is waiting for approval.',
     problem: 'A project source could not be updated.',
   }));
 
