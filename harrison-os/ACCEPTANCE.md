@@ -2,7 +2,7 @@
 
 Labels are not interchangeable: **implemented** (code exists), **locally verified** (unit/API or local browser test passed on this checkout, commit named), **integrated** (on main with the other slices), **deployed** (hosted Worker), **device verified** (real iPhone), **proven in use** (pilot). A blocked case names its exact prerequisite.
 
-Current evidence: the design-and-links commit after `0df24e7` (2026-11-01, Node 22, Chromium 153 headless): 383/383 unit, 15/15 local browser (F1-F14, X1), preview walkthrough all steps passed with 0 console errors and only Google-font GETs leaving the origin. Previous: `4a416f4` 380/380, 15/15. Earlier: `13abde8` 365/365 unit, 11/11 browser, 16/16 preview (that commit only, not reused as evidence for later changes). Baseline commit `c9cf526`: 207/207 unit, 11/11 local browser (F1-F10, X1) rerun 10:58-11:05 EDT on this cloud checkout. Imported historical reports are not counted.
+Current local evidence: the null-text fix commit after `e44fd7d` (2026-11-01): 385/385 unit, 16/16 local browser (F1-F15, X1), preview walkthrough passed. Production evidence is listed under "Deployment status". Earlier: `13abde8` 365/365 unit, 11/11 browser, 16/16 preview (that commit only, not reused as evidence for later changes). Baseline commit `c9cf526`: 207/207 unit, 11/11 local browser (F1-F10, X1) rerun 10:58-11:05 EDT on this cloud checkout. Imported historical reports are not counted.
 
 ## Deployment status (reported by Codex, 2026-11-01; not independently verified from the build session, whose network cannot reach workers.dev)
 
@@ -12,7 +12,17 @@ Current evidence: the design-and-links commit after `0df24e7` (2026-11-01, Node 
 - Dev/test flags (`DEV_ALLOW_UNAUTH`, `SPIKE_TEST_HOOKS`, `ALLOW_TEST_PUSH_ENDPOINT`) all `0`; normal (not `--pre-access`) deploy guard passed.
 - `PM_APP_URL` and `FIELD_APP_URL` set as links only. The PM Worker and database, the Field Hub and the old spike were not deployed or modified.
 - Not configured: AI API key, calendar, live PM digest, iPhone Shortcut, MCP.
-- **Pending:** first authenticated sign-in (Harrison's emailed code) and an authenticated save. Until that is observed, nothing below moves past "deployed".
+- **Production checks on deployed `f41c677` (Codex, 2026-11-01, desktop Chrome; reported, not rerun by the build session):**
+  - A3: owner sign-in succeeded; `/api/session` returns kind `owner`, masked iCloud identity, build `f41c677`, testHooks false (BUILD_ID override confirmed).
+  - A1/A23: a Work capture synced, survived reload and was searchable; a second capture was parsed and filed as one task plus one reminder; the task shows in Open tasks.
+  - A9 (partial, scheduling only): production cron ran at 2026-11-01T00:50:34Z with fired=1, errors=0; D1 events show `delivery_scheduled` then `delivery_no_route` with 0 subscriptions. The reminder was due 00:49Z, so this first run was about 95 s late during new-trigger propagation. Not phone delivery.
+  - A18 (smoke): a Personal QA note is absent from Work Memory search and the Work export, present in the All export.
+  - A20 (partial): Work and All export files downloaded and parsed. Production restore not run (browser file-upload permission not granted); deletion and tombstone-restore not exercised. QA notes remain, labelled QA.
+  - Connections: PM and Field Hub both "Linked" and each opened its correct app in a new tab; other integrations "Not set up".
+  - A21 (partial, desktop): Today, Waiting, Projects, Memory showed 0 console warnings or errors.
+  - CI: `harrison-os` workflow succeeded at `f41c677` (GitHub Actions run 41256605429).
+  - Not claimed: any multi-hour runtime/CPU sample; any real iPhone push, offline or session-expiry result.
+- **Live defect found and fixed after this deploy:** Open tasks > Edit printed the word "null" under Title, Notes and Project (the DOM's native `append()` turns a missing hint into text). Fixed in the shared `field()` renderer by routing through `appendKids`; one sibling with the same shape (Company projects with no sources) fixed too. Regressions: `tests/static-dom-null.test.mjs` (fails on the old code) and browser F15 (reproduced exactly three "null" texts on the old code; passes now). Needs a redeploy to reach production.
 - **Untested on a real iPhone:** install, push alert, offline queue, session expiry. Not passed.
 
 | ID | Status | Evidence (commit, test) | Remaining / blocked on |

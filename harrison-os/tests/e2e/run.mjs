@@ -1268,6 +1268,48 @@ const scenarios = [
       }
     },
   },
+  {
+    id: 'F15',
+    name: 'no stray "null" text: Open tasks > Edit form, and Company projects with no sources',
+    async run() {
+      const { context, page } = await openApp('F15', { offlineExpected: true });
+      // Visible text nodes that are exactly "null" or "undefined" (the DOM's append() prints a null child that way).
+      const strays = () =>
+        page.evaluate(() => {
+          const out = [];
+          const w = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT);
+          for (let n = w.nextNode(); n; n = w.nextNode()) {
+            const t = n.nodeValue.trim();
+            if ((t === 'null' || t === 'undefined') && n.parentElement && n.parentElement.offsetParent !== null) out.push(`${n.parentElement.tagName}.${n.parentElement.className}`);
+          }
+          return out;
+        });
+      try {
+        const title = 'Sample QA task for the edit form';
+        await apiOk('POST', '/api/items', { scope: 'work', kind: 'task', title });
+        await start(page, '#/tasks');
+        const row = page.locator('#tasks-body li.check-row', { has: page.locator('.check-title', { hasText: title }) });
+        await row.waitFor({ timeout: 15000 });
+        await row.getByRole('button', { name: /Edit/ }).click();
+        await page.locator('#edit-sheet[open] form').first().waitFor({ timeout: 10000 });
+        const labels = await page.$$eval('#edit-sheet form label', (els) => els.map((e) => e.textContent.trim()));
+        const inEdit = await strays();
+        check(labels.includes('Title'), `edit form labels ${JSON.stringify(labels)}`);
+        check(inEdit.length === 0, `"null" text in the edit form: ${inEdit.join(', ')}`);
+        await page.keyboard.press('Escape');
+        await page.waitForSelector('#edit-sheet:not([open])', { state: 'attached', timeout: 10000 });
+        await setScopeSwitch(page, 'personal');
+        await gotoRoute(page, '#/pm');
+        await page.waitForFunction(() => /official record/.test(document.body.textContent), null, { timeout: 15000 });
+        const inPm = await strays();
+        check(inPm.length === 0, `"null" text on Company projects without sources: ${inPm.join(', ')}`);
+        await setScopeSwitch(page, 'work');
+        return `edit form labels ${labels.join(' / ')}: no "null" text; Personal company projects (no sources): no "null" text`;
+      } finally {
+        await context.close();
+      }
+    },
+  },
 ];
 
 // After the scenarios: no sample text in server output or events.
