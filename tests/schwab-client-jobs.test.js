@@ -225,16 +225,19 @@ test('wrong job and changed instance replies are rejected; bridge credentials ne
   assert.equal(f.storage.get(settingsKey).hubKey, prior);
 });
 
-test('a stale v2 revision clears the rejected attempt and pulls before creating a new operation', async () => {
+test('a stale v2 revision recovers in the same round, pulling before a fresh operation', async () => {
   const f = await syncFixture(); let raced = false;
   f.control.delay = async req => {
     if (req.action !== 'push' || raced) return;
     raced = true;
-    const accepted = f.server.send({ ...req, opId: 'concurrent-writer' });
+    const accepted = f.server.send({ ...req, opId: 'concurrent-writer', tasks: req.tasks.map(t => ({ ...t, uid: 'concurrent-other-task' })) });
     assert.equal(accepted.ok, true);
   };
   const result = await f.newSync().cycle();
-  assert.equal(result.state, 'error'); assert.match(result.message, /changed on the hub/i);
+  assert.equal(result.state, 'live', 'the documented same-round rebase does not report a healthy online phone as failed');
+  const firstPush = f.requests.findIndex(r => r.action === 'push');
+  assert.equal(f.requests[firstPush + 1].action, 'pull');
+  assert.equal(f.requests.filter(r => r.action === 'push').length, 2, 'the original task is retried after the other task advances the revision');
   assert.equal(f.storage.get(f.scope.key('schwab.hubPending')), null);
   const n = f.requests.length;
   const next = await f.newSync().cycle();

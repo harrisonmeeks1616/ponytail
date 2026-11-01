@@ -447,7 +447,7 @@ export function normShift(x) {
 export const notesLock = notesPrefix => 'fieldhub-notes:' + notesPrefix;
 const withNotesLock = fn => (globalThis.navigator?.locks?.request ? navigator.locks.request(notesLock(NOTE_KEY()), () => fn()) : fn());
 // The keys of this origin that start with prefix (the notes' own keys), and a key removed as save writes one (never during a restore).
-export function keysWith(prefix) { try { return Array.from({ length: localStorage.length }, (_, i) => localStorage.key(i)).filter(k => typeof k === 'string' && k.startsWith(prefix)); } catch { return []; } }
+export function keysWith(prefix) { try { return localStorage.keys().filter(k => k.startsWith(prefix)); } catch { return []; } }
 export function drop(key) {
   try { jobScope.assertWritable(); if (localStorage.getItem(RESTORE_LOG) !== null) return false; localStorage.removeItem(jobKey(key)); return true; } catch { return false; }
 }

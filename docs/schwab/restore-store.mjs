@@ -76,7 +76,15 @@ export function createRestoreStorage(rawInput, prefix) {
     } catch { return 'restore_invalid'; }
   }
   const writable = () => { const s = status(); if (s) throw error(s); };
-  const logicalKeys = () => { resolve(); return [...new Set([...rawKeys().filter(k => !k.startsWith(prefix) && !metadata(k)), ...snapshot(captured).keys()])].sort(); };
+  const logicalKeys = () => {
+    resolve();
+    const keys = rawKeys().filter(k => !metadata(k));
+    if (captured === null) { // ordinary phone: enumerate names once, without reading every stored value
+      if (keys.some(k => k.startsWith(prefix) && !scoped(k))) throw error('restore_invalid');
+      return keys.sort();
+    }
+    return [...new Set([...keys.filter(k => !k.startsWith(prefix)), ...snapshot(captured).keys()])].sort();
+  };
 
   function change(k, value) {
     resolve();
@@ -149,9 +157,15 @@ export function createRestoreStorage(rawInput, prefix) {
       });
     },
     generationSnapshot(id) { resolve(); return new Map(snapshot(id)); },
-    getItem(k) { resolve(); k = String(k); return k.startsWith(prefix) ? snapshot(captured).get(k) ?? null : raw.getItem(k); },
+    getItem(k) {
+      resolve(); k = String(k);
+      if (!k.startsWith(prefix)) return raw.getItem(k);
+      if (!scoped(k)) throw error('restore_invalid');
+      return captured === null ? raw.getItem(k) : snapshot(captured).get(k) ?? null;
+    },
     setItem(k, v) { change(k, String(v)); },
     removeItem(k) { change(k, null); },
+    keys: logicalKeys, // one coherent enumeration; callers must not rescan the whole view for every key(i)
     key(i) { i = Number(i); return Number.isInteger(i) && i >= 0 ? logicalKeys()[i] ?? null : null; },
     get length() { return logicalKeys().length; },
   };

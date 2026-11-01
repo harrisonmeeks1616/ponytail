@@ -12,7 +12,7 @@ export function storageKey(id, key) {
   if (!id || !key.startsWith('schwab.')) return key;
   return prefix(id) + key.slice(7);
 }
-const rawLegacy = s => Object.fromEntries(Array.from({ length: s.length }, (_, i) => s.key(i)).filter(k => k?.startsWith('schwab.') && k !== 'schwab.unlock').sort().map(k => [k, s.getItem(k)]));
+const rawLegacy = s => Object.fromEntries(s.keys().filter(k => k.startsWith('schwab.') && k !== 'schwab.unlock').sort().map(k => [k, s.getItem(k)]));
 const same = (a, b) => JSON.stringify(a) === JSON.stringify(b);
 const browserStorage = () => { try { return globalThis.localStorage; } catch { return undefined; } };
 export function createJobScope({ href = 'https://local.invalid/tasks.html', storage = browserStorage, navigate = url => globalThis.location.assign(url) } = {}) {
@@ -25,8 +25,8 @@ export function createJobScope({ href = 'https://local.invalid/tasks.html', stor
     const jobs = new Map((Array.isArray(rows) ? rows : []).filter(j => j && JOB_ID.test(j.id) && typeof j.label === 'string').map(j => [j.id, { id: j.id, label: j.label }]));
     // Recover direct-link jobs from their own settings; listing never writes or inspects legacy stores.
     try {
-      for (let i = 0; i < storage.length; i++) {
-        const k = storage.key(i), jobId = /^fieldHub\.job\.([^.]+)\.settings$/.exec(k || '')?.[1];
+      for (const k of storage.keys()) {
+        const jobId = /^fieldHub\.job\.([^.]+)\.settings$/.exec(k)?.[1];
         if (!jobId || !JOB_ID.test(jobId) || jobs.has(jobId)) continue;
         const settings = parse(storage, k, null);
         if (!settings || typeof settings !== 'object' || Array.isArray(settings)) continue;
@@ -78,7 +78,7 @@ export function createJobScope({ href = 'https://local.invalid/tasks.html', stor
     const source = rawLegacy(storage), keys = Object.keys(source);
     if (!keys.length) fail('no_legacy_data');
     if ('schwab.restoreLog' in source) fail('restore_pending'); // a restore cut short on the original page: only that page puts it back (shared.mjs recoverRestore)
-    const targetKeys = Array.from({ length: storage.length }, (_, i) => storage.key(i)).filter(k => k?.startsWith(prefix(jobId)));
+    const targetKeys = storage.keys().filter(k => k.startsWith(prefix(jobId)));
     // Recopy is explicit and permitted only when nobody edited the first copy. Both-side edits need reviewed reconciliation.
     if (old) {
       if (Object.keys(old.source).some(k => !(k in source))) fail('both_changed'); // removed legacy stores need reviewed reconciliation, never leave a stale destination silently
