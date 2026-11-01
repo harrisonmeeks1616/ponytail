@@ -157,14 +157,25 @@ function webList(sources) {
         h(
           'a',
           { class: 'row-link', href, target: '_blank', rel: 'noopener noreferrer' },
-          h('span', { class: 'chips' }, h('span', { class: 'chip chip-kind', text: new URL(href).hostname })),
+          h('span', { class: 'chips' }, h('span', { class: 'chip chip-kind', text: new URL(href).hostname }), h('span', { class: 'chip', text: s.kind === 'fetch' ? 'Page it read' : 'Search result' })),
           h('span', { class: 'row-title', text: kit.excerpt(s.title || href, 140) }),
-          s.cited_text ? h('span', { class: 'row-meta', text: `“${kit.excerpt(s.cited_text, 160)}”` }) : null,
+          s.quoted !== false && s.cited_text ? h('span', { class: 'row-meta', text: `Quoted: “${kit.excerpt(s.cited_text, 160)}”` }) : null,
+          s.quoted === false ? h('span', { class: 'row-meta', text: 'Named in the answer; it came back from the web, but no passage is quoted.' }) : null,
         ),
       ),
     );
   }
   return ul;
+}
+
+/** Pure: what the web did for a live answer, from what really came back and what the answer quotes or names. */
+export function webUsedWords(a) {
+  const act = a.web_activity || {};
+  const did = act.searches && act.fetches ? 'It searched the web and read a page' : act.fetches && !act.searches ? 'It read a web page' : 'It searched the web';
+  const list = a.web_sources || [];
+  if (list.some((s) => s.quoted !== false)) return `${did}; the pages it quotes are linked below.`;
+  if (list.length) return `${did}; the answer names pages that came back, linked below, but quotes none: check them.`;
+  return `${did}, but the answer cites no page: treat it as unchecked.`;
 }
 
 function labelChip(live) {
@@ -176,7 +187,7 @@ function liveNote(a) {
   const sent = a.records_shared
     ? `Your ${(a.shared_scopes || []).map((s) => SCOPE_WORDS[s] || s).join(' and ')} records were sent to AI for this answer.`
     : 'No saved records were sent to AI for this answer.';
-  const web = a.web === 'used' && !(a.web_sources || []).length ? 'It searched the web, but the answer cites no page: treat it as unchecked.' : WEB_WORDS[a.web];
+  const web = a.web === 'used' ? webUsedWords(a) : WEB_WORDS[a.web];
   const partly = a.web !== 'unavailable' && (a.web_unavailable || []).length
     ? `${a.web_unavailable.map((t) => WEB_TOOL_WORDS[t] || t).join(' and ')} is turned off for this Anthropic account.`
     : null;

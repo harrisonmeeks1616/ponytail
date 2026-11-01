@@ -2,7 +2,7 @@
 // Shell caching with network-first navigations, plus reminder push and click handling.
 // Bump CACHE_NAME whenever any shell file changes.
 const CACHE_PREFIX = 'hos-';
-const CACHE_NAME = 'hos-v26';
+const CACHE_NAME = 'hos-v27';
 
 // '/' is the app page (index.html). Workers static assets may redirect /index.html
 // to /, so the page is cached under '/'. Google Fonts are not cached: offline, the

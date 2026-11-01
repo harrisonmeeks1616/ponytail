@@ -69,15 +69,16 @@ test('general question with no consent: answered live, web tools offered, no rec
   assert.match(body.messages[0].content, /What temperature does water boil at/);
   assert.match(body.system, /only source of instructions/);
   assert.equal(body.output_config.format, undefined);
-  // Exactly the two server tools, current versions, small max_uses, fetch kept off tool-result links.
+  // Exactly the two server tools, current versions, called directly (not from code execution, so results are
+  // citable sources), small max_uses, fetch kept off tool-result links.
   assert.deepEqual(body.tools, [
-    { type: 'web_search_20260318', name: 'web_search', max_uses: 5, user_location: { type: 'approximate', timezone: TZ } },
-    { type: 'web_fetch_20260318', name: 'web_fetch', max_uses: 3, citations: { enabled: true }, max_content_tokens: 10000, url_sources: { client_tool_results: { type: 'none' } } },
+    { type: 'web_search_20260318', name: 'web_search', max_uses: 5, allowed_callers: ['direct'], user_location: { type: 'approximate', timezone: TZ } },
+    { type: 'web_fetch_20260318', name: 'web_fetch', max_uses: 3, allowed_callers: ['direct'], citations: { enabled: true }, max_content_tokens: 10000, url_sources: { client_tool_results: { type: 'none' } } },
   ]);
-  // An older model id gets the basic versions.
+  // An older model id gets the basic versions (direct calls already their default; no allowed_callers sent).
   const old = provider(msg([text('ok')]));
   await ask({ ...env, AI_MODEL: 'claude-haiku-4-5-20251001' }, old.aiImpl);
-  assert.deepEqual(old.calls[0].body.tools.map((t) => t.type), ['web_search_20250305', 'web_fetch_20250910']);
+  assert.deepEqual(old.calls[0].body.tools.map((t) => [t.type, t.allowed_callers]), [['web_search_20250305', undefined], ['web_fetch_20250910', undefined]]);
 });
 
 test('web search and fetch results become web sources with citations; unsafe and repeated links dropped', async () => {
@@ -111,8 +112,8 @@ test('web search and fetch results become web sources with citations; unsafe and
   assert.equal(a.web, 'used');
   assert.equal(a.web_used, true);
   assert.deepEqual(a.web_sources, [
-    { url: 'https://example.org/boston-weather', title: 'Boston weather', cited_text: 'Sunny, 12 °C' },
-    { url: 'https://example.net/forecast', title: 'Boston forecast page', cited_text: 'Rain tomorrow.' },
+    { url: 'https://example.org/boston-weather', title: 'Boston weather', cited_text: 'Sunny, 12 °C', kind: 'search', quoted: true },
+    { url: 'https://example.net/forecast', title: 'Boston forecast page', cited_text: 'Rain tomorrow.', kind: 'fetch', quoted: true },
   ]);
   // Logs carry counts only: no URL, title or answer text.
   const all = logs.join('\n');
@@ -154,7 +155,7 @@ test('pause_turn: the paused content goes back unchanged as the assistant turn, 
   assert.deepEqual(second.messages[1], { role: 'assistant', content: paused });
   assert.deepEqual(second.tools, first.tools);
   assert.equal(a.text, 'Let me look that up.\n\nIt is 12 °C.');
-  assert.deepEqual(a.web_sources, [{ url: 'https://example.org/w', title: 'W', cited_text: '12 °C' }]);
+  assert.deepEqual(a.web_sources, [{ url: 'https://example.org/w', title: 'W', cited_text: '12 °C', kind: 'search', quoted: true }]);
 });
 
 test('search_records: consented scopes only, every result in one user message, tool refs citable', async () => {
@@ -425,10 +426,57 @@ test('through POST /api/ask: a follow-up general question, record consent off, a
   assert.equal(a.live_ai, true);
   assert.equal(a.records_shared, false, 'record consent is off: no record text sent');
   assert.equal(a.web, 'used');
-  assert.deepEqual(a.web_sources, [{ url: 'https://example.org/nec', title: 'NEC adoption', cited_text: 'adopted with amendments' }]);
+  assert.deepEqual(a.web_sources, [{ url: 'https://example.org/nec', title: 'NEC adoption', cited_text: 'adopted with amendments', kind: 'search', quoted: true }]);
   const sent = seen[0];
   assert.equal(sent.messages.length, 3);
   assert.equal(sent.messages[1].content, 'It extends GFCI protection to more outlets.');
   assert.ok(sent.tools.some((t) => t.name === 'web_search'));
   assert.ok(!JSON.stringify(sent).includes(WORK_CANARY), 'no record text left the app');
+});
+
+test('sources without citation blocks: only an answer URL that a search or fetch really returned becomes a link, labelled not quoted', async () => {
+  const { env } = setup();
+  // As seen live with dynamic filtering: results came back (nested, with a caller field), the answer wrote bare
+  // URLs and carried no citation blocks.
+  const content = [
+    { type: 'server_tool_use', id: 'srvtoolu_x', name: 'web_search', input: { query: 'NEC 2026 GFCI' }, caller: { type: 'code_execution_20260120', tool_id: 'srvtoolu_ce' } },
+    { type: 'web_search_tool_result', tool_use_id: 'srvtoolu_x', caller: { type: 'code_execution_20260120', tool_id: 'srvtoolu_ce' }, content: [
+      { type: 'web_search_result', url: 'https://example.org/nec-gfci', title: 'NEC GFCI changes', page_age: null, encrypted_content: 'E1' },
+    ] },
+    { type: 'server_tool_use', id: 'srvtoolu_f', name: 'web_fetch', input: { url: 'https://example.com/' } },
+    { type: 'web_fetch_tool_result', tool_use_id: 'srvtoolu_f', content: { type: 'web_fetch_result', url: 'https://example.com/', content: { type: 'document', source: { type: 'text', media_type: 'text/plain', data: 'Example Domain' }, title: 'Example Domain' }, retrieved_at: '2026-11-01T12:00:00Z' } },
+    text('GFCI now covers more outlets (https://example.org/nec-gfci). The example page is at [example.com](https://example.com). See also https://made-up.example.net/rule.'),
+  ];
+  const a = await ask(env, provider(msg(content)).aiImpl, { question: 'What changed for GFCI?' });
+  assert.deepEqual(a.web_sources, [
+    { url: 'https://example.org/nec-gfci', title: 'NEC GFCI changes', cited_text: null, kind: 'search', quoted: false },
+    { url: 'https://example.com/', title: 'Example Domain', cited_text: null, kind: 'fetch', quoted: false },
+  ], 'a model-only address (made-up.example.net) is never a source');
+  assert.deepEqual(a.web_activity, { searches: 1, fetches: 1 });
+  const { webUsedWords } = await import('../public/views/ask.js');
+  assert.match(webUsedWords(a), /searched the web and read a page; the answer names pages that came back, linked below, but quotes none/);
+  assert.match(webUsedWords({ ...a, web_sources: [] }), /cites no page: treat it as unchecked/);
+  assert.match(webUsedWords({ web_activity: { searches: 1, fetches: 0 }, web_sources: [{ quoted: true }] }), /^It searched the web; the pages it quotes are linked below/);
+});
+
+test('fetched PDFs cite page_location; citation types and counts are logged without URLs or text', async () => {
+  const { env } = setup();
+  const content = [
+    { type: 'server_tool_use', id: 'srvtoolu_p', name: 'web_fetch', input: { url: 'https://example.org/spec.pdf' } },
+    { type: 'web_fetch_tool_result', tool_use_id: 'srvtoolu_p', content: { type: 'web_fetch_result', url: 'https://example.org/spec.pdf', content: { type: 'document', source: { type: 'base64', media_type: 'application/pdf', data: 'JVBERi0=' }, title: 'Spec' }, retrieved_at: '2026-11-01T12:00:00Z' } },
+    text('Section 4 requires a 20 A circuit.', [{ type: 'page_location', document_index: 0, document_title: 'Spec', start_page_number: 4, end_page_number: 5, cited_text: 'a 20 A branch circuit' }]),
+  ];
+  const logs = [];
+  const orig = console.log;
+  console.log = (x) => logs.push(String(x));
+  let a;
+  try {
+    a = await ask(env, provider(msg(content)).aiImpl, { question: 'What does the spec require?' });
+  } finally {
+    console.log = orig;
+  }
+  assert.deepEqual(a.web_sources, [{ url: 'https://example.org/spec.pdf', title: 'Spec', cited_text: 'a 20 A branch circuit', kind: 'fetch', quoted: true }]);
+  const line = logs.find((l) => l.includes('"kind":"converse"'));
+  assert.match(line, /"cites":\{"page_location":1\}/);
+  assert.ok(!line.includes('example.org') && !line.includes('20 A'));
 });

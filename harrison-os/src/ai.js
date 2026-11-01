@@ -149,12 +149,17 @@ function dynamicWebModel(model) {
 /**
  * The two server tools, with small max_uses (search is billed per use). Fetch may open only URLs from the
  * owner's message or from earlier web results: url_sources stops it opening links seen only in app tool results.
+ * allowed_callers ['direct']: on the _20260209+ versions the default runs search and fetch inside code execution
+ * (dynamic filtering), where results reach the model as code output rather than citable sources, and live answers
+ * came back with bare URLs and no citation blocks. Called directly, results are sources the provider cites
+ * (web_search_result_location, char_location). It costs more input tokens; honest citations are the point here.
  */
 export function webTools(env, { timeZone } = {}) {
   const dynamic = dynamicWebModel(aiModel(env));
+  const direct = dynamic ? { allowed_callers: ['direct'] } : {};
   return [
-    { type: dynamic ? 'web_search_20260318' : 'web_search_20250305', name: 'web_search', max_uses: 5, ...(timeZone ? { user_location: { type: 'approximate', timezone: timeZone } } : {}) },
-    { type: dynamic ? 'web_fetch_20260318' : 'web_fetch_20250910', name: 'web_fetch', max_uses: 3, citations: { enabled: true }, max_content_tokens: 10000, url_sources: { client_tool_results: { type: 'none' } } },
+    { type: dynamic ? 'web_search_20260318' : 'web_search_20250305', name: 'web_search', max_uses: 5, ...direct, ...(timeZone ? { user_location: { type: 'approximate', timezone: timeZone } } : {}) },
+    { type: dynamic ? 'web_fetch_20260318' : 'web_fetch_20250910', name: 'web_fetch', max_uses: 3, ...direct, citations: { enabled: true }, max_content_tokens: 10000, url_sources: { client_tool_results: { type: 'none' } } },
   ];
 }
 
@@ -358,9 +363,11 @@ async function runTool(handlers, use) {
  *  | { ok: false, reason, status?, web, web_rejected, calls }
  * reason: complete()'s, plus 'refused' (stop_reason refusal) and 'incomplete' (max_tokens or too many steps).
  * text joins the text blocks after the last client tool round (pause_turn continuations included).
- * citations: [{ url, title, cited_text }] from those blocks, http(s) only, one per url.
- * web: { used, search, fetch, errors, results: [{ url, title }] }; used and the counts cover results that
- * actually came back (an error result is not a use).
+ * citations: [{ url, title, cited_text, kind: 'search' | 'fetch' }] from those blocks' citation blocks (a search
+ * result location, or a location in a fetched document), http(s) only, one per url.
+ * web: { used, search, fetch, errors, results: [{ url, title, searched, fetched }] }; used and the counts cover
+ * results that actually came back (an error result is not a use). results are every page a search returned or a
+ * fetch read, so a URL the answer names can be checked against what really came back.
  */
 export async function converse(env, opts = {}) {
   const { system = '', messages, tools = [], toolHandlers = {}, maxTokens = 4096, effort = 'low', signal } = opts;
@@ -378,13 +385,18 @@ export async function converse(env, opts = {}) {
   let toolList = Array.isArray(tools) ? tools.slice() : [];
   const webRejected = [];
   const fetched = []; // fetched documents in order: char_location citations name them by document_index
-  const seen = new Set();
-  const note = (url, title) => {
+  const byHref = new Map();
+  const note = (url, title, how) => {
     const href = webHref(url);
-    if (href && !seen.has(href)) {
-      seen.add(href);
-      web.results.push({ url: href, title: clipText(title, 300) });
+    if (!href) return null;
+    let r = byHref.get(href);
+    if (!r) {
+      r = { url: href, title: clipText(title, 300), searched: false, fetched: false };
+      byHref.set(href, r);
+      web.results.push(r);
     }
+    if (!r.title && title) r.title = clipText(title, 300);
+    r[how] = true;
     return href;
   };
   const scan = (content) => {
@@ -395,7 +407,7 @@ export async function converse(env, opts = {}) {
         if (Array.isArray(b.content)) {
           web.used = true;
           web.search++;
-          for (const r of b.content) if (r && r.type === 'web_search_result') note(r.url, r.title);
+          for (const r of b.content) if (r && r.type === 'web_search_result') note(r.url, r.title, 'searched');
         } else if (b.content && typeof b.content.error_code === 'string') web.errors.push(b.content.error_code.slice(0, 60));
       } else if (b.type === 'web_fetch_tool_result') {
         const c = b.content;
@@ -403,22 +415,27 @@ export async function converse(env, opts = {}) {
           web.used = true;
           web.fetch++;
           const title = c.content && typeof c.content.title === 'string' ? c.content.title : null;
-          fetched.push({ url: note(c.url, title), title });
+          fetched.push({ url: note(c.url, title, 'fetched'), title });
         } else if (c && typeof c.error_code === 'string') web.errors.push(c.error_code.slice(0, 60));
       }
     }
   };
+  // Citation types seen in the answer, counted for the log (types and counts only, never URLs or text).
+  const citeTypes = {};
   const citationsOf = (blocks) => {
     const out = [];
     const cited = new Set();
     for (const b of blocks) {
       for (const c of Array.isArray(b.citations) ? b.citations : []) {
         if (!c || typeof c !== 'object') continue;
-        const doc = c.type === 'char_location' && Number.isInteger(c.document_index) ? fetched[c.document_index] : null;
-        const url = c.type === 'web_search_result_location' ? webHref(c.url) : doc ? doc.url : null;
+        const type = typeof c.type === 'string' && /^[a-z_]{1,40}$/.test(c.type) ? c.type : 'other';
+        citeTypes[type] = (citeTypes[type] || 0) + 1;
+        // A location in a fetched document (characters, or pages of a PDF) names it by document_index.
+        const doc = (type === 'char_location' || type === 'page_location') && Number.isInteger(c.document_index) ? fetched[c.document_index] : null;
+        const url = type === 'web_search_result_location' ? webHref(c.url) : doc ? doc.url : null;
         if (!url || cited.has(url)) continue;
         cited.add(url);
-        out.push({ url, title: clipText(doc ? c.document_title || doc.title : c.title, 300), cited_text: clipText(c.cited_text, 300) });
+        out.push({ url, title: clipText(doc ? c.document_title || doc.title : c.title, 300), cited_text: clipText(c.cited_text, 300), kind: doc ? 'fetch' : 'search' });
       }
     }
     return out;
@@ -494,6 +511,6 @@ export async function converse(env, opts = {}) {
   } finally {
     dl.done();
   }
-  log({ kind: 'converse', ok: result.ok, reason: result.reason || null, status: result.status ?? null, attempts: stats.attempts, calls: stats.calls, web_search: web.search, web_fetch: web.fetch, web_errors: web.errors.length, web_rejected: webRejected.length, ms: Date.now() - dl.started });
+  log({ kind: 'converse', ok: result.ok, reason: result.reason || null, status: result.status ?? null, attempts: stats.attempts, calls: stats.calls, web_search: web.search, web_fetch: web.fetch, web_errors: web.errors.length, web_rejected: webRejected.length, cites: citeTypes, ms: Date.now() - dl.started });
   return { ...result, web, web_rejected: webRejected, calls: stats.calls };
 }

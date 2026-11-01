@@ -218,3 +218,12 @@ test('limits: Full gets 30 s and up to 8 model calls whether or not web is on; R
   assert.deepEqual(seen, [{ timeoutMs: 20000, maxCalls: undefined }, { timeoutMs: 30000, maxCalls: 8 }]);
   assert.equal(DB, env.DB);
 });
+
+test('Ask writes for Harrison: the instructions keep internal ids, change ids and tool names out of the answer', async () => {
+  const { call } = setup();
+  await call('PUT', '/api/ai/consent', { scope: 'work', allowed: true });
+  await call('PUT', '/api/ai/actions', { mode: 'full', scopes: ['work'] });
+  const { calls } = await askWith(call, [msg([{ type: 'text', text: 'Done.' }])]);
+  assert.match(calls[0].system, /leave out internal ids, change ids, request ids and tool names unless he asks for them/);
+  assert.doesNotMatch(calls[0].system, /with the ids and changeIds the tools returned/);
+});
