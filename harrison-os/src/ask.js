@@ -401,7 +401,7 @@ function askSystem({ shared, web, act = null }) {
     );
     if (act.crossProjects && act.crossProjects.length) {
       lines.push(
-        `The pm_* and field_* tools act on the real Electrical PM app, and on Field Hub through it, in the projects Harrison allowed (${act.crossProjects.join(', ')}). They change the official records, not a copy: the company project copy in Harrison OS is never the source for a change. Before a change, read the project's metadata (pm_get_metadata) and the record itself (pm_get_record or field_get_record), and send the revision you read; keys you do not give keep their values. Report Electrical PM's answer as it is: the record id and receipt when it was saved, "pending" (not saved) when Field Hub has not confirmed it yet, and the refusal or conflict when it was not done. Financial record types and secure fields are hidden from you unless Harrison allowed them; never guess them.`,
+        `The pm_* and field_* tools act on the real Electrical PM app, and on Field Hub through it, in the projects Harrison allowed: ${act.crossProjects.map((p) => (p.name ? `${p.name} (project_id ${p.id})` : `project_id ${p.id}`)).join('; ')}. They change the official records, not a copy: the company project copy in Harrison OS is never the source for a change. Before a change, read the project's metadata (pm_get_metadata) and the record itself (pm_get_record or field_get_record), and send the revision you read; keys you do not give keep their values. Report Electrical PM's answer as it is: the record id and receipt when it was saved, "pending" (not saved) when Field Hub has not confirmed it yet, and the refusal or conflict when it was not done. Financial record types and secure fields are hidden from you unless Harrison allowed them; never guess them.`,
       );
     }
   } else {
@@ -520,16 +520,25 @@ export async function answerQuestion(env, { scope, question, context = {}, mode 
     Object.assign(toolHandlers, kit.handlers);
   }
   if (web) tools.push(...webTools(env, { timeZone }));
-  const res = await aiImpl(env, {
-    system: askSystem({ shared, web, act: kit ? { scopes: actScopes, rules: kit.rules, crossProjects: kit.crossProjects || [] } : null }),
-    messages: [...history.map((t) => ({ role: t.role, content: t.text })), { role: 'user', content: askPrompt(question, mode, records, todayOn, { shared, timeZone }) }],
-    tools,
-    toolHandlers,
-    maxTokens: mode === 'write' ? 8192 : 4096,
-    timeoutMs: aiTimeoutMs(env, web ? 30000 : DEFAULT_TIMEOUT_MS),
-    signal,
-  });
-  const sent = { ...shell, records_shared: given.size > 0, shared_scopes: shared, web_unavailable: rejected(res), actions_mode: kit ? 'full' : 'read', actions: kit ? kit.actions : [] };
+  // Full access: a cross-app change takes several steps (metadata, read, change), so 30 s and up to 8 model calls
+  // whether or not web is on. Read only keeps its limits. A copy refresh for saved changes runs once, afterwards.
+  let res;
+  let copyRefresh = null;
+  try {
+    res = await aiImpl(env, {
+      system: askSystem({ shared, web, act: kit ? { scopes: actScopes, rules: kit.rules, crossProjects: kit.crossProjects || [] } : null }),
+      messages: [...history.map((t) => ({ role: t.role, content: t.text })), { role: 'user', content: askPrompt(question, mode, records, todayOn, { shared, timeZone }) }],
+      tools,
+      toolHandlers,
+      maxTokens: mode === 'write' ? 8192 : 4096,
+      timeoutMs: aiTimeoutMs(env, web || kit ? 30000 : DEFAULT_TIMEOUT_MS),
+      ...(kit ? { maxCalls: 8 } : {}),
+      signal,
+    });
+  } finally {
+    if (kit && kit.finish) copyRefresh = await kit.finish();
+  }
+  const sent = { ...shell, records_shared: given.size > 0, shared_scopes: shared, web_unavailable: rejected(res), actions_mode: kit ? 'full' : 'read', actions: kit ? kit.actions : [], ...(copyRefresh ? { copy_refresh: copyRefresh } : {}) };
   const fallback = (reason) => ({ ...deterministicAnswer(mode, ctx, brief), live_ai: false, label: NOT_AI_LABEL, fallback_reason: reason, ...sent, web: web && rejected(res).length >= 2 ? 'unavailable' : 'not_used' });
   if (!res || !res.ok) return fallback((res && res.reason) || 'provider_error');
   const { text, refs } = citedRefs(res.text, given);

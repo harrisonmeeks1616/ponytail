@@ -763,11 +763,12 @@ async function currentRecord(ctx, a) {
   return { rec, meta };
 }
 
-// One immediate refresh of Harrison OS's company-project copy after a saved change, through pm.js's own fenced
-// path (one shared lease; a refresh already running answers in_progress). The copy is never edited here.
-async function refreshCopy(ctx) {
+// One refresh of Harrison OS's company-project copy after a saved change, through pm.js's own fenced path (one
+// shared lease; a refresh already running answers in_progress). The copy is never edited here. The lease is taken
+// at the real time of the refresh, not the request's start (a long Ask request would start with an expired lease).
+export async function refreshCopy(env) {
   try {
-    const r = await pm.refreshHttpSource(ctx.env, ctx.nowMs, { timeoutMs: 5000 });
+    const r = await pm.refreshHttpSource(env, Date.now(), { timeoutMs: 5000 });
     return { ok: !!r.ok, code: r.ok ? 'ok' : String(r.code || 'error').slice(0, 40) };
   } catch {
     return { ok: false, code: 'error' };
@@ -789,7 +790,8 @@ const viaPm = (action, build) => async (ctx, args) => {
     ...(request.requestId ? { request_id: request.requestId } : {}),
     result,
     receipt: r.receipt,
-    ...(saved ? { copy_refresh: await refreshCopy(ctx) } : {}),
+    // An MCP call refreshes now; Ask (deferRefresh) refreshes once, after its whole tool loop.
+    ...(saved ? { copy_refresh: ctx.deferRefresh ? (ctx.deferRefresh(), { code: 'after_answer' }) : await refreshCopy(ctx.env) } : {}),
     count: Array.isArray(result && result.records) ? result.records.length : 1,
   };
 };
@@ -800,6 +802,16 @@ const wireBody = (w, sections) => ({ ...(w.status !== undefined ? { status: w.st
 const recordShape = (ctx, meta) => (v) => cross.redactValue(meta, v, sensitiveOf(ctx));
 
 const CROSS_TOOLS = [
+  {
+    // No PM call: the projects Harrison's grant allows this client, named from the approved PM copy.
+    name: 'pm_list_projects', app: 'pm', action: null,
+    description: 'The Electrical PM projects Harrison allowed for AI actions, with their names, so you can use the right project_id. Names come from Harrison OS\'s approved copy of Electrical PM.',
+    inputSchema: obj({}, []),
+    async run(ctx) {
+      const projects = await cross.allowedProjects(ctx.env, ctx.nowMs, ctx.cross);
+      return { app: 'pm', projects, note: 'Use the id as project_id. A name of null means the project is allowed but not in the current copy.', count: projects.length };
+    },
+  },
   {
     name: 'pm_get_project', app: 'pm', action: 'project.read',
     description: 'Read one Electrical PM project from Electrical PM itself (current, not the Harrison OS copy): its settings, contacts and lookups. Contact emails, phone numbers and notes and the site address are left out unless Harrison allowed private details.',
@@ -1026,7 +1038,7 @@ const REFUSED = {
  * The same registry serves Ask's Full mode (askToolkit below): grantOf is then Ask's own grant, actor 'ask_ai'
  * and maxChars Ask's tool-result limit. Whoever calls, the grant is read fresh by grantOf on every call.
  */
-export async function callTool({ env, nowMs, mods = DEFAULT_MODS, dispatch = null, grantOf = readGrant, actor = 'mcp_client', maxChars = MAX_RESULT_CHARS, onCut = null }, name, args = {}) {
+export async function callTool({ env, nowMs, mods = DEFAULT_MODS, dispatch = null, grantOf = readGrant, actor = 'mcp_client', maxChars = MAX_RESULT_CHARS, onCut = null, deferRefresh = null }, name, args = {}) {
   const tool = TOOLS.find((t) => t.name === name);
   // Read fresh on every call: a change or revocation applies to the very next call.
   const grant = await grantOf(env, nowMs);
@@ -1054,7 +1066,7 @@ export async function callTool({ env, nowMs, mods = DEFAULT_MODS, dispatch = nul
   }
   let data;
   try {
-    data = await tool.run({ env, nowMs, mods, dispatch, actor, cross: crossGrant }, args);
+    data = await tool.run({ env, nowMs, mods, dispatch, actor, cross: crossGrant, deferRefresh }, args);
   } catch (err) {
     if (err instanceof ToolError) return fail('tool_error', err.message);
     if (err instanceof SourceError) return fail(err.code, err.message, err.unknown ? { outcome_unknown: true, code: err.code } : null);
@@ -1100,6 +1112,8 @@ export async function askToolkit({ env, nowMs, dispatch, grantOf, maxChars, mods
   const handlers = {};
   // Text this question's results showed shortened ("…"): a change containing it would overwrite the full text.
   const shortened = new Set();
+  // A saved Electrical PM or Field Hub change asks for one copy refresh, run by finish() after the whole loop.
+  let refreshWanted = false;
   const containsShortened = (v) => (typeof v === 'string' ? [...shortened].some((x) => v.includes(x)) : v && typeof v === 'object' ? Object.values(v).some(containsShortened) : false);
   for (const t of tools) {
     const def = TOOLS.find((x) => x.name === t.name);
@@ -1111,7 +1125,7 @@ export async function askToolkit({ env, nowMs, dispatch, grantOf, maxChars, mods
         actions.push({ tool: t.name, app, scope, ok: false, message });
         return { content: message, is_error: true };
       }
-      const res = await callTool({ env, nowMs, mods, dispatch, grantOf: grantNow, actor: 'ask_ai', maxChars, onCut: (x) => shortened.add(x) }, t.name, input || {});
+      const res = await callTool({ env, nowMs, mods, dispatch, grantOf: grantNow, actor: 'ask_ai', maxChars, onCut: (x) => shortened.add(x), deferRefresh: () => { refreshWanted = true; } }, t.name, input || {});
       if (!res) return { content: 'Unknown tool.', is_error: true };
       const text = res.content[0].text;
       if (def.write) {
@@ -1125,8 +1139,10 @@ export async function askToolkit({ env, nowMs, dispatch, grantOf, maxChars, mods
       return { content: text, is_error: res.isError };
     };
   }
-  const projects = listed.some((t) => t.name.startsWith('pm_') || t.name.startsWith('field_')) ? crossGrant.projects : [];
-  return { tools, handlers, actions, rules: UNDO_RULES, crossProjects: projects };
+  const projects = listed.some((t) => t.name.startsWith('pm_') || t.name.startsWith('field_')) ? await cross.allowedProjects(env, nowMs, crossGrant) : [];
+  // After the tool loop (answered or not): the one copy refresh, if a change was saved. null: none was needed.
+  const finish = async () => (refreshWanted ? refreshCopy(env) : null);
+  return { tools, handlers, actions, rules: UNDO_RULES, crossProjects: projects, finish };
 }
 
 // The receipt fields shown to Harrison (PM's whole receipt stays in the tool result the model saw).

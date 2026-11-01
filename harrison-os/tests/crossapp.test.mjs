@@ -136,7 +136,7 @@ function fakePm() {
 function setup({ bind = true, digest = false } = {}) {
   const DB = createTestDb();
   const pm = fakePm();
-  const env = { DB, DEV_ALLOW_UNAUTH: '0', ACCESS_TEAM_DOMAIN: '', ACCESS_AUD: '', ...(bind ? { PM_COMMANDS_SERVICE: pm.service } : {}), ...(digest ? { PM_DIGEST_SERVICE: { getDigest: async () => sampleDigest(NOW) } } : {}) };
+  const env = { DB, DEV_ALLOW_UNAUTH: '0', ACCESS_TEAM_DOMAIN: '', ACCESS_AUD: '', ...(bind ? { PM_COMMANDS_SERVICE: pm.service } : {}), ...(digest ? { PM_DIGEST_SERVICE: { getDigest: async () => sampleDigest(Date.now()) } } : {}) };
   const as = (identity) => {
     const worker = createWorker({ now: () => NOW, authenticateImpl: async () => ({ ...identity }) });
     return async (method, path, body) => {
@@ -167,7 +167,7 @@ const text = (r) => r.content[0].text;
 
 test('grant route: owner only, nothing allowed by default, strict; project choices are names from the approved copy', async () => {
   const s = setup({ digest: true });
-  await refreshHttpSource(s.env, NOW); // the approved digest copy, as the cron would load it
+  await refreshHttpSource(s.env, Date.now()); // the approved digest copy, as the cron would load it
   const st = await s.owner('GET', '/api/connections/crossapp');
   assert.equal(st.status, 200);
   assert.deepEqual([st.data.configured, st.data.grant.clients, st.data.grant.projects, st.data.grant.actions, st.data.grant.includeSensitive], [true, [], [], [], false]);
@@ -397,7 +397,7 @@ test("Ask Full (Work) with the cross-app grant: it creates an Electrical PM reco
     msg([{ type: 'text', text: 'Opened the RFI in Electrical PM.' }], 'end_turn'),
   ]);
   assert.match(on.calls[0].system, /real Electrical PM app/);
-  assert.match(on.calls[0].system, /\(p1\)/);
+  assert.match(on.calls[0].system, /project_id p1/);
   const a = on.answer.actions[0];
   assert.deepEqual([a.tool, a.app, a.ok, a.scope], ['pm_create_record', 'pm', true, 'work']);
   assert.deepEqual(a.ids, ['rfi_3']);
@@ -461,4 +461,65 @@ test('Field Hub recovery is field_retry_operation, not a resent edit: no request
   const b = await s.call('field_edit_record', { project_id: 'p1', kind: 'tasks', key: 'T-100', expected_rev: 7, changes: { review: 'ok' }, reason: 'Reviewed' });
   assert.equal(a.structuredContent.request_id, b.structuredContent.request_id);
   assert.equal(b.structuredContent.receipt.replayed, true);
+});
+
+test('pm_list_projects: the allowed projects with names from the approved copy, filtered by the current grant, no PM call', async () => {
+  const s = setup({ digest: true });
+  await refreshHttpSource(s.env, Date.now());
+  await s.hosGrant('full', ['work']);
+  assert.ok(!(await s.names()).includes('pm_list_projects'), 'not listed before the cross-app grant');
+  await s.crossGrant({ clients: ['mcp'], projects: ['SAMPLE-P1', 'gone-project'], actions: ['project.read'] });
+  assert.ok((await s.names()).includes('pm_list_projects'));
+  const n = s.pm.calls.length;
+  const r = await s.call('pm_list_projects', {});
+  assert.equal(r.isError, false, text(r));
+  assert.deepEqual(r.structuredContent.projects, [{ id: 'SAMPLE-P1', name: 'Sample: Lobby lighting retrofit' }, { id: 'gone-project', name: null }]);
+  assert.equal(s.pm.calls.length, n, 'no PM call');
+  await s.crossGrant({ clients: ['ask'], projects: ['SAMPLE-P1'], actions: ['project.read'] });
+  assert.match(text(await s.call('pm_list_projects', {})), /has not allowed this AI client/, 'revoked for MCP: refused at once');
+});
+
+test('Ask: names in the instructions, one copy refresh after the whole loop (also when the AI fails after a write), Full limits', async () => {
+  const s = setup({ digest: true });
+  await refreshHttpSource(s.env, Date.now());
+  s.env.AI_API_KEY = 'sk-test-not-real';
+  s.env.AI_WEB_TOOLS = 'off';
+  await s.owner('PUT', '/api/ai/consent', { scope: 'work', allowed: true });
+  await s.owner('PUT', '/api/ai/actions', { mode: 'full', scopes: ['work'] });
+  await s.crossGrant({ clients: ['ask'], projects: ['p1', 'SAMPLE-P1'], actions: ALL });
+  const msg = (content, stop_reason) => ({ id: 'm', type: 'message', role: 'assistant', model: 'claude-sonnet-5-5', stop_reason, content });
+  const create = (id, title) => msg([{ type: 'tool_use', id, name: 'pm_create_record', input: { project_id: 'p1', type: 'rfi', top_level: { title }, data: { question: 'Which route?' } } }], 'tool_use');
+  const run = async (script) => {
+    const calls = [];
+    const orig = globalThis.fetch;
+    globalThis.fetch = async (_u, init) => {
+      const body = JSON.parse(init.body);
+      calls.push(body);
+      return new Response(JSON.stringify(script[Math.min(calls.length - 1, script.length - 1)]), { status: 200, headers: { 'content-type': 'application/json' } });
+    };
+    try {
+      return { calls, answer: (await s.owner('POST', '/api/ask', { scope: 'work', question: 'Open two RFIs in p1.' })).data.answer };
+    } finally {
+      globalThis.fetch = orig;
+    }
+  };
+  const refreshes = async () => Number((await s.DB.prepare("SELECT COUNT(*) AS n FROM events WHERE kind = 'pm_refresh'").first()).n);
+  const before = await refreshes();
+  const ok = await run([create('tu1', 'Route A'), create('tu2', 'Route B'), msg([{ type: 'text', text: 'Opened both.' }], 'end_turn')]);
+  assert.match(ok.calls[0].system, /Sample: Lobby lighting retrofit \(project_id SAMPLE-P1\); project_id p1|project_id p1; Sample: Lobby lighting retrofit \(project_id SAMPLE-P1\)/);
+  assert.equal(ok.answer.actions.filter((a) => a.ok).length, 2);
+  assert.equal(await refreshes(), before + 1, 'two saved writes, one refresh');
+  assert.deepEqual(ok.answer.copy_refresh, { ok: true, code: 'ok' });
+  const toolText = ok.calls[1].messages.at(-1).content[0].content;
+  assert.match(toolText, /"copy_refresh":\{"code":"after_answer"\}/, 'no refresh inside a model step');
+  // The AI fails after a saved write: the answer is Not AI, and still lists the change and the refresh.
+  const failed = await run([create('tu3', 'Route C'), msg([], 'refusal')]);
+  assert.equal(failed.answer.live_ai, false);
+  assert.deepEqual(failed.answer.actions.map((a) => [a.tool, a.ok]), [['pm_create_record', true]]);
+  assert.equal(failed.answer.copy_refresh.code, 'ok');
+  assert.equal(await refreshes(), before + 2);
+  // Nothing saved: no refresh at all.
+  const none = await run([msg([{ type: 'text', text: 'Nothing to do.' }], 'end_turn')]);
+  assert.equal(none.answer.copy_refresh, undefined);
+  assert.equal(await refreshes(), before + 2);
 });

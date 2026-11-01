@@ -193,6 +193,15 @@ const TOOL_WORDS = { create_item: 'Added', update_item: 'Changed', item_action: 
   field_edit_record: 'Changed a Field Hub record', field_retry_operation: 'Retried a Field Hub change' };
 const APP_WORDS = { pm: 'Electrical PM', field: 'Field Hub, through Electrical PM' };
 
+/** Pure: the one refresh of Harrison OS's company-project copy after Ask's saved changes, as it really went. */
+export function copyRefreshWords(r) {
+  const code = r && r.code;
+  if (code === 'ok') return "Harrison OS's copy of Electrical PM was refreshed with these changes.";
+  if (code === 'in_progress') return "Harrison OS's copy of Electrical PM is being refreshed right now; it shows these changes when that finishes.";
+  if (code === 'not_connected') return "Harrison OS has no live copy of Electrical PM to refresh; the changes are in Electrical PM itself.";
+  return `Harrison OS's copy of Electrical PM could not be refreshed just now (${String(code || 'unknown').slice(0, 40)}); the changes are in Electrical PM, and the next scheduled refresh brings them in.`;
+}
+
 /** Pure: one change Ask attempted, in plain words. In another app only a "saved" receipt is called done. */
 export function actionWords(a) {
   const source = a.app && a.app !== 'hos';
@@ -248,6 +257,7 @@ function renderAnswer(a) {
   if (a.live_ai) out.append(h('p', { class: 'subtle small ask-note', text: liveNote(a) }));
   const acts = actionsList(a.actions);
   if (acts) out.append(h('h3', { class: 'ask-sub', text: 'What Ask changed' }), acts);
+  if (a.copy_refresh) out.append(h('p', { class: 'subtle small', text: copyRefreshWords(a.copy_refresh) }));
   const list = sourcesList(a.sources, () => closeDrawer());
   if (list) out.append(h('h3', { class: 'ask-sub', text: 'From your records' }), list);
   else if (!a.live_ai) out.append(h('p', { class: 'subtle small', text: 'No saved records were used.' }));

@@ -2962,6 +2962,22 @@
     "meaning": "Electrical PM (and Field Hub through PM) tools: listed per action only when the private PM command connection is bound and the owner cross-app grant allows it; read actions under Read only or Full, writes under Full.",
     "tools": [
       {
+        "name": "pm_list_projects",
+        "description": "The Electrical PM projects Harrison allowed for AI actions, with their names, so you can use the right project_id. Names come from Harrison OS's approved copy of Electrical PM.",
+        "inputSchema": {
+          "type": "object",
+          "properties": {},
+          "required": [],
+          "additionalProperties": false
+        },
+        "annotations": {
+          "readOnlyHint": true,
+          "destructiveHint": false,
+          "idempotentHint": true,
+          "openWorldHint": true
+        }
+      },
+      {
         "name": "pm_get_project",
         "description": "Read one Electrical PM project from Electrical PM itself (current, not the Harrison OS copy): its settings, contacts and lookups. Contact emails, phone numbers and notes and the site address are left out unless Harrison allowed private details.",
         "inputSchema": {

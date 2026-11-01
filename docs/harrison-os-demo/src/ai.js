@@ -25,7 +25,8 @@ export const DEFAULT_TIMEOUT_MS = 20000;
 export const MAX_RESPONSE_CHARS = 200_000;
 // One loop response may carry web search results with their encrypted_content, so its cap is larger.
 export const MAX_TURN_RESPONSE_CHARS = 1_000_000;
-export const MAX_CALLS = 6;
+export const MAX_CALLS = 6; // the default loop
+export const MAX_CALLS_FULL = 8; // the most a caller may ask for (Ask with Full access)
 const MAX_PROMPT_CHARS = 120_000;
 const MAX_TOOL_RESULT_CHARS = 20_000;
 const RETRY_STATUSES = new Set([429, 529]);
@@ -346,7 +347,7 @@ async function runTool(handlers, use) {
 
 /**
  * converse(env, { system, messages, tools, toolHandlers, maxTokens, effort, timeoutMs, signal, fetchImpl, maxCalls })
- * A manual Messages API loop, at most maxCalls (6) requests inside one deadline. pause_turn: the paused
+ * A manual Messages API loop, at most maxCalls (default 6, at most 8) requests inside one deadline. pause_turn: the paused
  * assistant content is sent back unchanged and the call repeated, with no extra user message. tool_use: the
  * client tools in toolHandlers run and every call is answered in one user message of tool_result blocks.
  * Server tools (web search, web fetch) run on the provider's side. The full content of every response is kept
@@ -368,7 +369,7 @@ export async function converse(env, opts = {}) {
   if (!Array.isArray(messages) || !messages.length || JSON.stringify(messages).length > MAX_PROMPT_CHARS || String(system).length > MAX_PROMPT_CHARS) {
     return { ok: false, reason: 'invalid_output', web, web_rejected: [], calls: 0 };
   }
-  const maxCalls = clampInt(opts.maxCalls, { min: 1, max: MAX_CALLS, fallback: MAX_CALLS });
+  const maxCalls = clampInt(opts.maxCalls, { min: 1, max: MAX_CALLS_FULL, fallback: MAX_CALLS });
   const fetchImpl = opts.fetchImpl || globalThis.fetch;
   const model = aiModel(env);
   const dl = deadline(callTimeout(opts, env), signal);

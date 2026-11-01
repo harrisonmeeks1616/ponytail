@@ -70,14 +70,15 @@ export async function readCrossGrant(env, nowMs = Date.now()) {
   }
 }
 
-/** Does the grant let this client use this action at all (for listing tools)? */
+/** Does the grant let this client use this action at all (for listing tools)? action null: any action. */
 export function allowsAction(g, client, action) {
-  return !!g && g.clients.includes(client) && g.actions.includes(action) && g.projects.length > 0;
+  return !!g && g.clients.includes(client) && (action === null ? g.actions.length > 0 : g.actions.includes(action)) && g.projects.length > 0;
 }
 
-/** Why the grant refuses one call, or null. */
+/** Why the grant refuses one call, or null. action null (pm_list_projects): only the client and some action. */
 export function refusal(g, client, action, projectId) {
-  if (!g.clients.includes(client)) return { code: 'crossapp_off', message: 'Harrison has not allowed this AI client to act on Electrical PM or Field Hub. Nothing was read or changed.' };
+  if (!g.clients.includes(client) || (action === null && (!g.actions.length || !g.projects.length))) return { code: 'crossapp_off', message: 'Harrison has not allowed this AI client to act on Electrical PM or Field Hub. Nothing was read or changed.' };
+  if (action === null) return null;
   if (!g.actions.includes(action)) return { code: 'action_not_allowed', message: `Harrison has not allowed ${action} for AI clients. Nothing was read or changed.` };
   if (!g.projects.includes(projectId)) return { code: 'project_not_allowed', message: `Project ${projectId} is not in the projects Harrison allowed. Nothing was read or changed. Allowed: ${g.projects.join(', ') || 'none'}.` };
   return null;
@@ -378,6 +379,15 @@ async function projectChoices(env, nowMs, granted) {
   }
   const seen = new Set(live.map((p) => p.id));
   return [...live, ...granted.filter((id) => !seen.has(id)).map((id) => ({ id, name: null }))];
+}
+
+/**
+ * The projects this grant allows, with their names from the approved PM copy (labels only, never a source for a
+ * change): [{ id, name }], name null for an allowed id the copy does not list. No PM call.
+ */
+export async function allowedProjects(env, nowMs, g) {
+  const names = new Map((await projectChoices(env, nowMs, [])).map((p) => [p.id, p.name]));
+  return g.projects.map((id) => ({ id, name: names.get(id) ?? null }));
 }
 
 async function statusBody(env, nowMs) {

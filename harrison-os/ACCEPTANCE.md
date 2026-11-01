@@ -2,7 +2,7 @@
 
 Labels are not interchangeable: **implemented** (code exists), **locally verified** (unit/API or local browser test passed on this checkout, commit named), **integrated** (on main with the other slices), **deployed** (hosted Worker), **device verified** (real iPhone), **proven in use** (pilot). A blocked case names its exact prerequisite.
 
-Current evidence: integration candidate after `a21a251` (MCP Full + Ask web merged, review fixes, Ask Full, not deployed): 450/450 unit, 22/22 local browser (F1-F21, X1), preview walkthrough passed, shell cache `hos-v23`. Deployed release `1a3e65e`: 412/412 unit, 21/21 local browser (F1-F20, X1), preview walkthrough passed; production checks under "Deployment status". Historical: the null-text fix commit after `e44fd7d` (2026-11-01) had 385/385 unit, 16/16 local browser (F1-F15, X1). Earlier: `13abde8` 365/365 unit, 11/11 browser, 16/16 preview (that commit only, not reused as evidence for later changes). Baseline commit `c9cf526`: 207/207 unit, 11/11 local browser (F1-F10, X1) rerun 10:58-11:05 EDT on this cloud checkout. Imported historical reports are not counted.
+Current evidence: final cross-app candidate (this commit; not deployed by the build session): 499/499 unit, 22/22 local browser (F1-F21, X1), preview walkthrough passed, shell cache `hos-v26`; root's real HOS + native PM interoperability run passed all 13 cross-app tools on `ed21e0b` (to be rerun on this commit with `pm_list_projects`). Deployed release `1a3e65e` (historical): 412/412 unit, 21/21 local browser (F1-F20, X1); production checks under "Deployment status".
 
 ## Deployment status (reported by Codex, 2026-11-01; not independently verified from the build session, whose network cannot reach workers.dev)
 

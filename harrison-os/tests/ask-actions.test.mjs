@@ -200,3 +200,21 @@ test('Ask Full: text an earlier result showed shortened cannot be written back o
   assert.deepEqual(answer.actions.map((a) => [a.tool, a.ok]), [['update_item', false]]);
   assert.equal((await call('GET', `/api/items/${id}?scope=work`)).data.item.body, long, 'the full text is intact');
 });
+
+test('limits: Full gets 30 s and up to 8 model calls whether or not web is on; Read only keeps 20 s and the default 6', async () => {
+  const { answerQuestion } = await import('../src/ask.js');
+  const { DB, env, call } = setup();
+  await call('PUT', '/api/ai/consent', { scope: 'work', allowed: true });
+  const seen = [];
+  const aiImpl = async (_env, o) => {
+    seen.push({ timeoutMs: o.timeoutMs, maxCalls: o.maxCalls });
+    return { ok: false, reason: 'timeout', web: { used: false, errors: [] }, web_rejected: [] };
+  };
+  const toolkit = async () => ({ tools: [], handlers: {}, actions: [], rules: '', crossProjects: [], finish: async () => null });
+  const q = { scope: 'work', question: 'x', nowMs: Date.UTC(2026, 10, 1, 15), timeZone: 'America/New_York' };
+  await answerQuestion(env, q, { aiImpl, toolkit });
+  await call('PUT', '/api/ai/actions', { mode: 'full', scopes: ['work'] });
+  await answerQuestion(env, q, { aiImpl, toolkit });
+  assert.deepEqual(seen, [{ timeoutMs: 20000, maxCalls: undefined }, { timeoutMs: 30000, maxCalls: 8 }]);
+  assert.equal(DB, env.DB);
+});
