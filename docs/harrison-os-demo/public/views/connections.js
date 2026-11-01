@@ -30,7 +30,14 @@ function rowsOf(results, key) {
 }
 
 /** Pure: API answers -> rows. ai, mcp: one api() result; calendar, pm: an array of api() results (one per scope). */
-export function summarize({ ai, calendar = [], pm = [], mcp, apps = null }, { formatAt = (v) => v } = {}) {
+// Every row, on every path (including "Could not check" when offline), carries its group: the card renders by group.
+export function summarize(input, opts) {
+  const rows = summarizeRows(input, opts);
+  for (const r of rows) r.group = SOURCE_ROWS.has(r.name) ? 'source' : 'setup';
+  return rows;
+}
+
+function summarizeRows({ ai, calendar = [], pm = [], mcp, apps = null }, { formatAt = (v) => v } = {}) {
   // The MCP status route says which other routes exist; if it did not answer (offline, server error), nothing is known.
   if (!mcp || (!mcp.ok && mcp.status !== 404)) return NAMES.map(UNCHECKED);
   const rows = [];
@@ -92,7 +99,6 @@ export function summarize({ ai, calendar = [], pm = [], mcp, apps = null }, { fo
         : { name, status: 'Not linked', tone: 'none', detail: 'Add its web address to open it from Harrison OS.', need: `${setting} in the server settings (docs/DEPLOY.md).` },
     );
   }
-  for (const r of rows) r.group = SOURCE_ROWS.has(r.name) ? 'source' : 'setup';
   return rows;
 }
 

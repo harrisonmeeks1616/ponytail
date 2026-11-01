@@ -5,6 +5,14 @@
 let kit;
 let seq = 0;
 const PAST_SHOWN = 10;
+// 409 reasons from PATCH /api/reminders/:id. The form keeps what was typed in every case.
+const CONFLICT_WORDS = {
+  firing_now: 'This reminder is being sent right now. Your changes are still here: press Save again in a minute.',
+  alert_held: 'An alert from this reminder is waiting for quiet hours to end. Edit it after that alert goes out, or cancel the reminder and add a new one. Your changes are still here.',
+  stale_edit: 'This reminder was changed somewhere else since you opened it. Your changes are still here: reload the list to see the current version, then save again.',
+  not_active: 'This reminder already fired or was cancelled. Your words are still here: add them as a new reminder.',
+  concurrent_change: 'This reminder changed while saving. Your changes are still here: reload the list, then save again.',
+};
 
 export function register(k) {
   kit = k;
@@ -38,11 +46,13 @@ async function todayLink() {
   );
 }
 
-function deliveryWords(d) {
+// What is known about one delivery, from the server's states (deliveries.state: scheduled, held_by_policy,
+// sent, no_route, failed, received_on_device, acknowledged).
+export function deliveryWords(d) {
   if (!d) return null;
   if (d.acknowledged_at) return 'You opened the alert.';
   if (d.received_at) return 'Your phone reported the alert arrived.';
-  if (d.held_until && d.state === 'scheduled') return 'Held for quiet hours.';
+  if (d.state === 'held_by_policy') return 'Held for quiet hours; it is sent when they end.';
   if (d.state === 'sent') return 'Sent to the push service. That is not proof it showed on your phone.';
   if (d.state === 'no_route') return 'Not sent: no phone is set up for alerts.';
   if (d.state === 'failed') return 'Sending failed.';
@@ -149,6 +159,7 @@ function reminderForm(existing, reload, onDone) {
   const n = ++seq;
   const id = (k) => `rf-${n}-${k}`;
   const zoneHere = deviceTimeZone();
+  let newId = null; // a new reminder's id: set at the first Add, cleared only once the server confirms it
   const text = h('input', { id: id('text'), type: 'text', maxlength: 4000, value: existing ? existing.text : '', autocomplete: 'off' });
   const date = h('input', { id: id('date'), type: 'date', value: existing ? existing.local_date : localOn(), min: existing ? undefined : localOn() });
   const time = h('input', { id: id('time'), type: 'time', value: existing ? existing.local_time : '09:00' });
@@ -196,15 +207,28 @@ function reminderForm(existing, reload, onDone) {
           if (onDone) onDone();
           return;
         }
-        r = await api(`/api/reminders/${enc(existing.id)}`, { method: 'PATCH', body: { ...patch, scope: existing.scope } });
+        // The reminder as this form loaded it: the server refuses the edit if it changed since (another tab or device).
+        // Only what a person edits: the cron moving a daily reminder's next firing is not someone else's change.
+        const expected = { text: existing.text, time_zone: existing.time_zone, local_date: existing.local_date, local_time: existing.local_time, recurrence: existing.recurrence };
+        r = await api(`/api/reminders/${enc(existing.id)}`, { method: 'PATCH', body: { ...patch, scope: existing.scope, expected } });
       } else {
-        const rid = `rem-${crypto.randomUUID()}`;
-        r = await api('/api/reminders', { method: 'POST', body: { id: rid, ...v, time_zone: zoneHere, scope: scopeSel ? scopeSel.value : writeScope() } });
+        // One id per new reminder, kept until the server confirms: if a save committed but its answer was lost,
+        // pressing Add again is a retry of the same reminder, never a second alert. Changed words under the same
+        // id answer 409 id_conflict (handled below), so an unknown earlier save is never duplicated either.
+        if (!newId) newId = `rem-${crypto.randomUUID()}`;
+        r = await api('/api/reminders', { method: 'POST', body: { id: newId, ...v, time_zone: zoneHere, scope: scopeSel ? scopeSel.value : writeScope() } });
       }
       if (!r.ok) {
-        if (r.status === 409) return fail('This reminder fired or changed while you were editing. Your words are still here: reload the list, then save again if it is still set.');
+        if (r.status === 409) {
+          const code = r.data && r.data.error && r.data.error.code;
+          if (!existing && code === 'id_conflict') {
+            return fail('Your earlier Add was saved after all, with the words it had then, so this was not saved as a second reminder. What you typed is still here: copy it if you need it, then reload this screen and edit that reminder.');
+          }
+          return fail(CONFLICT_WORDS[code] || CONFLICT_WORDS.concurrent_change);
+        }
         return fail(failWords(r, existing ? 'save the changes' : 'add the reminder'));
       }
+      if (!existing) newId = null;
       const label = r.data && r.data.first_fire && r.data.first_fire.localLabel;
       showToast(`${existing ? 'Reminder saved' : 'Reminder added'}.${label ? ` Next: ${label}.` : ''}`, null);
       reload();

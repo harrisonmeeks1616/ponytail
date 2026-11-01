@@ -12,12 +12,15 @@ import {
   prefKeyFrom, prefLabel, restoreWords, taskMatches, shareText,
 } from './outbox-core.js';
 import { openStores } from './idb.js';
+import { writeDraftWhenReady, putCaptureOnce, queueFiles, mergeBack, mergeFiles, sameCapture, captureTextOf, unstoredFiles, draftConsumedBy, settleWithin } from './capture-core.js';
 import { VIEW_MODULES } from './views/index.js';
 
 const CLIENT_BUILD = 'ui-3';
 const IDB_NAME = 'harrison-os';
 const API_HEADERS = Object.freeze({ 'X-Requested-With': 'XMLHttpRequest' });
 const DRAFT_KEY = 'capture';
+// Storage that has not answered by then is treated as failed, so a hang never swallows a capture silently.
+const STORAGE_TIMEOUT_MS = 8000;
 const PENDING_ACKS_KEY = 'pending_acks';
 const LAST_SESSION_KEY = 'last_session';
 const SCOPE_KEY = 'hos.scope';
@@ -85,6 +88,7 @@ const state = {
   draftId: null,
   draftTimer: null,
   draftGen: 0,
+  lastDraft: null, // { id, text, updated_at } of the last draft this tab wrote
   today: null,
   todayError: null,
   returnView: null,
@@ -3448,24 +3452,29 @@ function hhmm(ms) {
   return d.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' });
 }
 
-async function writeDraft() {
+// quiet: keep the status line as it is (a restore's own message must stay readable).
+async function writeDraft({ quiet = false } = {}) {
   const gen = state.draftGen;
-  const text = $('capture-text').value;
-  const scope = currentCaptureScope();
-  if (!state.draftId) state.draftId = newClientId('capture');
-  const id = state.draftId;
   try {
-    const stores = await storesReady;
-    await draftRestored; // never overwrite the stored draft before it was restored
-    if (gen !== state.draftGen) return; // a Save happened meanwhile
-    const files = state.sheetFiles.slice();
-    if (text.trim() === '' && !files.length) {
-      await stores.drafts.del(DRAFT_KEY);
-      setText('draft-status', '');
-    } else {
-      await stores.drafts.put(DRAFT_KEY, { id, text, scope, files, updated_at: new Date().toISOString() });
-      setText('draft-status', `Draft kept on this phone at ${hhmm(Date.now())}.`);
-    }
+    // The box is read only after the startup restore (capture-core): a restore may merge the stored draft
+    // into words typed meanwhile, and an earlier snapshot would overwrite that merge.
+    const r = await settleWithin(writeDraftWhenReady({
+      storesReady,
+      restored: draftRestored,
+      gen,
+      currentGen: () => state.draftGen,
+      key: DRAFT_KEY,
+      onWritten: (rec) => {
+        state.lastDraft = { id: rec.id, text: rec.text, updated_at: rec.updated_at };
+      },
+      read: () => {
+        if (!state.draftId) state.draftId = newClientId('capture');
+        return { id: state.draftId, text: $('capture-text').value, scope: currentCaptureScope(), files: state.sheetFiles.slice() };
+      },
+    }), STORAGE_TIMEOUT_MS);
+    if (quiet) return;
+    if (r === 'deleted') setText('draft-status', '');
+    else if (r === 'written') setText('draft-status', `Draft kept on this phone at ${hhmm(Date.now())}.`);
   } catch {
     setText('draft-status', 'Could not keep the draft on this phone.');
   }
@@ -3491,21 +3500,43 @@ async function restoreDraft() {
   } catch {
     existing = undefined;
   }
+  // A draft whose id is in the outbox was saved, but it is discarded only when nothing in it would be lost:
+  // the saved capture has these same words and every photo of the draft reached photo storage. Different words
+  // (another tab saved this id) keep the whole draft; photos that never got stored come back on their own.
+  // Either way the draft is re-kept under a fresh id, so a later Save can remove it.
+  let draftIdNext = draft.id;
+  let text = draft.text;
+  let files = draftFiles;
+  let status = `Draft restored from this phone (kept ${formatAt(draft.updated_at)}).`;
   if (existing) {
-    await stores.drafts.del(DRAFT_KEY).catch(() => {});
-    if (!state.draftId) state.draftId = newClientId('capture');
-    logEvent({ kind: 'draft_discarded_already_saved', id: draft.id });
-    return;
+    if (sameCapture(existing, captureTextOf(draft.text, draftFiles), draft.scope)) {
+      const missing = await unstoredFiles(stores.attachments, draftFiles).catch(() => draftFiles);
+      if (!missing.length) {
+        await stores.drafts.del(DRAFT_KEY).catch(() => {});
+        if (!state.draftId) state.draftId = newClientId('capture');
+        logEvent({ kind: 'draft_discarded_already_saved', id: draft.id });
+        return;
+      }
+      text = '';
+      files = missing;
+      status = `Your last capture was saved, but ${plural(missing.length, 'photo or file was', 'photos or files were')} not kept on this phone. ${missing.length === 1 ? 'It is' : 'They are'} back in the box: save again.`;
+      logEvent({ kind: 'draft_files_not_stored', id: draft.id, count: missing.length });
+    } else {
+      logEvent({ kind: 'draft_kept_saved_elsewhere', id: draft.id });
+    }
+    draftIdNext = newClientId('capture');
   }
   const box = $('capture-text');
   // If typing already started during startup, keep both: nothing is lost.
-  box.value = box.value.trim() !== '' ? `${draft.text}\n${box.value}` : draft.text;
+  if (text.trim() !== '') box.value = box.value.trim() !== '' ? `${text}\n${box.value}` : text;
   const known = new Set(state.sheetFiles.map((f) => f.id));
-  state.sheetFiles = draftFiles.filter((f) => !known.has(f.id)).concat(state.sheetFiles);
+  state.sheetFiles = files.filter((f) => !known.has(f.id)).concat(state.sheetFiles);
   renderSheetFiles();
   if (isScope(draft.scope)) setCaptureScope(draft.scope);
-  state.draftId = typeof draft.id === 'string' && CLIENT_ID_RE.test(draft.id) ? draft.id : newClientId('capture');
-  setText('draft-status', `Draft restored from this phone (kept ${formatAt(draft.updated_at)}).`);
+  state.draftId = typeof draftIdNext === 'string' && CLIENT_ID_RE.test(draftIdNext) ? draftIdNext : newClientId('capture');
+  // Re-keep it under the id it now has (writeDraft runs once this restore has finished).
+  if (draftIdNext !== draft.id) writeDraft({ quiet: true });
+  setText('draft-status', status);
   logEvent({ kind: 'draft_restored', id: state.draftId });
 }
 
@@ -3513,8 +3544,9 @@ function onCaptureSubmit(event) {
   event.preventDefault();
   const box = $('capture-text');
   const files = state.sheetFiles.slice();
+  const typed = box.value;
   // A photo on its own still needs words for the server: say plainly what it is.
-  const text = box.value.trim() || (files.length ? `Attached: ${files.map((f) => f.name).join(', ')}` : '');
+  const text = captureTextOf(typed, files);
   if (!text) {
     showNotice('Nothing to save.');
     return;
@@ -3536,54 +3568,74 @@ function onCaptureSubmit(event) {
   renderSheetFiles();
   setText('draft-status', '');
   writeLocal(CAPTURE_SCOPE_KEY, scope);
-  persistCapture({ id, text, scope, files });
+  // The last draft this tab wrote for this capture, so the Save removes exactly that one (capture-core).
+  const ownLast = state.lastDraft && state.lastDraft.id === id ? state.lastDraft : null;
+  persistCapture({ id, text, typed, scope, files, ownLast });
 }
 
-async function persistCapture({ id, text, scope, files = [] }) {
-  let item;
-  try {
-    item = createOutboxItem({
-      id,
+async function persistCapture({ id, text, typed = text, scope, files = [], ownLast = null }) {
+  const make = (cid) =>
+    createOutboxItem({
+      id: cid,
       kind: 'capture',
       url: '/api/captures',
-      body: { id, text, scope, client_created_at: new Date().toISOString(), time_zone: deviceTimeZone() },
+      body: { id: cid, text, scope, client_created_at: new Date().toISOString(), time_zone: deviceTimeZone() },
     });
+  try {
+    make(id);
   } catch {
     showNotice('Could not save that capture.');
     return;
   }
+  let saved;
+  let timedOut = false;
   try {
-    const stores = await storesReady;
-    const existing = await stores.outbox.get(id);
-    if (!existing) await stores.outbox.put(item);
-    state.items.set(id, existing || item);
-    logEvent({ kind: 'capture_saved', id, attachments: files.length });
-  } catch {
-    // Put the text and files back so nothing is lost.
-    const box = $('capture-text');
-    if (box.value.trim() === '') {
-      box.value = text;
-      state.draftId = id;
-      state.sheetFiles = files.concat(state.sheetFiles);
+    const stores = await settleWithin(storesReady, STORAGE_TIMEOUT_MS);
+    // An id already in the outbox is reused only for the same words (a retry); different words get a fresh id.
+    saved = await settleWithin(putCaptureOnce(stores.outbox, { id, text, scope }, make, () => newClientId('capture')), STORAGE_TIMEOUT_MS);
+    state.items.set(saved.item.id, saved.item);
+    logEvent({ kind: 'capture_saved', id: saved.item.id, status: saved.status, attachments: files.length });
+  } catch (e) {
+    timedOut = !!e && e.message === 'storage_timeout';
+    const stored = await settleWithin(storesReady.then((st) => st.outbox.get(id)), STORAGE_TIMEOUT_MS).catch(() => null);
+    if (!sameCapture(stored, text, scope)) {
+      // Not saved: put it back without touching anything typed since (capture-core mergeBack).
+      const box = $('capture-text');
+      const back = mergeBack({ boxText: box.value, draftId: state.draftId, sheetFiles: state.sheetFiles }, { id, text: typed, files });
+      box.value = back.text;
+      state.draftId = back.draftId || newClientId('capture');
+      state.sheetFiles = back.files;
       renderSheetFiles();
-      onDraftInput();
+      writeDraft();
+      const why = timedOut ? "This phone's storage is not answering, so it was not saved." : 'Could not save on this phone.';
+      showNotice(
+        back.merged
+          ? `${why} Your earlier words and files are back in the box, above what you typed since.`
+          : `${why} Your text is back in the box.`,
+      );
+      return;
     }
-    showNotice('Could not save on this phone. Your text is back in the box.');
-    return;
+    saved = { item: stored, status: 'same' };
   }
-  const kept = await queueAttachments(id, scope, files);
-  if (kept) {
-    // Remove the draft only if it is still this capture's (typing may have started a new one).
+  const finalId = saved.item.id;
+  const q = await queueAttachments(finalId, scope, files);
+  const elsewhere = q.elsewhere.length ? ` ${plural(q.elsewhere.length, 'attachment was', 'attachments were')} already saved with an earlier capture and ${q.elsewhere.length === 1 ? 'stays' : 'stay'} there.` : '';
+  const separate = saved.status === 'renamed' ? ' Another tab had already saved this draft with different words, so this is kept as a separate capture.' : '';
+  if (!q.failed.length) {
+    // Remove the draft only if it is the one this Save consumed (same id, and the saved words or this tab's own
+    // last draft). One transaction, so words another tab or a later autosave wrote are never deleted.
     const stores = await storesReady;
-    const d = await stores.drafts.get(DRAFT_KEY).catch(() => null);
-    if (!d || d.id === id) await stores.drafts.del(DRAFT_KEY).catch(() => {});
-    setStatus(files.length ? `Saved on this phone with ${plural(files.length, 'attachment', 'attachments')}.` : 'Saved on this phone.');
+    await stores.drafts.delIf(DRAFT_KEY, (d) => draftConsumedBy(d, { id, text, scope }, ownLast)).catch(() => {});
+    const n = q.stored.length;
+    (separate || elsewhere ? showNotice : setStatus)(`${n ? `Saved on this phone with ${plural(n, 'attachment', 'attachments')}.` : 'Saved on this phone.'}${separate}${elsewhere}`);
   } else {
-    // The words are saved; the photos go back in the box to be saved again as their own capture.
-    state.sheetFiles = files.concat(state.sheetFiles);
+    // The words are saved; only the files that were not stored go back in the box, to be saved again.
+    state.sheetFiles = mergeFiles(q.failed, state.sheetFiles);
     renderSheetFiles();
     writeDraft();
-    showNotice('The words are saved, but this phone could not keep the photos with them. They are back in the box: save again.');
+    showNotice(
+      `The words are saved${q.stored.length ? ` with ${plural(q.stored.length, 'attachment', 'attachments')}` : ''}, but this phone could not keep ${plural(q.failed.length, 'more file', 'more files')}. ${q.failed.length === 1 ? 'It is' : 'They are'} back in the box: save again.${separate}${elsewhere}`,
+    );
   }
   renderOutbox();
   renderAuthBanner();
@@ -3948,21 +4000,22 @@ function validDraftFile(f) {
   return !!f && CLIENT_ID_RE.test(String(f.id || '')) && attachmentMime(f.mime, '') === f.mime && typeof f.data_b64 === 'string' && f.data_b64.length > 0 && Number(f.size) <= MAX_ATTACHMENT_BYTES;
 }
 
-// Queues the sheet's files for a saved capture. Returns false when this phone could not keep them.
+// Returns { stored, elsewhere, failed } (capture-core queueFiles). state.attachments shows each stored file
+// under the capture storage actually binds it to, never under one it was not written for.
 async function queueAttachments(captureId, scope, files) {
-  if (!files.length) return true;
+  if (!files.length) return { stored: [], elsewhere: [], failed: [] };
+  let res;
   try {
     const stores = await storesReady;
-    for (const f of files) {
-      const item = createAttachmentItem({ id: f.id, capture_id: captureId, scope, name: f.name, mime: f.mime, data_b64: f.data_b64 });
-      if (!(await stores.attachments.get(item.id))) await stores.attachments.put(item);
-      state.attachments.set(item.id, withoutBytes(item));
-    }
-    logEvent({ kind: 'attachments_queued', id: captureId, count: files.length });
-    return true;
+    res = await queueFiles(stores.attachments, captureId, files, (f) =>
+      createAttachmentItem({ id: f.id, capture_id: captureId, scope, name: f.name, mime: f.mime, data_b64: f.data_b64 }),
+    );
   } catch {
-    return false;
+    return { stored: [], elsewhere: [], failed: files.slice() };
   }
+  for (const item of res.stored.concat(res.elsewhere)) state.attachments.set(item.id, withoutBytes(item));
+  logEvent({ kind: 'attachments_queued', id: captureId, count: res.stored.length, elsewhere: res.elsewhere.length, failed: res.failed.length });
+  return res;
 }
 
 function withoutBytes(item) {
