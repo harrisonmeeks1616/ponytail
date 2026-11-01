@@ -34,7 +34,11 @@ Receipt: { status: 'saved' | 'pending', requestId: string, revision?: number, re
 
 ## 4. `metadata.read`: exact response
 
-Request: `{ action: 'metadata.read', projectId }`.
+Request: `{ action: 'metadata.read', projectId, query?: { types: 'id1,id2' } }`. With `types`, PM returns the exact schema of just those types (`metadataVersion` stays the full registry's). The full registry (33 types) is too large for one answer to the model, so:
+
+- `pm_get_metadata` without `types` gives the model a compact catalog (each type's id, label, statuses, default status, core, visibility, field count; the value forms; the Field Hub kinds) with the instruction to ask for one type; with `types` (up to 5) it gives those types complete.
+- `pm_create_record` asks PM for its own type only; `pm_update_record`, archive and restore read the record first, then ask for that record's type only.
+- `pm_list_records` (it needs every type's visibility) and `field_edit_record` (it needs the Field Hub kinds) read the full registry inside Harrison OS; it is not passed to the model.
 
 ```
 data: {
@@ -70,7 +74,7 @@ How Harrison OS uses it: the model is told to read it before any change; `pm_cre
 
 | action | request extras | data on success |
 |---|---|---|
-| `project.read` | | `{ project }` (PM's own project object, passed through) |
+| `project.read` | | PM's project answer (settings: site, phase progress, notes, weekly report, upload limit; contacts; lookups). Unless sensitive data is allowed, every `contacts` entry loses `email`, `phone` and `notes`, and `site` loses `address`, at any depth |
 | `records.list` | `query: { types? (CSV), status?, q?, archived? (1 or 0), limit (1..50), offset? }` (native keys) | `{ records: [Record], total, limit, offset }` |
 | `record.read` | `recordId` | `{ record: Record }` |
 | `record.create` | `requestId`, `body: { type, status?, <topLevel keys>, data?, financial?, internalData? }` | `{ record: Record }`, receipt `saved` |
@@ -85,7 +89,9 @@ How Harrison OS uses it: the model is told to read it before any change; `pm_cre
 `Record`: `{ id, type, revision: number, status, archived: boolean, <topLevel keys>, data?, financial?, internalData? }`.
 
 - **Updates send whole sections.** PM's edit API replaces a section it is given, so `pm_update_record` reads the complete current record in the same call (PM's owner read includes financial, internal and secure values), checks `revision` against the model's `expected_revision` (unless it is a `requestId` retry, which PM replays), merges the model's changes into each touched section and sends the full section. Sections not touched are not sent and stay as they are. A secure value the model never saw is therefore kept, not wiped.
-- **Field Hub edits.** `field_edit_record` reads `field.read` in the same call, checks `rev`, and sends `base` back exactly as `field.read` returned it, with the model's `changes` and a required `reason` (1 to 1000 characters). The adapter owns the Field Hub `opId`.
+- **Field Hub edits.** `field_edit_record` reads `field.read` in the same call, checks `rev`, and sends `base` back exactly as `field.read` returned it, with the model's `changes` and a required `reason` (1 to 1000 characters). The adapter owns the Field Hub `opId`. It takes no `request_id`: PM hashes the base too, so an edit resent after a lost answer (with a newer base) is not a replay. The supported recovery is `field_list_pending` then `field_retry_operation` with the pending `operationId`; an identical edit inside the same minute with nothing changed gets the same derived request id and is replayed, and one sent after Field Hub saved the first is refused by the rev check ("if that was this change, it is already made").
+- **Record retries.** `pm_update_record` with the first attempt's `request_id` and `expected_revision` skips Harrison OS's revision check (its own change moved it on) and rebuilds the same merged body, which PM replays. If someone changed that section in between, the body differs and PM refuses it as a changed request; nothing is applied twice.
+- **Outcomes.** A write whose answer was lost (timeout, throw, unknown shape) is reported as "Outcome unknown", never "Not done", and Ask lists it as "Not confirmed". A change PM saved whose answer is too large to show is still reported as done, without the record. A text value made from a copy shortened to fit an earlier answer (ending "…") is refused, because it would replace the full text (for `pm_update_record` against PM's current value; under Ask for every write tool).
 - **Sensitive data (`includeSensitive`, owner-only, default off).** Off: financial record types (`recordVisibility: 'financial'`) and every `secure` field are removed from metadata, lists, reads, write answers and a conflict's `current` before the model sees them, and writes to them are refused. On: the same validated native operations may read and change them. Re-read on every call with the rest of the grant.
 - **Conflicts.** PM maps its native `data.error.details.current` (the full current DTO) to `error.current` plus `status`; Harrison OS shows it to the model redacted as above.
 
@@ -96,6 +102,12 @@ How Harrison OS uses it: the model is told to read it before any change; `pm_cre
 - The copied company-project table (`pm_records`) is never read or written by these tools. After a `saved` write, Harrison OS asks for one immediate copy refresh through the existing fenced path, `pm.refreshHttpSource(env, nowMs, { timeoutMs: 5000 })`, and reports its outcome (`ok`, `in_progress`, `not_connected`, ...). It never edits the copy itself; clients see the change when the refresh commits and the sync version moves.
 - Audit: one `mcp_tool` or `ask_tool` event per call (actor, tool, ok/code, PM record ids), never field values. Ask's answer lists each change with the app, PM's ids and the receipt status.
 
-## 7. Answered by root (kept for the record)
+## 7. Known limits
+
+- With sensitive data off, a `records.list` word search (`q`) runs in PM over whatever PM searches; if PM's search covers secure fields, which records match could hint at secure text. PM can exclude secure fields from `q` for this caller.
+- A grant with change actions but no read actions still shows record contents in write answers and conflict messages (redacted as above).
+- A conflict's `current` is passed on redacted; an answer of a shape Harrison OS does not recognise is reduced to its revision and status.
+
+## 8. Answered by root (kept for the record)
 
 Binding pair, numeric revisions, native `records.list` keys, conflict DTO mapping, owner reads include financial and internal data, whole-section merge, `includeSensitive` instead of a permanent exclusion, `field.read` snapshot and `base`, Field Hub change keys, receipts `saved` / `pending`. Open: whether `project.read` can carry financial values (Harrison OS passes it through; if it can, mark them or omit them for this caller).

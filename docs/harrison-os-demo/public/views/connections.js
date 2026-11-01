@@ -91,9 +91,9 @@ function summarizeRows({ ai, calendar = [], pm = [], mcp, apps = null, crossapp 
         ? { name: 'iPhone Shortcut', status: 'Not set up', tone: 'none', detail: shortcutDetail, need: shortcutNeed }
         : { name: 'iPhone Shortcut', status: 'Not checked here', tone: 'none', detail: shortcutDetail, need: shortcutNeed },
   );
-  const changes = crossWords(crossapp);
   for (const [key, name, setting] of APPS) {
     const url = apps && apps[key];
+    const changes = crossWords(crossapp, key === 'field_hub' ? 'field' : 'pm');
     rows.push(
       url
         ? { name, status: 'Linked', tone: 'none', detail: `Opens ${hostOf(url)}. It stays the official record. ${changes}`, need: null, url }
@@ -117,15 +117,20 @@ function hostOf(url) {
 
 const CROSS_WRITES = ['record.create', 'record.update', 'record.archive', 'record.restore', 'field.edit', 'field.retry'];
 
-/** Pure: whether AI may change the official apps, from the cross-app status (null: this server has none). */
-export function crossWords(c) {
+/**
+ * Pure: what AI may do in one official app (app 'pm' or 'field'; none: either), from the cross-app status
+ * (null: this server has none). Reads and changes are counted from that app's own actions.
+ */
+export function crossWords(c, app = null) {
   const data = c && c.ok && c.data;
   if (!data) return 'Harrison OS does not change it.';
   const g = data.grant || { clients: [], actions: [], projects: [] };
-  const writes = g.actions.filter((a) => CROSS_WRITES.includes(a));
-  if (!g.clients.length || !g.actions.length || !g.projects.length) return 'AI clients may not read or change it (AI actions below are off).';
+  const mine = g.actions.filter((a) => !app || (app === 'field' ? a.startsWith('field.') : !a.startsWith('field.')));
+  const writes = mine.filter((a) => CROSS_WRITES.includes(a));
+  const reads = mine.filter((a) => !CROSS_WRITES.includes(a));
+  if (!g.clients.length || !mine.length || !g.projects.length) return 'AI clients may not read or change it (AI actions below are off).';
   const who = g.clients.map((x) => (x === 'ask' ? 'Ask' : 'MCP clients')).join(' and ');
-  const what = writes.length ? 'read and change' : 'read';
+  const what = reads.length && writes.length ? 'read and change' : writes.length ? 'make changes in' : 'read';
   const sens = g.includeSensitive ? ', financial records and private fields included' : '';
   return `${who} may ${what} it through the private PM connection, in ${g.projects.length === 1 ? 'one project' : `${g.projects.length} projects`}${sens}${data.configured ? '' : ', once that connection is set up (it is not yet)'}.`;
 }

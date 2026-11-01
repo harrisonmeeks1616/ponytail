@@ -111,7 +111,7 @@ const clip = (v, n) => String(v ?? '').slice(0, n);
  * A timeout or a thrown call is 'unavailable' with outcome_unknown for a write: the write may have happened, so
  * the answer says to read the record again or retry with the same requestId (PM replays, never applies twice).
  */
-export async function execute(env, request, { timeoutMs = CALL_TIMEOUT_MS, write = false } = {}) {
+export async function execute(env, request, { timeoutMs = CALL_TIMEOUT_MS, write = false, retry = 'request' } = {}) {
   if (!commandsConfigured(env)) return { ok: false, code: 'not_configured', message: 'The private Electrical PM command connection is not set up on this server.' };
   let timer;
   let res;
@@ -125,7 +125,9 @@ export async function execute(env, request, { timeoutMs = CALL_TIMEOUT_MS, write
     return {
       ok: false,
       code: timedOut ? 'timeout' : 'unavailable',
-      message: `${timedOut ? 'Electrical PM did not answer in time.' : 'Electrical PM could not be reached.'}${write ? ` The change may or may not have been made: read it again, or retry with request_id ${request.requestId} (PM will not apply it twice).` : ''}`,
+      message: `${timedOut ? 'Electrical PM did not answer in time.' : 'Electrical PM could not be reached.'}${!write ? '' : retry === 'request'
+        ? ` The change may or may not have been made: read it again, or retry with request_id ${request.requestId} (PM will not apply it twice).`
+        : ' The change may or may not have been made: check field_list_pending and use field_retry_operation with its operationId, or read the record again. Do not send the edit again.'}`,
       outcome_unknown: write,
     };
   } finally {
@@ -241,6 +243,42 @@ export function checkRecordWrite(meta, typeId, write, { create = false, sensitiv
 }
 
 /** The whole sections to send for an update: each touched section of the current record with the changes on top. */
+/**
+ * The compact catalog the model gets by default (the full registry is too large for one answer): each type's
+ * id, label, statuses, default status, core, visibility and field count, the value forms and the Field Hub kinds,
+ * with the instruction to ask for one type's complete fields. Financial types are left out unless sensitive.
+ */
+export function compactMetadata(meta, { sensitive = false } = {}) {
+  if (!isObj(meta)) return meta;
+  const count = (t) => (Array.isArray(t.topLevel) ? t.topLevel.length : 0) + SECTIONS.reduce((n, sec) => n + (isObj(t.sections) && Array.isArray(t.sections[sec]) ? t.sections[sec].length : 0), 0);
+  const all = Array.isArray(meta.recordTypes) ? meta.recordTypes : [];
+  const shown = all.filter((t) => t && (sensitive || !isFinancialType(t)));
+  return {
+    metadataVersion: meta.metadataVersion,
+    valueForms: meta.valueForms,
+    recordTypes: shown.map((t) => ({ id: t.id, label: t.label, statuses: t.statuses, defaultStatus: t.defaultStatus, core: t.core, ...(t.recordVisibility ? { recordVisibility: t.recordVisibility } : {}), fields: count(t) })),
+    field: meta.field ?? null,
+    note: `A catalog only. Call pm_get_metadata with types: ["<type id>"] for that type's complete keys before creating or changing a record of it.${sensitive || shown.length === all.length ? '' : ' Financial record types and secure fields are not shown: Harrison has not allowed AI to use them.'}`,
+  };
+}
+
+// Contact details and the site address in a project answer (project.read): removed unless sensitive. Matched by
+// the source's own key names at any depth (contacts lists, lookups, project settings), never by guessing values.
+const CONTACT_PRIVATE = ['email', 'phone', 'notes'];
+export function redactProject(value, { sensitive = false } = {}, depth = 0) {
+  if (sensitive || depth > 8) return value;
+  if (Array.isArray(value)) return value.map((v) => redactProject(v, { sensitive }, depth + 1));
+  if (!isObj(value)) return value;
+  const out = {};
+  for (const [k, v] of Object.entries(value)) {
+    if (k === 'contacts' && Array.isArray(v)) out[k] = v.map((c) => (isObj(c) ? Object.fromEntries(Object.entries(c).filter(([ck]) => !CONTACT_PRIVATE.includes(ck))) : c));
+    else if (k === 'site' && isObj(v)) out[k] = Object.fromEntries(Object.entries(redactProject(v, { sensitive }, depth + 1)).filter(([sk]) => sk !== 'address'));
+    else out[k] = redactProject(v, { sensitive }, depth + 1);
+  }
+  if (depth === 0) out.withheld = 'Contact emails, phone numbers and notes and the site address are not shown: Harrison has not allowed AI to use private details.';
+  return out;
+}
+
 /** The metadata as the model may see it: without financial types and secure fields unless sensitive. */
 export function metadataForModel(meta, { sensitive = false } = {}) {
   if (!isObj(meta) || sensitive) return meta;
@@ -262,14 +300,33 @@ export function metadataForModel(meta, { sensitive = false } = {}) {
 
 /**
  * Anything PM sent back that may hold a record (a conflict's current DTO, a create or update answer) as the model
- * may see it: a record-shaped object (id and type) is redacted; anything else that is not sensitive-safe is dropped.
+ * may see it. A record (any object with a type) is redacted; { record } and { records } answers redact theirs;
+ * anything else is reduced to its revision and status (fail closed: an unknown shape is never passed on whole).
  */
 export function redactValue(meta, value, opts) {
   if (opts && opts.sensitive) return value;
-  if (isObj(value) && typeof value.id === 'string' && typeof value.type === 'string') return redactRecord(meta, value, opts);
+  if (isObj(value) && typeof value.type === 'string') return redactRecord(meta, value, opts);
   if (isObj(value) && isObj(value.record)) return { ...value, record: redactRecord(meta, value.record, opts) };
   if (isObj(value) && Array.isArray(value.records)) return { ...value, records: value.records.map((r) => redactRecord(meta, r, opts)).filter((r) => r !== null) };
-  return value;
+  if (isObj(value) && value.record === null) return value;
+  return safeState(value);
+}
+
+/** Only the revision and status of an answer (rev for Field Hub): what a conflict needs, nothing private. */
+export function safeState(v) {
+  if (!isObj(v)) return '(withheld: read it again)';
+  const out = {};
+  for (const k of ['revision', 'rev', 'status']) if (v[k] !== undefined && (typeof v[k] !== 'object' || v[k] === null)) out[k] = v[k];
+  return Object.keys(out).length ? out : '(withheld: read it again)';
+}
+
+/**
+ * Was this new value made from a shortened copy of the current one (a result cut to fit, ending "…")? Then it
+ * must not be saved: it would replace the full text with the cut one. Checked for every string a change sets.
+ */
+export function shortenedFrom(current, next) {
+  if (typeof current !== 'string' || typeof next !== 'string') return false;
+  return [1000, 300, 80].some((n) => current.length > n && next.includes(`${current.slice(0, n)}…`));
 }
 
 export function mergeSections(current, sections) {

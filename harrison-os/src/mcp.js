@@ -156,23 +156,32 @@ function validateArgs(schema, args) {
 
 // ---------------------------------------------------------------- result shaping (bounded, labelled)
 
-function cut(value, max) {
-  if (typeof value === 'string') return value.length > max ? `${value.slice(0, max)}…` : value;
-  if (Array.isArray(value)) return value.slice(0, MAX_ARRAY).map((v) => cut(v, max));
-  if (value && typeof value === 'object') return Object.fromEntries(Object.entries(value).map(([k, v]) => [k, cut(v, max)]));
+function cut(value, max, onCut) {
+  if (typeof value === 'string') {
+    if (value.length <= max) return value;
+    const short = `${value.slice(0, max)}…`;
+    if (onCut) onCut(short);
+    return short;
+  }
+  if (Array.isArray(value)) return value.slice(0, MAX_ARRAY).map((v) => cut(v, max, onCut));
+  if (value && typeof value === 'object') return Object.fromEntries(Object.entries(value).map(([k, v]) => [k, cut(v, max, onCut)]));
   return value;
 }
 
 // A result that fits is returned whole: text is never shortened when it does not have to be, because a client
 // may write it back. Only a result over the limit has its long strings shortened (marked "…", with truncated:
 // true); one that still does not fit becomes a tool error rather than an unbounded response.
-export const TRUNCATED_NOTE = 'Some long text in this result was shortened (it ends with "…"). Read the one record (get_item) before changing it, and never save shortened text back.';
-function bounded(payload, limit = MAX_RESULT_CHARS) {
+export const TRUNCATED_NOTE = 'Some long text in this result was shortened (it ends with "…"). Never write shortened text back: it would replace the full text. Read the one record again (get_item, pm_get_record); if it is still shortened, that text is too long to change here.';
+function bounded(payload, limit = MAX_RESULT_CHARS, onCut = null) {
   const room = limit - 1024; // for the notice
   if (JSON.stringify(payload).length <= room) return payload;
   for (const max of [1000, 300, 80]) {
-    const out = cut(payload, max);
-    if (JSON.stringify(out).length <= room - TRUNCATED_NOTE.length) return { ...out, truncated: true, truncated_note: TRUNCATED_NOTE };
+    const cuts = [];
+    const out = cut(payload, max, (x) => cuts.push(x));
+    if (JSON.stringify(out).length <= room - TRUNCATED_NOTE.length) {
+      if (onCut) cuts.forEach(onCut);
+      return { ...out, truncated: true, truncated_note: TRUNCATED_NOTE };
+    }
   }
   return null;
 }
@@ -190,11 +199,13 @@ class ToolError extends Error {}
 
 // Electrical PM's own refusal or failure of one command, passed on with its code, message and, for a conflict,
 // the current state PM reported (bounded). Never reported as done.
+// A write whose answer was lost (timeout, throw, unknown shape) is "Outcome unknown", never "Not done".
 class SourceError extends Error {
   constructor(r, req) {
     const current = r.current !== undefined ? ` Current state from Electrical PM: ${JSON.stringify(r.current).slice(0, 1500)}` : '';
-    super(`Not done. Electrical PM answered ${r.code}${r.status ? ` (${r.status})` : ''} to ${req.action}: ${r.message}${current}`);
+    super(`${r.outcome_unknown ? 'Outcome unknown.' : 'Not done.'} Electrical PM answered ${r.code}${r.status ? ` (${r.status})` : ''} to ${req.action}: ${r.message}${current}`);
     this.code = r.code;
+    this.unknown = !!r.outcome_unknown;
   }
 }
 
@@ -717,33 +728,39 @@ async function pmCall(ctx, action, req, shape = null) {
   const write = !cross.READ_ACTIONS.includes(action);
   const request = { action, ...req };
   if (write) request.requestId = await cross.requestIdFor(req.requestId, { actor: ctx.actor, action, projectId: req.projectId, recordId: req.recordId ?? req.operationId ?? null, body: req.body ?? null, nowMs: ctx.nowMs });
-  const r = await cross.execute(ctx.env, request, { write });
+  // A Field Hub edit is recovered with field_retry_operation, never by sending it again (PM hashes its base too).
+  const r = await cross.execute(ctx.env, request, { write, retry: action === 'field.edit' ? 'operation' : 'request' });
   if (!r.ok) {
     // A conflict carries PM's full current record: it reaches the model only as the record would.
-    if (r.current !== undefined) r.current = shape ? shape(r.current) : ctx.cross.includeSensitive ? r.current : '(withheld: read the record again)';
+    if (r.current !== undefined) r.current = shape ? await shape(r.current) : ctx.cross.includeSensitive ? r.current : cross.safeState(r.current);
     throw new SourceError(r, request);
   }
   return { r, request };
 }
 
 const sensitiveOf = (ctx) => ({ sensitive: ctx.cross.includeSensitive === true });
-async function metaOf(ctx, projectId) {
-  const { r } = await pmCall(ctx, 'metadata.read', { projectId });
+// PM's metadata, for the given types only (metadata.read query.types, CSV: the exact schema of just those types),
+// or the whole registry when types is null (needed for the catalog, a list's visibility, and Field Hub kinds).
+async function metaOf(ctx, projectId, types = null) {
+  const { r } = await pmCall(ctx, 'metadata.read', { projectId, ...(types ? { query: { types: types.join(',') } } : {}) });
   if (!r.data || !Array.isArray(r.data.recordTypes)) throw new ToolError('Not done: Electrical PM did not return its record metadata, so Harrison OS will not guess record types or fields.');
   return r.data;
 }
 
-// The complete current record, read now from PM (never from Harrison OS's copy). A retry (request_id given) may
-// carry the revision of its first attempt, which its own change moved on: PM decides it by replaying.
-async function currentRecord(ctx, meta, a) {
-  const { r } = await pmCall(ctx, 'record.read', { projectId: a.project_id, recordId: a.record_id }, (v) => cross.redactValue(meta, v, sensitiveOf(ctx)));
+// The complete current record, read now from PM (never from Harrison OS's copy), then the metadata of its own type.
+// A retry (request_id given) may carry the revision of its first attempt, which its own change moved on: PM decides
+// it by replaying (the merged body is the same unless someone changed that section since; then PM refuses it).
+async function currentRecord(ctx, a) {
+  const { r } = await pmCall(ctx, 'record.read', { projectId: a.project_id, recordId: a.record_id });
   const rec = r.data && r.data.record;
   if (!rec || typeof rec !== 'object' || !Number.isInteger(rec.revision) || typeof rec.type !== 'string') throw new ToolError('Not done: Electrical PM did not return the record with its type and revision, so nothing is changed.');
+  const meta = await metaOf(ctx, a.project_id, [rec.type]);
+  if (!cross.typeOf(meta, rec.type)) throw new ToolError(`Not done: Electrical PM did not describe the record's type ${String(rec.type).slice(0, 60)}, so nothing is changed.`);
   if (!ctx.cross.includeSensitive && cross.isFinancialType(cross.typeOf(meta, rec.type))) throw new ToolError('Not done: that record is a financial type, which Harrison has not allowed AI to use. Nothing was changed.');
   if (!a.request_id && rec.revision !== a.expected_revision) {
     throw new ToolError(`Not done: the record changed since you read it (revision ${rec.revision} now, you sent ${a.expected_revision}). Read it again, then decide.`);
   }
-  return rec;
+  return { rec, meta };
 }
 
 // One immediate refresh of Harrison OS's company-project copy after a saved change, through pm.js's own fenced
@@ -764,7 +781,7 @@ const viaPm = (action, build) => async (ctx, args) => {
   if (args.request_id) req.requestId = args.request_id;
   const { r, request } = await pmCall(ctx, action, req, shape);
   const saved = !cross.READ_ACTIONS.includes(action) && r.receipt && r.receipt.status === 'saved';
-  const result = shape(r.data);
+  const result = await shape(r.data);
   return {
     app: action.startsWith('field.') ? 'field' : 'pm',
     action,
@@ -785,15 +802,18 @@ const recordShape = (ctx, meta) => (v) => cross.redactValue(meta, v, sensitiveOf
 const CROSS_TOOLS = [
   {
     name: 'pm_get_project', app: 'pm', action: 'project.read',
-    description: 'Read one Electrical PM project from Electrical PM itself (current, not the Harrison OS copy).',
+    description: 'Read one Electrical PM project from Electrical PM itself (current, not the Harrison OS copy): its settings, contacts and lookups. Contact emails, phone numbers and notes and the site address are left out unless Harrison allowed private details.',
     inputSchema: obj({ project_id: pmProject }, ['project_id']),
-    run: viaPm('project.read', () => ({ req: {} })),
+    run: viaPm('project.read', (_a, ctx) => ({ req: {}, shape: (d) => cross.redactProject(d, sensitiveOf(ctx)) })),
   },
   {
     name: 'pm_get_metadata', app: 'pm', action: 'metadata.read',
-    description: "Electrical PM's record types for a project: each type's statuses, top-level keys and data / financial / internalData fields (kind, required, options), the value form of each kind, and the Field Hub kinds and change keys PM accepts. Read it before creating or changing anything.",
-    inputSchema: obj({ project_id: pmProject }, ['project_id']),
-    run: viaPm('metadata.read', (_a, ctx) => ({ req: {}, shape: (m) => cross.metadataForModel(m, sensitiveOf(ctx)) })),
+    description: "Electrical PM's record types for a project. Without types: a catalog of every type (id, label, statuses, field count), the value form of each field kind, and the Field Hub kinds and change keys. With types (up to 5 ids): those types' complete top-level keys and data / financial / internalData fields (kind, required, options). Ask for a type's complete fields before creating or changing a record of it.",
+    inputSchema: obj({ project_id: pmProject, types: { type: 'array', minItems: 1, maxItems: 5, items: typeIdProp } }, ['project_id']),
+    run: viaPm('metadata.read', (a, ctx) => ({
+      req: a.types ? { query: { types: a.types.join(',') } } : {},
+      shape: (m) => (a.types ? cross.metadataForModel(m, sensitiveOf(ctx)) : cross.compactMetadata(m, sensitiveOf(ctx))),
+    })),
   },
   {
     name: 'pm_list_records', app: 'pm', action: 'records.list',
@@ -811,6 +831,7 @@ const CROSS_TOOLS = [
       const meta = await metaOf(ctx, a.project_id);
       // Without sensitive data, ask PM only for the types AI may see, so its paging and total are right.
       const allowed = meta.recordTypes.filter((t) => ctx.cross.includeSensitive || !cross.isFinancialType(t)).map((t) => t.id);
+      if (!allowed.length) throw new ToolError('No record types in this project are open to AI (all are financial, and Harrison has not allowed financial records).');
       const types = a.types ? a.types : ctx.cross.includeSensitive ? null : allowed;
       if (a.types && a.types.some((t) => !allowed.includes(t))) throw new ToolError(`Not done: types must be among ${allowed.join(', ')}.`);
       const query = { ...(types ? { types: types.join(',') } : {}), ...(a.status ? { status: a.status } : {}), ...(a.q ? { q: a.q } : {}), ...(a.archived !== undefined ? { archived: a.archived ? 1 : 0 } : {}), limit: a.limit || 20, ...(a.offset ? { offset: a.offset } : {}) };
@@ -821,24 +842,24 @@ const CROSS_TOOLS = [
     name: 'pm_get_record', app: 'pm', action: 'record.read',
     description: 'One complete Electrical PM record (type, status, revision, top-level keys and sections), read now from Electrical PM.',
     inputSchema: obj({ project_id: pmProject, record_id: pmRecordId }, ['project_id', 'record_id']),
-    run: viaPm('record.read', async (a, ctx) => {
-      const meta = await metaOf(ctx, a.project_id);
-      return {
-        req: { recordId: a.record_id },
-        shape: (d) => {
-          const out = recordShape(ctx, meta)(d);
-          if (out && out.record === null) throw new ToolError('That record is a financial type, which Harrison has not allowed AI to see.');
-          return out;
-        },
-      };
-    }),
+    // Read first, then the metadata of the record's own type, to show it as the model may see it.
+    run: viaPm('record.read', (a, ctx) => ({
+      req: { recordId: a.record_id },
+      shape: async (d) => {
+        const type = d && d.record && typeof d.record.type === 'string' ? d.record.type : null;
+        if (!type) return { record: null, withheld: 'Electrical PM did not return a record with a type, so nothing is shown.' };
+        const out = recordShape(ctx, await metaOf(ctx, a.project_id, [type]))(d);
+        if (out && out.record === null) throw new ToolError('That record is a financial type, which Harrison has not allowed AI to see.');
+        return out;
+      },
+    })),
   },
   {
     name: 'pm_create_record', app: 'pm', action: 'record.create', write: true,
     description: "Create a record in Electrical PM: a type, optionally a status, and keys exactly as pm_get_metadata declares them (required ones included). Returns Electrical PM's own record and receipt.",
     inputSchema: obj({ project_id: pmProject, type: typeIdProp, ...WRITE_PROPS, request_id: requestIdProp }, ['project_id', 'type']),
     run: viaPm('record.create', async (a, ctx) => {
-      const meta = await metaOf(ctx, a.project_id);
+      const meta = await metaOf(ctx, a.project_id, [a.type]);
       const w = writeOf(a);
       const bad = cross.checkRecordWrite(meta, a.type, w, { create: true, ...sensitiveOf(ctx) });
       if (bad) throw new ToolError(`Not done: ${bad}. Nothing was changed.`);
@@ -851,11 +872,15 @@ const CROSS_TOOLS = [
     description: 'Change one Electrical PM record: status, top-level keys and section keys from pm_get_metadata. Send the revision from pm_get_record; Harrison OS reads the record again first and changes nothing if it moved on. Keys you do not give keep their values.',
     inputSchema: obj({ project_id: pmProject, record_id: pmRecordId, expected_revision: revisionProp, ...WRITE_PROPS, request_id: requestIdProp }, ['project_id', 'record_id', 'expected_revision']),
     run: viaPm('record.update', async (a, ctx) => {
-      const meta = await metaOf(ctx, a.project_id);
-      const rec = await currentRecord(ctx, meta, a);
+      const { rec, meta } = await currentRecord(ctx, a);
       const w = writeOf(a);
       const bad = cross.checkRecordWrite(meta, rec.type, w, sensitiveOf(ctx));
       if (bad) throw new ToolError(`Not done: ${bad}. Nothing was changed.`);
+      // Text cut to fit an earlier answer ("…") must never replace the full text PM holds.
+      const pairs = [...Object.entries(w.topLevel).map(([k, v]) => [k, rec[k], v]),
+        ...cross.SECTIONS.flatMap((sec) => Object.entries(w.sections[sec] || {}).map(([k, v]) => [`${sec}.${k}`, rec[sec] && rec[sec][k], v]))];
+      const cutKey = pairs.find(([, cur, next]) => cross.shortenedFrom(cur, next));
+      if (cutKey) throw new ToolError(`Not done: the new ${cutKey[0]} contains a shortened copy of its current text, which would replace the full text. That text is too long to change here: change it in Electrical PM. Nothing was changed.`);
       return { req: { recordId: a.record_id, body: { expectedRevision: a.expected_revision, ...wireBody(w, cross.mergeSections(rec, w.sections)) } }, shape: recordShape(ctx, meta) };
     }),
   },
@@ -864,8 +889,7 @@ const CROSS_TOOLS = [
     description: 'Archive one Electrical PM record (pm_restore_record brings it back). Send the revision from pm_get_record.',
     inputSchema: obj({ project_id: pmProject, record_id: pmRecordId, expected_revision: revisionProp, request_id: requestIdProp }, ['project_id', 'record_id', 'expected_revision']),
     run: viaPm('record.archive', async (a, ctx) => {
-      const meta = await metaOf(ctx, a.project_id);
-      await currentRecord(ctx, meta, a);
+      const { meta } = await currentRecord(ctx, a);
       return { req: { recordId: a.record_id, body: { expectedRevision: a.expected_revision } }, shape: recordShape(ctx, meta) };
     }),
   },
@@ -874,8 +898,7 @@ const CROSS_TOOLS = [
     description: 'Restore an archived Electrical PM record. Send the revision from pm_get_record.',
     inputSchema: obj({ project_id: pmProject, record_id: pmRecordId, expected_revision: revisionProp, request_id: requestIdProp }, ['project_id', 'record_id', 'expected_revision']),
     run: viaPm('record.restore', async (a, ctx) => {
-      const meta = await metaOf(ctx, a.project_id);
-      await currentRecord(ctx, meta, a);
+      const { meta } = await currentRecord(ctx, a);
       return { req: { recordId: a.record_id, body: { expectedRevision: a.expected_revision } }, shape: recordShape(ctx, meta) };
     }),
   },
@@ -900,13 +923,12 @@ const CROSS_TOOLS = [
   },
   {
     name: 'field_edit_record', app: 'field', action: 'field.edit', write: true,
-    description: "Change one Field Hub record through Electrical PM: only the change keys pm_get_metadata lists for that kind, with a short reason. Send the rev from field_get_record (0 for a new task). The answer is PM's receipt: saved, or pending until Field Hub confirms.",
+    description: "Change one Field Hub record through Electrical PM: only the change keys pm_get_metadata lists for that kind, with a short reason. Send the rev from field_get_record (0 for a new task). The answer is PM's receipt: saved, or pending until Field Hub confirms. If an answer is lost, do not send the edit again: check field_list_pending and use field_retry_operation with its operationId, or read the record again.",
     inputSchema: obj({
       project_id: pmProject, kind: fieldKind, key: fieldKey,
       expected_rev: revisionProp,
       changes: freeObject("Change keys for this kind from pm_get_metadata (field.kinds[].changeKeys) and their new values."),
       reason: { type: 'string', minLength: 1, maxLength: 1000, description: 'Why, in a sentence, as it will show in the activity.' },
-      request_id: requestIdProp,
     }, ['project_id', 'kind', 'key', 'expected_rev', 'changes', 'reason']),
     run: viaPm('field.edit', async (a, ctx) => {
       const meta = await metaOf(ctx, a.project_id);
@@ -919,7 +941,7 @@ const CROSS_TOOLS = [
       const { r } = await pmCall(ctx, 'field.read', { projectId: a.project_id, query: { kind: a.kind, key: a.key } });
       const d = r.data;
       if (!d || typeof d !== 'object' || !Number.isInteger(d.rev)) throw new ToolError('Not done: Electrical PM did not return the Field Hub record with its rev, so nothing is changed.');
-      if (!a.request_id && d.rev !== a.expected_rev) throw new ToolError(`Not done: the Field Hub record changed since you read it (rev ${d.rev} now, you sent ${a.expected_rev}). Read it again, then decide.`);
+      if (d.rev !== a.expected_rev) throw new ToolError(`Not done: the Field Hub record changed since you read it (rev ${d.rev} now, you sent ${a.expected_rev}). If that was this change, it is already made (see field_list_pending); otherwise read it again, then decide.`);
       return { req: { body: { kind: a.kind, key: a.key, expectedRev: a.expected_rev, base: d.base ?? null, changes: a.changes, reason: a.reason } } };
     }),
   },
@@ -959,8 +981,8 @@ export function listTools(env, mods = DEFAULT_MODS, grant = defaultGrant(env), c
   }));
 }
 
-function toolError(message) {
-  return { content: [{ type: 'text', text: message }], isError: true };
+function toolError(message, structured = null) {
+  return { content: [{ type: 'text', text: message }], isError: true, ...(structured ? { structuredContent: structured } : {}) };
 }
 
 // One audit event per call: who (actor), tool, scope, ok/code, and for a change the ids and changeIds it touched,
@@ -1004,7 +1026,7 @@ const REFUSED = {
  * The same registry serves Ask's Full mode (askToolkit below): grantOf is then Ask's own grant, actor 'ask_ai'
  * and maxChars Ask's tool-result limit. Whoever calls, the grant is read fresh by grantOf on every call.
  */
-export async function callTool({ env, nowMs, mods = DEFAULT_MODS, dispatch = null, grantOf = readGrant, actor = 'mcp_client', maxChars = MAX_RESULT_CHARS }, name, args = {}) {
+export async function callTool({ env, nowMs, mods = DEFAULT_MODS, dispatch = null, grantOf = readGrant, actor = 'mcp_client', maxChars = MAX_RESULT_CHARS, onCut = null }, name, args = {}) {
   const tool = TOOLS.find((t) => t.name === name);
   // Read fresh on every call: a change or revocation applies to the very next call.
   const grant = await grantOf(env, nowMs);
@@ -1015,9 +1037,9 @@ export async function callTool({ env, nowMs, mods = DEFAULT_MODS, dispatch = nul
   }
   // Electrical PM and Field Hub are Work.
   const scope = tool.app ? 'work' : args && typeof args === 'object' && SCOPES.includes(args.scope) ? args.scope : null;
-  const fail = async (code, message) => {
+  const fail = async (code, message, structured = null) => {
     await audit(env, nowMs, actor, { tool: name, scope, ok: false, code });
-    return toolError(message);
+    return toolError(message, structured);
   };
   if (refused) return fail(refused, REFUSED[refused]);
   if (scope && !grant.scopes.includes(scope)) return fail('scope_not_allowed', `This connection may not use the ${scope} scope.`);
@@ -1035,7 +1057,7 @@ export async function callTool({ env, nowMs, mods = DEFAULT_MODS, dispatch = nul
     data = await tool.run({ env, nowMs, mods, dispatch, actor, cross: crossGrant }, args);
   } catch (err) {
     if (err instanceof ToolError) return fail('tool_error', err.message);
-    if (err instanceof SourceError) return fail(err.code, err.message);
+    if (err instanceof SourceError) return fail(err.code, err.message, err.unknown ? { outcome_unknown: true, code: err.code } : null);
     if (err instanceof RouteError) return fail(err.code, `Not done. Harrison OS answered ${err.status} ${err.code}: ${err.message}`);
     if (err instanceof HttpError || err instanceof db.ScopeError || err instanceof db.ValidationError || err instanceof db.NotFoundError) return fail('invalid', 'The request was not valid for this record.');
     await audit(env, nowMs, actor, { tool: name, scope, ok: false, code: 'internal' });
@@ -1043,8 +1065,9 @@ export async function callTool({ env, nowMs, mods = DEFAULT_MODS, dispatch = nul
   }
   const count = Number.isInteger(data.count) ? data.count : Array.isArray(data.records) ? data.records.length : 0;
   delete data.count;
-  const body = bounded(data, maxChars);
-  if (!body) return fail('too_large', 'The result was too large. Ask for fewer records.');
+  // A change that was made is reported as made even when its answer is too large to show.
+  const body = bounded(data, maxChars, onCut) || (tool.write ? bounded({ ...data, result: null, result_note: 'Done, but the answer is too large to show here: read the record again.' }, maxChars, onCut) : null);
+  if (!body) return fail('too_large', tool.write ? 'Done, but the answer is too large to show: read the record again.' : 'The result was too large. Ask for fewer records.');
   const structured = { notice: UNTRUSTED_NOTICE, scope, ...body };
   await audit(env, nowMs, actor, { tool: name, scope, count, ok: true, ...(tool.write ? touched(data) : {}) });
   return { content: [{ type: 'text', text: JSON.stringify(structured) }], structuredContent: structured, isError: false };
@@ -1075,18 +1098,26 @@ export async function askToolkit({ env, nowMs, dispatch, grantOf, maxChars, mods
   tools[tools.length - 1] = { ...tools[tools.length - 1], cache_control: { type: 'ephemeral' } };
   const actions = [];
   const handlers = {};
+  // Text this question's results showed shortened ("…"): a change containing it would overwrite the full text.
+  const shortened = new Set();
+  const containsShortened = (v) => (typeof v === 'string' ? [...shortened].some((x) => v.includes(x)) : v && typeof v === 'object' ? Object.values(v).some(containsShortened) : false);
   for (const t of tools) {
     const def = TOOLS.find((x) => x.name === t.name);
     handlers[t.name] = async (input) => {
-      const res = await callTool({ env, nowMs, mods, dispatch, grantOf: grantNow, actor: 'ask_ai', maxChars }, t.name, input || {});
       const scope = def.app ? 'work' : input && SCOPES.includes(input.scope) ? input.scope : null;
+      const app = def.app || 'hos';
+      if (def.write && shortened.size && containsShortened(input)) {
+        const message = 'Not done: this change contains text that an earlier result showed shortened (ending "…"), which would replace the full text. That text is too long to change here.';
+        actions.push({ tool: t.name, app, scope, ok: false, message });
+        return { content: message, is_error: true };
+      }
+      const res = await callTool({ env, nowMs, mods, dispatch, grantOf: grantNow, actor: 'ask_ai', maxChars, onCut: (x) => shortened.add(x) }, t.name, input || {});
       if (!res) return { content: 'Unknown tool.', is_error: true };
       const text = res.content[0].text;
       if (def.write) {
-        const app = def.app || 'hos';
         const sc = res.structuredContent || {};
         actions.push(res.isError
-          ? { tool: t.name, app, scope, ok: false, message: text.slice(0, 300) }
+          ? { tool: t.name, app, scope, ok: false, ...(sc.outcome_unknown ? { unknown: true } : {}), message: text.slice(0, 300) }
           : def.app
             ? { tool: t.name, app, scope, ok: true, ids: touched(sc).ids, change_ids: [], request_id: sc.request_id || null, receipt: receiptOf(sc.receipt) }
             : { tool: t.name, app, scope, ok: true, ...touched(sc) });

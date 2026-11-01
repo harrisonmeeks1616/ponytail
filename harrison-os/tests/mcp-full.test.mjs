@@ -360,7 +360,7 @@ test('(j) long text comes back whole when it fits; only an oversized result is s
   for (let i = 0; i < 2; i++) await s.ok('create_item', { scope: 'work', kind: 'reference', title: `More notes ${i}`, notes: long });
   const big = await s.ok('list_items', { scope: 'work' });
   assert.equal(big.truncated, true);
-  assert.match(big.truncated_note, /never save shortened text back/);
+  assert.match(big.truncated_note, /Never write shortened text back/);
   assert.ok(big.records.every((r) => r.body.endsWith('…') && r.body.length < long.length));
 
   // expected must be the whole editable reminder: an empty or partial snapshot is refused before anything runs.

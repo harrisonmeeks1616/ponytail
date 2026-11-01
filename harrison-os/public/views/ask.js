@@ -197,7 +197,11 @@ const APP_WORDS = { pm: 'Electrical PM', field: 'Field Hub, through Electrical P
 export function actionWords(a) {
   const source = a.app && a.app !== 'hos';
   const status = source && a.receipt ? a.receipt.status : null;
-  const state = !a.ok ? 'Not done' : !source || status === 'saved' ? 'Done' : status === 'pending' ? 'Sent, waiting for Field Hub to confirm' : 'Sent, not confirmed as saved';
+  const confirmBy = a.app === 'field' ? 'Field Hub' : 'Electrical PM';
+  const state = a.unknown ? 'Not confirmed (it may have been made): read it again'
+    : !a.ok ? 'Not done'
+      : !source || status === 'saved' ? 'Done'
+        : status === 'pending' ? `Sent, waiting for ${confirmBy} to confirm` : 'Sent, not confirmed as saved';
   const where = APP_WORDS[a.app] ? ` in ${APP_WORDS[a.app]}` : a.scope ? ` (${SCOPE_WORDS[a.scope] || a.scope})` : '';
   return `${state}: ${TOOL_WORDS[a.tool] || String(a.tool || '').replaceAll('_', ' ')}${where}`;
 }

@@ -193,10 +193,15 @@ const TOOL_WORDS = { create_item: 'Added', update_item: 'Changed', item_action: 
   field_edit_record: 'Changed a Field Hub record', field_retry_operation: 'Retried a Field Hub change' };
 const APP_WORDS = { pm: 'Electrical PM', field: 'Field Hub, through Electrical PM' };
 
-/** Pure: one change Ask attempted, in plain words. A source answer of "pending" is never called done. */
+/** Pure: one change Ask attempted, in plain words. In another app only a "saved" receipt is called done. */
 export function actionWords(a) {
-  const pending = a.ok && a.app && a.app !== 'hos' && a.receipt && a.receipt.status === 'pending';
-  const state = !a.ok ? 'Not done' : pending ? 'Sent, waiting for Field Hub to confirm' : 'Done';
+  const source = a.app && a.app !== 'hos';
+  const status = source && a.receipt ? a.receipt.status : null;
+  const confirmBy = a.app === 'field' ? 'Field Hub' : 'Electrical PM';
+  const state = a.unknown ? 'Not confirmed (it may have been made): read it again'
+    : !a.ok ? 'Not done'
+      : !source || status === 'saved' ? 'Done'
+        : status === 'pending' ? `Sent, waiting for ${confirmBy} to confirm` : 'Sent, not confirmed as saved';
   const where = APP_WORDS[a.app] ? ` in ${APP_WORDS[a.app]}` : a.scope ? ` (${SCOPE_WORDS[a.scope] || a.scope})` : '';
   return `${state}: ${TOOL_WORDS[a.tool] || String(a.tool || '').replaceAll('_', ' ')}${where}`;
 }

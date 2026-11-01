@@ -43,6 +43,13 @@ const META = {
   ] },
 };
 
+// The real registry has 33 types; 31 fillers with 40 fields each make the full schema too large for one answer,
+// as it was against the native PM bundle.
+for (let i = 0; i < 31; i++) {
+  META.recordTypes.push({ id: `type${i}`, label: `Type ${i}`, statuses: ['open', 'closed'], defaultStatus: 'open', core: false,
+    topLevel: [field('title', 'text', { required: true })], sections: { data: Array.from({ length: 40 }, (_, j) => field(`field${j}`, 'longtext')) } });
+}
+
 // The stand-in PM: its own project allowlist (p1, p2), full owner records, whole-section replace, request-id
 // replay and changed-request refusal, conflicts with the full current DTO, Field Hub snapshots and a queue.
 function fakePm() {
@@ -75,8 +82,18 @@ function fakePm() {
       };
       const rec = req.recordId ? records.get(req.recordId) : null;
       switch (req.action) {
-        case 'project.read': return done({ project: { id: req.projectId, name: 'Sample clinic fit-out' } });
-        case 'metadata.read': return done(structuredClone(META));
+        case 'project.read': return done({
+          project: { id: req.projectId, name: 'Sample clinic fit-out', settings: { site: { address: '1 Sample Way', start: '2026-09-01', deadline: '2027-03-01' }, phaseProgress: { rough: 40 } } },
+          contacts: [{ id: 'c1', name: 'Jordan Example', role: 'GC', email: 'jordan@example.invalid', phone: '555-0100', notes: 'PRIVATE-CONTACT-NOTE' }],
+          lookups: { contacts: [{ id: 'c1', name: 'Jordan Example', email: 'jordan@example.invalid' }], phases: ['rough', 'trim'] },
+        });
+        case 'metadata.read': {
+          // query.types (CSV): the exact schema of just those types; the version stays the full registry's.
+          const want = req.query && req.query.types ? req.query.types.split(',') : null;
+          const m = structuredClone(META);
+          if (want) m.recordTypes = m.recordTypes.filter((t) => want.includes(t.id));
+          return done(m);
+        }
         case 'records.list': {
           const types = req.query && req.query.types ? req.query.types.split(',') : null;
           const list = [...records.values()].filter((r) => !types || types.includes(r.type));
@@ -176,16 +193,17 @@ test('grant route: owner only, nothing allowed by default, strict; project choic
 test('without sensitive data: financial types and secure fields never reach the model, in metadata, lists, reads or conflicts', async () => {
   const s = setup();
   await s.full();
-  const meta = (await s.call('pm_get_metadata', { project_id: 'p1' })).structuredContent.result;
-  assert.deepEqual(meta.recordTypes.map((t) => t.id), ['rfi']);
+  const meta = (await s.call('pm_get_metadata', { project_id: 'p1', types: ['rfi', 'invoice'] })).structuredContent.result;
+  assert.deepEqual(meta.recordTypes.map((t) => t.id), ['rfi'], 'the financial type is withheld even when asked for');
+  assert.ok(!(await s.call('pm_get_metadata', { project_id: 'p1' })).structuredContent.result.recordTypes.some((t) => t.id === 'invoice'));
   const rfi = meta.recordTypes[0];
   assert.ok(!rfi.topLevel.some((f) => f.key === 'internalNotes'));
   assert.deepEqual(rfi.sections.financial, []);
   assert.equal(meta.withheld.financialTypes, 1);
   const list = await s.call('pm_list_records', { project_id: 'p1' });
-  assert.equal(s.pm.calls.at(-1).query.types, 'rfi', 'PM is asked only for the types AI may see');
+  assert.ok(!s.pm.calls.at(-1).query.types.split(',').includes('invoice') && s.pm.calls.at(-1).query.types.split(',').includes('rfi'), 'PM is asked only for the types AI may see');
   assert.deepEqual(list.structuredContent.result.records.map((r) => r.id), ['rfi_1']);
-  assert.match((await s.call('pm_list_records', { project_id: 'p1', types: ['invoice'] })).content[0].text, /types must be among rfi/);
+  assert.match((await s.call('pm_list_records', { project_id: 'p1', types: ['invoice'] })).content[0].text, /types must be among rfi, type0/);
   const rec = (await s.call('pm_get_record', { project_id: 'p1', record_id: 'rfi_1' })).structuredContent.result.record;
   assert.equal(rec.internalNotes, undefined);
   assert.equal(rec.financial.costImpact, undefined);
@@ -228,7 +246,7 @@ test('writes: declared keys only, whole-section merge keeps every value (secure 
   // Stale: Harrison OS reads the record itself and stops before any update reaches PM.
   const before = s.pm.calls.length;
   assert.match(text(await s.call('pm_update_record', { project_id: 'p1', record_id: 'rfi_1', expected_revision: 2, data: { discipline: 'mechanical' } })), /changed since you read it/);
-  assert.deepEqual(s.pm.calls.slice(before).map((c) => c.action), ['metadata.read', 'record.read']);
+  assert.deepEqual(s.pm.calls.slice(before).map((c) => [c.action, c.query && c.query.types]), [['record.read', undefined], ['metadata.read', 'rfi']], 'the record first, then only its own type');
   assert.match(text(await s.call('pm_update_record', { project_id: 'p1', record_id: 'rfi_1', expected_revision: 3, internalData: { margin: 0.5 } })), /margin is a secure field/);
 
   // A data change and an internalData change: each touched section goes whole, with every current value kept.
@@ -258,8 +276,9 @@ test('writes: declared keys only, whole-section merge keeps every value (secure 
 test('with includeSensitive: financial types and secure fields are visible and writable through the same checks', async () => {
   const s = setup();
   await s.full({ includeSensitive: true });
-  const meta = (await s.call('pm_get_metadata', { project_id: 'p1' })).structuredContent.result;
+  const meta = (await s.call('pm_get_metadata', { project_id: 'p1', types: ['rfi', 'invoice'] })).structuredContent.result;
   assert.deepEqual(meta.recordTypes.map((t) => t.id), ['rfi', 'invoice']);
+  assert.ok((await s.call('pm_get_metadata', { project_id: 'p1' })).structuredContent.result.recordTypes.some((t) => t.id === 'invoice'));
   assert.equal((await s.call('pm_get_record', { project_id: 'p1', record_id: 'rfi_1' })).structuredContent.result.record.internalNotes, SECRET_NOTE);
   const r = await s.call('pm_update_record', { project_id: 'p1', record_id: 'rfi_1', expected_revision: 3, financial: { costImpact: 1500 } });
   assert.equal(r.isError, false, text(r));
@@ -386,4 +405,60 @@ test("Ask Full (Work) with the cross-app grant: it creates an Electrical PM reco
   assert.match(a.request_id, /^hos_/);
   const ev = (await s.DB.prepare("SELECT detail FROM events WHERE kind = 'ask_tool'").all()).results.map((e) => JSON.parse(e.detail));
   assert.deepEqual(ev.map((e) => [e.actor, e.tool, e.ok]), [['ask_ai', 'pm_create_record', true]]);
+});
+
+test('metadata: the default answer is a compact catalog that fits; one type on request is complete; writes fetch only their type', async () => {
+  const s = setup();
+  await s.full();
+  const full = JSON.stringify(META).length;
+  assert.ok(full > 48 * 1024, `the stand-in registry is realistically large (${full} characters)`);
+  const cat = await s.call('pm_get_metadata', { project_id: 'p1' });
+  assert.equal(cat.isError, false, text(cat));
+  const c = cat.structuredContent.result;
+  assert.equal(c.recordTypes.length, 32, 'every type except the financial one');
+  assert.equal(c.recordTypes.find((t) => t.id === 'type0').fields, 41);
+  assert.ok(!('sections' in c.recordTypes[0]), 'no fields in the catalog');
+  assert.match(c.note, /types: \["<type id>"\]/);
+  assert.match(c.note, /Financial record types and secure fields are not shown/);
+  assert.equal(cat.structuredContent.truncated, undefined, 'nothing shortened');
+  const one = (await s.call('pm_get_metadata', { project_id: 'p1', types: ['rfi'] })).structuredContent.result;
+  assert.deepEqual(one.recordTypes.map((t) => t.id), ['rfi']);
+  assert.deepEqual(one.recordTypes[0].sections.data.map((f) => f.key), ['question', 'discipline']);
+  assert.equal(s.pm.calls.at(-1).query.types, 'rfi');
+  const n = s.pm.calls.length;
+  await s.call('pm_create_record', { project_id: 'p1', type: 'rfi', top_level: { title: 'Conduit route' }, data: { question: 'Which route?' } });
+  const meta = s.pm.calls.slice(n).filter((x) => x.action === 'metadata.read');
+  assert.deepEqual(meta.map((x) => x.query && x.query.types), ['rfi'], 'a create asks only for its own type');
+});
+
+test('project.read: contact emails, phones and notes and the site address are left out unless private details are allowed', async () => {
+  const s = setup();
+  await s.full();
+  const off = (await s.call('pm_get_project', { project_id: 'p1' })).structuredContent;
+  const t = JSON.stringify(off);
+  for (const secret of ['jordan@example.invalid', '555-0100', 'PRIVATE-CONTACT-NOTE', '1 Sample Way']) assert.ok(!t.includes(secret), secret);
+  assert.equal(off.result.contacts[0].name, 'Jordan Example');
+  assert.equal(off.result.project.settings.site.deadline, '2027-03-01');
+  assert.match(off.result.withheld, /Contact emails/);
+  await s.crossGrant({ clients: ['mcp'], projects: ['p1'], actions: ALL, includeSensitive: true });
+  const on = (await s.call('pm_get_project', { project_id: 'p1' })).structuredContent.result;
+  assert.equal(on.contacts[0].email, 'jordan@example.invalid');
+  assert.equal(on.project.settings.site.address, '1 Sample Way');
+});
+
+test('Field Hub recovery is field_retry_operation, not a resent edit: no request_id on edits, and a lost answer says so', async () => {
+  const s = setup();
+  await s.full();
+  const r = await s.call('field_edit_record', { project_id: 'p1', kind: 'tasks', key: 'T-100', expected_rev: 7, changes: { review: 'ok' }, reason: 'Reviewed', request_id: 'retry_123456' });
+  assert.equal(r.isError, true);
+  assert.match(text(r), /unknown argument: request_id/);
+  const hang = { PM_COMMANDS_SERVICE: { execute: () => new Promise(() => {}) } };
+  const t = await execute(hang, { action: 'field.edit', projectId: 'p1', requestId: 'hos_abcdef12' }, { timeoutMs: 20, write: true, retry: 'operation' });
+  assert.match(t.message, /field_list_pending and use field_retry_operation/);
+  assert.ok(!/retry with request_id/.test(t.message));
+  // The same edit again inside the minute, while nothing changed, is the same request id: PM replays it.
+  const a = await s.call('field_edit_record', { project_id: 'p1', kind: 'tasks', key: 'T-100', expected_rev: 7, changes: { review: 'ok' }, reason: 'Reviewed' });
+  const b = await s.call('field_edit_record', { project_id: 'p1', kind: 'tasks', key: 'T-100', expected_rev: 7, changes: { review: 'ok' }, reason: 'Reviewed' });
+  assert.equal(a.structuredContent.request_id, b.structuredContent.request_id);
+  assert.equal(b.structuredContent.receipt.replayed, true);
 });

@@ -2963,7 +2963,7 @@
     "tools": [
       {
         "name": "pm_get_project",
-        "description": "Read one Electrical PM project from Electrical PM itself (current, not the Harrison OS copy).",
+        "description": "Read one Electrical PM project from Electrical PM itself (current, not the Harrison OS copy): its settings, contacts and lookups. Contact emails, phone numbers and notes and the site address are left out unless Harrison allowed private details.",
         "inputSchema": {
           "type": "object",
           "properties": {
@@ -2989,7 +2989,7 @@
       },
       {
         "name": "pm_get_metadata",
-        "description": "Electrical PM's record types for a project: each type's statuses, top-level keys and data / financial / internalData fields (kind, required, options), the value form of each kind, and the Field Hub kinds and change keys PM accepts. Read it before creating or changing anything.",
+        "description": "Electrical PM's record types for a project. Without types: a catalog of every type (id, label, statuses, field count), the value form of each field kind, and the Field Hub kinds and change keys. With types (up to 5 ids): those types' complete top-level keys and data / financial / internalData fields (kind, required, options). Ask for a type's complete fields before creating or changing a record of it.",
         "inputSchema": {
           "type": "object",
           "properties": {
@@ -2999,6 +2999,18 @@
               "maxLength": 120,
               "pattern": "^[A-Za-z0-9_.:-]{1,120}$",
               "description": "The Electrical PM project id. Only the projects Harrison allowed are answered."
+            },
+            "types": {
+              "type": "array",
+              "minItems": 1,
+              "maxItems": 5,
+              "items": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 60,
+                "pattern": "^[A-Za-z0-9_.-]{1,60}$",
+                "description": "A record type id from pm_get_metadata."
+              }
             }
           },
           "required": [
@@ -3468,7 +3480,7 @@
       },
       {
         "name": "field_edit_record",
-        "description": "Change one Field Hub record through Electrical PM: only the change keys pm_get_metadata lists for that kind, with a short reason. Send the rev from field_get_record (0 for a new task). The answer is PM's receipt: saved, or pending until Field Hub confirms.",
+        "description": "Change one Field Hub record through Electrical PM: only the change keys pm_get_metadata lists for that kind, with a short reason. Send the rev from field_get_record (0 for a new task). The answer is PM's receipt: saved, or pending until Field Hub confirms. If an answer is lost, do not send the edit again: check field_list_pending and use field_retry_operation with its operationId, or read the record again.",
         "inputSchema": {
           "type": "object",
           "properties": {
@@ -3513,13 +3525,6 @@
               "minLength": 1,
               "maxLength": 1000,
               "description": "Why, in a sentence, as it will show in the activity."
-            },
-            "request_id": {
-              "type": "string",
-              "minLength": 8,
-              "maxLength": 40,
-              "pattern": "^[A-Za-z0-9_-]{8,40}$",
-              "description": "Only to retry an earlier attempt whose answer was lost: send its request_id and PM replays it instead of applying it twice."
             }
           },
           "required": [

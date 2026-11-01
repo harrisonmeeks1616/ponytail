@@ -172,3 +172,31 @@ test('change list words: in another app only a saved receipt is done; pending an
   assert.match(actionWords({ tool: 'create_item', app: 'hos', ok: true, scope: 'work' }), /^Done: Added \(Work\)/);
   assert.match(actionWords({ tool: 'pm_create_record', app: 'pm', ok: false }), /^Not done/);
 });
+
+test('Ask Full: text an earlier result showed shortened cannot be written back over the full text (Harrison OS tools too)', async () => {
+  const { call } = setup();
+  await call('PUT', '/api/ai/consent', { scope: 'work', allowed: true });
+  await call('PUT', '/api/ai/actions', { mode: 'full', scopes: ['work'] });
+  const long = `Panel schedule ${'x'.repeat(19500)} end`;
+  const id = (await call('POST', '/api/items', { scope: 'work', kind: 'reference', title: 'Panel notes', body: long })).data.item.id;
+  let shown = null;
+  const script = [
+    use('tu_1', 'get_item', { scope: 'work', item_id: id }),
+    (req) => {
+      const [r] = results(req);
+      assert.equal(r.data.truncated, true, 'under Ask\'s limit the one-item read is shortened');
+      shown = r.data.item.body;
+      assert.ok(shown.endsWith('…'));
+      return use('tu_2', 'update_item', { scope: 'work', item_id: id, notes: `${shown} Added line.` });
+    },
+    (req) => {
+      const [r] = results(req);
+      assert.equal(r.is_error, true);
+      assert.match(r.text, /shortened/);
+      return msg([{ type: 'text', text: 'That note is too long to change here.' }]);
+    },
+  ];
+  const { answer } = await askWith(call, script, { scope: 'work', question: 'Add "Added line." to my panel notes.' });
+  assert.deepEqual(answer.actions.map((a) => [a.tool, a.ok]), [['update_item', false]]);
+  assert.equal((await call('GET', `/api/items/${id}?scope=work`)).data.item.body, long, 'the full text is intact');
+});
