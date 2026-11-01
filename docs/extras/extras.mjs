@@ -166,7 +166,7 @@ export function record(ev, job, tz) {
     addedSince(ev) && `Added after the signature. What the rep was shown:\n${s.shown}`,
     s?.text && `Acknowledged: ${s.text}`,
     s?.refused ? `Signature: refused by the rep (${s.reason || 'no reason given'}), ${when(s.at, tz)}` : s && `Signed: ${s.name}, ${when(s.at, tz)}`,
-    ev.replacesNo && `Corrects item ${pad(ev.replacesNo)}. Notice for this event went out under item ${pad(ev.replacesNo)}.`,
+    ev.replacesNo && `Corrects item ${pad(ev.replacesNo)}.`,
     ev.noticeSentAt && `Notice sent: ${when(ev.noticeSentAt, tz)}`,
     ev.coSubmittedAt && `CO ${ev.coNo || '(no number)'} submitted ${day(ev.coSubmittedAt, tz)}${ev.coAmount != null ? `, ${usd(ev.coAmount)}` : ''}`,
     ev.decision && `Decision: ${STATUS[ev.decision]} ${day(ev.decidedAt, tz)}`,

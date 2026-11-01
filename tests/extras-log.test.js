@@ -87,7 +87,45 @@ test('the shared record states facts only: no deadline analysis, and the signed 
   const snap = shared.indexOf('Added after the signature. What the rep was shown:\n' + sig.shown);
   assert.ok(snap > 0 && snap < shared.indexOf('Acknowledged:'), 'the shared record carries the snapshot, right above the signature');
   const { fresh } = reissue({ ...base, noticeSentAt: '2026-11-02T14:00:00.000Z' }, [base], 'wrong level', 'e2');
-  assert.match(record(fresh, job, TZ), /Corrects item 001\. Notice for this event went out under item 001\.\nNotice sent:/);
+  assert.match(record(fresh, job, TZ), /Corrects item 001\.\nNotice sent:/);
+  const unsent = reissue(base, [base], 'wrong level', 'e3').fresh;
+  assert.ok(record(unsent, job, TZ).endsWith('Corrects item 001.'), 'correcting an unsent item never claims a notice went out');
+  const newlySent = { ...unsent, noticeSentAt: '2026-11-05T15:00:00.000Z', noticeText: 'Notice under corrected item 002' };
+  assert.doesNotMatch(record(newlySent, job, TZ), /went out under item/, 'a notice sent after correction cannot be attributed to the old item');
+  const submitted = reissue({ ...base, coSubmittedAt: '2026-11-02T14:00:00.000Z' }, [base], 'wrong level', 'e4').fresh;
+  assert.match(record(submitted, job, TZ), /Corrects item 001\.\nCO .* submitted/, 'a recorded CO submission remains in the corrected record');
+});
+
+test('sharing a record requires every photo and never silently falls back to text without attachments', async () => {
+  const fs = require('node:fs'), path = require('node:path'), vm = require('node:vm');
+  const source = fs.readFileSync(path.join(__dirname, '../docs/extras/app.mjs'), 'utf8');
+  const code = source.slice(source.indexOf('async function shareRecord('), source.indexOf('async function sendNotice('));
+  const sent = [], copied = [], warnings = [], photos = new Map();
+  const navigator = { canShare: () => true, share: payload => { sent.push(payload); return Promise.resolve(); } };
+  const share = vm.runInNewContext(`(${code})`, { X: await X, S: { photos }, navigator,
+    slug: () => 'sample', dataFile: (data, name) => ({ data, name }), sigPng: () => 'signature',
+    copy: text => copied.push(text), toast: text => warnings.push(text) });
+  const item = ev({ photos: ['p1', 'p2'] });
+  photos.set('p1', 'first photo');
+  await share(item, job);
+  assert.equal(sent.length, 0, 'a partially loaded record cannot open the share sheet');
+  assert.equal(copied.length, 0, 'missing photos are not replaced with a text-only copy');
+  assert.match(warnings.pop(), /photo could not be loaded/i);
+  photos.set('p2', 'second photo');
+  const sharing = share(item, job);
+  assert.equal(sent.length, 1, 'the share sheet is opened synchronously in the tap, without awaiting storage');
+  await sharing;
+  assert.deepEqual(Array.from(sent[0].files, f => f.data), ['first photo', 'second photo']);
+  navigator.canShare = () => false;
+  await share(item, job);
+  assert.equal(sent.length, 1);
+  assert.equal(copied.length, 0, 'unsupported file sharing cannot silently drop the files');
+  assert.match(warnings.pop(), /cannot share the attachments/);
+  navigator.canShare = () => true;
+  navigator.share = () => Promise.reject(new Error('file sharing failed'));
+  await share(item, job);
+  assert.equal(copied.length, 0, 'a failed file share cannot become a text-only success');
+  assert.match(warnings.pop(), /attachments were not shared/);
 });
 
 test('the Friday line counts open, unnoticed, late, pending, noticed-late and rejected per job', async () => {

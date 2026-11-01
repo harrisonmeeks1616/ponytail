@@ -502,13 +502,23 @@ async function shareRecord(e, job) {
   // Built synchronously from what the screen already loaded: Safari only allows the share sheet right after
   // a tap, and waiting on storage first can lose that permission.
   const text = X.record(e, job), name = `${e.job} item ${X.pad(e.no)}`, base = `${slug(e.job)}-${X.pad(e.no)}`;
+  const photos = e.photos.map(pid => S.photos.get(pid));
+  if (photos.some(p => !p)) return toast('A photo could not be loaded. Reopen this item or restore its backup before sharing.');
+  const files = photos.map((data, i) => dataFile(data, `${base}-photo-${i + 1}.jpg`));
+  if (e.sig && !e.sig.refused) files.push(dataFile(sigPng(e.sig), `${base}-signature.png`));
   try {
-    const files = e.photos.map((pid, i) => S.photos.get(pid) && dataFile(S.photos.get(pid), `${base}-photo-${i + 1}.jpg`)).filter(Boolean);
-    if (e.sig && !e.sig.refused) files.push(dataFile(sigPng(e.sig), `${base}-signature.png`));
-    if (files.length && navigator.canShare?.({ files })) await navigator.share({ title: name, text, files });
+    if (files.length) {
+      if (!navigator.share || !navigator.canShare?.({ files })) return toast('This browser cannot share the attachments. Use Print or PDF to include them.');
+      await navigator.share({ title: name, text, files });
+    }
     else if (navigator.share) await navigator.share({ title: name, text });
     else await copy(text, 'Record');
-  } catch (err) { if (err.name !== 'AbortError') await copy(text, 'Record'); }
+  } catch (err) {
+    if (err.name !== 'AbortError') {
+      if (files.length) toast('The attachments were not shared. Try again, or use Print or PDF to include them.');
+      else await copy(text, 'Record');
+    }
+  }
 }
 async function sendNotice(e, job) {
   const { subject, body } = X.notice(e, job);
@@ -544,11 +554,18 @@ function detailScreen(id) {
   if (!e) return missing();
   const job = S.jobs[e.job], t = Date.now(), s = X.status(e), live = s !== 'void', w = X.who(e);
   const prev = e.replaces && findEv(e.replaces);
+  const pendingPhotos = [];
   const photos = h('div', { class: 'photos' }, e.photos.map((pid, i) => {
     const img = h('img', { alt: `Photo ${i + 1} of item ${X.pad(e.no)}` });
-    photo(pid).then(src => { if (src) img.src = src; });
+    pendingPhotos.push(photo(pid).then(src => { if (src) img.src = src; return src; }));
     return h('figure', null, img);
   }));
+  const share = h('button', { disabled: !!e.photos.length, onclick: () => shareRecord(e, job) }, 'Share record');
+  const photoState = h('p', { class: 'hint', role: 'status' }, e.photos.length ? 'Loading photos before sharing…' : '');
+  if (pendingPhotos.length) Promise.all(pendingPhotos).then(loaded => {
+    if (loaded.some(p => !p)) { photoState.textContent = 'A photo is missing. Restore its backup, or edit this item to remove the missing photo before sharing.'; return; }
+    share.disabled = false; photoState.textContent = '';
+  }).catch(() => { photoState.textContent = 'Photos could not be loaded. Reopen this item before sharing.'; });
   const changedSince = X.addedSince(e);
   const record = h('div', { class: 'card' }, h('h2', null, 'Record'),
     h('dl', null, dtdd('When', X.when(e.at)), w && dtdd(w.label, w.text), dtdd('Where', e.area), dtdd('What changed', e.what), dtdd('References', e.refs)),
@@ -622,11 +639,12 @@ function detailScreen(id) {
 
   const actions = h('div', { class: 'card noprint' }, h('h2', null, 'Share and fix'),
     h('div', { class: 'row' },
-      h('button', { onclick: () => shareRecord(e, job) }, 'Share record'),
+      share,
       h('button', { onclick: () => window.print() }, 'Print or PDF'),
       live && s === 'open' ? h('button', { onclick: () => copy(X.todoistLine(e, job, Date.now()), 'Todoist reminder') }, 'Copy Todoist reminder') : null,
       live ? h('button', { onclick: () => go(`#/e/${e.id}/edit`) }, e.sig ? 'Add hours or photos' : 'Edit') : null,
-      live ? h('button', { class: 'danger', onclick: () => go(`#/e/${e.id}/void`) }, e.sig ? 'Void and re-issue' : 'Void') : null));
+      live ? h('button', { class: 'danger', onclick: () => go(`#/e/${e.id}/void`) }, e.sig ? 'Void and re-issue' : 'Void') : null),
+    e.photos.length ? photoState : null);
 
   // Until notice is out, sending it is the job: it comes first.
   const body = s === 'open' ? [noticeCard, record, sigCard] : [record, sigCard, noticeCard];
