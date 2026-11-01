@@ -23,6 +23,7 @@ const LIVE_LABEL_HTTP = 'Company PM digest link';
 const LIVE_LABEL_RPC = 'Company PM digest (private connection)';
 export const STALE_MS = 48 * 3600 * 1000;
 export const REFRESH_MS = 60 * 60 * 1000;
+export const REFRESH_LEASE_MS = LIMITS.fetchMs + 5000;
 const HTTP_SCOPE = 'work'; // the authorized digest link is company data
 const DEFAULT_TZ = 'America/New_York';
 const CHANGE_LIST_CAP = 50;
@@ -300,9 +301,11 @@ export function diffImport(prev, next, firstImport) {
  * Replaces one source's records with a normalized import in a single batch (all or nothing). Record ids
  * are kept per provider id, so 'pm:<id>' refs held elsewhere stay valid across re-imports.
  */
-export async function importInto(d, { sourceId = null, scope, label, kind = 'import', sample = 0 }, digest, nowIso) {
+export async function importInto(d, { sourceId = null, scope, label, kind = 'import', sample = 0 }, digest, nowIso, { refreshToken = null } = {}) {
   requireScope(scope);
   const existing = sourceId ? await getSource(d, sourceId, scope) : null;
+  // A deleted source or a successor's claim invalidates an in-flight live refresh.
+  if (refreshToken && (!existing || existing.refresh_token !== refreshToken)) return { superseded: true };
   if (sourceId && !existing) throw new db.NotFoundError('source not found');
   if (existing && existing.kind !== kind) throw new HttpError(409, 'wrong_source_kind', 'That source is not an import');
   if (existing && Number(existing.sample) && !sample) throw new HttpError(409, 'sample_source', 'That is the sample; import into a new source');
@@ -314,14 +317,16 @@ export async function importInto(d, { sourceId = null, scope, label, kind = 'imp
   const changes = diffImport(prev, digest, !existing || !existing.last_import_at);
   const sampleFlag = existing ? Number(existing.sample) : sample ? 1 : 0;
   const stmts = [];
+  const fence = refreshToken ? ' AND EXISTS (SELECT 1 FROM pm_sources WHERE id = ? AND refresh_token = ?)' : '';
+  const fenceValues = refreshToken ? [id, refreshToken] : [];
   if (existing) {
     stmts.push(
       d
         .prepare(
           `UPDATE pm_sources SET label = ?, system = ?, base_url = ?, state = 'ok', last_import_at = ?, exported_at = ?,
-             last_error_code = NULL, last_changes = ? WHERE id = ?`,
+             last_error_code = NULL, last_changes = ? WHERE id = ?${refreshToken ? ' AND refresh_token = ?' : ''}`,
         )
-        .bind(label || existing.label, digest.system, digest.base_url, nowIso, digest.exported_at, JSON.stringify(changes), id),
+        .bind(label || existing.label, digest.system, digest.base_url, nowIso, digest.exported_at, JSON.stringify(changes), id, ...(refreshToken ? [refreshToken] : [])),
     );
   } else {
     stmts.push(
@@ -333,16 +338,16 @@ export async function importInto(d, { sourceId = null, scope, label, kind = 'imp
         .bind(id, scope, label, kind, digest.system, digest.base_url, nowIso, digest.exported_at, JSON.stringify(changes), sampleFlag, nowIso),
     );
   }
-  stmts.push(d.prepare('DELETE FROM pm_records WHERE source_id = ?').bind(id));
+  stmts.push(d.prepare(`DELETE FROM pm_records WHERE source_id = ?${fence}`).bind(id, ...fenceValues));
   const insert = `INSERT INTO pm_records (id, source_id, scope, provider_id, kind, parent_provider_id, title, status, due_on, owner_label,
-    url, updated_at, milestone_title, milestone_due_on, imported_at, sample) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`;
+    url, updated_at, milestone_title, milestone_due_on, imported_at, sample) ${refreshToken ? 'SELECT ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ? WHERE EXISTS (SELECT 1 FROM pm_sources WHERE id = ? AND refresh_token = ?)' : 'VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)'}`;
   let items = 0;
   for (const p of digest.projects) {
     stmts.push(
       d
         .prepare(insert)
         .bind(prevId.get(`project:${p.provider_id}`) || newId('pmr'), id, scope, p.provider_id, 'project', null, p.name, p.status, null, null,
-          p.url, p.updated_at, p.milestone_title, p.milestone_due_on, nowIso, sampleFlag),
+          p.url, p.updated_at, p.milestone_title, p.milestone_due_on, nowIso, sampleFlag, ...fenceValues),
     );
     for (const it of p.items) {
       items++;
@@ -350,11 +355,13 @@ export async function importInto(d, { sourceId = null, scope, label, kind = 'imp
         d
           .prepare(insert)
           .bind(prevId.get(`item:${it.provider_id}`) || newId('pmr'), id, scope, it.provider_id, 'item', p.provider_id, it.title, it.status,
-            it.due_on, it.owner_label, it.url, it.updated_at, null, null, nowIso, sampleFlag),
+            it.due_on, it.owner_label, it.url, it.updated_at, null, null, nowIso, sampleFlag, ...fenceValues),
       );
     }
   }
-  await d.batch(stmts);
+  if (refreshToken) stmts.push(d.prepare('UPDATE pm_sources SET refresh_token = NULL, refresh_until_ms = NULL WHERE id = ? AND refresh_token = ?').bind(id, refreshToken));
+  const results = await d.batch(stmts);
+  if (refreshToken && !results[0].meta.changes) return { superseded: true };
   return { sourceId: id, projects: digest.projects.length, items, changes };
 }
 
@@ -469,8 +476,8 @@ async function fetchDigest(env, fetchImpl, timeoutMs) {
 }
 
 /**
- * Refreshes the http source. claimOlderThanMs (cron) claims the attempt so overlapping runs fetch once.
- * On failure the previous copy is kept and marked with the error; it is never wiped.
+ * Manual and cron refreshes share one durable lease. A successor gets an opaque token after expiry;
+ * every copy/error commit is fenced by that token, not by timestamps. Last good data survives failure.
  */
 export async function refreshHttpSource(env, nowMs, { fetchImpl = globalThis.fetch, claimOlderThanMs = null, timeoutMs = LIMITS.fetchMs } = {}) {
   if (!liveConfigured(env)) return { ok: false, code: 'not_connected' };
@@ -484,41 +491,50 @@ export async function refreshHttpSource(env, nowMs, { fetchImpl = globalThis.fet
     )
     .bind(HTTP_SOURCE_ID, HTTP_SCOPE, via === 'rpc' ? LIVE_LABEL_RPC : LIVE_LABEL_HTTP, nowIso)
     .run();
-  const claim =
-    claimOlderThanMs == null
-      ? await d.prepare('UPDATE pm_sources SET last_attempt_at = ? WHERE id = ?').bind(nowIso, HTTP_SOURCE_ID).run()
-      : await d
-          .prepare('UPDATE pm_sources SET last_attempt_at = ? WHERE id = ? AND (last_attempt_at IS NULL OR last_attempt_at <= ?)')
-          .bind(nowIso, HTTP_SOURCE_ID, iso(nowMs - claimOlderThanMs))
-          .run();
-  if (!claim.meta.changes) return { ok: false, code: 'not_due' };
+  const token = newId('pmfetch');
+  const claim = await d.prepare(
+    `UPDATE pm_sources SET refresh_token = ?, refresh_until_ms = ?, last_attempt_at = ? WHERE id = ?
+     AND (refresh_token IS NULL OR refresh_until_ms IS NULL OR refresh_until_ms <= ?)
+     ${claimOlderThanMs == null ? '' : `AND (last_attempt_at IS NULL OR last_attempt_at <= ? OR
+       (refresh_token IS NOT NULL AND (refresh_until_ms IS NULL OR refresh_until_ms <= ?)))`}`,
+  ).bind(token, nowMs + REFRESH_LEASE_MS, nowIso, HTTP_SOURCE_ID, nowMs,
+    ...(claimOlderThanMs == null ? [] : [iso(nowMs - claimOlderThanMs), nowMs])).run();
+  if (!claim.meta.changes) {
+    const current = await d.prepare('SELECT refresh_token, refresh_until_ms FROM pm_sources WHERE id = ?').bind(HTTP_SOURCE_ID).first();
+    return { ok: false, code: current && current.refresh_token && current.refresh_until_ms > nowMs ? 'in_progress' : 'not_due' };
+  }
 
-  const got = via === 'rpc' ? await fetchDigestRpc(env, timeoutMs) : await fetchDigest(env, fetchImpl, timeoutMs);
-  let result;
-  if (got.ok) {
-    try {
-      let obj;
+  try {
+    const got = via === 'rpc' ? await fetchDigestRpc(env, timeoutMs) : await fetchDigest(env, fetchImpl, timeoutMs);
+    if (!liveConfigured(env)) return { ok: false, code: 'not_connected' };
+    let result;
+    if (got.ok) {
       try {
-        obj = JSON.parse(got.text);
-      } catch {
-        bad('not JSON');
+        let obj;
+        try { obj = JSON.parse(got.text); } catch { bad('not JSON'); }
+        const digest = normalizeDigest(obj, { nowMs });
+        const imported = await importInto(d, { sourceId: HTTP_SOURCE_ID, scope: HTTP_SCOPE, kind: 'http' }, digest, nowIso, { refreshToken: token });
+        result = imported.superseded ? { ok: false, code: 'superseded' } : { ok: true, ...imported };
+      } catch (err) {
+        if (!(err instanceof HttpError)) throw err;
+        result = { ok: false, code: 'invalid_format' };
       }
-      const digest = normalizeDigest(obj, { nowMs });
-      result = { ok: true, ...(await importInto(d, { sourceId: HTTP_SOURCE_ID, scope: HTTP_SCOPE, kind: 'http' }, digest, nowIso)) };
-    } catch (err) {
-      if (!(err instanceof HttpError)) throw err;
-      result = { ok: false, code: 'invalid_format' };
+    } else {
+      result = got;
     }
-  } else {
-    result = got;
+    if (!result.ok) {
+      const failed = await d.prepare("UPDATE pm_sources SET state = 'error', last_error_code = ?, refresh_token = NULL, refresh_until_ms = NULL WHERE id = ? AND refresh_token = ?")
+        .bind(result.code, HTTP_SOURCE_ID, token).run();
+      if (!failed.meta.changes) result = { ok: false, code: 'superseded' };
+    }
+    await logEvent(d, nowMs, 'pm_refresh', HTTP_SOURCE_ID, result.ok
+      ? { via, state: 'ok', projects: result.projects, items: result.items, ...result.changes.counts }
+      : { via, state: result.code === 'superseded' ? 'superseded' : 'error', code: result.code, ...(result.status ? { status: result.status } : {}) });
+    return result;
+  } finally {
+    // Also release after a local DB/validation exception; never clear a successor's lease.
+    await d.prepare('UPDATE pm_sources SET refresh_token = NULL, refresh_until_ms = NULL WHERE id = ? AND refresh_token = ?').bind(HTTP_SOURCE_ID, token).run();
   }
-  if (!result.ok) {
-    await d.prepare("UPDATE pm_sources SET state = 'error', last_error_code = ? WHERE id = ?").bind(result.code, HTTP_SOURCE_ID).run();
-  }
-  await logEvent(d, nowMs, 'pm_refresh', HTTP_SOURCE_ID, result.ok
-    ? { via, state: 'ok', projects: result.projects, items: result.items, ...result.changes.counts }
-    : { via, state: 'error', code: result.code, ...(result.status ? { status: result.status } : {}) });
-  return result;
 }
 
 /** Cron: at most one digest-link fetch per REFRESH_MS. One bounded unit of work per call. */
