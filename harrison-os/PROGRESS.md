@@ -82,3 +82,8 @@ The repository as a whole is not green; only the `harrison-os` job is.
 - 2026-11-01: release fix for the Add double-tap window (id kept for the form's life), F18 held-reload check; 411/411 unit, 21/21 browser; cache hos-v17. Release candidate for root's deploy.
 - 2026-11-01: sibling draft-deletion paths closed (startup discard and empty-box autosave now compare-and-delete the observed/owned draft; no plain drafts.del left). 412/412 unit, 21/21 browser; cache hos-v18.
 - 2026-11-01: Save's draft delete now matches the exact own-draft snapshot (id, version, words, scope, file refs); the saved-words shortcut is gone. All three draft deletion sites use the same snapshot. F18 waits for the second POST response. 412/412 unit, 21/21 browser; cache hos-v19.
+
+## Release (Codex, 2026-11-01)
+
+- Deployed exact source `1a3e65e` to the existing harrison-os Worker (version ID in the private release record). Independent 412/412 unit, the stale-draft and simultaneous capture/file reproductions, 21/21 browser; CI run 41264222338 success. Live checks: session build `1a3e65e`, testHooks false; anonymous root/session/`capture-core.js` redirect to Access; shell `hos-v19`; all main screens render with no console warnings or errors; local draft keep/restore/clear check with no server record; Reminders at 393x852 without horizontal overflow (not iPhone evidence); first post-release cron tick ok (3 ms CPU, fired 0, errors 0).
+- The core editable app is live with no known code blockers from the bounded reviews. Still open and not commissioned: real iPhone install/push/offline/expiry, AI key and consent, a calendar source, a PM digest endpoint and token in Electrical PM, Shortcut and MCP service tokens, and any long-run runtime observation.
