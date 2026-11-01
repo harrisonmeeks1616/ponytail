@@ -87,3 +87,10 @@ The repository as a whole is not green; only the `harrison-os` job is.
 
 - Deployed exact source `1a3e65e` to the existing harrison-os Worker (version ID in the private release record). Independent 412/412 unit, the stale-draft and simultaneous capture/file reproductions, 21/21 browser; CI run 41264222338 success. Live checks: session build `1a3e65e`, testHooks false; anonymous root/session/`capture-core.js` redirect to Access; shell `hos-v19`; all main screens render with no console warnings or errors; local draft keep/restore/clear check with no server record; Reminders at 393x852 without horizontal overflow (not iPhone evidence); first post-release cron tick ok (3 ms CPU, fired 0, errors 0).
 - The core editable app is live with no known code blockers from the bounded reviews. Still open and not commissioned: real iPhone install/push/offline/expiry, AI key and consent, a calendar source, a PM digest endpoint that would first have to be built in Electrical PM (new code outside this repository) and then authorized with a token, Shortcut and MCP service tokens, and any long-run runtime observation.
+
+## Phone commissioning round (2026-10-31 evening New York)
+
+- Added Memory > Alerts "Send a test alert": sends one push now and shows only what the server records (push service accepted, phone beacon arrived, opened by tap), resuming after the tap reloads the app; new owner-only `GET /api/deliveries/:id` (states and times, no text). Browser F21 and a route unit test.
+- Added `scripts/service-check.mjs` for root: checks the Shortcut and MCP service tokens from a computer (Shortcut default writes nothing; MCP prints tool names and sizes only; never prints secrets; confirms each token is refused on an owner route). `tests/service-check.test.mjs` runs it against the real Worker routes in-process.
+- Rewrote `docs/PHONE_TEST.md`: the stale "tonight" step is replaced by a general DST procedure, and each phone step names its server evidence (events, deliveries) and the observed / server only / not tested labels.
+- 416/416 unit, 22/22 browser. Not deployed by this session; nothing observed on a phone yet.

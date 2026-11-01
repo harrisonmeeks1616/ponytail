@@ -213,3 +213,19 @@ test('the editor\'s version: a routine daily firing is not "changed elsewhere"; 
   const noop = await call('PATCH', '/api/reminders/rem-edit-00001', { scope: 'personal', text: created.text, expected: seen });
   assert.equal(noop.status, 409);
 });
+
+test('GET /api/deliveries/:id returns states and times only (no reminder text); unknown id is 404', async () => {
+  const { call, env } = setup(NOW);
+  await make(call);
+  await runScheduled(env, T + 60_000);
+  const list = await call('GET', '/api/reminders?scope=personal');
+  const id = list.data.items[0].deliveries[0].id;
+  const r = await call('GET', `/api/deliveries/${id}`);
+  assert.equal(r.status, 200);
+  assert.equal(r.data.delivery.state, 'no_route');
+  assert.equal(r.data.delivery.reminder_id, 'rem-edit-00001');
+  assert.ok(!JSON.stringify(r.data).includes('Sample reminder'), 'no reminder text');
+  assert.equal((await call('GET', '/api/deliveries/dl-none-000001')).status, 404);
+  const t = await call('POST', '/api/push/test', {});
+  assert.equal((await call('GET', `/api/deliveries/${t.data.delivery_id}`)).data.delivery.reminder_id, t.data.reminder_id);
+});

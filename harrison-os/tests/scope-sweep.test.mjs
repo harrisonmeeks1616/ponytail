@@ -43,6 +43,7 @@ const EXEMPT = {
   'POST /api/push/subscriptions': 'device push endpoint, not user content',
   'DELETE /api/push/subscriptions': 'device push endpoint, not user content',
   'POST /api/push/test': 'fixed test text, no records',
+  'GET /api/deliveries/([A-Za-z0-9_.:-]{1,120})': 'delivery ids/states/timestamps only (serialiseDelivery has no text)',
   'POST /api/deliveries/([A-Za-z0-9_.:-]{1,120})/received': 'returns delivery ids/states/timestamps only (serialiseDelivery has no text)',
   'POST /api/deliveries/([A-Za-z0-9_.:-]{1,120})/ack': 'returns delivery ids/states/timestamps only (serialiseDelivery has no text)',
   'GET /api/evidence': 'events carry ids/states/counts only (logging rule, tests/api X1)',

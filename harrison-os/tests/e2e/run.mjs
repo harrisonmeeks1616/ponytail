@@ -1738,6 +1738,50 @@ const scenarios = [
       }
     },
   },
+  {
+    id: 'F21',
+    name: 'Memory > Send a test alert: honest stages (no route from the real server; staged accepted -> arrived -> opened), nothing claimed beyond what the server recorded',
+    async run() {
+      const { context, page } = await openApp('F21', { offlineExpected: true });
+      try {
+        await start(page, '#/memory');
+        const btn = page.locator('#notify-test');
+        await btn.waitFor({ timeout: 15000 });
+        // 1. The real server, no phone registered: it says so, nothing more.
+        await btn.click();
+        await waitFor(async () => /no alert route/.test((await page.textContent('#notify-test-result')) || ''), { what: 'no-route wording' });
+        const noRoute = await page.textContent('#notify-test-result');
+        // 2. A staged delivery: accepted by the push service, then the phone's beacon, then the tap.
+        const stages = [
+          { state: 'sent', received_at: null, acknowledged_at: null },
+          { state: 'received_on_device', received_at: '2026-11-01T03:00:05.000Z', acknowledged_at: null },
+          { state: 'acknowledged', received_at: '2026-11-01T03:00:05.000Z', acknowledged_at: '2026-11-01T03:00:20.000Z' },
+        ];
+        let stage = 0;
+        await page.route('**/api/push/test', (route) => route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ delivery_id: 'dl-test-stage-01', reminder_id: 'test-staged', state: 'sent', push_status: 201, error: null }) }));
+        await page.route('**/api/deliveries/dl-test-stage-01', (route) => route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ delivery: { id: 'dl-test-stage-01', ...stages[Math.min(stage, 2)] } }) }));
+        await btn.click();
+        await waitFor(async () => /accepted the test alert\. That is not proof/.test((await page.textContent('#notify-test-result')) || ''), { what: 'accepted wording' });
+        const said = [await page.textContent('#notify-test-result')];
+        stage = 1;
+        await waitFor(async () => /reported the test alert arrived/.test((await page.textContent('#notify-test-result')) || ''), { what: 'arrived wording', timeout: 15000 });
+        said.push(await page.textContent('#notify-test-result'));
+        // The tap may reload the app: the check resumes from what was remembered.
+        stage = 2;
+        await page.reload({ waitUntil: 'load' });
+        await waitAppReady(page);
+        await page.evaluate(() => (location.hash = '#/memory'));
+        await waitFor(async () => /You opened the test alert/.test((await page.textContent('#notify-test-result')) || ''), { what: 'opened wording after reload', timeout: 15000 });
+        said.push(await page.textContent('#notify-test-result'));
+        check(await page.evaluate(() => !localStorage.getItem('hos-test-alert')), 'the finished check is not resumed again');
+        await page.unroute('**/api/push/test');
+        await page.unroute('**/api/deliveries/dl-test-stage-01');
+        return `real server: "${noRoute}"; staged: ${said.map((t) => `"${t}"`).join(' -> ')} (resumed after a reload)`;
+      } finally {
+        await context.close();
+      }
+    },
+  },
 ];
 
 // After the scenarios: no sample text in server output or events.
