@@ -511,3 +511,10 @@ test('license-class wording never claims voltage alone makes Unlimited exclusive
   for (const bad of [/only license for work past/i, /Unlimited either way/i, /what only Unlimited covers/i, /nothing above 1,000 V is Limited work/i]) assert.doesNotMatch(txt, bad);
   assert.match(NC.cards.find((c) => c[0] === 2)[3], /voltage alone does not decide/i);
 });
+
+test('mobile: form controls are 16px (no iOS focus zoom) and wide flex/grid children can shrink', () => {
+  const css = require('fs').readFileSync(path.join(dir, 'style.css'), 'utf8');
+  assert.match(css, /input, select, textarea \{ font-size: 16px; \}/);
+  assert.match(css, /\.sess \{[^}]*minmax\(0, 1fr\)/);
+  assert.match(css, /\.chip \{[^}]*white-space: normal/);
+});

@@ -18,6 +18,10 @@ html { scroll-behavior: smooth; }
 body { margin: 0; background: radial-gradient(1200px 600px at 80% -10%, rgba(52,211,240,.08), transparent 60%), radial-gradient(900px 500px at -10% 0%, rgba(255,182,39,.07), transparent 60%), var(--bg); color: var(--ink); font: 15px/1.55 var(--sans); min-height: 100vh; -webkit-font-smoothing: antialiased; }
 a { color: var(--cyan); text-underline-offset: 3px; }
 button, input, select, textarea { font: inherit; color: inherit; }
+html { -webkit-text-size-adjust: 100%; text-size-adjust: 100%; }
+/* iOS Safari zooms the whole page when a field under 16px is focused, which looks like the screen changing size. Keep every control at 16px and stop double-tap zoom. */
+input, select, textarea { font-size: 16px; }
+button, [data-act], summary, .nav button { touch-action: manipulation; -webkit-tap-highlight-color: transparent; }
 :focus-visible { outline: 2px solid var(--amber); outline-offset: 2px; }
 h1, h2, h3, h4 { margin: 0; line-height: 1.15; letter-spacing: -.01em; }
 h2 { font-size: 1.55rem; } h3 { font-size: 1.1rem; } h4 { font-size: .95rem; }
@@ -27,7 +31,7 @@ p { margin: 0 0 .6em; } ul { margin: .3em 0; padding-left: 1.2em; } li { margin:
 .amber { color: var(--amber); } .green { color: var(--green); } .red { color: var(--red); } .cyan { color: var(--cyan); }
 
 /* shell */
-.shell { display: grid; grid-template-columns: 232px minmax(0, 1fr); min-height: 100vh; }
+.shell { display: grid; grid-template-columns: 232px minmax(0, 1fr); min-height: 100vh; min-height: 100dvh; overflow-x: clip; }
 .side { position: sticky; top: 0; height: 100vh; padding: 20px 14px; border-right: 1px solid var(--line); background: linear-gradient(180deg, var(--bg2), var(--bg)); display: flex; flex-direction: column; gap: 4px; }
 .brand { display: flex; gap: 10px; align-items: center; padding: 4px 8px 16px; }
 .bolt { width: 38px; height: 38px; border-radius: 11px; background: linear-gradient(135deg, var(--amber), #ff7a18); display: grid; place-items: center; color: var(--amber-ink); font-weight: 900; box-shadow: var(--glow); }
@@ -72,7 +76,7 @@ main { padding: 26px clamp(14px, 3vw, 40px) 90px; max-width: 1180px; width: 100%
 .hero .mut { color: #a9b8dc; }
 
 /* bits */
-.chip { display: inline-flex; align-items: center; gap: 5px; font-size: .72rem; font-weight: 700; padding: 3px 9px; border-radius: 99px; background: var(--card2); border: 1px solid var(--line); color: var(--mut); white-space: nowrap; }
+.chip { display: inline-flex; align-items: center; gap: 5px; font-size: .72rem; font-weight: 700; padding: 3px 9px; border-radius: 99px; background: var(--card2); border: 1px solid var(--line); color: var(--mut); white-space: normal; max-width: 100%; min-width: 0; overflow-wrap: anywhere; }
 .chip.amber { background: rgba(255,182,39,.14); border-color: rgba(255,182,39,.4); color: var(--amber); }
 .chip.green { background: rgba(61,220,151,.12); border-color: rgba(61,220,151,.4); color: var(--green); }
 .chip.red { background: rgba(255,107,107,.12); border-color: rgba(255,107,107,.4); color: var(--red); }
@@ -99,7 +103,7 @@ hr { border: 0; border-top: 1px solid var(--line); margin: 14px 0; }
 .notice { border-left: 3px solid var(--amber); background: rgba(255,182,39,.08); padding: 10px 14px; border-radius: 0 10px 10px 0; font-size: .88rem; }
 .notice.cyan { border-color: var(--cyan); background: rgba(52,211,240,.07); } .notice.red { border-color: var(--red); background: rgba(255,107,107,.08); } .notice.green { border-color: var(--green); background: rgba(61,220,151,.07); }
 details { border: 1px solid var(--line); border-radius: 12px; background: var(--card); } details + details { margin-top: 8px; }
-summary { cursor: pointer; padding: 12px 14px; font-weight: 700; list-style: none; display: flex; gap: 10px; align-items: center; } summary::-webkit-details-marker { display: none; }
+summary { cursor: pointer; padding: 12px 14px; font-weight: 700; list-style: none; display: flex; flex-wrap: wrap; gap: 6px 10px; align-items: center; min-width: 0; } summary::-webkit-details-marker { display: none; }
 summary::after { content: "+"; margin-left: auto; color: var(--amber); font: 700 1.2rem var(--mono); } details[open] > summary::after { content: "-"; }
 details > .body { padding: 2px 16px 16px; }
 table { width: 100%; border-collapse: collapse; font-size: .88rem; } th, td { text-align: left; padding: 8px 10px; border-bottom: 1px solid var(--line); vertical-align: top; } th { color: var(--mut); font-size: .72rem; text-transform: uppercase; letter-spacing: .07em; }
@@ -109,7 +113,8 @@ table { width: 100%; border-collapse: collapse; font-size: .88rem; } th, td { te
 .tabs button[aria-pressed="true"] { background: var(--amber); color: var(--amber-ink); border-color: transparent; }
 
 /* sessions / lists */
-.sess { display: grid; grid-template-columns: 30px 1fr auto; gap: 10px; align-items: start; padding: 11px 12px; border: 1px solid var(--line); border-radius: 12px; background: var(--card); }
+.sess { display: grid; grid-template-columns: 30px minmax(0, 1fr) auto; gap: 10px; align-items: start; padding: 11px 12px; border: 1px solid var(--line); border-radius: 12px; background: var(--card); }
+.sess > div { min-width: 0; overflow-wrap: anywhere; }
 .sess + .sess { margin-top: 8px; } .sess.today { border-color: var(--amber); box-shadow: var(--glow); } .sess.done > div > b { color: var(--mut); }
 .chk { width: 24px; height: 24px; border-radius: 8px; border: 2px solid var(--dim); background: transparent; cursor: pointer; display: grid; place-items: center; color: transparent; font-weight: 900; } .chk.on { background: var(--green); border-color: var(--green); color: #052b1a; }
 .opt { display: flex; gap: 11px; padding: 11px 13px; border: 1px solid var(--line); border-radius: 12px; cursor: pointer; background: var(--bg2); margin-top: 8px; } .opt:hover { border-color: var(--cyan); }

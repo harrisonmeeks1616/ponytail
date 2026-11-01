@@ -38,7 +38,7 @@ Progress is saved in this browser (`localStorage`). **Progress, Backup** exports
 
 ## Check
 
-`node --test tests/nc-unlimited.test.js` runs 44 checks: the data counts (100 bank items, 37 sprint days, 37 packets, 60 cards, 15 scenarios), the 11-category blueprint, the sprint calendar (one session per day, Oct 31 to Dec 6; mocks on Nov 14, 21 and 28 only), the Eastern-time countdown, every worked example from the Notion guide, the business scenarios, the NEC table structure and lookups (anchored to your Notion worked examples), the error-log mastery rule, the Leitner boxes and the readiness gates.
+`node --test tests/nc-unlimited.test.js` runs 45 checks: the data counts (100 bank items, 37 sprint days, 37 packets, 60 cards, 15 scenarios), the 11-category blueprint, the sprint calendar (one session per day, Oct 31 to Dec 6; mocks on Nov 14, 21 and 28 only), the Eastern-time countdown, every worked example from the Notion guide, the business scenarios, the NEC table structure and lookups (anchored to your Notion worked examples), the error-log mastery rule, the Leitner boxes and the readiness gates.
 
 ## Known open items
 
