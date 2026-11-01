@@ -1640,7 +1640,8 @@ async function submitReview(button, capture, keepAsNote) {
   if (state.route.name === 'review') renderReview();
 }
 
-async function deleteCapture(button, capture) {
+// after: what to show once it is deleted (default: back to Review, where this button usually sits).
+async function deleteCapture(button, capture, { after = null } = {}) {
   if (state.reviewBusy) return;
   if (!isScope(capture.scope)) return;
   if (!window.confirm('Delete this capture? Your original words and its photos and files are removed for good. Anything already filed from it stays, marked as from a deleted capture.')) return;
@@ -1664,7 +1665,8 @@ async function deleteCapture(button, capture) {
       renderOutbox();
       setStatus('Capture deleted.');
       state.reviewBusy = false;
-      go('review', null);
+      if (after) after();
+      else go('review', null);
     } else {
       showNotice(failWords(r, 'delete it'));
     }
@@ -2962,6 +2964,23 @@ function searchRow(row) {
     }
     actions.append(deleteItemButton(it, { after: () => runSearch(state.search ? state.search.q : '') }));
     li.append(actions);
+  }
+  // A filed or kept capture is only reachable here (Review lists unfiled ones), so it is deleted from here too.
+  if (ref.type === 'capture' && isScope(row.scope)) {
+    const label = excerpt(row.title || row.text || row.body || 'capture', 60);
+    li.append(
+      h(
+        'div',
+        { class: 'button-row' },
+        h('button', {
+          type: 'button',
+          class: 'btn btn-danger',
+          text: 'Delete',
+          'aria-label': `Delete capture: ${label}`,
+          onclick: (e) => deleteCapture(e.currentTarget, { id: ref.id, scope: row.scope }, { after: () => runSearch(state.search ? state.search.q : '') }),
+        }),
+      ),
+    );
   }
   return li;
 }

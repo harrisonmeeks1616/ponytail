@@ -1320,6 +1320,45 @@ const scenarios = [
       }
     },
   },
+  {
+    id: 'F16',
+    name: 'Memory search: delete a kept (filed) Work capture; the Personal capture with the same words stays',
+    async run() {
+      const { context, page } = await openApp('F16', { offlineExpected: true });
+      try {
+        const word = `qadelete${tok('f16').replace(/[^a-z0-9]/gi, '')}`;
+        const ids = { work: 'cap-f16-work-0001', personal: 'cap-f16-pers-0001' };
+        for (const scope of ['work', 'personal']) {
+          await apiOk('POST', '/api/captures', { id: ids[scope], scope, text: remember(`Sample QA note ${word} for ${scope}.`), time_zone: TZ });
+          await apiOk('POST', `/api/captures/${ids[scope]}/review`, { scope, keepAsNote: true });
+        }
+        const capIds = async (scope) => (await apiOk('GET', `/api/export?scope=${scope}`)).tables.captures.map((c) => c.id);
+        check((await capIds('work')).includes(ids.work) && (await capIds('personal')).includes(ids.personal), 'seed captures not stored');
+        const inbox = await apiOk('GET', '/api/inbox?scope=all');
+        check(!JSON.stringify(inbox).includes(word), 'kept captures should not be in Review (that is why Memory needs Delete)');
+
+        await start(page, '#/memory');
+        await setScopeSwitch(page, 'all');
+        const before = await searchUi(page, word);
+        check(before.groups.length === 2 && before.groups.every((g) => g.rows.length === 1), `search before: ${JSON.stringify(before.groups)}`);
+        const workBtn = page.locator('#search-results section.search-group-work').getByRole('button', { name: /^Delete capture:/ });
+        check((await workBtn.count()) === 1, 'no Delete on the Work capture row');
+        await workBtn.click(); // the confirm dialog is accepted by openApp
+        await waitFor(async () => !(await capIds('work')).includes(ids.work), { what: 'work capture deleted on the server' });
+        const after = await searchUi(page, word);
+        const route = await page.evaluate(() => location.hash);
+        check(route === '#/memory', `left Memory after delete: ${route}`);
+        check(after.groups.find((g) => g.scope === 'work').rows.length === 0, 'work row still listed');
+        check(after.groups.find((g) => g.scope === 'personal').rows.length === 1, 'personal row disappeared');
+        check((await capIds('personal')).includes(ids.personal), 'personal capture was touched');
+        const again = await api('POST', '/api/captures', { id: ids.work, scope: 'work', text: 'late retry', time_zone: TZ });
+        check(again.status === 410, `late retry of the deleted id -> ${again.status}, expected 410`);
+        return `kept Work + Personal captures (not in Review); Memory > Delete on the Work row -> server deletes it, stays on Memory, Work group empty, Personal capture and row intact; late retry of the deleted id -> 410`;
+      } finally {
+        await context.close();
+      }
+    },
+  },
 ];
 
 // After the scenarios: no sample text in server output or events.
