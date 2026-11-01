@@ -447,7 +447,7 @@ export function normShift(x) {
 export const notesLock = notesPrefix => 'fieldhub-notes:' + notesPrefix;
 const withNotesLock = fn => (globalThis.navigator?.locks?.request ? navigator.locks.request(notesLock(NOTE_KEY()), () => fn()) : fn());
 // The keys of this origin that start with prefix (the notes' own keys), and a key removed as save writes one (never during a restore).
-export function keysWith(prefix) { try { return Array.from({ length: localStorage.length }, (_, i) => localStorage.key(i)).filter(k => typeof k === 'string' && k.startsWith(prefix)); } catch { return []; } }
+export function keysWith(prefix) { try { return localStorage.keys().filter(k => k.startsWith(prefix)); } catch { return []; } }
 export function drop(key) {
   try { jobScope.assertWritable(); if (localStorage.getItem(RESTORE_LOG) !== null) return false; localStorage.removeItem(jobKey(key)); return true; } catch { return false; }
 }
@@ -1160,9 +1160,16 @@ async function post(s, body) {
   const url = String(s.folderUrl || '').trim();
   if (!/^https:\/\/script\.google\.com\/macros\/s\/[\w-]+\/exec$/.test(url)) throw new Error(L('Use the Apps Script upload link ending in /exec'));
   // A plain-text body keeps this a "simple" request, which Apps Script answers without a CORS preflight.
-  const res = await fetch(url, { method: 'POST', body: JSON.stringify({ ...body, code: s.siteCode }) });
-  const reply = await res.json().catch(() => ({}));
-  if (!reply.ok) throw new Error(reply.error || L('the folder answered with error {status}', { status: res.status }));
+  const ac = new AbortController(), deadline = setTimeout(() => ac.abort(), 30000);
+  try {
+    const res = await fetch(url, { method: 'POST', body: JSON.stringify({ ...body, code: s.siteCode }), signal: ac.signal });
+    const reply = await res.json().catch(() => ({}));
+    if (!reply.ok) throw new Error(reply.error || L('the folder answered with error {status}', { status: res.status }));
+  } catch (e) {
+    // Like a lost connection: retain the exact item. The receiver's receipt makes a committed-but-unanswered upload safe to retry.
+    if (ac.signal.aborted) throw new TypeError('offline');
+    throw e;
+  } finally { clearTimeout(deadline); }
 }
 
 let flushing = null;

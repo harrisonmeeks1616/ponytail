@@ -1,6 +1,6 @@
 // Keep every core file from one release together, including the Spanish dictionary.
 // Bump CACHE for every app release. Existing tabs keep their build until all close.
-const CACHE = 'schwab-field-apps-v20'; // v20: atomic staged restores retain old-tab data and pause for reconciliation.
+const CACHE = 'schwab-field-apps-v21'; // v21: bounded PDF uploads and linear ordinary storage reads/key scans.
 const FILES = ['./', 'index.html', 'tasks.html', 'report.html', 'report.mjs', 'shared.mjs', 'restore-store.mjs', 'sync.mjs', 'live.mjs', 'jobs.mjs', 'jobs-ui.mjs', 'es.mjs', 'shared.css']; // every file the app imports
 const CORE = new Set(FILES.map(f => new URL(f, self.location).href));
 
