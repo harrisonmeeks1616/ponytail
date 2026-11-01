@@ -6,6 +6,10 @@ const test = require('node:test');
 const assert = require('node:assert/strict');
 const lib = import('../docs/schwab/shared.mjs');
 const P = s => Buffer.from('%PDF-' + s).toString('base64'); // a queued PDF, as fileAway makes it
+// Complete native Storage contract: the restore view validates key/length/removeItem too.
+const nativeStorage = store => ({ get length() { return store.size; },
+  key: i => [...store.keys()][i] ?? null, getItem: k => store.get(String(k)) ?? null,
+  setItem: (k, v) => store.set(String(k), String(v)), removeItem: k => store.delete(String(k)), clear: () => store.clear() });
 
 test('links round-trip a task sheet and reject junk', async () => {
   const { pack, unpack, codeFrom } = await lib;
@@ -113,7 +117,7 @@ test('PDFs are well-formed and keep the text', async () => {
 test('finished records wait on the phone until the review folder takes them', async () => {
   const { queue, flush, queued } = await lib;
   const store = new Map();
-  Object.defineProperty(globalThis, 'localStorage', { configurable: true, value: { getItem: k => store.get(k) ?? null, setItem: (k, v) => store.set(k, String(v)) } });
+  Object.defineProperty(globalThis, 'localStorage', { configurable: true, value: nativeStorage(store) });
   const realFetch = globalThis.fetch, sent = [];
   const answer = reply => async (url, o) => ({ status: 200, json: async () => (sent.push(JSON.parse(o.body)), reply) });
   const s = { folderUrl: 'https://script.google.com/macros/s/x/exec', siteCode: 'sparky' };
@@ -145,7 +149,7 @@ test('finished records wait on the phone until the review folder takes them', as
 test('review uploads reject other destinations without sending PDF data or the code', async () => {
   const { queue, flush } = await lib;
   const store = new Map(), sent = [];
-  Object.defineProperty(globalThis, 'localStorage', { configurable: true, value: { getItem: k => store.get(k) ?? null, setItem: (k, v) => store.set(k, String(v)) } });
+  Object.defineProperty(globalThis, 'localStorage', { configurable: true, value: nativeStorage(store) });
   const realFetch = globalThis.fetch;
   globalThis.fetch = async (url, o) => { sent.push([url, JSON.parse(o.body)]); return { status: 200, json: async () => ({ ok: true }) }; };
   try {
@@ -164,7 +168,7 @@ test('review uploads reject other destinations without sending PDF data or the c
 test('a newer queued PDF survives completion of an older upload', async () => {
   const { queue, flush } = await lib;
   const store = new Map(), sent = [];
-  Object.defineProperty(globalThis, 'localStorage', { configurable: true, value: { getItem: k => store.get(k) ?? null, setItem: (k, v) => store.set(k, String(v)) } });
+  Object.defineProperty(globalThis, 'localStorage', { configurable: true, value: nativeStorage(store) });
   const realFetch = globalThis.fetch, s = { folderUrl: 'https://script.google.com/macros/s/x/exec', siteCode: 'fictional-code' };
   let release, started;
   const began = new Promise(resolve => { started = resolve; });
@@ -185,6 +189,46 @@ test('a newer queued PDF survives completion of an older upload', async () => {
     assert.equal((await flush(s)).left, 0);
     assert.deepEqual(sent.map(x => x.pdf), [P('older'), P('newer')]);
   } finally { globalThis.fetch = realFetch; delete globalThis.localStorage; }
+});
+
+test('a stalled PDF reply times out, retains the exact queued version, and retries the committed receipt once', async () => {
+  const { queue, flush, queued } = await lib;
+  const store = new Map(), received = [], receipts = new Set();
+  Object.defineProperty(globalThis, 'localStorage', { configurable: true, value: nativeStorage(store) });
+  const realFetch = globalThis.fetch, realSet = globalThis.setTimeout, realClear = globalThis.clearTimeout;
+  const s = { folderUrl: 'https://script.google.com/macros/s/x/exec', siteCode: 'fictional-code' };
+  let deadline, lateReply, created = 0, cleared = 0;
+  globalThis.setTimeout = (fn, ms) => { assert.equal(ms, 30000); deadline = fn; return 12345; };
+  globalThis.clearTimeout = id => { assert.equal(id, 12345); cleared++; };
+  globalThis.fetch = async (url, options) => {
+    if (!options.signal) throw new TypeError('An abortable request is required');
+    received.push(JSON.parse(options.body));
+    const receipt = options.body; // test server: the same immutable request is one committed upload
+    const duplicate = receipts.has(receipt);
+    if (!duplicate) { receipts.add(receipt); created++; }
+    return { status: 200, json: duplicate ? async () => ({ ok: true, duplicate: true }) : () => new Promise((resolve, reject) => {
+      lateReply = resolve;
+      options.signal.addEventListener('abort', () => reject(new DOMException('Aborted', 'AbortError')), { once: true });
+    }) };
+  };
+  try {
+    queue({ date: '2026-10-04', name: 'FICTIONAL deadline check', pdf: P('same version'), v: 234 });
+    const pending = flush(s);
+    await new Promise(resolve => setImmediate(resolve));
+    assert.equal(typeof deadline, 'function', 'the entire upload and JSON body read have a deadline');
+    deadline();
+    assert.deepEqual(await pending, { left: 1, error: '' });
+    assert.equal(queued(), 1, 'an uncertain committed upload is still durably queued');
+    lateReply({ ok: true }); // a late answer after abort cannot remove the retained item
+    assert.equal(queued(), 1);
+    assert.deepEqual(await flush(s), { left: 0, error: '' });
+    assert.deepEqual(received[1], received[0], 'retry keeps date/name/pdf/version, not a new upload identity');
+    assert.equal(created, 1, 'the committed receipt is acknowledged rather than duplicated');
+    assert.equal(cleared, 2, 'both request deadlines are cleared');
+  } finally {
+    globalThis.fetch = realFetch; globalThis.setTimeout = realSet; globalThis.clearTimeout = realClear;
+    delete globalThis.localStorage;
+  }
 });
 
 test('Spanish mode has a Spanish version of every on-screen phrase', async () => {

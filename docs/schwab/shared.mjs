@@ -1160,9 +1160,16 @@ async function post(s, body) {
   const url = String(s.folderUrl || '').trim();
   if (!/^https:\/\/script\.google\.com\/macros\/s\/[\w-]+\/exec$/.test(url)) throw new Error(L('Use the Apps Script upload link ending in /exec'));
   // A plain-text body keeps this a "simple" request, which Apps Script answers without a CORS preflight.
-  const res = await fetch(url, { method: 'POST', body: JSON.stringify({ ...body, code: s.siteCode }) });
-  const reply = await res.json().catch(() => ({}));
-  if (!reply.ok) throw new Error(reply.error || L('the folder answered with error {status}', { status: res.status }));
+  const ac = new AbortController(), deadline = setTimeout(() => ac.abort(), 30000);
+  try {
+    const res = await fetch(url, { method: 'POST', body: JSON.stringify({ ...body, code: s.siteCode }), signal: ac.signal });
+    const reply = await res.json().catch(() => ({}));
+    if (!reply.ok) throw new Error(reply.error || L('the folder answered with error {status}', { status: res.status }));
+  } catch (e) {
+    // Like a lost connection: retain the exact item. The receiver's receipt makes a committed-but-unanswered upload safe to retry.
+    if (ac.signal.aborted) throw new TypeError('offline');
+    throw e;
+  } finally { clearTimeout(deadline); }
 }
 
 let flushing = null;
