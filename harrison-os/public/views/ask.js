@@ -1,6 +1,7 @@
 // Ask (Lumen): the top-bar Ask drawer, the Memory card "Ask with AI" and the project block "Catch me up".
-// Talks to /api/ask, /api/ai/status, /api/ai/consent and /api/projects/:id/brief (src/ask.js).
-// Plain language only: no model names, ids or diagnostics. "AI answer" and "Not AI" are always labelled.
+// Talks to /api/ask, /api/ai/status, /api/ai/consent, /api/ai/web and /api/projects/:id/brief (src/ask.js).
+// Plain language only: no model names, ids or diagnostics. "AI answer" and "Not AI" are always labelled;
+// record sources are listed under "From your records", web sources (linked, new tab) under "From the web".
 
 const ASK_TIMEOUT_MS = 40000; // the server's AI deadline is at most 30 s; kit.api's 15 s would cut it short
 const MODES = [
@@ -16,13 +17,33 @@ const REASON_WORDS = {
   cancelled: 'Stopped. This comes straight from your saved records.',
   provider_error: 'AI could not be reached just now, so this comes straight from your saved records.',
   invalid_output: 'The AI reply could not be checked against your records, so it is not shown.',
+  refused: 'The AI declined to answer this one, so this comes straight from your saved records.',
+  incomplete: 'The AI answer was cut off, so it is not shown. This comes straight from your saved records.',
+};
+// What the answer says about the web. Only "used" means a search or a page actually came back.
+const WEB_WORDS = {
+  used: 'It searched the web; the pages it relied on are linked below.',
+  not_needed: 'It did not search the web for this.',
+  failed: 'It tried the web, but the search did not work just now, so this is from what it already knows.',
+  unavailable: 'Web search is turned off for this Anthropic account, so this is from what it already knows.',
+  off: 'Web search is off for Ask, so this is from what it already knows.',
 };
 const SCOPE_WORDS = { all: 'Work and Personal', work: 'Work', personal: 'Personal' };
 
 let kit;
 let drawer = null;
 let inFlight = null;
-let status = null; // last /api/ai/status: { configured, consent: { work, personal } }
+let status = null; // last /api/ai/status: { configured, consent: { work, personal }, web_allowed, web_server_off, web_available }
+
+/** An http(s) link for a web source, else null: nothing else (javascript:, data:, relative) becomes a link. */
+export function webLinkHref(url) {
+  try {
+    const u = new URL(String(url || ''));
+    return u.protocol === 'https:' || u.protocol === 'http:' ? u.href : null;
+  } catch {
+    return null;
+  }
+}
 
 async function loadStatus() {
   const r = await kit.api('/api/ai/status');
@@ -89,8 +110,39 @@ function sourcesList(sources, onNavigate) {
   return ul;
 }
 
+function webList(sources) {
+  const { h } = kit;
+  const rows = (Array.isArray(sources) ? sources : []).map((s) => [s, webLinkHref(s && s.url)]).filter(([, href]) => href);
+  if (!rows.length) return null;
+  const ul = h('ul', { class: 'list ask-sources ask-web', 'aria-label': 'Web sources' });
+  for (const [s, href] of rows) {
+    ul.append(
+      h(
+        'li',
+        null,
+        h(
+          'a',
+          { class: 'row-link', href, target: '_blank', rel: 'noopener noreferrer' },
+          h('span', { class: 'chips' }, h('span', { class: 'chip chip-kind', text: new URL(href).hostname })),
+          h('span', { class: 'row-title', text: kit.excerpt(s.title || href, 140) }),
+          s.cited_text ? h('span', { class: 'row-meta', text: `“${kit.excerpt(s.cited_text, 160)}”` }) : null,
+        ),
+      ),
+    );
+  }
+  return ul;
+}
+
 function labelChip(live) {
   return kit.h('p', { class: `ask-label ${live ? 'is-ai' : 'is-not-ai'}`, text: live ? 'AI answer' : 'Not AI. Matched from your saved records.' });
+}
+
+// What was sent and what the web did, in one line under a live answer.
+function liveNote(a) {
+  const sent = a.records_shared
+    ? `Your ${(a.shared_scopes || []).map((s) => SCOPE_WORDS[s] || s).join(' and ')} records were sent to AI for this answer.`
+    : 'No saved records were sent to AI for this answer.';
+  return [sent, WEB_WORDS[a.web], 'Ask cannot change anything. AI can be wrong: check anything important.'].filter(Boolean).join(' ');
 }
 
 function renderAnswer(a) {
@@ -98,9 +150,24 @@ function renderAnswer(a) {
   const out = h('div', { class: 'ask-answer' }, labelChip(a.live_ai));
   if (!a.live_ai && REASON_WORDS[a.fallback_reason]) out.append(h('p', { class: 'subtle small', text: REASON_WORDS[a.fallback_reason] }));
   out.append(h('div', { class: 'ask-text', text: a.text || '' }));
+  if (a.live_ai) out.append(h('p', { class: 'subtle small ask-note', text: liveNote(a) }));
   const list = sourcesList(a.sources, () => closeDrawer());
-  if (list) out.append(h('h3', { class: 'ask-sub', text: 'Sources' }), list);
-  else out.append(h('p', { class: 'subtle small', text: 'No saved records were used.' }));
+  if (list) out.append(h('h3', { class: 'ask-sub', text: 'From your records' }), list);
+  else if (!a.live_ai) out.append(h('p', { class: 'subtle small', text: 'No saved records were used.' }));
+  const web = webList(a.web_sources);
+  if (web) out.append(h('h3', { class: 'ask-sub', text: 'From the web' }), web);
+  // Matches from scopes not shared with AI: shown here only, never sent.
+  if (a.local) {
+    out.append(
+      h(
+        'div',
+        { class: 'ask-local' },
+        h('p', { class: 'ask-label is-not-ai', text: 'From your saved records. Not sent to AI.' }),
+        h('div', { class: 'ask-text', text: a.local.text || '' }),
+        sourcesList(a.local.sources, () => closeDrawer()),
+      ),
+    );
+  }
   return out;
 }
 
@@ -169,7 +236,10 @@ function renderContext() {
     );
   }
   const scope = drawer.dataset.projectScope || kit.state.scope;
-  document.getElementById('ask-where').textContent = `Looks only in ${SCOPE_WORDS[scope] || 'this view'}. Ask reads your records and never changes them.`;
+  const words = SCOPE_WORDS[scope] || 'this view';
+  document.getElementById('ask-where').textContent = status && status.configured
+    ? `Your question goes to AI${status.web_available ? ', which may search the web' : ''}. Records from ${words} are sent only where allowed in Memory. Ask never changes anything.`
+    : `Looks only in ${words}. Ask reads your records and never changes them.`;
 }
 
 function openDrawer() {
@@ -177,6 +247,7 @@ function openDrawer() {
   const p = currentProject();
   if (p) Object.assign(drawer.dataset, { projectId: p.id, projectName: p.name, projectScope: p.scope });
   else for (const k of ['projectId', 'projectName', 'projectScope']) delete drawer.dataset[k];
+  if (!status) loadStatus().then(() => drawer && drawer.open && renderContext(), () => {});
   renderContext();
   if (!drawer.open) {
     try {
@@ -212,7 +283,7 @@ async function runAsk() {
   inFlight = controller;
   submit.disabled = true;
   cancel.hidden = false;
-  live.textContent = 'Looking through your records…';
+  live.textContent = status && status.configured ? 'Working on an answer…' : 'Looking through your records…';
   result.replaceChildren();
   try {
     const r = await postAsk({ scope, question: q, mode, context: projectId ? { project_id: projectId } : undefined, tz: kit.deviceTimeZone() }, controller);
@@ -256,10 +327,10 @@ async function memoryCard() {
       'p',
       { class: 'subtle small' },
       status.configured
-        ? 'Ask can use Claude, an AI service from Anthropic, for the scopes you allow below.'
-        : 'AI needs an Anthropic API key added to the server. Until then Ask still answers, straight from your saved records, labelled Not AI.',
+        ? 'Ask uses Claude, an AI service from Anthropic. It answers general questions as well as questions about your records: your question is always sent to Anthropic to write the answer.'
+        : 'AI needs an Anthropic API key added to the server. Until then Ask answers straight from your saved records, labelled Not AI, and cannot answer general questions or search the web.',
     ),
-    h('p', { class: 'small', text: 'When a scope is allowed, Ask sends your question and the matching records from that scope (titles, dates, who owes what and short notes) to Anthropic to write the answer. Harrison OS does not save your questions or answers. Records from a scope that is not allowed are never sent.' }),
+    h('p', { class: 'small', text: 'Saved records are sent only from the scopes you allow below (titles, dates, who owes what and short notes). Records from a scope that is not allowed are never sent; Ask may still show matches from them, marked Not sent to AI. Harrison OS does not save your questions or answers.' }),
   );
   for (const scope of ['work', 'personal']) {
     const id = `ask-consent-${scope}`;
@@ -281,7 +352,37 @@ async function memoryCard() {
     });
     card.append(h('div', { class: 'ask-toggle' }, box, h('label', { for: id, text: `Allow ${SCOPE_WORDS[scope]} text to be sent to AI` }), note));
   }
+  card.append(webToggle());
   return kit.section('Ask with AI', card, 'memory-ask-ai');
+}
+
+// Says "on" only when it really is offered: the key is set, the server allows it and so does the owner.
+function webWords(s) {
+  if (s.web_server_off) return 'Turned off in the server settings.';
+  if (!s.web_allowed) return 'Off. Ask answers from what the AI already knows.';
+  if (!s.configured) return 'Allowed, but there is no web search until AI is set up.';
+  return 'On. When a question needs current facts, Anthropic searches the web or reads a page for the AI, and the answer links what it used. Each search costs a little extra on the Anthropic account, and the account\'s own settings can still turn web search off; an answer says so when that happens.';
+}
+
+function webToggle() {
+  const { h } = kit;
+  const box = h('input', { type: 'checkbox', id: 'ask-web', checked: !!status.web_allowed, disabled: !!status.web_server_off });
+  const note = h('span', { class: 'subtle small', 'aria-live': 'polite', text: webWords(status) });
+  box.addEventListener('change', async () => {
+    const want = box.checked;
+    box.disabled = true;
+    const res = await kit.api('/api/ai/web', { method: 'PUT', body: { allowed: want } });
+    if (res.ok && res.data) {
+      status = res.data;
+      box.checked = !!status.web_allowed;
+      note.textContent = webWords(status);
+    } else {
+      box.checked = !want;
+      note.textContent = kit.failWords(res, 'save that');
+    }
+    box.disabled = !!status.web_server_off;
+  });
+  return h('div', { class: 'ask-toggle' }, box, h('label', { for: 'ask-web', text: 'Let Ask search the web' }), note);
 }
 
 // ---------------------------------------------------------------- project block: Catch me up

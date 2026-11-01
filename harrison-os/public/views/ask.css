@@ -92,6 +92,17 @@
   margin: 1rem 0 0.375rem;
 }
 
+/* Matches from scopes not shared with AI, under a live answer. */
+.ask-local {
+  margin-top: 1rem;
+  padding-top: 0.75rem;
+  border-top: 1px dashed var(--line);
+}
+
+.ask-web .row-meta {
+  display: block;
+}
+
 .ask-gap {
   padding: 0.5rem 0.75rem;
   border-radius: var(--radius-sm);
