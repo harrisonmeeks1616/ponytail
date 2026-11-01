@@ -1249,7 +1249,7 @@ const scenarios = [
   },
   {
     id: 'F14',
-    name: 'Memory > connections: honest states for Ask, MCP and Shortcut when nothing is configured',
+    name: 'Memory > connections: honest states for Ask, MCP and Shortcut when nothing is configured; the owner sets AI client access',
     async run() {
       const { context, page } = await openApp('F14', { offlineExpected: true });
       try {
@@ -1262,7 +1262,19 @@ const scenarios = [
         const shortcut = find('iPhone Shortcut') || '';
         check(/Not set up|Not checked here/.test(shortcut), `Shortcut row: ${shortcut}`);
         check(!rows.some((r) => /Connected|Working|OK\b/i.test(r)), `a state claims more than was checked: ${rows.join(' | ')}`);
-        return `connection rows: ${rows.join(' | ')}`;
+        // The owner sets AI client access in the card: Full for Work, saved through the owner-only route.
+        const form = page.locator('form.conn-grant');
+        await form.locator('input[name="mcp-grant-mode"][value="full"]').check();
+        await form.locator('#mcp-grant-work').check();
+        await form.locator('#mcp-grant-personal').uncheck();
+        await form.getByRole('button', { name: 'Save access' }).click();
+        await page.locator('form.conn-grant .conn-grant-now', { hasText: 'Now: Full access to Work records' }).waitFor({ timeout: 15000 });
+        const stored = await apiOk('GET', '/api/connections/mcp/grant');
+        check(stored.mode === 'full' && stored.scopes.join() === 'work' && stored.set_by === 'owner', `grant after Save: ${JSON.stringify(stored)}`);
+        const focused = await page.evaluate(() => document.activeElement && document.activeElement.textContent);
+        check(focused === 'Save access', `focus after Save: ${focused}`);
+        await apiOk('PUT', '/api/connections/mcp/grant', { mode: 'read', scopes: ['work'] });
+        return `connection rows: ${rows.join(' | ')}; access saved as Full (Work) from the card, focus kept on Save`;
       } finally {
         await context.close();
       }

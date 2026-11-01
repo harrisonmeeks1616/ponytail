@@ -16,7 +16,7 @@
 import * as db from './db.js';
 import { interpret } from './interpret.js';
 import { buildToday } from './today.js';
-import { authenticate, authorizeRoute } from './auth.js';
+import { authenticate, authorizeRoute, MCP_PATH } from './auth.js';
 import { instantToZonedParts, nextDailyOccurrence, formatLocal } from './time.js';
 import { isAllowedPushEndpoint, sendWebPush, b64urlDecode } from './webpush.js';
 import {
@@ -1291,9 +1291,15 @@ export async function handleApi(request, env, url, { nowMs = Date.now(), authent
   }
 
   const ctx = { request, env, url, nowMs, identity, hooks, path };
+  if (path === MCP_PATH) ctx.dispatch = mcpDispatcher(ctx);
+  return route(ctx, method);
+}
+
+// Runs one request through the route table. Errors from handlers and db.js become the app's JSON answers.
+async function route(ctx, method) {
   let pathMatched = false;
   for (const [m, re, handler] of ROUTES) {
-    const match = path.match(re);
+    const match = ctx.path.match(re);
     if (!match) continue;
     pathMatched = true;
     if (m !== method) continue;
@@ -1308,6 +1314,22 @@ export async function handleApi(request, env, url, { nowMs = Date.now(), authent
   }
   if (pathMatched) return apiError(405, 'method_not_allowed', 'Method not allowed');
   return apiError(404, 'not_found', 'Not found');
+}
+
+// One fixed in-process request for an MCP Full-access tool (src/mcp.js builds each one). It runs through this
+// same route table, so validation, row scopes, undo history (changeId), idempotency and 409/410 answers are
+// exactly the app's. The caller is the internal 'mcp_client' identity (labelled so in events), which
+// authorizeRoute confines to the app-owned record routes; test hooks are off.
+function mcpDispatcher(parent) {
+  const identity = { kind: 'mcp_client' };
+  return async (method, path, body) => {
+    const url = new URL(path, parent.url.origin);
+    if (!authorizeRoute(identity, method, url.pathname)) return apiError(403, 'forbidden', 'This identity may not call this route');
+    const init = { method, headers: { 'Content-Type': 'application/json' } };
+    if (body !== undefined) init.body = JSON.stringify(body);
+    const request = new Request(url, init);
+    return route({ request, env: parent.env, url, nowMs: parent.nowMs, identity, hooks: false, path: url.pathname }, method);
+  };
 }
 
 // ---------------------------------------------------------------- the Worker (fetch + scheduled)

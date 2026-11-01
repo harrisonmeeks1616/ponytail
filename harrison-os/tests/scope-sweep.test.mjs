@@ -51,6 +51,8 @@ const EXEMPT = {
   'PUT /api/settings/test-quiet-hours': 'test setting, no content',
   'POST /api/mcp': 'service identity only (owner gets 403); scope canary in tests/mcp.test.mjs',
   'GET /api/connections/mcp': 'configuration flags only',
+  'GET /api/connections/mcp/grant': 'owner-only MCP access setting: mode and scope names, no records',
+  'PUT /api/connections/mcp/grant': 'owner-only MCP access setting: stores and returns mode and scope names, no records; tests/mcp-full.test.mjs (h)',
   'GET /api/ai/status': 'configured flag and per-scope consent booleans only',
   'PUT /api/ai/consent': 'sets a per-scope boolean; returns flags only',
 };
