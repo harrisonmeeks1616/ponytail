@@ -5,5 +5,6 @@ import * as calendar from './calendar.js';
 import * as pm from './pm.js';
 import * as weekly from './weekly.js';
 import * as connections from './connections.js';
+import * as reminders from './reminders.js';
 
-export const VIEW_MODULES = [ask, drafts, calendar, pm, weekly, connections];
+export const VIEW_MODULES = [ask, drafts, calendar, pm, weekly, connections, reminders];

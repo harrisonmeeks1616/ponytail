@@ -1,5 +1,5 @@
 // Read-only calendar view: a "Calendar" block on Today (next fixed event, today's events, freshness) and a
-// "Calendar (read-only)" card in Memory (add an ICS link, import a .ics file, load the sample, refresh,
+// "Calendar (a copy)" card in Memory (add an ICS link, import a .ics file, load the sample, refresh,
 // remove, health). Harrison OS only reads calendars; it never changes them and never sends calendar alerts.
 
 const MAX_FILE_BYTES = 2 * 1024 * 1024;
@@ -322,8 +322,8 @@ function renderMemoryCard(kit, scope) {
   });
 
   card.append(
-    h('h2', { id: 'cal-card-title', text: 'Calendar (read-only)' }),
-    h('p', { class: 'subtle', text: 'Shows fixed events from your calendar on Today. Harrison OS only reads: it never changes your calendar and does not send calendar alerts.' }),
+    h('h2', { id: 'cal-card-title', text: 'Calendar (a copy)' }),
+    h('p', { class: 'subtle', text: 'Shows fixed events from your calendar on Today. It is a copy: add or change events in your calendar app (for example Fantastical); a calendar link refreshes here about every 30 minutes, an imported file never does. Harrison OS never changes your calendar and does not send calendar alerts.' }),
     list,
     status,
     h('details', { class: 'inline-form' }, h('summary', { class: 'btn btn-secondary', text: 'Add a calendar link' }), linkForm),

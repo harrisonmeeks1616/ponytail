@@ -943,6 +943,33 @@ async function getReminders(ctx) {
   });
 }
 
+async function patchReminder(ctx, id) {
+  const { env, nowMs } = ctx;
+  const body = await readJson(ctx.request);
+  const scope = requireScope(body.scope);
+  const f = {};
+  if (body.text !== undefined) f.text = requireText(body.text, 'text', 4000);
+  if (body.local_date !== undefined) {
+    if (typeof body.local_date !== 'string' || !DATE_RE.test(body.local_date)) throw new HttpError(400, 'invalid_local_date', 'local_date must be YYYY-MM-DD');
+    f.localDate = body.local_date;
+  }
+  if (body.local_time !== undefined) {
+    if (typeof body.local_time !== 'string' || !TIME_RE.test(body.local_time)) throw new HttpError(400, 'invalid_local_time', 'local_time must be HH:MM');
+    f.localTime = body.local_time;
+  }
+  if (body.time_zone !== undefined) f.timeZone = requireTimeZone(body.time_zone, nowMs);
+  if (body.recurrence !== undefined) {
+    if (!RECURRENCES.has(body.recurrence)) throw new HttpError(400, 'invalid_recurrence', "recurrence must be 'none' or 'daily'");
+    f.recurrence = body.recurrence;
+  }
+  const res = await db.updateReminder(env.DB, id, f, scope, iso(nowMs));
+  await logEvent(env, nowMs, 'reminder_updated', id, { scope, fields: Object.keys(f), next_fire_at: Number(res.reminder.next_fire_at), adjustment: res.firstFire.adjustment });
+  return json(200, {
+    reminder: serialiseReminder(res.reminder),
+    first_fire: { instantMs: res.firstFire.instantMs, localLabel: safeFormatLocal(res.firstFire.instantMs, res.reminder.time_zone), adjustment: res.firstFire.adjustment },
+  });
+}
+
 async function postCancelReminder(ctx, id) {
   const body = await readJson(ctx.request);
   const scope = requireScope(body.scope ?? ctx.url.searchParams.get('scope'));
@@ -1176,6 +1203,7 @@ export const ROUTES = [
   ['DELETE', r(`/api/preferences/(${PREF_KEY})`), deletePreferenceRoute],
   ['POST', r('/api/reminders'), postReminder],
   ['GET', r('/api/reminders'), getReminders],
+  ['PATCH', r(`/api/reminders/(${ID})`), patchReminder],
   ['POST', r(`/api/reminders/(${ID})/cancel`), postCancelReminder],
   ['GET', r('/api/push/public-key'), getPublicKey],
   ['POST', r('/api/push/subscriptions'), postSubscription],
