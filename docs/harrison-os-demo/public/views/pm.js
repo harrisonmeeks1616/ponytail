@@ -5,8 +5,9 @@
 const MAX_FILE_BYTES = 60 * 1024; // the API body cap is 64 KB of JSON
 
 const ERROR_WORDS = {
-  not_connected: 'Not connected: needs an authorized digest link',
-  timeout: "The digest link didn't answer in time",
+  not_connected: 'Not connected: needs the approved private PM connection or an authorized digest link',
+  timeout: "The PM digest didn't answer in time",
+  rpc_error: 'The private PM connection did not answer correctly',
   network: 'Could not reach the digest link',
   redirected: 'The digest link tried to send us somewhere else, which is not allowed',
   too_large: 'The digest was too large',
