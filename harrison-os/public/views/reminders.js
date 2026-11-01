@@ -7,7 +7,7 @@ let seq = 0;
 const PAST_SHOWN = 10;
 // 409 reasons from PATCH /api/reminders/:id. The form keeps what was typed in every case.
 const CONFLICT_WORDS = {
-  firing_now: 'This reminder is being sent right now. Your changes are still here: try Save again in a minute.',
+  firing_now: 'This reminder is being sent right now. Your changes are still here: press Save again in a minute.',
   alert_held: 'An alert from this reminder is waiting for quiet hours to end. Edit it after that alert goes out, or cancel the reminder and add a new one. Your changes are still here.',
   stale_edit: 'This reminder was changed somewhere else since you opened it. Your changes are still here: reload the list to see the current version, then save again.',
   not_active: 'This reminder already fired or was cancelled. Your words are still here: add them as a new reminder.',
@@ -208,7 +208,8 @@ function reminderForm(existing, reload, onDone) {
           return;
         }
         // The reminder as this form loaded it: the server refuses the edit if it changed since (another tab or device).
-        const expected = { text: existing.text, time_zone: existing.time_zone, local_date: existing.local_date, local_time: existing.local_time, recurrence: existing.recurrence, next_fire_at: existing.next_fire_at };
+        // Only what a person edits: the cron moving a daily reminder's next firing is not someone else's change.
+        const expected = { text: existing.text, time_zone: existing.time_zone, local_date: existing.local_date, local_time: existing.local_time, recurrence: existing.recurrence };
         r = await api(`/api/reminders/${enc(existing.id)}`, { method: 'PATCH', body: { ...patch, scope: existing.scope, expected } });
       } else {
         // One id per new reminder, kept until the server confirms: if a save committed but its answer was lost,

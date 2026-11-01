@@ -3,7 +3,8 @@
 // the two apart. Sample data only.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { writeDraftWhenReady, putCaptureOnce, queueFiles, mergeBack, sameCapture, captureTextOf } from '../public/capture-core.js';
+import { writeDraftWhenReady, putCaptureOnce, queueFiles, mergeBack, sameCapture, captureTextOf, unstoredFiles, draftConsumedBy, settleWithin } from '../public/capture-core.js';
+import { createMemoryStores } from '../public/idb.js';
 
 const deferred = () => {
   let resolve;
@@ -20,6 +21,39 @@ function keyed({ onPut } = {}) {
     async put(item) {
       if (onPut) onPut(item);
       m.set(item.id, structuredClone(item));
+    },
+    async insert(item) {
+      if (onPut) onPut(item);
+      if (m.has(item.id)) return false;
+      m.set(item.id, structuredClone(item));
+      return true;
+    },
+  };
+}
+
+// A store where the first get/insert/put calls wait at a barrier until `parties` of them are waiting, then all
+// are released together: two tabs that both read before either writes. insert stays atomic once released
+// (like IndexedDB add() in one transaction); get-then-put is not.
+function racing(parties) {
+  const m = new Map();
+  let waiting = [];
+  let open = false; // only the first round is held; later calls (the loser's follow-up) pass straight through
+  const gate = () => (open ? Promise.resolve() : new Promise((resolve) => {
+    waiting.push(resolve);
+    if (waiting.length >= parties) {
+      open = true;
+      waiting.forEach((r) => r());
+    }
+  }));
+  return {
+    map: m,
+    async get(id) { await gate(); return m.has(id) ? structuredClone(m.get(id)) : undefined; },
+    async put(item) { await gate(); m.set(item.id, structuredClone(item)); },
+    async insert(item) {
+      await gate();
+      if (m.has(item.id)) return false;
+      m.set(item.id, structuredClone(item));
+      return true;
     },
   };
 }
@@ -144,4 +178,101 @@ test('a stored draft whose id was saved by another tab with different words is n
   assert.equal(sameCapture(saved, captureTextOf('First tab saved words\n', []), 'work'), true, 'same words: the draft is stale');
   assert.equal(sameCapture(saved, captureTextOf('Second tab edited words', []), 'work'), false, 'different words: keep the draft');
   assert.equal(captureTextOf('', [file('att-x-000001', 'site.jpg')]), 'Attached: site.jpg');
+});
+
+test('two tabs save the same restored draft id at the same moment: both reads see nothing, both texts survive', async () => {
+  const outbox = racing(2);
+  const make = (text) => (id) => capture(id, text);
+  const [a, b] = await Promise.all([
+    putCaptureOnce(outbox, { id: 'cap-draft-0009', text: 'First tab words', scope: 'work' }, make('First tab words'), () => 'cap-fresh-a001'),
+    putCaptureOnce(outbox, { id: 'cap-draft-0009', text: 'Second tab words', scope: 'work' }, make('Second tab words'), () => 'cap-fresh-b001'),
+  ]);
+  assert.deepEqual([a.status, b.status].sort(), ['renamed', 'stored']);
+  assert.notEqual(a.item.id, b.item.id);
+  assert.deepEqual([...outbox.map.values()].map((x) => x.body.text).sort(), ['First tab words', 'Second tab words']);
+  for (const r of [a, b]) assert.equal(outbox.map.get(r.item.id).body.text, r.item.body.text, 'each caller holds the row that is really stored');
+
+  // The previous order (read, then write) under the same barrier: both read "absent", the second write wins.
+  const old = racing(2);
+  const oldPut = async (id, text) => {
+    const existing = await old.get(id);
+    if (!existing) await old.put(capture(id, text));
+    return existing ? 'same' : 'stored';
+  };
+  const both = await Promise.all([oldPut('cap-draft-0009', 'First tab words'), oldPut('cap-draft-0009', 'Second tab words')]);
+  assert.deepEqual(both, ['stored', 'stored']);
+  assert.equal(old.map.size, 1, 'old ordering: one capture lost though both said stored');
+});
+
+test('the same capture retried from two tabs at once is stored once', async () => {
+  const outbox = racing(2);
+  const make = (id) => capture(id, 'Same words');
+  const rs = await Promise.all([1, 2].map(() => putCaptureOnce(outbox, { id: 'cap-draft-0010', text: 'Same words', scope: 'work' }, make, () => 'cap-unused-01')));
+  assert.deepEqual(rs.map((r) => r.status).sort(), ['same', 'stored']);
+  assert.equal(outbox.map.size, 1);
+});
+
+test('two tabs queue the same photo id for different captures at once: it is stored once and each reports the real binding', async () => {
+  const store = racing(2);
+  const f = file('att-shared-001');
+  const [a, b] = await Promise.all([
+    queueFiles(store, 'cap-tab-a-001', [f], (x) => att(x, 'cap-tab-a-001')),
+    queueFiles(store, 'cap-tab-b-001', [f], (x) => att(x, 'cap-tab-b-001')),
+  ]);
+  const owner = store.map.get('att-shared-001').capture_id;
+  assert.equal(store.map.size, 1);
+  const winner = owner === 'cap-tab-a-001' ? a : b;
+  const loser = owner === 'cap-tab-a-001' ? b : a;
+  assert.deepEqual(winner.stored.map((x) => x.capture_id), [owner]);
+  assert.deepEqual(loser.stored, [], 'the loser does not claim the file');
+  assert.deepEqual(loser.elsewhere.map((x) => [x.id, x.capture_id]), [['att-shared-001', owner]], 'the loser reports where it really is');
+
+  // Previous order under the same barrier: both report the file as theirs, only the last write is stored.
+  const old = racing(2);
+  const oldQueue = async (cap) => {
+    if (!(await old.get(f.id))) await old.put(att(f, cap));
+    return cap;
+  };
+  const claimed = await Promise.all([oldQueue('cap-tab-a-001'), oldQueue('cap-tab-b-001')]);
+  assert.equal(claimed.length, 2);
+  assert.equal(old.map.size, 1, 'old ordering: both claimed it, one binding is false');
+});
+
+test('after a Save, only the draft that Save consumed is removed: never another tab\'s words under the same id', async () => {
+  const saved = { id: 'cap-draft-0020', text: 'A words', scope: 'work' };
+  const own = { id: 'cap-draft-0020', text: 'A wor', scope: 'work', files: [], updated_at: '2026-11-01T01:00:00.000Z' };
+  assert.equal(draftConsumedBy(own, saved, { updated_at: own.updated_at, text: own.text }), true, "this tab's own draft, a few keystrokes behind");
+  assert.equal(draftConsumedBy({ ...own, text: 'A words' }, saved, null), true, 'the saved words');
+  const otherTab = { id: 'cap-draft-0020', text: 'B words', scope: 'work', files: [], updated_at: '2026-11-01T00:59:00.000Z' };
+  assert.equal(draftConsumedBy(otherTab, saved, { updated_at: own.updated_at, text: own.text }), false, 'another tab wrote different words earlier');
+  assert.equal(draftConsumedBy(otherTab, saved, null), false);
+  assert.equal(draftConsumedBy({ ...own, id: 'cap-draft-other' }, saved, { updated_at: own.updated_at, text: own.text }), false, 'a newer draft under a new id');
+
+  // delIf is one step in the store: the predicate sees what is stored at that moment.
+  const st = createMemoryStores();
+  await st.drafts.put('capture', otherTab);
+  assert.equal(await st.drafts.delIf('capture', (d) => draftConsumedBy(d, saved, { updated_at: own.updated_at, text: own.text })), false);
+  assert.equal((await st.drafts.get('capture')).text, 'B words');
+  await st.drafts.put('capture', own);
+  assert.equal(await st.drafts.delIf('capture', (d) => draftConsumedBy(d, saved, { updated_at: own.updated_at, text: own.text })), true);
+  assert.equal(await st.drafts.get('capture'), undefined);
+});
+
+test('a saved draft whose second photo never reached storage is not discarded: that photo is found missing', async () => {
+  const store = keyed();
+  const f1 = file('att-kept-0001');
+  const f2 = file('att-lost-0001');
+  await store.insert(att(f1, 'cap-x-000001'));
+  assert.deepEqual((await unstoredFiles(store, [f1, f2])).map((f) => f.id), ['att-lost-0001']);
+  assert.deepEqual(await unstoredFiles(store, [f1]), []);
+});
+
+test('storage that never answers becomes a visible failure, and a draft write reports what it wrote', async () => {
+  await assert.rejects(settleWithin(new Promise(() => {}), 20), /storage_timeout/);
+  assert.equal(await settleWithin(Promise.resolve(7), 20), 7);
+  const d = draftsStore();
+  let seen = null;
+  await writeDraftWhenReady({ storesReady: Promise.resolve(d), restored: Promise.resolve(), gen: 0, currentGen: () => 0, key: 'capture', read: () => ({ id: 'cap-w-000001', text: 'Hi', scope: 'work', files: [] }), onWritten: (r) => (seen = r) });
+  assert.equal(seen.text, 'Hi');
+  assert.equal(d.map.get('capture').updated_at, seen.updated_at);
 });

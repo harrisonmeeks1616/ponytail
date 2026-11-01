@@ -2269,10 +2269,22 @@ export async function updateReminder(db, id, fields, scope, nowIso, expected = n
   const before = await firstOf(db, 'SELECT * FROM reminders WHERE id = ? AND scope = ?', id, s);
   if (!before) throw new NotFoundError('No such reminder');
   if (before.state !== 'active') throw new ConflictError('This reminder already fired or was cancelled', 'not_active');
-  if (expected && REMINDER_SNAPSHOT.some((c) => expected[c] !== undefined && String(expected[c] ?? '') !== String(before[c] ?? ''))) {
-    throw new ConflictError('This reminder changed since you opened it', 'stale_edit');
-  }
   const f = fields || {};
+  if (expected) {
+    // Only the fields a person edits are compared: the cron advancing a daily reminder's next firing is not a
+    // change "somewhere else", and the guarded UPDATE below still covers the firing itself.
+    const same = (want, row) => REMINDER_EDITABLE.every(([col]) => want[col] === undefined || String(want[col] ?? '') === String(row[col] ?? ''));
+    if (!same(expected, before)) {
+      // The same edit already landed (its answer was lost and Save was pressed again): the stored row is the
+      // editor's version with this edit applied. Report it as saved instead of "changed somewhere else".
+      const target = Object.fromEntries(REMINDER_EDITABLE.map(([col, key]) => [col, f[key] !== undefined ? f[key] : expected[col]]));
+      if (same(target, before)) {
+        const ms = before.next_fire_at == null ? null : Number(before.next_fire_at);
+        return { reminder: before, firstFire: { instantMs: ms, adjustment: null }, alreadySaved: true };
+      }
+      throw new ConflictError('This reminder changed since you opened it', 'stale_edit');
+    }
+  }
   const merged = {
     id: before.id,
     text: f.text ?? before.text,
@@ -2363,6 +2375,8 @@ export async function insertDelivery(db, { id, reminderId, scheduledFor, localLa
 // The reminder fields a cron run read and will send: a claim or an edit applies only while they are unchanged.
 const REMINDER_SNAPSHOT = ['text', 'time_zone', 'local_date', 'local_time', 'recurrence', 'next_fire_at'];
 const SNAPSHOT_SQL = REMINDER_SNAPSHOT.map((c) => `${c} IS ?`).join(' AND ');
+// [column, field name in an edit]: what a person can change. An editor's "expected" version is compared on these.
+const REMINDER_EDITABLE = [['text', 'text'], ['time_zone', 'timeZone'], ['local_date', 'localDate'], ['local_time', 'localTime'], ['recurrence', 'recurrence']];
 
 /**
  * SYSTEM, cron only. Claims the due occurrence rem.next_fire_at for the reminder exactly as the cron read it:

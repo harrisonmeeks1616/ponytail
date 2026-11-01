@@ -968,8 +968,11 @@ async function patchReminder(ctx, id) {
     expected = body.expected;
   }
   const res = await db.updateReminder(env.DB, id, f, scope, iso(nowMs), expected);
-  await logEvent(env, nowMs, 'reminder_updated', id, { scope, fields: Object.keys(f), next_fire_at: Number(res.reminder.next_fire_at), adjustment: res.firstFire.adjustment });
+  if (!res.alreadySaved) {
+    await logEvent(env, nowMs, 'reminder_updated', id, { scope, fields: Object.keys(f), next_fire_at: Number(res.reminder.next_fire_at), adjustment: res.firstFire.adjustment });
+  }
   return json(200, {
+    already_saved: !!res.alreadySaved,
     reminder: serialiseReminder(res.reminder),
     first_fire: { instantMs: res.firstFire.instantMs, localLabel: safeFormatLocal(res.firstFire.instantMs, res.reminder.time_zone), adjustment: res.firstFire.adjustment },
   });

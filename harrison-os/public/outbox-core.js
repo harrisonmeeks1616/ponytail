@@ -185,6 +185,13 @@ export function createMemoryStore(initial = []) {
     async remove(id) {
       map.delete(id);
     },
+    // Insert only if absent (the check and the write are one synchronous step). false when it existed.
+    async insert(item) {
+      if (!item || typeof item.id !== 'string') throw new TypeError('item.id required');
+      if (map.has(item.id)) return false;
+      map.set(item.id, clone(item));
+      return true;
+    },
   };
 }
 

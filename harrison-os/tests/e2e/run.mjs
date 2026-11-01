@@ -1541,6 +1541,167 @@ const scenarios = [
       }
     },
   },
+  {
+    id: 'F19',
+    name: 'real IndexedDB, two tabs at once: the same draft id saved with different words keeps both; a shared photo id is stored once with its true owner',
+    async run() {
+      const { context, page } = await openApp('F19', { offlineExpected: true });
+      try {
+        await start(page, '#/today');
+        const page2 = await context.newPage();
+        await page2.goto('/#/today');
+        await waitAppReady(page2);
+        const ROUNDS = 40; // the deterministic proof is tests/capture-core.test.mjs; here real IndexedDB, real concurrency
+        // Each tab runs the shipped capture-core functions on the shipped IndexedDB store (a separate test database).
+        const run = (p, tab) =>
+          p.evaluate(async ({ tab, ROUNDS }) => {
+            const { openStores } = await import('/idb.js');
+            const core = await import('/capture-core.js');
+            const stores = await openStores({ name: 'hos-e2e-two-tabs' });
+            // Cross-tab barrier: in every round, each tab's FIRST store call (a read or an insert) waits until the
+            // other tab has reached the same point, so both tabs look before either writes.
+            const bc = new BroadcastChannel('hos-e2e-two-tabs');
+            const arrived = new Set();
+            bc.onmessage = (e) => arrived.add(e.data);
+            // Re-announce while waiting: the other tab may open its channel after our first message.
+            const barrier = async (key) => {
+              for (let t = 0; t < 1000 && !arrived.has(key); t++) {
+                bc.postMessage(key);
+                await new Promise((r) => setTimeout(r, 5));
+              }
+              bc.postMessage(key);
+              if (!arrived.has(key)) throw new Error(`barrier ${key} timed out`);
+            };
+            const gated = (store, prefix, round) => {
+              let first = true;
+              const wrap = (fn) => async (...args) => {
+                if (first) {
+                  first = false;
+                  await barrier(`${prefix}${round}`);
+                }
+                return fn.apply(store, args);
+              };
+              return { get: wrap(store.get), put: wrap(store.put), insert: wrap(store.insert), list: store.list.bind(store) };
+            };
+            const out = [];
+            for (let i = 0; i < ROUNDS; i++) {
+              const id = `cap-race-${String(i).padStart(4, '0')}`;
+              const text = `Tab ${tab} words ${i}`;
+              const make = (cid) => ({ id: cid, kind: 'capture', created_at: '2026-11-01T00:00:00.000Z', body: { id: cid, text, scope: 'work' } });
+              const saved = await core.putCaptureOnce(gated(stores.outbox, 'c', i), { id, text, scope: 'work' }, make, () => `cap-fresh-${tab}-${i}-${Math.random().toString(36).slice(2, 8)}`);
+              const files = await core.queueFiles(gated(stores.attachments, 'a', i), saved.item.id, [{ id: `att-race-${String(i).padStart(4, '0')}` }], (f) => ({ id: f.id, capture_id: saved.item.id, created_at: '2026-11-01T00:00:00.000Z' }));
+              out.push({ status: saved.status, id: saved.item.id, text: saved.item.body.text, stored: files.stored.map((x) => x.capture_id), elsewhere: files.elsewhere.map((x) => x.capture_id) });
+            }
+            bc.close();
+            return { out, persistent: stores.persistent === true };
+          }, { tab, ROUNDS });
+        const [a, b] = await Promise.all([run(page, 'A'), run(page2, 'B')]);
+        check(a.persistent && b.persistent, 'IndexedDB not in use (memory fallback)');
+        const db = await page.evaluate(async () => {
+          const { openStores } = await import('/idb.js');
+          const s = await openStores({ name: 'hos-e2e-two-tabs' });
+          return { outbox: (await s.outbox.list()).map((x) => [x.id, x.body.text]), attachments: (await s.attachments.list()).map((x) => [x.id, x.capture_id]) };
+        });
+        const texts = new Map(db.outbox);
+        const owners = new Map(db.attachments);
+        let renamed = 0;
+        for (let i = 0; i < ROUNDS; i++) {
+          for (const r of [a.out[i], b.out[i]]) {
+            check(texts.get(r.id) === r.text, `round ${i}: ${r.text} not stored under ${r.id}`);
+            if (r.status === 'renamed') renamed++;
+          }
+          const owner = owners.get(`att-race-${String(i).padStart(4, '0')}`);
+          const claims = [a.out[i], b.out[i]].filter((r) => r.stored.length);
+          check(claims.length === 1 && claims[0].stored[0] === owner, `round ${i}: photo claimed by ${claims.length} tabs, stored for ${owner}`);
+          const other = [a.out[i], b.out[i]].find((r) => !r.stored.length);
+          check(other.elsewhere[0] === owner, `round ${i}: the other tab reports ${other.elsewhere[0]}, storage has ${owner}`);
+        }
+        check(db.outbox.length === 2 * ROUNDS && renamed === ROUNDS, `captures ${db.outbox.length}, renamed ${renamed}`);
+        await page.evaluate(() => new Promise((r) => { const q = indexedDB.deleteDatabase('hos-e2e-two-tabs'); q.onsuccess = q.onerror = q.onblocked = () => r(); }));
+        return `${ROUNDS} rounds, two tabs at once on real IndexedDB: ${db.outbox.length} captures stored (each tab's words under the id it reports, ${renamed} kept under a fresh id), each shared photo stored once and the other tab reports its true owner`;
+      } finally {
+        await context.close();
+      }
+    },
+  },
+  {
+    id: 'F20',
+    name: 'startup restore loses nothing: saved words with an unstored photo bring back only that photo; another tab\'s words under a saved id are kept under a fresh id and leave after their own Save',
+    async run() {
+      const { context, page } = await openApp('F20', { offlineExpected: true });
+      // Writes straight into the app's own stores (as an earlier session or another tab would have left them).
+      const seed = (draft, captureText, storedFiles) =>
+        page.evaluate(async ({ draft, captureText, storedFiles }) => {
+          const { openStores } = await import('/idb.js');
+          const oc = await import('/outbox-core.js');
+          const s = await openStores({ name: 'harrison-os' }); // the app's own database (app.js IDB_NAME)
+          await s.drafts.put('capture', draft);
+          await s.outbox.put(oc.createOutboxItem({ id: draft.id, kind: 'capture', url: '/api/captures', body: { id: draft.id, text: captureText, scope: draft.scope, time_zone: 'America/New_York' } }));
+          for (const f of storedFiles) await s.attachments.put(oc.createAttachmentItem({ id: f.id, capture_id: draft.id, scope: draft.scope, name: f.name, mime: f.mime, data_b64: f.data_b64 }));
+        }, { draft, captureText, storedFiles });
+      const stored = () =>
+        page.evaluate(async () => {
+          const { openStores } = await import('/idb.js');
+          const s = await openStores({ name: 'harrison-os' }); // the app's own database (app.js IDB_NAME)
+          return { draft: (await s.drafts.get('capture')) || null, outbox: (await s.outbox.list()).map((x) => [x.id, x.body.text]), attachments: (await s.attachments.list()).map((x) => [x.id, x.capture_id]) };
+        });
+      const reload = async () => {
+        await page.reload({ waitUntil: 'load' });
+        await waitAppReady(page);
+      };
+      const file = (id, name) => ({ id, name, mime: 'text/plain', data_b64: btoa(`sample ${name}`), size: 12 });
+      try {
+        await start(page, '#/today');
+        // 1. The words were saved, the first file stored, the second never was.
+        const f1 = file('att-f20-kept-01', 'kept.txt');
+        const f2 = file('att-f20-lost-01', 'lost.txt');
+        const now = new Date().toISOString();
+        await seed({ id: 'cap-f20-saved-01', text: 'Sample note with two files', scope: 'work', files: [f1, f2], updated_at: now }, 'Sample note with two files', [f1]);
+        await reload();
+        await openCaptureSheet(page);
+        const box1 = await page.inputValue('#capture-text');
+        const names1 = await page.$$eval('#capture-files li', (els) => els.map((e) => e.textContent));
+        const status1 = await page.textContent('#draft-status');
+        check(box1 === '', `saved words came back as a draft: ${JSON.stringify(box1)}`);
+        check(names1.length === 1 && /lost\.txt/.test(names1[0]), `files in the box: ${JSON.stringify(names1)}; status ${status1}; stored ${JSON.stringify(await stored())}`);
+        check(/not kept on this phone/.test(status1), `status: ${status1}`);
+        let st = await waitFor(async () => { const x = await stored(); return x.draft && x.draft.id !== 'cap-f20-saved-01' ? x : false; }, { what: 'draft re-kept under a fresh id' });
+        check(st.draft.files.length === 1 && st.draft.files[0].id === f2.id, `re-kept draft files ${JSON.stringify(st.draft.files.map((f) => f.id))}`);
+        await page.locator('#capture-sheet input[name="cscope"][value="work"]').check();
+        await page.click('#capture-save');
+        st = await waitFor(async () => { const x = await stored(); return x.attachments.some(([id]) => id === f2.id) ? x : false; }, { what: 'unstored file saved' });
+        const owners = Object.fromEntries(st.attachments);
+        check(owners[f1.id] === 'cap-f20-saved-01' && owners[f2.id] && owners[f2.id] !== 'cap-f20-saved-01', `file owners ${JSON.stringify(owners)}`);
+        await waitFor(async () => (await stored()).draft === null, { what: 'draft removed after its Save' });
+        await closeCaptureSheet(page);
+
+        // 2. Another tab saved this draft id with different words.
+        await seed({ id: 'cap-f20-tab-0001', text: 'Sample tab two words', scope: 'work', files: [], updated_at: new Date().toISOString() }, 'Sample tab one words', []);
+        await reload();
+        await openCaptureSheet(page);
+        check((await page.inputValue('#capture-text')) === 'Sample tab two words', 'the other tab words were not restored');
+        await waitFor(async () => { const x = await stored(); return x.draft && x.draft.id !== 'cap-f20-tab-0001' ? x : false; }, { what: 'draft re-kept under a fresh id' });
+        await closeCaptureSheet(page);
+        await reload(); // restored again exactly once, not doubled
+        await openCaptureSheet(page);
+        check((await page.inputValue('#capture-text')) === 'Sample tab two words', `after a second launch: ${JSON.stringify(await page.inputValue('#capture-text'))}`);
+        await page.locator('#capture-sheet input[name="cscope"][value="work"]').check();
+        await page.click('#capture-save');
+        await waitFor(async () => (await stored()).draft === null, { what: 'draft removed after its Save' });
+        st = await stored();
+        const texts = st.outbox.map(([, t]) => t);
+        check(texts.includes('Sample tab one words') && texts.includes('Sample tab two words'), `outbox texts ${JSON.stringify(texts)}`);
+        await closeCaptureSheet(page);
+        await reload();
+        await openCaptureSheet(page);
+        check((await page.inputValue('#capture-text')) === '', 'the saved draft came back after its Save');
+        await closeCaptureSheet(page);
+        return 'unstored file only came back (words not duplicated), saved under a new capture while the stored one kept its owner, draft removed; other-tab words restored under a fresh id, kept once across launches, saved alongside the first tab\'s words, then gone';
+      } finally {
+        await context.close();
+      }
+    },
+  },
 ];
 
 // After the scenarios: no sample text in server output or events.

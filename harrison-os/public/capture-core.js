@@ -18,7 +18,7 @@ export function sameCapture(existing, text, scope) {
  * merged the stored draft into new typing must not be overwritten by a snapshot taken before it ran.
  * read() -> { id, text, scope, files } is called after the waits; gen/currentGen skip a write a Save superseded.
  */
-export async function writeDraftWhenReady({ storesReady, restored, gen, currentGen, read, key }) {
+export async function writeDraftWhenReady({ storesReady, restored, gen, currentGen, read, key, onWritten = () => {} }) {
   const stores = await storesReady;
   await restored;
   if (gen !== currentGen()) return 'skipped';
@@ -27,35 +27,37 @@ export async function writeDraftWhenReady({ storesReady, restored, gen, currentG
     await stores.drafts.del(key);
     return 'deleted';
   }
-  await stores.drafts.put(key, { id, text, scope, files, updated_at: new Date().toISOString() });
+  const record = { id, text, scope, files, updated_at: new Date().toISOString() };
+  await stores.drafts.put(key, record);
+  onWritten(record);
   return 'written';
 }
 
 /**
- * Puts a capture in the outbox exactly once. An existing row with the same words and scope is a retry and is
- * reused; one with different words (another tab saved the same restored draft) is left alone and this capture
- * is stored under a fresh id, so neither text is lost. make(id) builds the outbox item.
+ * Puts a capture in the outbox exactly once, with the store's atomic insert (add-if-absent), never a read
+ * then a write: two tabs saving the same restored draft id at the same moment cannot both "find it free".
+ * The loser compares: the same words and scope is a retry and reuses the row; different words (another tab's
+ * capture) are stored under a fresh id, so neither text is lost. make(id) builds the outbox item.
  * Returns { item, status: 'stored' | 'same' | 'renamed' }.
  */
 export async function putCaptureOnce(outbox, { id, text, scope }, make, freshId) {
+  const item = make(id);
+  if (await outbox.insert(item)) return { item, status: 'stored' };
   const existing = await outbox.get(id);
-  if (!existing) {
-    const item = make(id);
-    await outbox.put(item);
-    return { item, status: 'stored' };
-  }
   if (sameCapture(existing, text, scope)) return { item: existing, status: 'same' };
-  const nid = freshId();
-  const item = make(nid);
-  await outbox.put(item);
-  return { item, status: 'renamed' };
+  for (let i = 0; i < 3; i++) {
+    const other = make(freshId());
+    if (await outbox.insert(other)) return { item: other, status: 'renamed' };
+  }
+  throw new Error('no_free_capture_id');
 }
 
 /**
- * Stores each file for captureId, in order. A file already stored is never rebound: if it belongs to this
- * capture it counts as stored, if it belongs to another capture it stays there (reported in elsewhere, with
- * its real binding). On the first failure the remaining files are returned in failed, untouched, so only
- * those go back to the box. make(file) builds the attachment item.
+ * Stores each file for captureId, in order, with the atomic insert. A file id already stored is never
+ * rebound: if it belongs to this capture (a retry) it counts as stored; if another capture got it first (two
+ * tabs queueing the same draft's photo at once) it stays there and is reported in elsewhere with its real
+ * binding. On the first failure the remaining files are returned in failed, untouched, so only those go back
+ * to the box. make(file) builds the attachment item.
  * Returns { stored: item[], elsewhere: item[], failed: file[] }.
  */
 export async function queueFiles(store, captureId, files, make) {
@@ -63,14 +65,15 @@ export async function queueFiles(store, captureId, files, make) {
   for (let i = 0; i < files.length; i++) {
     const f = files[i];
     try {
-      const existing = await store.get(f.id);
-      if (existing) {
-        (existing.capture_id === captureId ? out.stored : out.elsewhere).push(existing);
+      const item = make(f);
+      if (await store.insert(item)) {
+        out.stored.push(item);
         continue;
       }
-      const item = make(f);
-      await store.put(item);
-      out.stored.push(item);
+      const existing = await store.get(f.id);
+      if (existing && existing.capture_id === captureId) out.stored.push(existing);
+      else if (existing) out.elsewhere.push(existing);
+      else throw new Error('vanished'); // deleted between the two steps: treat as not stored
     } catch {
       out.failed = files.slice(i);
       break;
@@ -95,4 +98,37 @@ export function mergeBack({ boxText, draftId, sheetFiles }, failed) {
 export function mergeFiles(first, then) {
   const seen = new Set();
   return first.concat(then).filter((f) => f && !seen.has(f.id) && seen.add(f.id));
+}
+
+/** The draft files that never reached photo storage (by id). */
+export async function unstoredFiles(store, files) {
+  const out = [];
+  for (const f of files) if (!(await store.get(f.id))) out.push(f);
+  return out;
+}
+
+/**
+ * Is this stored draft the one a Save consumed? Only if it has the saved capture's id and either holds the
+ * saved words and scope, or is exactly the last draft this tab itself wrote (ownLast: { updated_at, text }),
+ * which may be a few keystrokes behind the saved words. A draft another tab wrote under the same id matches
+ * neither, so it is kept. saved: { id, text, scope }.
+ */
+export function draftConsumedBy(draft, saved, ownLast) {
+  if (!draft || draft.id !== saved.id) return false;
+  if (captureTextOf(draft.text, Array.isArray(draft.files) ? draft.files : []) === saved.text && draft.scope === saved.scope) return true;
+  return !!ownLast && draft.updated_at === ownLast.updated_at && draft.text === ownLast.text;
+}
+
+/**
+ * Resolves with the promise's value, or rejects with Error('storage_timeout') after ms: storage that never
+ * answers (an IndexedDB open or transaction that hangs) must turn into a visible failure, not a silent wait.
+ */
+export function settleWithin(promise, ms) {
+  let timer;
+  return Promise.race([
+    promise,
+    new Promise((_, reject) => {
+      timer = setTimeout(() => reject(new Error('storage_timeout')), ms);
+    }),
+  ]).finally(() => clearTimeout(timer));
 }

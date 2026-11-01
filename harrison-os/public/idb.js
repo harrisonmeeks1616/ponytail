@@ -129,6 +129,18 @@ function keyedStore(withStore, name) {
     async remove(id) {
       await withStore(name, 'readwrite', (s) => reqToPromise(s.delete(id)));
     },
+    // Insert only if absent, atomically: IndexedDB add() fails with ConstraintError inside the same
+    // transaction when the key exists, so two tabs can never both win. Returns false when it existed.
+    async insert(item) {
+      if (!item || typeof item.id !== 'string') throw new TypeError('item.id required');
+      try {
+        await withStore(name, 'readwrite', (s) => reqToPromise(s.add(item)));
+        return true;
+      } catch (e) {
+        if (e && e.name === 'ConstraintError') return false;
+        throw e;
+      }
+    },
   };
 }
 
@@ -146,6 +158,16 @@ function idbStores(conn) {
     },
     async del(key) {
       await withStore('drafts', 'readwrite', (s) => reqToPromise(s.delete(key)));
+    },
+    // Read and delete in ONE readwrite transaction: deletes only if keep(draft) is false at that moment, so a
+    // newer draft written by another tab or an autosave can never be deleted by an older save. true if deleted.
+    async delIf(key, shouldDelete) {
+      return withStore('drafts', 'readwrite', async (s) => {
+        const v = await reqToPromise(s.get(key));
+        if (v === undefined || v === null || !shouldDelete(v)) return false;
+        await reqToPromise(s.delete(key));
+        return true;
+      });
     },
   };
   let addsSinceTrim = 0;
@@ -211,6 +233,11 @@ export function createMemoryStores(warning = MEMORY_WARNING) {
       async get(key) { return draftMap.has(key) ? copy(draftMap.get(key)) : undefined; },
       async put(key, value) { draftMap.set(key, copy(value)); },
       async del(key) { draftMap.delete(key); },
+      async delIf(key, shouldDelete) {
+        if (!draftMap.has(key) || !shouldDelete(copy(draftMap.get(key)))) return false;
+        draftMap.delete(key);
+        return true;
+      },
     },
     log: {
       async add(entry) {

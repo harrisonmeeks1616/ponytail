@@ -170,7 +170,7 @@ test('an alert held for quiet hours: editing is refused (no old + new alert); ca
 test('an edit from an outdated view is refused even when the next firing is unchanged; push test still records its delivery', async () => {
   const { call } = setup(NOW);
   const created = (await make(call, { recurrence: 'daily' })).data.reminder;
-  const seen = { text: created.text, time_zone: created.time_zone, local_date: created.local_date, local_time: created.local_time, recurrence: created.recurrence, next_fire_at: created.next_fire_at };
+  const seen = { text: created.text, time_zone: created.time_zone, local_date: created.local_date, local_time: created.local_time, recurrence: created.recurrence };
   assert.equal((await call('PATCH', '/api/reminders/rem-edit-00001', { scope: 'personal', text: 'Tab one words', expected: seen })).status, 200);
   const stale = await call('PATCH', '/api/reminders/rem-edit-00001', { scope: 'personal', text: 'Tab two words', expected: seen });
   assert.equal(stale.status, 409);
@@ -182,4 +182,34 @@ test('an edit from an outdated view is refused even when the next firing is unch
   assert.equal(t.status, 200);
   assert.match(t.data.reminder_id, /^test-/);
   assert.equal(t.data.state, 'no_route');
+});
+
+test('the editor\'s version: a routine daily firing is not "changed elsewhere"; firing_now retry works after the advance; a lost-answer re-save is reported saved', async () => {
+  const db = await import('../src/db.js');
+  const { call, env, setNow } = setup(NOW);
+  const created = (await make(call, { recurrence: 'daily' })).data.reminder;
+  const seen = { text: created.text, time_zone: created.time_zone, local_date: created.local_date, local_time: created.local_time, recurrence: created.recurrence };
+  // The form is open; the cron claims T (edit refused as firing_now), then advances.
+  setNow(T + 30_000);
+  const [rem] = await db.listDueReminders(env.DB, T + 30_000, 5);
+  await db.claimDueOccurrence(env.DB, rem, { id: 'dl-open-00001', localLabel: 'x' }, new Date(T).toISOString());
+  const busy = await call('PATCH', '/api/reminders/rem-edit-00001', { scope: 'personal', local_time: '10:00', expected: seen });
+  assert.equal(busy.data.error.code, 'firing_now');
+  await db.advanceReminder(env.DB, 'rem-edit-00001', T, Date.UTC(2026, 9, 31, 13, 0));
+  // Same form, same version, pressed again after the advance: accepted (no false "changed elsewhere").
+  const retry = await call('PATCH', '/api/reminders/rem-edit-00001', { scope: 'personal', local_time: '10:00', expected: seen });
+  assert.equal(retry.status, 200, JSON.stringify(retry.data));
+  assert.equal(retry.data.reminder.local_time, '10:00');
+  assert.equal(retry.data.already_saved, false);
+  // Its answer is lost; Save again with the same form: the edit is already there, reported as saved.
+  const again = await call('PATCH', '/api/reminders/rem-edit-00001', { scope: 'personal', local_time: '10:00', expected: seen });
+  assert.equal(again.status, 200);
+  assert.equal(again.data.already_saved, true);
+  // A different edit from the same outdated form is still refused.
+  const other = await call('PATCH', '/api/reminders/rem-edit-00001', { scope: 'personal', local_time: '11:00', expected: seen });
+  assert.equal(other.status, 409);
+  assert.equal(other.data.error.code, 'stale_edit');
+  // A stale no-op edit (nothing changed by this form, but the row moved on) is refused too, not "saved".
+  const noop = await call('PATCH', '/api/reminders/rem-edit-00001', { scope: 'personal', text: created.text, expected: seen });
+  assert.equal(noop.status, 409);
 });
