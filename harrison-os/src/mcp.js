@@ -14,7 +14,10 @@
 //   Before the owner saves a grant, the deployment default applies exactly as it always did: read only,
 //   MCP_SCOPES (default 'work'), and capture_text only with MCP_ALLOW_CAPTURE=1.
 // - Every tool takes one scope; a scope outside the grant is a tool error before anything runs. Never 'all'.
-// - Calendar events and company project (PM) data are copies of other systems and stay read-only here.
+// - Calendar events and the company project (PM) copy are copies of other systems and stay read-only here.
+//   Changing Electrical PM itself, and Field Hub through it, is the pm_* and field_* tools: each one call to
+//   PM's private command entrypoint, allowed only by Harrison's separate cross-app grant (src/crossapp.js,
+//   docs/CROSS_APP_ACTIONS.md), checked on every call, on top of this grant (Work scope; writes need Full).
 // - No tool reads or changes the grant, AI consent or settings, export/restore, push, sessions, test hooks,
 //   or calendar/PM sources. No shell, SQL or files.
 // - Record text in results is user data and is labelled untrusted; nothing in it is acted on.
@@ -30,6 +33,7 @@ import { instantToZonedParts } from './time.js';
 import { interpret } from './interpret.js';
 import { normaliseTeamDomain, mcpAudience, MCP_PATH } from './auth.js';
 import { HttpError, json, apiError, iso, readJson, validTimeZone, MAX_TEXT, scopeAllowlist } from './http.js';
+import * as cross from './crossapp.js';
 
 export const PROTOCOL_VERSIONS = Object.freeze(['2025-11-25', '2025-06-18']); // current first, then the previous one
 export const MAX_MCP_BODY_BYTES = 64 * 1024;
@@ -132,8 +136,10 @@ function validateValue(p, v, key) {
   return `${key} must be ${types.filter((t) => t !== 'null').join(' or ')}`;
 }
 
+// additionalProperties: true marks a free-form object (pm_* fields): its entries are checked by the tool against
+// the source's own declared schema (src/crossapp.js checkFields), not here.
 function validateObject(schema, args, prefix = '') {
-  for (const key of Object.keys(args)) if (!(key in schema.properties)) return `unknown argument: ${prefix}${key.slice(0, 40)}`;
+  if (schema.additionalProperties !== true) for (const key of Object.keys(args)) if (!(key in schema.properties)) return `unknown argument: ${prefix}${key.slice(0, 40)}`;
   for (const key of schema.required) if (args[key] === undefined) return `missing argument: ${prefix}${key}`;
   for (const [key, p] of Object.entries(schema.properties)) {
     if (args[key] === undefined) continue;
@@ -181,6 +187,16 @@ const itemOut = (i) => ({
 // ---------------------------------------------------------------- tools
 
 class ToolError extends Error {}
+
+// Electrical PM's own refusal or failure of one command, passed on with its code, message and, for a conflict,
+// the current state PM reported (bounded). Never reported as done.
+class SourceError extends Error {
+  constructor(r, req) {
+    const current = r.current !== undefined ? ` Current state from Electrical PM: ${JSON.stringify(r.current).slice(0, 1500)}` : '';
+    super(`Not done. Electrical PM answered ${r.code}${r.status ? ` (${r.status})` : ''} to ${req.action}: ${r.message}${current}`);
+    this.code = r.code;
+  }
+}
 
 // The app's own refusal of a fixed request (4xx/5xx), passed on with its status and code (never user text).
 class RouteError extends Error {
@@ -672,6 +688,187 @@ const TOOLS = [
   },
 ];
 
+// ------------------------------------------------ cross-app: Electrical PM, and Field Hub through PM
+// Each tool is one action of PM's private command entrypoint (src/crossapp.js execute). A change first reads
+// the current record and PM's declared fields itself, so it never edits from a stale or shortened copy and
+// never sends a field PM did not declare; PM's native API then validates everything again.
+
+const pmProject = { type: 'string', minLength: 1, maxLength: 120, pattern: cross.PROJECT_ID_PATTERN, description: 'The Electrical PM project id. Only the projects Harrison allowed are answered.' };
+const pmRecordId = { type: 'string', minLength: 1, maxLength: 120, pattern: '^[A-Za-z0-9_.:-]{1,120}$', description: 'The record id from pm_list_records or pm_get_record.' };
+const revisionProp = { type: ['integer', 'string'], minimum: 0, maximum: Number.MAX_SAFE_INTEGER, minLength: 1, maxLength: 80, description: 'The revision you read (pm_get_record / field_get_record). If the record changed since, nothing is changed.' };
+const requestIdProp = { type: 'string', minLength: 8, maxLength: 40, pattern: '^[A-Za-z0-9_-]{8,40}$', description: 'Only to retry an earlier attempt: send its request_id and PM replays it instead of applying it twice.' };
+const fieldsProp = { type: 'object', properties: {}, required: [], additionalProperties: true, description: "Field names and values exactly as pm_get_schema declares them for this record type. Undeclared fields are refused." };
+const fieldKind = { type: 'string', enum: ['task', 'shift', 'report', 'log'], description: 'Field Hub record kind.' };
+const fieldKey = { type: 'string', minLength: 1, maxLength: 120, pattern: '^[A-Za-z0-9_.:-]{1,120}$', description: 'The Field Hub key: a task uid, shift id, report date (YYYY-MM-DD) or log uid.' };
+
+async function pmCall(ctx, action, req) {
+  const write = !cross.READ_ACTIONS.includes(action);
+  const request = { action, ...req };
+  if (write) request.requestId = await cross.requestIdFor(req.requestId, { actor: ctx.actor, action, projectId: req.projectId, recordId: req.recordId ?? req.operationId ?? null, body: req.body ?? null, nowMs: ctx.nowMs });
+  const r = await cross.execute(ctx.env, request, { write });
+  if (!r.ok) throw new SourceError(r, request);
+  return { r, request };
+}
+
+const declared = (data, pick) => {
+  const list = pick(data);
+  return Array.isArray(list) ? list : null;
+};
+const typeFields = (schema, type) => declared(schema, (s) => (s && Array.isArray(s.recordTypes) ? (s.recordTypes.find((t) => t && t.type === type) || {}).fields : null));
+const kindOf = (schema, kind) => (schema && schema.field && Array.isArray(schema.field.kinds) ? schema.field.kinds.find((k) => k && k.kind === kind) : null) || null;
+
+async function schemaOf(ctx, projectId) {
+  const { r } = await pmCall(ctx, 'project.schema', { projectId });
+  return r.data;
+}
+
+// The complete current record, read now from PM (never from Harrison OS's copy). A retry (request_id given)
+// may carry the revision of its first attempt, which its own change moved on: PM decides it by replaying.
+async function currentOf(ctx, action, req, expected, retry = false) {
+  const { r } = await pmCall(ctx, action, req);
+  const rec = r.data && r.data.record;
+  if (!rec || typeof rec !== 'object' || rec.revision === undefined || rec.revision === null) throw new ToolError('Not done: Electrical PM did not return the current record with its revision, so nothing is changed.');
+  if (!retry && String(rec.revision) !== String(expected)) {
+    throw new ToolError(`Not done: the record changed since you read it (revision ${String(rec.revision).slice(0, 80)} now, you sent ${String(expected).slice(0, 80)}). Read it again, then decide.`);
+  }
+  return rec;
+}
+
+// One fixed PM action. build(args, ctx) -> request fields (it may read first). The result is PM's own answer.
+const viaPm = (action, build) => async (ctx, args) => {
+  const req = { projectId: args.project_id, ...(await build(args, ctx)) };
+  if (args.request_id) req.requestId = args.request_id;
+  const { r, request } = await pmCall(ctx, action, req);
+  return {
+    app: action.startsWith('field.') ? 'field' : 'pm',
+    action,
+    project_id: request.projectId,
+    ...(request.requestId ? { request_id: request.requestId } : {}),
+    result: r.data,
+    receipt: r.receipt,
+    count: Array.isArray(r.data && r.data.records) ? r.data.records.length : 1,
+  };
+};
+
+const CROSS_TOOLS = [
+  {
+    name: 'pm_get_project', app: 'pm', action: 'project.read',
+    description: 'Read one Electrical PM project from Electrical PM itself (current, not the Harrison OS copy).',
+    inputSchema: obj({ project_id: pmProject }, ['project_id']),
+    run: viaPm('project.read', () => ({})),
+  },
+  {
+    name: 'pm_get_schema', app: 'pm', action: 'project.schema',
+    description: 'The record types of an Electrical PM project and their fields (kinds, required, editable, allowed values), and the Field Hub kinds PM can change. Read it before creating or changing anything.',
+    inputSchema: obj({ project_id: pmProject }, ['project_id']),
+    run: viaPm('project.schema', () => ({})),
+  },
+  {
+    name: 'pm_list_records', app: 'pm', action: 'records.list',
+    description: 'List Electrical PM records of a project, optionally by type, state or words. Use pm_get_record for one complete record before changing it.',
+    inputSchema: obj({
+      project_id: pmProject,
+      type: { type: 'string', minLength: 1, maxLength: 60, pattern: '^[A-Za-z0-9_.-]{1,60}$', description: 'A record type from pm_get_schema.' },
+      state: { type: 'string', enum: ['active', 'archived', 'all'] },
+      text: { type: 'string', minLength: 1, maxLength: 200 },
+      limit: limitProp(50, 20),
+      cursor: { type: 'string', minLength: 1, maxLength: 200 },
+    }, ['project_id']),
+    run: viaPm('records.list', ({ type, state, text, limit = 20, cursor }) => ({ query: Object.fromEntries(Object.entries({ type, state, text, limit, cursor }).filter(([, v]) => v !== undefined)) })),
+  },
+  {
+    name: 'pm_get_record', app: 'pm', action: 'record.read',
+    description: 'One complete Electrical PM record with its type, fields and revision, read now from Electrical PM.',
+    inputSchema: obj({ project_id: pmProject, record_id: pmRecordId }, ['project_id', 'record_id']),
+    run: viaPm('record.read', ({ record_id }) => ({ recordId: record_id })),
+  },
+  {
+    name: 'pm_create_record', app: 'pm', action: 'record.create', write: true,
+    description: 'Create a record in Electrical PM. Fields must be the ones pm_get_schema declares for the type (required ones included). Returns Electrical PM\'s own record and receipt.',
+    inputSchema: obj({ project_id: pmProject, type: { type: 'string', minLength: 1, maxLength: 60, pattern: '^[A-Za-z0-9_.-]{1,60}$' }, fields: fieldsProp, request_id: requestIdProp }, ['project_id', 'type', 'fields']),
+    run: viaPm('record.create', async (a, ctx) => {
+      const defs = typeFields(await schemaOf(ctx, a.project_id), a.type);
+      const bad = defs ? cross.checkFields(defs, a.fields, { create: true }) : `Electrical PM declares no record type ${a.type} for this project (see pm_get_schema).`;
+      if (bad) throw new ToolError(`Not done: ${bad}. Nothing was changed.`);
+      return { body: { type: a.type, fields: a.fields } };
+    }),
+  },
+  {
+    name: 'pm_update_record', app: 'pm', action: 'record.update', write: true,
+    description: 'Change fields of one Electrical PM record. Send the revision from pm_get_record; Harrison OS reads the record again first and changes nothing if it moved on. Only declared, editable fields.',
+    inputSchema: obj({ project_id: pmProject, record_id: pmRecordId, expected_revision: revisionProp, fields: fieldsProp, request_id: requestIdProp }, ['project_id', 'record_id', 'expected_revision', 'fields']),
+    run: viaPm('record.update', async (a, ctx) => {
+      const rec = await currentOf(ctx, 'record.read', { projectId: a.project_id, recordId: a.record_id }, a.expected_revision, !!a.request_id);
+      const bad = cross.checkFields(typeFields(await schemaOf(ctx, a.project_id), rec.type), a.fields);
+      if (bad) throw new ToolError(`Not done: ${bad}. Nothing was changed.`);
+      return { recordId: a.record_id, body: { expectedRevision: a.expected_revision, fields: a.fields } };
+    }),
+  },
+  {
+    name: 'pm_archive_record', app: 'pm', action: 'record.archive', write: true,
+    description: 'Archive one Electrical PM record (pm_restore_record brings it back). Send the revision from pm_get_record.',
+    inputSchema: obj({ project_id: pmProject, record_id: pmRecordId, expected_revision: revisionProp, request_id: requestIdProp }, ['project_id', 'record_id', 'expected_revision']),
+    run: viaPm('record.archive', async (a, ctx) => {
+      await currentOf(ctx, 'record.read', { projectId: a.project_id, recordId: a.record_id }, a.expected_revision, !!a.request_id);
+      return { recordId: a.record_id, body: { expectedRevision: a.expected_revision } };
+    }),
+  },
+  {
+    name: 'pm_restore_record', app: 'pm', action: 'record.restore', write: true,
+    description: 'Restore an archived Electrical PM record. Send the revision from pm_get_record.',
+    inputSchema: obj({ project_id: pmProject, record_id: pmRecordId, expected_revision: revisionProp, request_id: requestIdProp }, ['project_id', 'record_id', 'expected_revision']),
+    run: viaPm('record.restore', async (a, ctx) => {
+      await currentOf(ctx, 'record.read', { projectId: a.project_id, recordId: a.record_id }, a.expected_revision, !!a.request_id);
+      return { recordId: a.record_id, body: { expectedRevision: a.expected_revision } };
+    }),
+  },
+  {
+    name: 'field_get_status', app: 'field', action: 'field.status',
+    description: "Field Hub's state for an Electrical PM project, as Electrical PM's Field Hub connection reports it (connected job, last sync, pending operations).",
+    inputSchema: obj({ project_id: pmProject }, ['project_id']),
+    run: viaPm('field.status', () => ({})),
+  },
+  {
+    name: 'field_get_record', app: 'field', action: 'field.read',
+    description: 'One Field Hub record (task sheet, shift, daily report or daily log) read now through Electrical PM, with its revision.',
+    inputSchema: obj({ project_id: pmProject, kind: fieldKind, key: fieldKey }, ['project_id', 'kind', 'key']),
+    run: viaPm('field.read', ({ kind, key }) => ({ query: { kind, key } })),
+  },
+  {
+    name: 'field_list_pending', app: 'field', action: 'field.pending',
+    description: 'Field Hub changes Electrical PM has sent or queued and not yet seen confirmed, with their operation ids and states.',
+    inputSchema: obj({ project_id: pmProject }, ['project_id']),
+    run: viaPm('field.pending', () => ({})),
+  },
+  {
+    name: 'field_edit_record', app: 'field', action: 'field.edit', write: true,
+    description: "Change one Field Hub record through Electrical PM (the office part: only fields pm_get_schema declares editable for that kind). Send the revision from field_get_record. The answer is PM's receipt: applied, pending (queued for Field Hub) or refused.",
+    inputSchema: obj({
+      project_id: pmProject, kind: fieldKind, key: fieldKey, expected_revision: revisionProp, fields: fieldsProp,
+      intent: { type: 'string', minLength: 1, maxLength: 40, pattern: '^[a-z][a-z0-9_.-]{0,39}$', description: 'The kind of change, when pm_get_schema declares intents for this kind (for example a review or a reply).' },
+      request_id: requestIdProp,
+    }, ['project_id', 'kind', 'key', 'expected_revision', 'fields']),
+    run: viaPm('field.edit', async (a, ctx) => {
+      await currentOf(ctx, 'field.read', { projectId: a.project_id, query: { kind: a.kind, key: a.key } }, a.expected_revision, !!a.request_id);
+      const k = kindOf(await schemaOf(ctx, a.project_id), a.kind);
+      if (!k) throw new ToolError(`Not done: Electrical PM declares no editable Field Hub ${a.kind} for this project (see pm_get_schema). Nothing was changed.`);
+      if (Array.isArray(k.intents) && k.intents.length ? !k.intents.includes(a.intent) : a.intent !== undefined) {
+        throw new ToolError(`Not done: intent must be one of ${(k.intents || []).join(', ') || '(none declared: leave it out)'}. Nothing was changed.`);
+      }
+      const bad = cross.checkFields(k.fields, a.fields);
+      if (bad) throw new ToolError(`Not done: ${bad}. Nothing was changed.`);
+      return { body: { kind: a.kind, key: a.key, expectedRevision: a.expected_revision, fields: a.fields, ...(a.intent ? { intent: a.intent } : {}) } };
+    }),
+  },
+  {
+    name: 'field_retry_operation', app: 'field', action: 'field.retry', write: true,
+    description: 'Ask Electrical PM to retry one pending Field Hub operation (from field_list_pending). PM resends the same operation; it is never applied twice.',
+    inputSchema: obj({ project_id: pmProject, operation_id: { type: 'string', minLength: 8, maxLength: 80, pattern: '^[A-Za-z0-9_-]{8,80}$' }, request_id: requestIdProp }, ['project_id', 'operation_id']),
+    run: viaPm('field.retry', ({ operation_id }) => ({ operationId: operation_id })),
+  },
+].map((t) => ({ ...t, available: (_m, env) => cross.commandsConfigured(env) }));
+TOOLS.push(...CROSS_TOOLS);
+
 const READ_ANNOTATIONS = { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false };
 const DEFAULT_MODS = { ask, review, calendar, pm };
 
@@ -686,13 +883,16 @@ function refusal(t, g) {
   return 'read_only';
 }
 
-/** The tools/list answer for a grant (default: the deployment default from env). */
-export function listTools(env, mods = DEFAULT_MODS, grant = defaultGrant(env)) {
-  return TOOLS.filter((t) => (!t.available || t.available(mods)) && !refusal(t, grant)).map((t) => ({
+/**
+ * The tools/list answer for a grant (default: the deployment default from env). crossOk(tool) decides the
+ * pm_* and field_* tools (the cross-app grant); without it they are not listed. They also need the binding.
+ */
+export function listTools(env, mods = DEFAULT_MODS, grant = defaultGrant(env), crossOk = () => false) {
+  return TOOLS.filter((t) => (!t.available || t.available(mods, env)) && !refusal(t, grant) && (!t.app || (grant.scopes.includes('work') && crossOk(t)))).map((t) => ({
     name: t.name,
     description: t.description,
     inputSchema: t.inputSchema,
-    annotations: t.write ? { readOnlyHint: false, destructiveHint: !!t.destructive, idempotentHint: false, openWorldHint: false } : READ_ANNOTATIONS,
+    annotations: t.write ? { readOnlyHint: false, destructiveHint: !!t.destructive, idempotentHint: false, openWorldHint: !!t.app } : { ...READ_ANNOTATIONS, ...(t.app ? { openWorldHint: true } : {}) },
   }));
 }
 
@@ -722,7 +922,8 @@ export function touched(data) {
     if (k === 'changeId' && v != null) changes.add(String(v));
     else if (k === 'changeIds' && Array.isArray(v)) v.forEach((c) => c != null && changes.add(String(c)));
     else if (Array.isArray(v)) v.slice(0, 20).forEach(take);
-    else take(v);
+    else if (k === 'result' && v && typeof v === 'object') take(v.record); // a cross-app answer: PM's own record id
+    else if (k !== 'receipt') take(v);
   }
   if (data && data.undone && data.undone.changeId != null) changes.add(String(data.undone.changeId));
   return { ids: [...ids].slice(0, 20), change_ids: [...changes].slice(0, 20) };
@@ -744,12 +945,13 @@ export async function callTool({ env, nowMs, mods = DEFAULT_MODS, dispatch = nul
   const tool = TOOLS.find((t) => t.name === name);
   // Read fresh on every call: a change or revocation applies to the very next call.
   const grant = await grantOf(env, nowMs);
-  const refused = tool && (!tool.available || tool.available(mods)) ? refusal(tool, grant) : 'unknown';
+  const refused = tool && (!tool.available || tool.available(mods, env)) ? refusal(tool, grant) : 'unknown';
   if (refused === 'unknown') {
     await audit(env, nowMs, actor, { tool: 'unknown', ok: false });
     return null;
   }
-  const scope = args && typeof args === 'object' && SCOPES.includes(args.scope) ? args.scope : null;
+  // Electrical PM and Field Hub are Work.
+  const scope = tool.app ? 'work' : args && typeof args === 'object' && SCOPES.includes(args.scope) ? args.scope : null;
   const fail = async (code, message) => {
     await audit(env, nowMs, actor, { tool: name, scope, ok: false, code });
     return toolError(message);
@@ -758,11 +960,17 @@ export async function callTool({ env, nowMs, mods = DEFAULT_MODS, dispatch = nul
   if (scope && !grant.scopes.includes(scope)) return fail('scope_not_allowed', `This connection may not use the ${scope} scope.`);
   const invalid = validateArgs(tool.inputSchema, args ?? {});
   if (invalid) return fail('invalid_arguments', `Invalid arguments: ${invalid}.`);
+  if (tool.app) {
+    // Harrison's cross-app grant, read now: this client, this action, this project.
+    const why = cross.refusal(await cross.readCrossGrant(env, nowMs), actor === 'mcp_client' ? 'mcp' : 'ask', tool.action, args.project_id);
+    if (why) return fail(why.code, why.message);
+  }
   let data;
   try {
-    data = await tool.run({ env, nowMs, mods, dispatch }, args);
+    data = await tool.run({ env, nowMs, mods, dispatch, actor }, args);
   } catch (err) {
     if (err instanceof ToolError) return fail('tool_error', err.message);
+    if (err instanceof SourceError) return fail(err.code, err.message);
     if (err instanceof RouteError) return fail(err.code, `Not done. Harrison OS answered ${err.status} ${err.code}: ${err.message}`);
     if (err instanceof HttpError || err instanceof db.ScopeError || err instanceof db.ValidationError || err instanceof db.NotFoundError) return fail('invalid', 'The request was not valid for this record.');
     await audit(env, nowMs, actor, { tool: name, scope, ok: false, code: 'internal' });
@@ -785,37 +993,52 @@ export async function callTool({ env, nowMs, mods = DEFAULT_MODS, dispatch = nul
  * scopes intersected by src/ask.js); the registry, validation, routes and refusals are exactly MCP's. Each call is
  * recorded in actions ({ tool, scope, ok, code?, ids, change_ids }), so the answer can show what really changed.
  */
-export function askToolkit({ env, nowMs, dispatch, grantOf, maxChars, mods = DEFAULT_MODS }) {
+export async function askToolkit({ env, nowMs, dispatch, grantOf, maxChars, mods = DEFAULT_MODS }) {
   const grantNow = async () => {
     const g = await grantOf();
     return { mode: g.mode, scopes: g.scopes, capture: g.mode === 'full', set_by: 'owner', updated_at: null };
   };
-  const tools = listTools(env, mods, { mode: 'full', scopes: SCOPES, capture: true, set_by: 'owner' }).map((t) => ({
-    name: t.name,
-    description: t.description,
-    input_schema: t.inputSchema,
-  }));
+  // The pm_* and field_* tools are offered only when Harrison's cross-app grant lets Ask use that action and Ask
+  // has Full access to Work; each call is checked again (both grants, read fresh).
+  const first = await grantNow();
+  const crossGrant = await cross.readCrossGrant(env, nowMs);
+  const crossOk = (t) => first.scopes.includes('work') && cross.allowsAction(crossGrant, 'ask', t.action);
+  const listed = listTools(env, mods, { mode: 'full', scopes: SCOPES, capture: true, set_by: 'owner' }, crossOk);
+  const tools = listed.map((t) => ({ name: t.name, description: t.description, input_schema: t.inputSchema }));
   // About 30 KB of definitions, the same on every request of a question: one cache breakpoint after them lets the
   // later requests of the tool loop (and questions within the cache lifetime) read them from the prompt cache.
   tools[tools.length - 1] = { ...tools[tools.length - 1], cache_control: { type: 'ephemeral' } };
   const actions = [];
   const handlers = {};
   for (const t of tools) {
+    const def = TOOLS.find((x) => x.name === t.name);
     handlers[t.name] = async (input) => {
       const res = await callTool({ env, nowMs, mods, dispatch, grantOf: grantNow, actor: 'ask_ai', maxChars }, t.name, input || {});
-      const scope = input && SCOPES.includes(input.scope) ? input.scope : null;
-      const write = TOOLS.find((x) => x.name === t.name).write === true;
+      const scope = def.app ? 'work' : input && SCOPES.includes(input.scope) ? input.scope : null;
       if (!res) return { content: 'Unknown tool.', is_error: true };
       const text = res.content[0].text;
-      if (write) {
+      if (def.write) {
+        const app = def.app || 'hos';
+        const sc = res.structuredContent || {};
         actions.push(res.isError
-          ? { tool: t.name, scope, ok: false, message: text.slice(0, 300) }
-          : { tool: t.name, scope, ok: true, ...touched(res.structuredContent) });
+          ? { tool: t.name, app, scope, ok: false, message: text.slice(0, 300) }
+          : def.app
+            ? { tool: t.name, app, scope, ok: true, ids: touched(sc).ids, change_ids: [], request_id: sc.request_id || null, receipt: receiptOf(sc.receipt) }
+            : { tool: t.name, app, scope, ok: true, ...touched(sc) });
       }
       return { content: text, is_error: res.isError };
     };
   }
-  return { tools, handlers, actions, rules: UNDO_RULES };
+  const projects = listed.some((t) => t.name.startsWith('pm_') || t.name.startsWith('field_')) ? crossGrant.projects : [];
+  return { tools, handlers, actions, rules: UNDO_RULES, crossProjects: projects };
+}
+
+// The receipt fields shown to Harrison (PM's whole receipt stays in the tool result the model saw).
+function receiptOf(r) {
+  if (!r || typeof r !== 'object') return null;
+  const out = {};
+  for (const k of ['status', 'revision', 'recordId', 'operationId', 'requestId', 'replayed']) if (r[k] !== undefined && r[k] !== null && typeof r[k] !== 'object') out[k] = String(r[k]).slice(0, 80);
+  return Object.keys(out).length ? out : null;
 }
 
 // ---------------------------------------------------------------- JSON-RPC over Streamable HTTP
@@ -835,7 +1058,9 @@ export function instructionsFor(g) {
     read: `Read only, ${scopes} scope. ${g.capture ? 'The only possible change is capture_text, which adds a capture to the inbox for review.' : 'Nothing can be changed.'}`,
     full:
       `Full access to the ${scopes} scope: create, edit, review, organise and delete Harrison OS records. ${UNDO_RULES} ` +
-      'Calendar events and company project (PM) data are copies of other systems and stay read-only.',
+      'Calendar events and the company project (PM) copy are copies and stay read-only. Only when Harrison allows it separately, the pm_* and ' +
+      'field_* tools act on Electrical PM itself (and Field Hub through it): read the record and pm_get_schema first, send the revision you read, ' +
+      "and report PM's receipt or refusal as it is.",
   }[g.mode];
   return (
     'Harrison OS: personal and work memory, tasks, Waiting items, projects, reminders and drafts. Every tool is scoped to work or ' +
@@ -898,7 +1123,8 @@ export async function handleMcp(ctx, { mods = DEFAULT_MODS } = {}) {
     case 'ping':
       return rpcResult(msg.id, {});
     case 'tools/list':
-      return rpcResult(msg.id, { tools: listTools(env, mods, await readGrant(env, nowMs)) });
+      const crossGrant = await cross.readCrossGrant(env, nowMs);
+      return rpcResult(msg.id, { tools: listTools(env, mods, await readGrant(env, nowMs), (t) => cross.allowsAction(crossGrant, 'mcp', t.action)) });
     case 'tools/call': {
       if (typeof params.name !== 'string' || params.name.length > 64) return rpcError(200, msg.id, -32602, 'Invalid params: name');
       const result = await callTool({ env, nowMs, mods, dispatch: ctx.dispatch }, params.name, params.arguments === undefined ? {} : params.arguments);
@@ -944,6 +1170,7 @@ const FEATURE_STATUS = [
   ['ai', ask, '/api/ai/status'],
   ['calendar', calendar, '/api/calendar/connections'],
   ['pm', pm, '/api/pm/sources'],
+  ['crossapp', cross, '/api/connections/crossapp'],
 ];
 export function connectionFeatures() {
   const out = {};

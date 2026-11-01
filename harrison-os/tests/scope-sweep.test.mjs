@@ -57,6 +57,8 @@ const EXEMPT = {
   'GET /api/ai/status': 'configured flag and per-scope consent booleans only',
   'PUT /api/ai/consent': 'sets a per-scope boolean; returns flags only',
   'PUT /api/ai/web': 'sets the owner web-search boolean; returns flags only',
+  'GET /api/connections/crossapp': 'owner-only cross-app grant status: client names, project ids and action names, no records',
+  'PUT /api/connections/crossapp/grant': 'owner-only cross-app grant: stores client names, project ids and action names, no records; tests/crossapp.test.mjs',
   'PUT /api/ai/actions': 'owner-only Ask actions setting: stores mode and scope names, returns flags only; tests/ask-actions.test.mjs',
 };
 

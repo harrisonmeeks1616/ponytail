@@ -185,7 +185,18 @@ const TOOL_WORDS = { create_item: 'Added', update_item: 'Changed', item_action: 
   create_project: 'Added a project', update_project: 'Changed a project', save_place: 'Saved a place', review_capture: 'Reviewed a capture', delete_capture: 'Deleted a capture',
   capture_text: 'Captured', create_reminder: 'Added a reminder', edit_reminder: 'Changed a reminder', cancel_reminder: 'Cancelled a reminder', set_preference: 'Saved a preference',
   delete_preference: 'Deleted a preference', create_draft: 'Prepared a draft', edit_draft: 'Changed a draft', check_draft: 'Checked a draft', delete_draft: 'Deleted a draft',
-  weekly_review_select: 'Picked for the week', weekly_review_defer: 'Moved to a later week', weekly_review_complete: 'Marked the weekly review done' };
+  weekly_review_select: 'Picked for the week', weekly_review_defer: 'Moved to a later week', weekly_review_complete: 'Marked the weekly review done',
+  pm_create_record: 'Created a record', pm_update_record: 'Changed a record', pm_archive_record: 'Archived a record', pm_restore_record: 'Restored a record',
+  field_edit_record: 'Changed a Field Hub record', field_retry_operation: 'Retried a Field Hub change' };
+const APP_WORDS = { pm: 'Electrical PM', field: 'Field Hub, through Electrical PM' };
+
+/** Pure: one change Ask attempted, in plain words. A source answer of "pending" is never called done. */
+export function actionWords(a) {
+  const pending = a.ok && a.app && a.app !== 'hos' && a.receipt && a.receipt.status === 'pending';
+  const state = !a.ok ? 'Not done' : pending ? 'Sent, waiting for Field Hub to confirm' : 'Done';
+  const where = APP_WORDS[a.app] ? ` in ${APP_WORDS[a.app]}` : a.scope ? ` (${SCOPE_WORDS[a.scope] || a.scope})` : '';
+  return `${state}: ${TOOL_WORDS[a.tool] || String(a.tool || '').replaceAll('_', ' ')}${where}`;
+}
 
 // Every change Ask attempted, from the server's own record of each call (not from the AI's words), each with
 // Undo where the app keeps history. Shown also on a Not AI answer: a change made before the AI failed still stands.
@@ -194,8 +205,8 @@ function actionsList(actions) {
   if (!Array.isArray(actions) || !actions.length) return null;
   const ul = h('ul', { class: 'list ask-actions', 'aria-label': 'What Ask changed' });
   for (const a of actions) {
-    const what = `${a.ok ? 'Done' : 'Not done'}: ${TOOL_WORDS[a.tool] || String(a.tool || '').replaceAll('_', ' ')}${a.scope ? ` (${SCOPE_WORDS[a.scope] || a.scope})` : ''}`;
-    const detail = a.ok ? (a.ids || []).join(', ') : a.message || '';
+    const what = actionWords(a);
+    const detail = a.ok ? [(a.ids || []).join(', '), a.receipt && a.receipt.status ? `PM: ${a.receipt.status}` : ''].filter(Boolean).join(' · ') : a.message || '';
     const li = h('li', { class: 'plain-row' }, h('span', { class: 'row-title', text: what }), detail ? h('span', { class: 'row-meta', text: detail }) : null);
     const changes = a.ok && a.tool !== 'undo_change' ? (a.change_ids || []).filter((c) => /^[0-9]{1,15}$/.test(String(c))) : [];
     if (changes.length) {

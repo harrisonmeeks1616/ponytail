@@ -25,6 +25,12 @@ export function manifest() {
       "Ask's Full mode offers the same tools (name, description, input_schema) to the model, under Ask's own owner grant.",
     ],
     modes: Object.fromEntries(modes.map(([name, meaning, g]) => [name, { meaning, grant: { mode: g.mode, scopes: g.scopes }, instructions: instructionsFor(g), tools: listTools({}, undefined, g) }])),
+    // Added to the read or full list above only when env.PM_COMMANDS_SERVICE is bound AND Harrison's cross-app
+    // grant allows that client the action (and the grant includes Work). Writes need Full. docs/CROSS_APP_ACTIONS.md.
+    cross_app: {
+      meaning: 'Electrical PM (and Field Hub through PM) tools: listed per action only when the private PM command connection is bound and the owner cross-app grant allows it; read actions under Read only or Full, writes under Full.',
+      tools: listTools({ PM_COMMANDS_SERVICE: { execute() {} } }, undefined, owner('full', ['work']), () => true).filter((t) => /^(pm|field)_/.test(t.name)),
+    },
   };
 }
 

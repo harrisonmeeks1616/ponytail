@@ -358,3 +358,39 @@ test('drawer history: newest exchanges kept within the server limits', async () 
   assert.ok(h.reduce((n, t) => n + t.text.length, 0) <= HISTORY_LIMITS.total);
   assert.deepEqual(historyFor([]), []);
 });
+
+test('through POST /api/ask: a follow-up general question, record consent off, answered with a cited web source and the earlier turns', async () => {
+  const { env, call } = setup();
+  assert.equal((await call('POST', '/api/items', { scope: 'work', kind: 'task', id: 'item-orchid2', title: `Orchid supplier ${WORK_CANARY}` })).status, 201);
+  const seen = [];
+  const orig = globalThis.fetch;
+  globalThis.fetch = async (_u, init) => {
+    seen.push(JSON.parse(init.body));
+    return new Response(JSON.stringify(msg([
+      { type: 'server_tool_use', id: 'srvtoolu_c', name: 'web_search', input: { query: 'NEC 2026 adoption Massachusetts' } },
+      { type: 'web_search_tool_result', tool_use_id: 'srvtoolu_c', content: [{ type: 'web_search_result', url: 'https://example.org/nec', title: 'NEC adoption', page_age: null, encrypted_content: 'EncC' }] },
+      text('Massachusetts adopted it with amendments.', [{ type: 'web_search_result_location', url: 'https://example.org/nec', title: 'NEC adoption', cited_text: 'adopted with amendments', encrypted_index: 'Ec' }]),
+    ])), { status: 200, headers: { 'content-type': 'application/json' } });
+  };
+  let r;
+  try {
+    r = await call('POST', '/api/ask', {
+      scope: 'work',
+      question: 'And has Massachusetts adopted it yet?',
+      history: [{ role: 'user', text: 'What changed in the 2026 NEC for GFCI?' }, { role: 'assistant', text: 'It extends GFCI protection to more outlets.' }],
+    });
+  } finally {
+    globalThis.fetch = orig;
+  }
+  assert.equal(r.status, 200, r.text);
+  const a = r.data.answer;
+  assert.equal(a.live_ai, true);
+  assert.equal(a.records_shared, false, 'record consent is off: no record text sent');
+  assert.equal(a.web, 'used');
+  assert.deepEqual(a.web_sources, [{ url: 'https://example.org/nec', title: 'NEC adoption', cited_text: 'adopted with amendments' }]);
+  const sent = seen[0];
+  assert.equal(sent.messages.length, 3);
+  assert.equal(sent.messages[1].content, 'It extends GFCI protection to more outlets.');
+  assert.ok(sent.tools.some((t) => t.name === 'web_search'));
+  assert.ok(!JSON.stringify(sent).includes(WORK_CANARY), 'no record text left the app');
+});

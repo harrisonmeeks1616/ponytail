@@ -321,7 +321,7 @@ test('GET /api/connections/mcp: owner only, plain status, never secrets', async 
     configured: true, scopes: ['work'], allow_capture: false, grant: { mode: 'read', scopes: ['work'], allow_capture: false, set_by: 'default', updated_at: null },
     last_call_at: null, shortcut_configured: false, shortcut_scopes: ['work'],
   });
-  assert.deepEqual(Object.keys(features), ['ai', 'calendar', 'pm']);
+  assert.deepEqual(Object.keys(features), ['ai', 'calendar', 'pm', 'crossapp']);
   assert.ok(!r.text.includes('secretish'));
   await callTool({ env: owner.env, nowMs: NOW }, 'list_open_tasks', { scope: 'work' });
   assert.equal((await owner.http('GET', '/api/connections/mcp')).data.last_call_at, new Date(NOW).toISOString());
@@ -343,7 +343,7 @@ test('GET /api/connections/mcp: shortcut_configured is a boolean, never the audi
 test('GET /api/connections/mcp: features is true exactly for the status routes this build answers', async () => {
   const owner = setup({ identity: { kind: 'owner', email: 'x', emailMasked: 'x***' } });
   const { features } = (await owner.http('GET', '/api/connections/mcp')).data;
-  const paths = { ai: '/api/ai/status', calendar: '/api/calendar/connections?scope=work', pm: '/api/pm/sources?scope=work' };
+  const paths = { ai: '/api/ai/status', calendar: '/api/calendar/connections?scope=work', pm: '/api/pm/sources?scope=work', crossapp: '/api/connections/crossapp' };
   for (const [key, path] of Object.entries(paths)) {
     const status = (await owner.http('GET', path)).status;
     assert.equal(features[key], status !== 404, `${key}: feature ${features[key]}, route answered ${status}`);
