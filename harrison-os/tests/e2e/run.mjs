@@ -1536,8 +1536,10 @@ const scenarios = [
         await form2.getByRole('button', { name: 'Add reminder' }).click();
         await page.waitForSelector('#toast:not([hidden])', { timeout: 10000 });
         await waitFor(async () => !(await form2.getByRole('button', { name: 'Add reminder' }).isDisabled()), { what: 'old form enabled while the reload is held' });
+        const secondPost = page.waitForResponse((r) => r.request().method() === 'POST' && new URL(r.url()).pathname === '/api/reminders', { timeout: 10000 });
         await form2.getByRole('button', { name: 'Add reminder' }).click();
-        await waitFor(async () => posts >= 2, { what: 'second Add sent' });
+        await secondPost; // the server has answered the second Add before anything is counted
+        check(posts >= 2, `second Add sent: ${posts} POSTs`);
         releaseReload();
         await Promise.all(heldCalls); // every held reload has gone through before the route is removed
         await page.unroute('**/api/reminders?*');

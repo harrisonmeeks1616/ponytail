@@ -3,7 +3,7 @@
 // the two apart. Sample data only.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { writeDraftWhenReady, putCaptureOnce, queueFiles, mergeBack, sameCapture, captureTextOf, unstoredFiles, draftConsumedBy, settleWithin, settleStoredDraft, isSameDraft } from '../public/capture-core.js';
+import { writeDraftWhenReady, putCaptureOnce, queueFiles, mergeBack, sameCapture, captureTextOf, unstoredFiles, draftConsumedBy, settleWithin, settleStoredDraft, isSameDraft, draftSnapshot } from '../public/capture-core.js';
 import { createMemoryStores } from '../public/idb.js';
 
 const deferred = () => {
@@ -250,23 +250,30 @@ test('two tabs queue the same photo id for different captures at once: it is sto
   assert.equal(old.map.size, 1, 'old ordering: both claimed it, one binding is false');
 });
 
-test('after a Save, only the draft that Save consumed is removed: never another tab\'s words under the same id', async () => {
+test('after a Save, only the exact draft version this tab owns is removed: never a newer one under the same id', async () => {
   const saved = { id: 'cap-draft-0020', text: 'A words', scope: 'work' };
-  const own = { id: 'cap-draft-0020', text: 'A wor', scope: 'work', files: [], updated_at: '2026-11-01T01:00:00.000Z' };
-  assert.equal(draftConsumedBy(own, saved, { updated_at: own.updated_at, text: own.text }), true, "this tab's own draft, a few keystrokes behind");
-  assert.equal(draftConsumedBy({ ...own, text: 'A words' }, saved, null), true, 'the saved words');
-  const otherTab = { id: 'cap-draft-0020', text: 'B words', scope: 'work', files: [], updated_at: '2026-11-01T00:59:00.000Z' };
-  assert.equal(draftConsumedBy(otherTab, saved, { updated_at: own.updated_at, text: own.text }), false, 'another tab wrote different words earlier');
-  assert.equal(draftConsumedBy(otherTab, saved, null), false);
-  assert.equal(draftConsumedBy({ ...own, id: 'cap-draft-other' }, saved, { updated_at: own.updated_at, text: own.text }), false, 'a newer draft under a new id');
+  const own = { id: 'cap-draft-0020', text: 'A wor', scope: 'work', files: [file('att-a-photo-01')], updated_at: '2026-11-01T01:00:00.000Z' };
+  const mine = draftSnapshot(own);
+  assert.ok(Object.isFrozen(mine) && Object.isFrozen(mine.fileIds), 'the ownership snapshot is immutable');
+  assert.equal(draftConsumedBy(own, saved, mine), true, "this tab's own draft (a few keystrokes behind the saved words)");
+  // Newer drafts under the same id: same words but an added photo, other words, other scope. All stay.
+  const newer = (over) => ({ ...own, updated_at: '2026-11-01T01:00:09.000Z', ...over });
+  assert.equal(draftConsumedBy(newer({ files: [file('att-a-photo-01'), file('att_new_photo')] }), saved, mine), false, 'same id and words, newer version with an added photo');
+  assert.equal(draftConsumedBy({ ...own, files: [file('att-a-photo-01'), file('att_new_photo')] }, saved, mine), false, 'same version stamp but different photos');
+  assert.equal(draftConsumedBy(newer({ text: 'A words, edited in tab B' }), saved, mine), false, 'changed words');
+  assert.equal(draftConsumedBy({ ...own, scope: 'personal' }, saved, mine), false, 'changed scope');
+  assert.equal(draftConsumedBy({ ...own, text: 'A words' }, saved, mine), false, 'the saved words alone are not ownership');
+  assert.equal(draftConsumedBy(own, saved, null), false, 'a tab that owns no draft removes none');
+  assert.equal(draftConsumedBy({ ...own, id: 'cap-draft-other' }, saved, mine), false, 'a newer draft under a new id');
 
-  // delIf is one step in the store: the predicate sees what is stored at that moment.
+  // delIf applies the predicate to what is stored at that moment, in one step.
   const st = createMemoryStores();
-  await st.drafts.put('capture', otherTab);
-  assert.equal(await st.drafts.delIf('capture', (d) => draftConsumedBy(d, saved, { updated_at: own.updated_at, text: own.text })), false);
-  assert.equal((await st.drafts.get('capture')).text, 'B words');
+  const tabB = newer({ files: [file('att-a-photo-01'), file('att_new_photo')] });
+  await st.drafts.put('capture', tabB);
+  assert.equal(await st.drafts.delIf('capture', (d) => draftConsumedBy(d, saved, mine)), false);
+  assert.deepEqual((await st.drafts.get('capture')).files.map((f) => f.id), ['att-a-photo-01', 'att_new_photo']);
   await st.drafts.put('capture', own);
-  assert.equal(await st.drafts.delIf('capture', (d) => draftConsumedBy(d, saved, { updated_at: own.updated_at, text: own.text })), true);
+  assert.equal(await st.drafts.delIf('capture', (d) => draftConsumedBy(d, saved, mine)), true);
   assert.equal(await st.drafts.get('capture'), undefined);
 });
 
@@ -292,19 +299,24 @@ test('stale-draft deletion, sibling paths: startup discard and an empty box neve
 
   // (2) Empty box in tab A while tab B's different draft is stored: kept. A's own last draft: removed.
   const e = draftsStore();
-  const mine = { id: 'cap-a-000031', text: 'A words', updated_at: '2026-11-01T02:01:00.000Z' };
+  const mineRecord = { id: 'cap-a-000031', text: 'A words', scope: 'work', files: [], updated_at: '2026-11-01T02:01:00.000Z' };
+  const mine = draftSnapshot(mineRecord);
   e.map.set('capture', { id: 'cap-b-000031', text: 'B words', scope: 'work', files: [], updated_at: '2026-11-01T02:01:30.000Z' });
   const emptyWrite = (owned) => writeDraftWhenReady({ storesReady: Promise.resolve(e), restored: Promise.resolve(), gen: 0, currentGen: () => 0, key: 'capture', read: () => ({ id: 'cap-a-000031', text: '  ', scope: 'work', files: [] }), owned: () => owned });
   assert.equal(await emptyWrite(mine), 'kept');
   assert.equal(e.map.get('capture').text, 'B words', "an empty box in A does not delete B's draft");
   assert.equal(await emptyWrite(null), 'kept', 'a tab that owns no draft deletes nothing');
-  e.map.set('capture', { ...mine, scope: 'work', files: [] });
+  e.map.set('capture', { ...mineRecord });
   assert.equal(await emptyWrite(mine), 'deleted', "clearing the box removes this tab's own draft");
   assert.equal(e.map.has('capture'), false);
   // B wrote after A's last write under the same id: still B's.
   e.map.set('capture', { id: 'cap-a-000031', text: 'B typed under the shared id', scope: 'work', files: [], updated_at: '2026-11-01T02:02:00.000Z' });
   assert.equal(await emptyWrite(mine), 'kept');
   assert.equal(isSameDraft(e.map.get('capture'), mine), false);
+  // Same id, same words, same scope, a newer version with a photo added: still not A's.
+  e.map.set('capture', { ...mineRecord, files: [file('att_new_photo')], updated_at: '2026-11-01T02:03:00.000Z' });
+  assert.equal(await emptyWrite(mine), 'kept');
+  assert.equal(e.map.get('capture').files.length, 1);
 
 });
 
