@@ -12,7 +12,7 @@ import {
   prefKeyFrom, prefLabel, restoreWords, taskMatches, shareText,
 } from './outbox-core.js';
 import { openStores } from './idb.js';
-import { writeDraftWhenReady, putCaptureOnce, queueFiles, mergeBack, mergeFiles, sameCapture, captureTextOf, unstoredFiles, draftConsumedBy, settleWithin } from './capture-core.js';
+import { writeDraftWhenReady, putCaptureOnce, queueFiles, mergeBack, mergeFiles, captureTextOf, draftConsumedBy, settleWithin, settleStoredDraft, sameCapture } from './capture-core.js';
 import { VIEW_MODULES } from './views/index.js';
 
 const CLIENT_BUILD = 'ui-3';
@@ -3467,13 +3467,15 @@ async function writeDraft({ quiet = false } = {}) {
       onWritten: (rec) => {
         state.lastDraft = { id: rec.id, text: rec.text, updated_at: rec.updated_at };
       },
+      owned: () => state.lastDraft,
       read: () => {
         if (!state.draftId) state.draftId = newClientId('capture');
         return { id: state.draftId, text: $('capture-text').value, scope: currentCaptureScope(), files: state.sheetFiles.slice() };
       },
     }), STORAGE_TIMEOUT_MS);
+    if (r === 'deleted') state.lastDraft = null;
     if (quiet) return;
-    if (r === 'deleted') setText('draft-status', '');
+    if (r === 'deleted' || r === 'kept') setText('draft-status', '');
     else if (r === 'written') setText('draft-status', `Draft kept on this phone at ${hhmm(Date.now())}.`);
   } catch {
     setText('draft-status', 'Could not keep the draft on this phone.');
@@ -3493,37 +3495,35 @@ async function restoreDraft() {
     if (!state.draftId) state.draftId = newClientId('capture');
     return;
   }
-  // If this draft's id is already in the outbox, it was saved; the draft is stale.
-  let existing;
-  try {
-    existing = draft.id ? await stores.outbox.get(draft.id) : undefined;
-  } catch {
-    existing = undefined;
-  }
   // A draft whose id is in the outbox was saved, but it is discarded only when nothing in it would be lost:
-  // the saved capture has these same words and every photo of the draft reached photo storage. Different words
+  // the saved capture has these same words, every photo of the draft reached photo storage, and the stored
+  // draft is still the one read here (capture-core settleStoredDraft, compare-and-delete). Different words
   // (another tab saved this id) keep the whole draft; photos that never got stored come back on their own.
   // Either way the draft is re-kept under a fresh id, so a later Save can remove it.
+  let settled;
+  try {
+    settled = await settleStoredDraft(stores, DRAFT_KEY, draft, draftFiles);
+  } catch {
+    settled = { action: 'restore', missing: [], existing: null };
+  }
+  if (settled.action === 'discarded' || settled.action === 'kept') {
+    // Discarded: saved with nothing missing. Kept: another tab replaced the draft meanwhile; that one is theirs.
+    if (!state.draftId) state.draftId = newClientId('capture');
+    logEvent({ kind: settled.action === 'discarded' ? 'draft_discarded_already_saved' : 'draft_changed_during_restore', id: draft.id });
+    return;
+  }
   let draftIdNext = draft.id;
   let text = draft.text;
   let files = draftFiles;
   let status = `Draft restored from this phone (kept ${formatAt(draft.updated_at)}).`;
-  if (existing) {
-    if (sameCapture(existing, captureTextOf(draft.text, draftFiles), draft.scope)) {
-      const missing = await unstoredFiles(stores.attachments, draftFiles).catch(() => draftFiles);
-      if (!missing.length) {
-        await stores.drafts.del(DRAFT_KEY).catch(() => {});
-        if (!state.draftId) state.draftId = newClientId('capture');
-        logEvent({ kind: 'draft_discarded_already_saved', id: draft.id });
-        return;
-      }
-      text = '';
-      files = missing;
-      status = `Your last capture was saved, but ${plural(missing.length, 'photo or file was', 'photos or files were')} not kept on this phone. ${missing.length === 1 ? 'It is' : 'They are'} back in the box: save again.`;
-      logEvent({ kind: 'draft_files_not_stored', id: draft.id, count: missing.length });
-    } else {
-      logEvent({ kind: 'draft_kept_saved_elsewhere', id: draft.id });
-    }
+  if (settled.action === 'missing') {
+    text = '';
+    files = settled.missing;
+    status = `Your last capture was saved, but ${plural(settled.missing.length, 'photo or file was', 'photos or files were')} not kept on this phone. ${settled.missing.length === 1 ? 'It is' : 'They are'} back in the box: save again.`;
+    logEvent({ kind: 'draft_files_not_stored', id: draft.id, count: settled.missing.length });
+    draftIdNext = newClientId('capture');
+  } else if (settled.existing) {
+    logEvent({ kind: 'draft_kept_saved_elsewhere', id: draft.id });
     draftIdNext = newClientId('capture');
   }
   const box = $('capture-text');
@@ -3534,8 +3534,10 @@ async function restoreDraft() {
   renderSheetFiles();
   if (isScope(draft.scope)) setCaptureScope(draft.scope);
   state.draftId = typeof draftIdNext === 'string' && CLIENT_ID_RE.test(draftIdNext) ? draftIdNext : newClientId('capture');
-  // Re-keep it under the id it now has (writeDraft runs once this restore has finished).
+  // Re-keep it under the id it now has (writeDraft runs once this restore has finished). Kept as it was, the
+  // stored draft is this tab's own from now on: clearing the box may remove exactly that one.
   if (draftIdNext !== draft.id) writeDraft({ quiet: true });
+  else state.lastDraft = { id: draft.id, text: draft.text, updated_at: draft.updated_at };
   setText('draft-status', status);
   logEvent({ kind: 'draft_restored', id: state.draftId });
 }

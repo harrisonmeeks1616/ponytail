@@ -3,7 +3,7 @@
 // the two apart. Sample data only.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { writeDraftWhenReady, putCaptureOnce, queueFiles, mergeBack, sameCapture, captureTextOf, unstoredFiles, draftConsumedBy, settleWithin } from '../public/capture-core.js';
+import { writeDraftWhenReady, putCaptureOnce, queueFiles, mergeBack, sameCapture, captureTextOf, unstoredFiles, draftConsumedBy, settleWithin, settleStoredDraft, isSameDraft } from '../public/capture-core.js';
 import { createMemoryStores } from '../public/idb.js';
 
 const deferred = () => {
@@ -59,7 +59,19 @@ function racing(parties) {
 }
 function draftsStore() {
   const m = new Map();
-  return { map: m, drafts: { async get(k) { return m.get(k); }, async put(k, v) { m.set(k, structuredClone(v)); }, async del(k) { m.delete(k); } } };
+  return {
+    map: m,
+    drafts: {
+      async get(k) { return m.get(k); },
+      async put(k, v) { m.set(k, structuredClone(v)); },
+      async del(k) { m.delete(k); },
+      async delIf(k, shouldDelete) {
+        if (!m.has(k) || !shouldDelete(structuredClone(m.get(k)))) return false;
+        m.delete(k);
+        return true;
+      },
+    },
+  };
 }
 const capture = (id, text, scope = 'work') => ({ id, kind: 'capture', body: { id, text, scope } });
 const file = (id, name = `${id}.jpg`) => ({ id, name, mime: 'image/jpeg', data_b64: 'AAEC' });
@@ -256,6 +268,44 @@ test('after a Save, only the draft that Save consumed is removed: never another 
   await st.drafts.put('capture', own);
   assert.equal(await st.drafts.delIf('capture', (d) => draftConsumedBy(d, saved, { updated_at: own.updated_at, text: own.text })), true);
   assert.equal(await st.drafts.get('capture'), undefined);
+});
+
+test('stale-draft deletion, sibling paths: startup discard and an empty box never delete another tab\'s newer draft', async () => {
+  // (1) Startup: tab A reads draft X (already saved, nothing missing); while its outbox lookup is pending,
+  // tab B writes new words under the same key. A must not delete B's draft.
+  const d = draftsStore();
+  const observed = { id: 'cap-saved-0031', text: 'Saved words', scope: 'work', files: [], updated_at: '2026-11-01T02:00:00.000Z' };
+  d.map.set('capture', observed);
+  const lookup = deferred();
+  const outbox = { async get() { await lookup.promise; return capture('cap-saved-0031', 'Saved words'); } };
+  const stores = { drafts: d.drafts, outbox, attachments: keyed() };
+  const settling = settleStoredDraft(stores, 'capture', structuredClone(observed), []);
+  d.map.set('capture', { id: 'cap-saved-0031', text: 'Tab B newer words', scope: 'work', files: [], updated_at: '2026-11-01T02:00:05.000Z' });
+  lookup.resolve();
+  const r = await settling;
+  assert.equal(r.action, 'kept');
+  assert.equal(d.map.get('capture').text, 'Tab B newer words', "tab B's draft survives A's startup discard");
+  // Unchanged meanwhile: the saved draft is discarded as before.
+  d.map.set('capture', observed);
+  assert.equal((await settleStoredDraft({ ...stores, outbox: { async get() { return capture('cap-saved-0031', 'Saved words'); } } }, 'capture', structuredClone(observed), [])).action, 'discarded');
+  assert.equal(d.map.has('capture'), false);
+
+  // (2) Empty box in tab A while tab B's different draft is stored: kept. A's own last draft: removed.
+  const e = draftsStore();
+  const mine = { id: 'cap-a-000031', text: 'A words', updated_at: '2026-11-01T02:01:00.000Z' };
+  e.map.set('capture', { id: 'cap-b-000031', text: 'B words', scope: 'work', files: [], updated_at: '2026-11-01T02:01:30.000Z' });
+  const emptyWrite = (owned) => writeDraftWhenReady({ storesReady: Promise.resolve(e), restored: Promise.resolve(), gen: 0, currentGen: () => 0, key: 'capture', read: () => ({ id: 'cap-a-000031', text: '  ', scope: 'work', files: [] }), owned: () => owned });
+  assert.equal(await emptyWrite(mine), 'kept');
+  assert.equal(e.map.get('capture').text, 'B words', "an empty box in A does not delete B's draft");
+  assert.equal(await emptyWrite(null), 'kept', 'a tab that owns no draft deletes nothing');
+  e.map.set('capture', { ...mine, scope: 'work', files: [] });
+  assert.equal(await emptyWrite(mine), 'deleted', "clearing the box removes this tab's own draft");
+  assert.equal(e.map.has('capture'), false);
+  // B wrote after A's last write under the same id: still B's.
+  e.map.set('capture', { id: 'cap-a-000031', text: 'B typed under the shared id', scope: 'work', files: [], updated_at: '2026-11-01T02:02:00.000Z' });
+  assert.equal(await emptyWrite(mine), 'kept');
+  assert.equal(isSameDraft(e.map.get('capture'), mine), false);
+
 });
 
 test('a saved draft whose second photo never reached storage is not discarded: that photo is found missing', async () => {
