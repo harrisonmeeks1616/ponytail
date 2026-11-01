@@ -4407,6 +4407,66 @@ function onEnableClick() {
     });
 }
 
+// Test alert (Memory > Alerts): sends one push right away and then shows each stage only as the server records
+// it: accepted by the push service, the phone reported it arrived (service worker beacon), opened (tap). Tapping
+// the alert can reload the app, so the delivery id is remembered for ten minutes and the check resumes.
+const TEST_ALERT_KEY = 'hos-test-alert';
+const TEST_ALERT_WATCH_MS = 10 * 60 * 1000;
+let testAlertTimer = null;
+
+function testAlertWords(d) {
+  if (!d) return '';
+  if (d.acknowledged_at) return `You opened the test alert (${formatAt(d.acknowledged_at)}). Alerts work on this phone.`;
+  if (d.received_at) return `Your phone reported the test alert arrived (${formatAt(d.received_at)}). Tap it to finish the check.`;
+  if (d.state === 'sent') return 'The push service accepted the test alert. That is not proof it showed: watch for it on this phone, then tap it.';
+  if (d.state === 'no_route') return 'Not sent: the server has no alert route for this phone. Tap Turn on alerts (or Register this phone again) first.';
+  if (d.state === 'failed') return `Sending failed${d.error ? ` (${d.error})` : ''}. Tap Register this phone again, then try once more.`;
+  return 'Sending the test alert.';
+}
+
+async function onTestAlertClick(e) {
+  await guarded(e.currentTarget, async () => {
+    setText('notify-test-result', 'Sending a test alert.');
+    const r = await api('/api/push/test', { method: 'POST', body: { time_zone: deviceTimeZone() } });
+    logEvent({ kind: 'push_test', status: r.status, ok: r.ok, state: r.ok ? r.data.state : null });
+    if (!r.ok) {
+      setText('notify-test-result', failWords(r, 'send a test alert'));
+      return;
+    }
+    setText('notify-test-result', testAlertWords({ state: r.data.state, error: r.data.error }));
+    if (r.data.state === 'sent' && CLIENT_ID_RE.test(String(r.data.delivery_id || ''))) {
+      writeLocal(TEST_ALERT_KEY, JSON.stringify({ id: r.data.delivery_id, at: Date.now() }));
+      watchTestAlert(r.data.delivery_id, Date.now());
+    }
+  });
+}
+
+function watchTestAlert(id, startedAt) {
+  clearTimeout(testAlertTimer);
+  const tick = async () => {
+    const r = await api(`/api/deliveries/${enc(id)}`);
+    if (r.ok && r.data && r.data.delivery) {
+      setText('notify-test-result', testAlertWords(r.data.delivery));
+      if (r.data.delivery.acknowledged_at) {
+        writeLocal(TEST_ALERT_KEY, '');
+        return;
+      }
+    }
+    if (Date.now() - startedAt < TEST_ALERT_WATCH_MS) testAlertTimer = setTimeout(tick, 3000);
+    else setText('notify-test-result', 'No answer from this phone within ten minutes. Check Settings, Notifications, Harrison OS, then try again.');
+  };
+  testAlertTimer = setTimeout(tick, 1500);
+}
+
+function resumeTestAlert() {
+  try {
+    const t = JSON.parse(readLocal(TEST_ALERT_KEY) || 'null');
+    if (t && CLIENT_ID_RE.test(String(t.id || '')) && Date.now() - Number(t.at) < TEST_ALERT_WATCH_MS) watchTestAlert(t.id, Number(t.at));
+  } catch {
+    /* nothing to resume */
+  }
+}
+
 // iOS can silently invalidate subscriptions, so re-subscribe on open when allowed.
 async function resubscribeSilently(force) {
   if (!pushSupported() || Notification.permission !== 'granted') return;
@@ -4435,10 +4495,13 @@ function renderNotify() {
   if (iosBrowser) {
     setText('notify-permission', 'Alerts need the Home Screen app.');
     enable.hidden = true;
+    $('notify-test').hidden = true;
   } else if (!pushSupported()) {
     setText('notify-permission', 'This browser cannot receive reminder alerts.');
     enable.hidden = true;
+    $('notify-test').hidden = true;
   } else {
+    $('notify-test').hidden = false;
     const p = Notification.permission;
     setText(
       'notify-permission',
@@ -4512,6 +4575,7 @@ function bindHandlers() {
     if (e.target instanceof Element && e.target.closest('button[data-export]')) onExportClick(e);
   });
   $('notify-enable').addEventListener('click', onEnableClick);
+  $('notify-test').addEventListener('click', onTestAlertClick);
 
   window.addEventListener('online', () => {
     renderOffline();
@@ -4666,6 +4730,7 @@ async function init() {
   renderOutbox();
   renderAuthBanner();
   handleAckParam();
+  resumeTestAlert();
   handleShareParam();
   try {
     if (navigator.storage && navigator.storage.persisted && !(await navigator.storage.persisted()) && navigator.storage.persist) {

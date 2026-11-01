@@ -1066,6 +1066,14 @@ async function postPushTest(ctx) {
 
 // ---------------------------------------------------------------- delivery beacon and ack
 
+// One delivery's states and times (no reminder text), for the phone check in Memory > Alerts: shows whether
+// the push service accepted it, whether the phone reported it arrived, and whether it was opened.
+async function getDeliveryRoute(ctx, id) {
+  const row = await db.getDelivery(ctx.env.DB, id);
+  if (!row) throw new HttpError(404, 'not_found', 'No such delivery');
+  return json(200, { delivery: serialiseDelivery(row, ctx.nowMs) });
+}
+
 async function postReceived(ctx, id) {
   const { env, nowMs } = ctx;
   const body = await readJsonLenient(ctx.request);
@@ -1217,6 +1225,7 @@ export const ROUTES = [
   ['POST', r('/api/push/subscriptions'), postSubscription],
   ['DELETE', r('/api/push/subscriptions'), deleteSubscription],
   ['POST', r('/api/push/test'), postPushTest],
+  ['GET', r(`/api/deliveries/(${ID})`), getDeliveryRoute],
   ['POST', r(`/api/deliveries/(${ID})/received`), postReceived],
   ['POST', r(`/api/deliveries/(${ID})/ack`), postAck],
   ['GET', r('/api/evidence'), getEvidence],
