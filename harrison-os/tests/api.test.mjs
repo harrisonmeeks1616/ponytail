@@ -494,8 +494,8 @@ test('shortcut identity: allowed only on POST /api/shortcut/capture, without the
     assert.equal(r.status, 403, `${m} ${p}`);
     assert.equal(r.data.error.code, 'forbidden');
   }
-  // The shortcut capture landed in Personal (the spike's default) for the owner to review.
-  const ownerView = await db.getInbox(svc.DB, 'personal');
+  // With no scope sent and SHORTCUT_SCOPES unset (Work only), the capture lands in Work for the owner to review.
+  const ownerView = await db.getInbox(svc.DB, 'work');
   assert.equal(ownerView.length, 1);
   assert.equal(ownerView[0].capture.source, 'shortcut');
 
@@ -737,4 +737,31 @@ test('session: app links are https only, never credentials or other schemes', as
     const r = await call('GET', '/api/session');
     assert.deepEqual(r.data.apps, want);
   }
+});
+
+
+test('shortcut scopes are enforced by the server (SHORTCUT_SCOPES), not by the Shortcut: other scopes 403, nothing stored', async () => {
+  const service = { kind: 'service', audience: 'shortcut', commonName: 'sample', expMs: NOW + 3600_000 };
+  const post = (svc, body) => svc.call('POST', '/api/shortcut/capture', { csrf: false, body });
+  const count = async (svc) => (await svc.DB.prepare('SELECT COUNT(*) AS n FROM captures').first('n'));
+  // Unset: Work only.
+  const a = setup({ authenticateImpl: async () => ({ ...service }) });
+  const denied = await post(a, { text: 'Sample personal words', scope: 'personal', client_ref: 'ref-scope-001' });
+  assert.equal(denied.status, 403);
+  assert.equal(denied.data.error.code, 'scope_not_allowed');
+  assert.equal(await count(a), 0, 'nothing stored for a refused scope');
+  assert.equal((await post(a, { text: 'Sample work words', scope: 'work', client_ref: 'ref-scope-002' })).status, 201);
+  assert.equal((await post(a, { text: 'Sample no scope', client_ref: 'ref-scope-003' })).status, 201);
+  assert.equal((await a.DB.prepare("SELECT scope FROM captures WHERE id = 'sc_ref-scope-003'").first('scope')), 'work');
+  // Explicitly both.
+  const b = setup({ authenticateImpl: async () => ({ ...service }), env: { SHORTCUT_SCOPES: 'work, personal' } });
+  assert.equal((await post(b, { text: 'Sample personal words', scope: 'personal', client_ref: 'ref-scope-004' })).status, 201);
+  // A typo grants nothing.
+  const c = setup({ authenticateImpl: async () => ({ ...service }), env: { SHORTCUT_SCOPES: 'wrk' } });
+  assert.equal((await post(c, { text: 'Sample words', scope: 'work', client_ref: 'ref-scope-005' })).status, 403);
+  assert.equal((await post(c, { text: 'Sample words', client_ref: 'ref-scope-006' })).status, 403);
+  assert.equal(await count(c), 0);
+  // The owner status route reports the allowlist (never the token or audience).
+  const owner = setup({ env: { SHORTCUT_SCOPES: 'work' } });
+  assert.deepEqual((await owner.call('GET', '/api/connections/mcp')).data.shortcut_scopes, ['work']);
 });

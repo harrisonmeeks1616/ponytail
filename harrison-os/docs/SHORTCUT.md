@@ -10,8 +10,9 @@ An extra way to capture from the iPhone (Share Sheet, Back Tap, Siri, Action but
 | A Cloudflare Access application for the path `/api/shortcut/capture` with a **Service Auth** policy | Cloudflare Zero Trust dashboard (owner does this) | Not set up from here |
 | A service token (Client ID and Client Secret) allowed by that policy | Zero Trust, Access, Service Auth | Not created. Never commit it. |
 | That application's AUD tag in `vars.ACCESS_AUD_SHORTCUT` | wrangler.jsonc / dashboard | Blank example |
+| The scopes this credential may write, `vars.SHORTCUT_SCOPES` | wrangler.jsonc / private config | `work` (Work only). Enforced by the server: a scope outside it gets 403 and nothing is stored |
 
-The service token can only reach `POST /api/shortcut/capture`. It cannot read anything, and a person's sign-in does not work on that application (src/auth.js `authorizeRoute`).
+The service token can only reach `POST /api/shortcut/capture`. It cannot read anything, and a person's sign-in does not work on that application (src/auth.js `authorizeRoute`). Which scopes it may write is decided by the server (`SHORTCUT_SCOPES`, Work only by default), not by the Shortcut: a Shortcut that sends another scope is refused. Fixing the scope inside the Shortcut is convenience only and grants or limits nothing.
 
 ## It needs a connection
 
@@ -33,7 +34,7 @@ There is **no offline queue** in a Shortcut. If the phone has no connection, or 
      - `Content-Type`: `application/json`
    - Request Body: JSON
      - `text` (Text): `Words`
-     - `scope` (Text): `personal` or `work` (optional; the server defaults to `personal`)
+     - `scope` (Text): `work` (optional; omitted means Work when the server allows it; `personal` only works if `SHORTCUT_SCOPES` includes it)
      - `client_ref` (Text): `Ref`
      - `time_zone` (Text): `America/New_York` (optional; used for dates like "Friday")
 5. **Get Dictionary Value** `message` from Contents of URL. **If** it has any value: **Show Notification** with it. **Otherwise**: **Show Alert** "Not saved. Open Harrison OS and capture it there." and **Copy to Clipboard** `Words` so nothing is lost.
@@ -48,6 +49,7 @@ Keep the Client Secret only inside the Shortcut on your own phone. If the phone 
 | 200 `{ ok: true, duplicate: true }` | The same `client_ref` (or, without one, the same text in the same UTC minute) was already saved. Nothing new. |
 | 200 or 410 with `deleted: true` / `capture_deleted` | That capture was deleted on purpose earlier. Nothing is saved. |
 | 400 | The text is empty or longer than 10,000 characters, or a field is malformed. |
+| 403 `scope_not_allowed` | The server does not let this credential write that scope (`SHORTCUT_SCOPES`). Not saved. |
 | 401 / 403, or an HTML login page | Access did not accept the token (missing, wrong, expired, or the Access application is not set up). Not saved. |
 | No answer / timeout | No connection. Not saved. |
 
@@ -57,4 +59,4 @@ Without a `client_ref` the server dedupes by text and minute, which is lossy: th
 
 - Photos and files: the Shortcut endpoint takes text only. Add photos from the app's capture sheet.
 - Reading anything back (Today, search): the service token is capture-only by design.
-- Evidence: this Shortcut has not been run against a deployed app from this repository. Record a real run in ACCEPTANCE.md before calling it working.
+- Evidence: this Shortcut has not been run against a deployed app from this repository. Check the credential first from a computer with `scripts/service-check.mjs shortcut` (it also checks that the server refuses scopes outside the expected list), then record a real run in ACCEPTANCE.md before calling it working.

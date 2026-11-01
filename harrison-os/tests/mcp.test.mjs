@@ -316,7 +316,7 @@ test('GET /api/connections/mcp: owner only, plain status, never secrets', async 
   const r = await owner.http('GET', '/api/connections/mcp');
   assert.equal(r.status, 200);
   const { features, ...rest } = r.data;
-  assert.deepEqual(rest, { configured: true, scopes: ['work'], allow_capture: false, last_call_at: null, shortcut_configured: false });
+  assert.deepEqual(rest, { configured: true, scopes: ['work'], allow_capture: false, last_call_at: null, shortcut_configured: false, shortcut_scopes: ['work'] });
   assert.deepEqual(Object.keys(features), ['ai', 'calendar', 'pm']);
   assert.ok(!r.text.includes('secretish'));
   await callTool({ env: owner.env, nowMs: NOW }, 'list_open_tasks', { scope: 'work' });

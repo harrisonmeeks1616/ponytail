@@ -41,7 +41,7 @@ HOS_URL=https://<app host> SHORTCUT_CLIENT_ID=<id> SHORTCUT_CLIENT_SECRET=<secre
 HOS_URL=https://<app host> MCP_CLIENT_ID=<id> MCP_CLIENT_SECRET=<secret> node scripts/service-check.mjs mcp
 ```
 
-The Shortcut check writes nothing unless `--write` is added (then one capture labelled "Service check ... safe to delete" in Personal, plus a retry that must come back as a duplicate). The MCP check prints tool names and sizes only. Neither prints a secret. Run them from a shell whose history you control.
+The Shortcut check writes nothing unless `--write` is added (then one capture labelled "Service check ... safe to delete" in Work, plus a retry that must come back as a duplicate), and it checks the server refuses every scope outside `--expect-scopes` (default `work`) with 403. If the server wrongly accepts one, that probe saves one labelled capture and the check fails. The MCP check prints tool names and sizes only. Neither prints a secret. Run them from a shell whose history you control.
 
 ## Not covered here
 

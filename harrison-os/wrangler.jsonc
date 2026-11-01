@@ -43,6 +43,9 @@
 		"ACCESS_AUD": "",
 		// AUD tag of the separate /api/shortcut/* application (Service Auth). Empty = Shortcut capture disabled.
 		"ACCESS_AUD_SHORTCUT": "",
+		// Scopes the Shortcut credential may write (comma list of work, personal), enforced by the server; a
+		// scope outside it gets 403 and nothing is stored. Unset or blank also means Work only.
+		"SHORTCUT_SCOPES": "work",
 		"VAPID_PUBLIC_KEY": "",
 		// The Worker's own https:// origin (never an email address).
 		"VAPID_SUBJECT": "",

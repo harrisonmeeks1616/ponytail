@@ -14,9 +14,9 @@ import { classify } from '../scripts/service-check.mjs';
 const run = promisify(execFile);
 const SCRIPT = fileURLToPath(new URL('../scripts/service-check.mjs', import.meta.url));
 
-async function withServer(fn) {
+async function withServer(fn, extraEnv = {}) {
   const DB = createTestDb();
-  const env = { DB, BUILD_ID: 'test', DEV_ALLOW_UNAUTH: '0', SPIKE_TEST_HOOKS: '0', ALLOW_TEST_PUSH_ENDPOINT: '0', ACCESS_TEAM_DOMAIN: 'https://example.cloudflareaccess.com', ACCESS_AUD: 'aud-owner', ACCESS_AUD_SHORTCUT: 'aud-shortcut', ACCESS_AUD_MCP: 'aud-mcp', MCP_SCOPES: 'work', VAPID_PUBLIC_KEY: '', VAPID_SUBJECT: '' };
+  const env = { DB, BUILD_ID: 'test', DEV_ALLOW_UNAUTH: '0', SPIKE_TEST_HOOKS: '0', ALLOW_TEST_PUSH_ENDPOINT: '0', ACCESS_TEAM_DOMAIN: 'https://example.cloudflareaccess.com', ACCESS_AUD: 'aud-owner', ACCESS_AUD_SHORTCUT: 'aud-shortcut', ACCESS_AUD_MCP: 'aud-mcp', MCP_SCOPES: 'work', VAPID_PUBLIC_KEY: '', VAPID_SUBJECT: '', ...extraEnv };
   const ids = { 'sc-id': 'shortcut', 'mcp-id': 'mcp' };
   const worker = createWorker({ authenticateImpl: async (req) => ({ kind: 'service', audience: ids[req.headers.get('CF-Access-Client-Id')], commonName: 'sample', expMs: Date.now() + 60_000 }) });
   const server = createServer(async (req, res) => {
@@ -46,6 +46,7 @@ test('shortcut: default writes nothing; --write saves one capture and the retry 
     assert.equal(ok.code, 0, ok.out);
     assert.match(ok.out, /PASS {2}Shortcut token reaches the Worker/);
     assert.match(ok.out, /PASS {2}Shortcut token is refused on an owner route/);
+    assert.match(ok.out, /PASS {2}the server refuses personal for this credential \(403 scope_not_allowed, nothing saved\)/);
     assert.equal((await DB.prepare('SELECT COUNT(*) AS n FROM captures').first('n')), 0, 'the default check saved nothing');
     const w = await go(['shortcut', '--write'], { HOS_URL: url, SHORTCUT_CLIENT_ID: 'sc-id', SHORTCUT_CLIENT_SECRET: 'right-secret' });
     assert.equal(w.code, 0, w.out);
@@ -72,6 +73,18 @@ test('mcp: initialize, tools/list and one read pass; the token is refused on an 
 test('classify: redirects, HTML and 401/403 are never taken for success', () => {
   assert.equal(classify(302, 'text/html', '').ok, false);
   assert.equal(classify(200, 'text/html; charset=utf-8', '<html>').ok, false);
-  assert.equal(classify(403, 'application/json', '{}').ok, false);
+  assert.equal(classify(403, 'text/plain', 'Forbidden').ok, false, 'a non-JSON 403 is Access refusing');
+  assert.deepEqual([classify(403, 'application/json', '{"error":{"code":"scope_not_allowed"}}').status, classify(403, 'application/json', '{}').ok], [403, true], 'a JSON 403 is the Worker answering; the caller judges it');
   assert.deepEqual(classify(400, 'application/json', '{"error":{}}').status, 400);
+});
+
+test('shortcut scope boundary: a credential the server lets write Personal fails the default Work-only expectation', async () => {
+  await withServer(async (url, DB) => {
+    const r = await go(['shortcut'], { HOS_URL: url, SHORTCUT_CLIENT_ID: 'sc-id', SHORTCUT_CLIENT_SECRET: 'right-secret' });
+    assert.equal(r.code, 1, r.out);
+    assert.match(r.out, /FAIL {2}the server accepted personal \(201\): the credential is broader than expected; that probe saved one capture/);
+    assert.equal(await DB.prepare("SELECT COUNT(*) AS n FROM captures WHERE scope = 'personal'").first('n'), 1);
+    const both = await go(['shortcut', '--expect-scopes=work,personal'], { HOS_URL: url, SHORTCUT_CLIENT_ID: 'sc-id', SHORTCUT_CLIENT_SECRET: 'right-secret' });
+    assert.equal(both.code, 0, both.out);
+  }, { SHORTCUT_SCOPES: 'work,personal' });
 });

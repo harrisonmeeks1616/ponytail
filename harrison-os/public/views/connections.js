@@ -83,10 +83,13 @@ function summarizeRows({ ai, calendar = [], pm = [], mcp, apps = null }, { forma
 
   const shortcutDetail = 'Sends a capture to your inbox when the phone is online. It does not keep captures while offline.';
   const shortcutSet = mcp.ok && mcp.data ? mcp.data.shortcut_configured : undefined;
+  // Which scopes the server lets the Shortcut credential write (SHORTCUT_SCOPES), not what the Shortcut sends.
+  const scWords = mcp.ok && mcp.data && Array.isArray(mcp.data.shortcut_scopes) ? mcp.data.shortcut_scopes.map(word) : null;
+  const scopeLine = scWords ? (scWords.length ? ` The server lets it save to ${scWords.join(' and ')} only.` : ' The server lets it save nowhere (check SHORTCUT_SCOPES).') : '';
   const shortcutNeed = 'A Cloudflare Access service token for the Shortcut. Steps are in docs/MCP.md, "iPhone Shortcut".';
   rows.push(
     shortcutSet === true
-      ? { name: 'iPhone Shortcut', status: 'Set up', tone: 'warn', detail: `${shortcutDetail} This shows the server is ready, not that the phone has sent anything.`, need: null }
+      ? { name: 'iPhone Shortcut', status: 'Set up', tone: 'warn', detail: `${shortcutDetail}${scopeLine} This shows the server is ready, not that the phone has sent anything.`, need: null }
       : shortcutSet === false
         ? { name: 'iPhone Shortcut', status: 'Not set up', tone: 'none', detail: shortcutDetail, need: shortcutNeed }
         : { name: 'iPhone Shortcut', status: 'Not checked here', tone: 'none', detail: shortcutDetail, need: shortcutNeed },

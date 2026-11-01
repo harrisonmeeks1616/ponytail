@@ -100,6 +100,17 @@ export function requireScope(value, { allowAll = false } = {}) {
   return value;
 }
 
+/**
+ * A credential's scope allowlist from a comma-list variable (MCP_SCOPES, SHORTCUT_SCOPES). Unset or blank
+ * means Work only (least privilege); a set value keeps only the known scopes, so a typo grants nothing.
+ */
+export function scopeAllowlist(raw) {
+  const v = typeof raw === 'string' ? raw.trim() : '';
+  if (!v) return ['work'];
+  const words = v.split(',').map((t) => t.trim());
+  return ['work', 'personal'].filter((s) => words.includes(s));
+}
+
 export function queryScope(ctx, opts) {
   return requireScope(ctx.url.searchParams.get('scope'), opts);
 }

@@ -2,7 +2,7 @@
 //
 // POST /api/mcp            JSON-RPC 2.0 over MCP Streamable HTTP, plain JSON responses only (no SSE, no sessions).
 // GET  /api/connections/mcp  owner-only status for the Connections card: { configured, scopes, allow_capture, last_call_at,
-//                            shortcut_configured, features: { ai, calendar, pm } }.
+//                            shortcut_configured, shortcut_scopes, features: { ai, calendar, pm } }.
 //
 // Authority lives here, in code, never in tool arguments or record text:
 // - Only the MCP service identity (Access service token through its own application, ACCESS_AUD_MCP) and the
@@ -23,7 +23,7 @@ import { buildToday } from './today.js';
 import { instantToZonedParts } from './time.js';
 import { interpret } from './interpret.js';
 import { normaliseTeamDomain, mcpAudience, MCP_PATH } from './auth.js';
-import { HttpError, json, apiError, iso, validTimeZone, MAX_TEXT } from './http.js';
+import { HttpError, json, apiError, iso, validTimeZone, MAX_TEXT, scopeAllowlist } from './http.js';
 
 export const PROTOCOL_VERSIONS = Object.freeze(['2025-11-25', '2025-06-18']); // current first, then the previous one
 export const MAX_MCP_BODY_BYTES = 64 * 1024;
@@ -41,9 +41,8 @@ export const UNTRUSTED_NOTICE =
 // ---------------------------------------------------------------- configuration
 
 export function mcpConfig(env = {}) {
-  const raw = typeof env.MCP_SCOPES === 'string' ? env.MCP_SCOPES.trim() : '';
   // Unset means work only; a set value keeps only the known scopes, so a typo grants nothing.
-  const scopes = raw ? SCOPES.filter((s) => raw.split(',').map((t) => t.trim()).includes(s)) : ['work'];
+  const scopes = scopeAllowlist(env.MCP_SCOPES);
   return {
     configured: !!normaliseTeamDomain(env.ACCESS_TEAM_DOMAIN) && !!mcpAudience(env),
     scopes,
@@ -397,6 +396,7 @@ async function getMcpStatus(ctx) {
     allow_capture: cfg.allowCapture,
     last_call_at: lastCallAt,
     shortcut_configured: shortcutConfigured(ctx.env),
+    shortcut_scopes: scopeAllowlist(ctx.env.SHORTCUT_SCOPES),
     features: connectionFeatures(),
   });
 }
