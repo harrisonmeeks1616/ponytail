@@ -7,9 +7,9 @@ const assert = require('node:assert/strict');
 const lib = import('../docs/schwab/shared.mjs');
 const P = s => Buffer.from('%PDF-' + s).toString('base64'); // a queued PDF, as fileAway makes it
 // Complete native Storage contract: the restore view validates key/length/removeItem too.
-const nativeStorage = store => ({ get length() { return store.size; },
+const nativeStorage = (store, setItem = (k, v) => store.set(String(k), String(v))) => ({ get length() { return store.size; },
   key: i => [...store.keys()][i] ?? null, getItem: k => store.get(String(k)) ?? null,
-  setItem: (k, v) => store.set(String(k), String(v)), removeItem: k => store.delete(String(k)), clear: () => store.clear() });
+  setItem, removeItem: k => store.delete(String(k)), clear: () => store.clear() });
 
 test('links round-trip a task sheet and reject junk', async () => {
   const { pack, unpack, codeFrom } = await lib;
@@ -302,7 +302,7 @@ test('Spanish labels, safe placeholders, and notes printed as typed', async () =
 test('upload queue: newer edits survive, refusals cannot block or flood, dead records clear', async () => {
   const { queue, flush, queued } = await lib;
   const store = new Map();
-  Object.defineProperty(globalThis, 'localStorage', { configurable: true, value: { getItem: k => store.get(k) ?? null, setItem: (k, v) => store.set(k, String(v)) } });
+  Object.defineProperty(globalThis, 'localStorage', { configurable: true, value: nativeStorage(store) });
   const realFetch = globalThis.fetch, sent = [];
   const s = { folderUrl: 'https://script.google.com/macros/s/x/exec', siteCode: 'sparky' };
   const answer = decide => async (url, o) => {
@@ -396,7 +396,7 @@ test('merges keep the send and result stamps an older link is checked against', 
 test('a restored file with the wrong shape cannot crash the apps', async () => {
   const { load, KEYS } = await lib;
   const store = new Map([[KEYS.tasks, '{"not":"a list"}'], [KEYS.settings, '{"me":"H"}']]);
-  Object.defineProperty(globalThis, 'localStorage', { configurable: true, value: { getItem: k => store.get(k) ?? null, setItem: (k, v) => store.set(k, String(v)) } });
+  Object.defineProperty(globalThis, 'localStorage', { configurable: true, value: nativeStorage(store) });
   try {
     assert.deepEqual(load(KEYS.tasks, []), []);
     assert.deepEqual(load(KEYS.settings, null), { me: 'H' });
@@ -413,7 +413,7 @@ test('a short crafted link cannot expand into a huge list or carry an impossible
 test('office passcode: stored hashed, a 12-hour sign-in, a wait after 5 wrong codes, links only fill a missing code', async () => {
   const { pinHash, tryPin, unlocked, signOut, waitLeft, adoptPin, PIN_FORMAT } = await lib;
   const store = new Map();
-  Object.defineProperty(globalThis, 'localStorage', { configurable: true, value: { getItem: k => store.get(k) ?? null, setItem: (k, v) => store.set(k, String(v)) } });
+  Object.defineProperty(globalThis, 'localStorage', { configurable: true, value: nativeStorage(store) });
   try {
     // A valid hex salt may contain the PIN digits by chance; that is not plaintext storage.
     const office = { pin: await pinHash('4821', '4821000000000000') };
@@ -543,7 +543,7 @@ test('people: settings from before ids migrate the same way on every phone, on r
   assert.deepEqual([a.crews, a.people], [b.crews, b.people], 'two phones migrating the same lists agree on the ids');
   assert.deepEqual(a.crews.map(c => [c.name, c.lead, c.members]), [['Crew A', 'Mike R', 'José L, Luis M'], ['Crew B', '', 'Ana P, Zoë Ñúñez']]);
   const store = new Map([[KEYS.settings, JSON.stringify(a)]]);
-  Object.defineProperty(globalThis, 'localStorage', { configurable: true, value: { getItem: k => store.get(k) ?? null, setItem: (k, v) => store.set(k, String(v)) } });
+  Object.defineProperty(globalThis, 'localStorage', { configurable: true, value: nativeStorage(store) });
   try {
     assert.deepEqual(loadSettings().people, a.people, 'a reload keeps the ids');
     const oldTab = JSON.parse(store.get(KEYS.settings));
@@ -563,7 +563,7 @@ test('people: settings from before ids migrate the same way on every phone, on r
 test('people: a tab still on the old version saving settings keeps every person id, even two people with one name', async () => {
   const { KEYS, normSettings, loadSettings, save, addPerson, people, backupData, restoreData } = await lib;
   const store = new Map();
-  Object.defineProperty(globalThis, 'localStorage', { configurable: true, value: { getItem: k => store.get(k) ?? null, setItem: (k, v) => store.set(k, String(v)) } });
+  Object.defineProperty(globalThis, 'localStorage', { configurable: true, value: nativeStorage(store) });
   try {
     const S = normSettings({ crews: [{ name: 'Crew A', members: 'Jose L, Ana P' }, { name: 'Crew B', members: '' }] });
     addPerson(S, 'Ray K', S.crews[0].id); // a random id, not one a migration from the names would make
@@ -717,7 +717,7 @@ test('every new field survives normalizing, a reload and a JSON round trip', asy
   const set = { hubUrl: 'https://script.google.com/macros/s/x/exec', hubKey: 'A'.repeat(32), hubRole: 'pm', hubCrew: 'Crew A', workerId: 'p1', worker: 'Mike R',
     crews: [{ id: 'c1', name: 'Crew A', lead: 'Mike R', members: '' }], people: [{ id: 'p1', name: 'Mike R', crewId: 'c1' }] };
   const store = new Map([[KEYS.settings, JSON.stringify(normSettings(set))]]);
-  Object.defineProperty(globalThis, 'localStorage', { configurable: true, value: { getItem: k => store.get(k) ?? null, setItem: (k, v) => store.set(k, String(v)) } });
+  Object.defineProperty(globalThis, 'localStorage', { configurable: true, value: nativeStorage(store) });
   try {
     const s2 = loadSettings();
     for (const k of ['hubUrl', 'hubKey', 'hubRole', 'hubCrew', 'workerId', 'worker', 'people']) assert.deepEqual(s2[k], set[k], 'settings ' + k);
@@ -729,7 +729,7 @@ test('a backup carries people, ids, stamps, replies, shift links and the device 
   const { KEYS, normSettings, loadSettings, normTask, normShift, normReport, load, save, backupData, restoreData, isBackup, ensureDevice, deviceId, deviceSecret } = await lib;
   const crypto = require('node:crypto');
   const store = new Map();
-  Object.defineProperty(globalThis, 'localStorage', { configurable: true, value: { getItem: k => store.get(k) ?? null, setItem: (k, v) => store.set(k, String(v)) } });
+  Object.defineProperty(globalThis, 'localStorage', { configurable: true, value: nativeStorage(store) });
   try {
     const id = await ensureDevice();
     assert.match(id, /^[0-9a-f]{32}$/);
@@ -877,7 +877,7 @@ test('busy: a second tap while the work runs does nothing, and the button comes 
 test('a tab still on the old version cannot wipe the passcode', async () => {
   const { KEYS, loadSettings, setPin, pinHash, PIN_FORMAT } = await lib;
   const store = new Map();
-  Object.defineProperty(globalThis, 'localStorage', { configurable: true, value: { getItem: k => store.get(k) ?? null, setItem: (k, v) => store.set(k, String(v)) } });
+  Object.defineProperty(globalThis, 'localStorage', { configurable: true, value: nativeStorage(store) });
   try {
     const s = loadSettings();
     setPin(s, await pinHash('4821'));
@@ -891,7 +891,7 @@ test('a tab still on the old version cannot wipe the passcode', async () => {
 test('the hub link, key, role and crew have a key of their own: an old tab, a disconnect and a backup', async () => {
   const { KEYS, HUB_FIELDS, loadSettings, save, backupData, restoreData, onSave } = await lib;
   const store = new Map(), saves = [];
-  Object.defineProperty(globalThis, 'localStorage', { configurable: true, value: { getItem: k => store.get(k) ?? null, setItem: (k, v) => store.set(k, String(v)) } });
+  Object.defineProperty(globalThis, 'localStorage', { configurable: true, value: nativeStorage(store) });
   try {
     const hub = { hubUrl: 'https://script.google.com/macros/s/x/exec', hubKey: 'K'.repeat(32), hubRole: 'crew', hubCrew: 'Crew A' };
     save(KEYS.settings, { me: '', worker: 'Jose L', ...hub });
@@ -910,17 +910,18 @@ test('the hub link, key, role and crew have a key of their own: an old tab, a di
     assert.deepEqual([loadSettings().hubUrl, loadSettings().hubKey], [hub.hubUrl, ''], 'restored: the address, not the key');
     onSave(k => saves.push(k));
     save(KEYS.tasks, []);
-    Object.defineProperty(globalThis, 'localStorage', { configurable: true, value: { getItem: () => null, setItem: () => { throw new Error('full'); } } });
+    Object.defineProperty(globalThis, 'localStorage', { configurable: true, value: nativeStorage(new Map(), () => { throw new Error('full'); }) });
     assert.equal(save(KEYS.tasks, [1]), false);
     assert.deepEqual(saves, [KEYS.tasks], 'the save hook hears each save that happened, and only those');
   } finally { (await lib).onSave(() => {}); delete globalThis.localStorage; }
 });
 
-test('a full phone: the right passcode is never called wrong, a restore never brings a hub key, and a restore cut short leaves the keys it wrote', async () => {
+test('a full phone: the right passcode is never called wrong, a restore never brings a hub key, and an unpublished restore leaves the original selected', async () => {
   const { KEYS, pinHash, tryPin, unlocked, loadSettings, load, save, restoreData } = await lib;
   const store = new Map();
-  let full = false, failOn = null;
-  Object.defineProperty(globalThis, 'localStorage', { configurable: true, value: { getItem: k => store.get(k) ?? null, setItem: (k, v) => { if (full || k === failOn) throw new Error('QuotaExceededError'); store.set(k, String(v)); }, removeItem: k => store.delete(k) } });
+  let full = false, failOn = null, failed = '';
+  const storage = () => nativeStorage(store, (k, v) => { if (full || (failOn && k.startsWith(failOn))) { failed = k; throw new Error('QuotaExceededError'); } store.set(k, String(v)); });
+  Object.defineProperty(globalThis, 'localStorage', { configurable: true, value: storage() });
   try {
     const office = { pin: await pinHash('4821', '4821000000000000') }, t0 = 1.8e12;
     full = true;
@@ -939,19 +940,30 @@ test('a full phone: the right passcode is never called wrong, a restore never br
     assert.deepEqual([load(KEYS.hub, {}).hubKey, loadSettings().hubKey], [mine.hubKey, mine.hubKey], 'own backup: still connected');
     assert.ok(restoreData({ [KEYS.hub]: { ...mine, hubRole: 'super', hubKey: '' } }));
     assert.equal(load(KEYS.hub, {}).hubKey, '', 'another role on the same hub: the key goes');
-    // A restore that stops for lack of space has written the keys before the full one: the caller shows storage as it is (restore() answers partial).
-    store.clear();
-    failOn = KEYS.tasks;
-    assert.equal(restoreData({ [KEYS.settings]: { me: 'Restored' }, [KEYS.tasks]: [], [KEYS.reports]: { x: 1 } }), false);
-    assert.equal(loadSettings().me, 'Restored', 'settings were written before the full key');
-    assert.equal(store.has(KEYS.reports), false, 'nothing after it');
+    // Neither a full generation write nor a full publication write can expose a partial restored copy.
+    for (const key of ['fieldHub.restoreGeneration.', 'fieldHub.restoreHead.']) {
+      store.clear();
+      store.set(KEYS.settings, JSON.stringify({ me: 'Original' }));
+      store.set(KEYS.tasks, JSON.stringify([{ uid: 'original' }]));
+      store.set(KEYS.reports, JSON.stringify({ original: true }));
+      Object.defineProperty(globalThis, 'localStorage', { configurable: true, value: storage() }); // a fresh phone realm
+      failOn = key;
+      failed = '';
+      assert.equal(restoreData({ [KEYS.settings]: { me: 'Restored' }, [KEYS.tasks]: [], [KEYS.reports]: { x: 1 } }), false);
+      assert.ok(failed.startsWith(key), 'the restore reached the injected quota failure');
+      assert.equal(loadSettings().me, 'Original', 'the original settings remain selected');
+      assert.deepEqual(load(KEYS.tasks, []), [{ uid: 'original' }], 'the original tasks remain selected');
+      assert.deepEqual(load(KEYS.reports, {}), { original: true }, 'the original reports remain selected');
+      assert.equal([...store.keys()].some(k => k.startsWith('fieldHub.restoreHead.')), false, 'no restored copy was published');
+      assert.equal([...store.keys()].some(k => k.startsWith('fieldHub.restoreGeneration.')), key === 'fieldHub.restoreHead.', 'a publication failure retains its staged payload for recovery');
+    }
   } finally { delete globalThis.localStorage; }
 });
 
 test('two first calls for the device secret make one secret', async () => {
   const { KEYS, ensureDevice, deviceSecret } = await lib;
   const store = new Map(), writes = [];
-  Object.defineProperty(globalThis, 'localStorage', { configurable: true, value: { getItem: k => store.get(k) ?? null, setItem: (k, v) => { if (k === KEYS.device) writes.push(v); store.set(k, String(v)); } } });
+  Object.defineProperty(globalThis, 'localStorage', { configurable: true, value: nativeStorage(store, (k, v) => { if (k === KEYS.device) writes.push(v); store.set(k, String(v)); }) });
   try {
     const [a, b] = await Promise.all([ensureDevice(), ensureDevice()]);
     assert.match(a, /^[0-9a-f]{32}$/);
@@ -978,9 +990,9 @@ test('the report language follows the superintendent part only', async () => {
 });
 
 test('an older tab saving settings with no people keeps every person and id; a restore forgets what the hub had', async () => {
-  const { KEYS, loadSettings, save, normSettings, restoreData } = await lib;
+  const { KEYS, loadSettings, load, save, normSettings, restoreData } = await lib;
   const store = new Map();
-  Object.defineProperty(globalThis, 'localStorage', { configurable: true, value: { getItem: k => store.get(k) ?? null, setItem: (k, v) => store.set(k, String(v)), removeItem: k => store.delete(k) } });
+  Object.defineProperty(globalThis, 'localStorage', { configurable: true, value: nativeStorage(store) });
   try {
     const crews = [{ id: 'cAlpha9', name: 'Crew A', lead: '', members: '' }, { id: 'cBeta5', name: 'Crew B', lead: '', members: '' }];
     save(KEYS.settings, normSettings({ crews, people: [{ id: 'pJose77', name: 'Jose L', crewId: 'cAlpha9' }, { id: 'pMia88', name: 'Mia R', crewId: 'cAlpha9' }, { id: 'pJose99', name: 'Jose L', crewId: 'cBeta5' }] }));
@@ -989,7 +1001,8 @@ test('an older tab saving settings with no people keeps every person and id; a r
     assert.deepEqual([s.lang, s.crews.map(c => c.id), s.people.map(p => [p.id, p.crewId])], ['es', ['cAlpha9', 'cBeta5'], [['pJose77', 'cAlpha9'], ['pMia88', 'cAlpha9'], ['pJose99', 'cBeta5']]], 'the second Jose L included');
     store.set('schwab.hubSync', '{"rev":9}');
     assert.ok(restoreData({ [KEYS.tasks]: [] }));
-    assert.equal(store.get('schwab.hubSync'), undefined, 'the next round merges pull-first, so newer hub copies win');
+    assert.equal(load('schwab.hubSync', null), null, 'the next round merges pull-first, so newer hub copies win');
+    assert.equal(store.get('schwab.hubSync'), '{"rev":9}', 'the original sync baseline remains available for recovery');
   } finally { delete globalThis.localStorage; }
 });
 
@@ -1033,7 +1046,7 @@ test('the language tapped stays on screen when the phone could not save it; once
   const { chooseLang, loadSettings, getLang, setLang, normSettings, KEYS } = await lib;
   const store = new Map();
   let full = false;
-  Object.defineProperty(globalThis, 'localStorage', { configurable: true, value: { getItem: k => store.get(k) ?? null, setItem: (k, v) => { if (full && k === KEYS.settings) throw new Error('QuotaExceededError'); store.set(k, String(v)); } } });
+  Object.defineProperty(globalThis, 'localStorage', { configurable: true, value: nativeStorage(store, (k, v) => { if (full && k === KEYS.settings) throw new Error('QuotaExceededError'); store.set(k, String(v)); }) });
   try {
     const s = normSettings({ lang: 'es', me: 'Sam' });
     store.set(KEYS.settings, JSON.stringify(s));
