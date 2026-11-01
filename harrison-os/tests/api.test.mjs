@@ -726,3 +726,15 @@ test('static assets get the CSP (Google Fonts allowed), and unknown routes answe
   assert.equal(badJson.status, 400);
   assert.equal((await badJson.json()).error.code, 'bad_json');
 });
+
+test('session: app links are https only, never credentials or other schemes', async () => {
+  for (const [pm, field, want] of [
+    ['https://pm.example.com/app', '', { pm: 'https://pm.example.com/app', field_hub: null }],
+    ['http://pm.example.com/', 'javascript:alert(1)', { pm: null, field_hub: null }],
+    ['https://user:pw@pm.example.com/', 'https://field.example.com/hub/', { pm: null, field_hub: 'https://field.example.com/hub/' }],
+  ]) {
+    const { call } = setup({ env: { PM_APP_URL: pm, FIELD_APP_URL: field } });
+    const r = await call('GET', '/api/session');
+    assert.deepEqual(r.data.apps, want);
+  }
+});

@@ -26,6 +26,8 @@ export const FORBIDDEN_REFERENCES = [
   'harrison_os_spike',
   SPIKE_DB_ID,
 ];
+export const LINK_VARS = ['PM_APP_URL', 'FIELD_APP_URL'];
+const LINK_VAR_RE = new RegExp(`"(${LINK_VARS.join('|')})"\\s*:\\s*"[^"\\\\]*"`, 'g');
 const OTHER_CONFIG_FILES = ['wrangler.json', 'wrangler.toml'];
 
 // Removes // and /* */ comments outside strings, then trailing commas outside strings.
@@ -108,7 +110,9 @@ export function checkConfig(rawText, { preAccess = false } = {}) {
   const errors = [];
   const warnings = [];
 
-  const lower = rawText.toLowerCase();
+  // The two app-link vars may name the other apps' web addresses (links only, never bindings): their values are
+  // left out of the forbidden-reference scan. Everything else, including their names, is still scanned.
+  const lower = rawText.replace(LINK_VAR_RE, '"$1": ""').toLowerCase();
   for (const ref of FORBIDDEN_REFERENCES) {
     if (lower.includes(ref)) errors.push(`config references "${ref}"; harrison-os must not touch other projects`);
   }

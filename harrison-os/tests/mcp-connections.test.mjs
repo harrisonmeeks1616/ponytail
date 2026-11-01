@@ -59,7 +59,7 @@ test('iPhone Shortcut row follows shortcut_configured and points at a doc that e
 
 test('server not answering reads "Could not check" for every row, never "Not available yet"', () => {
   const rows = summarize({ mcp: { ok: false, status: 0, offline: true, data: null } });
-  assert.equal(rows.length, 5);
+  assert.equal(rows.length, 7);
   for (const r of rows) assert.equal(r.status, 'Could not check');
 });
 
@@ -68,8 +68,9 @@ async function cardRequests(features, scope) {
   const asked = [];
   let block;
   const kit = {
-    h: () => ({}), chip: () => ({}), section: () => ({}), formatAt: (v) => v, state: { scope },
+    h: () => ({}), chip: () => ({}), section: () => ({}), formatAt: (v) => v, state: { scope, session: { apps: {} } },
     addMemoryBlock: (fn) => (block = fn),
+    addTodayBlock: () => {},
     api: async (path) => {
       asked.push(path);
       return path === '/api/connections/mcp' ? ok({ configured: false, scopes: ['work'], allow_capture: false, last_call_at: null, features }) : ok({});
@@ -87,4 +88,16 @@ test('card asks only for feature routes the server reports present', async () =>
     ['/api/ai/status', '/api/calendar/connections?scope=work', '/api/connections/mcp', '/api/pm/sources?scope=work']);
   assert.deepEqual(await cardRequests({ ai: false, calendar: true, pm: false }, 'all'),
     ['/api/calendar/connections?scope=personal', '/api/calendar/connections?scope=work', '/api/connections/mcp']);
+});
+
+test('official apps: linked only with an https address, and never described as more than a link', () => {
+  const ok = { ok: true, status: 200, data: { features: {}, scopes: ['work'], configured: false } };
+  const none = byName(summarize({ ai: null, mcp: ok }));
+  assert.equal(none['Electrical PM app'].status, 'Not linked');
+  assert.match(none['Field Hub'].need, /FIELD_APP_URL/);
+  const linked = byName(summarize({ ai: null, mcp: ok, apps: { pm: 'https://pm.example.com/', field_hub: null } }));
+  assert.equal(linked['Electrical PM app'].status, 'Linked');
+  assert.equal(linked['Electrical PM app'].url, 'https://pm.example.com/');
+  assert.match(linked['Electrical PM app'].detail, /official record/);
+  assert.equal(linked['Field Hub'].status, 'Not linked');
 });

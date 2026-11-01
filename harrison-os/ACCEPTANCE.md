@@ -2,7 +2,7 @@
 
 Labels are not interchangeable: **implemented** (code exists), **locally verified** (unit/API or local browser test passed on this checkout, commit named), **integrated** (on main with the other slices), **deployed** (hosted Worker), **device verified** (real iPhone), **proven in use** (pilot). A blocked case names its exact prerequisite.
 
-Current evidence commit `4a416f4` (this checkout, run 2026-10-31 afternoon, Node 22, Chromium 153 headless): 380/380 unit, 15/15 local browser (F1-F14, X1), preview walkthrough all steps passed with 0 console errors and only Google-font GETs leaving the origin. Earlier: `13abde8` 365/365 unit, 11/11 browser, 16/16 preview (that commit only, not reused as evidence for later changes). Baseline commit `c9cf526`: 207/207 unit, 11/11 local browser (F1-F10, X1) rerun 10:58-11:05 EDT on this cloud checkout. Imported historical reports are not counted.
+Current evidence: the design-and-links commit after `0df24e7` (2026-11-01, Node 22, Chromium 153 headless): 383/383 unit, 15/15 local browser (F1-F14, X1), preview walkthrough all steps passed with 0 console errors and only Google-font GETs leaving the origin. Previous: `4a416f4` 380/380, 15/15. Earlier: `13abde8` 365/365 unit, 11/11 browser, 16/16 preview (that commit only, not reused as evidence for later changes). Baseline commit `c9cf526`: 207/207 unit, 11/11 local browser (F1-F10, X1) rerun 10:58-11:05 EDT on this cloud checkout. Imported historical reports are not counted.
 
 | ID | Status | Evidence (commit, test) | Remaining / blocked on |
 |---|---|---|---|

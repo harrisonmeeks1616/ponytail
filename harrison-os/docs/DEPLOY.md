@@ -101,3 +101,8 @@ node scripts/deploy-guard.mjs wrangler.local.jsonc && npx wrangler deploy --conf
 ## Operating cost and limits
 
 The cron runs every minute and does bounded work per run: at most 3 reminder sends, one calendar refresh and one PM refresh. Hosted CPU was sampled in the earlier spike, not guaranteed. When Workers Free limits are reached, Cloudflare rejects requests: captures stay in the phone's outbox and reminders are late, never silently dropped. No numeric budget setting exists.
+
+## Links to the Electrical PM app and the Field Hub (optional)
+
+Set `vars.PM_APP_URL` and `vars.FIELD_APP_URL` to each app's https:// address. Harrison OS then shows them as one-tap buttons under "Your apps" on Today and in Memory > Connections. These are links only: Harrison OS does not read, copy or change either app's records, and neither app is deployed, modified or bound here. The deploy guard leaves these two values out of its other-project check (they may name those apps); every other setting is still checked. Live company-project status in Harrison OS still comes only from the read-only PM digest (`PM_DIGEST_URL`, hourly).
+

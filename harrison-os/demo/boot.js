@@ -148,6 +148,9 @@ async function main() {
   const env = {
     DB: db, BUILD_ID: `preview-${REVISION}`, DEV_ALLOW_UNAUTH: '1', SPIKE_TEST_HOOKS: '0', ALLOW_TEST_PUSH_ENDPOINT: '0',
     ACCESS_TEAM_DOMAIN: '', ACCESS_AUD: '', ACCESS_AUD_SHORTCUT: '', VAPID_PUBLIC_KEY: '', VAPID_SUBJECT: '',
+    // The Field app is published next to this preview on the same Pages site; the link opens the real app.
+    // (https only, so a plain-http local copy shows it as not linked.) The PM app's address is not public.
+    FIELD_APP_URL: new URL('../schwab/', location.href).href,
   };
   const worker = installApi(env);
   if (!opened.persistent) $('demo-storage').hidden = false;

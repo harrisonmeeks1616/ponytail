@@ -78,3 +78,13 @@ What would change this recommendation:
 - If in two weeks of real use you capture less than about once a day, or keep tracking waiting-ons in texts or the PM app anyway, stop Harrison OS and put a small "my follow-ups" view into the PM app instead.
 - If the PM app already tracks personal follow-ups well (I have not seen its code), reuse that and keep only Capture and Resume here.
 - If the phone checks fail (alerts, offline capture), fix those before anything else; a command center that drops a capture is worse than none.
+
+## One hub? (asked November 1)
+
+You asked for every linked app to live on the same hub or server so everything updates live. What this build does instead, and why:
+
+- **Done:** Harrison OS links to the Electrical PM app and the Field Hub with one tap (Today > "Your apps", and Memory > Connections), once their addresses are set (`PM_APP_URL`, `FIELD_APP_URL`). In the preview the Field Hub link points at the published Field app.
+- **Live data today:** company-project status updates from the PM digest link about once an hour, read-only. Calendar refreshes every 30 minutes. Field Hub data (crew hours, job records) is deliberately not copied: the hub stays the record.
+- **Not done:** moving the PM app or the Field Hub onto the Harrison OS server. The PM app's source is not in this repository, the Field Hub is a Google Apps Script service with its own sync contract, and the agreed direction was "one experience, separate systems of record". Merging them would put crew timekeeping and office records behind a personal tool's deploy, so a bad Harrison OS deploy could take the crew app down.
+- **If you want truly live status across all three**, the safe next step is a small read-only "status feed" from each official app (the PM digest already is one), polled by Harrison OS more often. That needs your decision and access to the PM app's code.
+

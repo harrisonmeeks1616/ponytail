@@ -23,5 +23,13 @@ test('new blank vars are present and safe by default', () => {
   const vars = JSON.parse(cfgText.replace(/^\s*\/\/.*$/gm, '')).vars;
   assert.equal(vars.MCP_SCOPES, 'work');
   assert.equal(vars.MCP_ALLOW_CAPTURE, '0');
-  for (const k of ['ACCESS_AUD_MCP', 'AI_MODEL', 'AI_TIMEOUT_MS', 'PM_DIGEST_URL']) assert.equal(vars[k], '', k);
+  for (const k of ['ACCESS_AUD_MCP', 'AI_MODEL', 'AI_TIMEOUT_MS', 'PM_DIGEST_URL', 'PM_APP_URL', 'FIELD_APP_URL']) assert.equal(vars[k], '', k);
+});
+
+test('app links may name the other apps; anything else that does is still refused', () => {
+  const linked = cfgText.replace('"PM_APP_URL": ""', '"PM_APP_URL": "https://harrison-electrical-pm.example.workers.dev/"').replace('"FIELD_APP_URL": ""', '"FIELD_APP_URL": "https://example.github.io/field-hub/"');
+  assert.notEqual(linked, cfgText);
+  assert.ok(!checkConfig(linked, { preAccess: true }).errors.some((e) => e.includes('references')));
+  const bound = linked.replace('"MCP_SCOPES": "work"', '"MCP_SCOPES": "work", "OTHER": "electrical-pm"');
+  assert.ok(checkConfig(bound, { preAccess: true }).errors.some((e) => e.includes('"electrical-pm"')));
 });

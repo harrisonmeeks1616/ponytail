@@ -109,12 +109,12 @@ function localDateOfIso(iso, timeZone) {
 
 function waitingWhy(w, todayOn, timeZone) {
   const who = w.who && String(w.who).trim() ? w.who : 'someone';
-  const asked = isDate(w.asked_on) ? w.asked_on : 'date not stated';
-  const follow = w.follow_up_on === todayOn ? 'Follow-up is today.' : `Follow-up was ${w.follow_up_on}.`;
+  const asked = isDate(w.asked_on) ? plainDate(w.asked_on) : 'date not stated';
+  const follow = w.follow_up_on === todayOn ? 'Follow-up is today.' : `Follow-up was ${isDate(w.follow_up_on) ? plainDate(w.follow_up_on) : w.follow_up_on}.`;
   let reply = 'No reply recorded.';
   if (w.reply_recorded_at) {
     const on = localDateOfIso(w.reply_recorded_at, timeZone);
-    reply = on ? `Reply recorded on ${on}.` : 'Reply recorded.';
+    reply = on ? `Reply recorded on ${plainDate(on)}.` : 'Reply recorded.';
   }
   return `You asked ${who} on ${asked}. ${follow} ${reply}`;
 }
@@ -228,7 +228,7 @@ export function buildToday(rows, opts) {
       t.due_on === todayOn
         ? 'Due today'
         : isDate(t.due_on) && t.due_on < todayOn
-          ? `Overdue · due ${t.due_on}`
+          ? `Overdue · due ${plainDate(t.due_on)}`
           : 'Picked for today',
     done: t.state === 'done',
     picked: t.today_pick === 1 || t.today_pick === true,

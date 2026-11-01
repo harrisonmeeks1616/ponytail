@@ -19,7 +19,7 @@
   <link rel="icon" type="image/png" sizes="192x192" href="/icons/icon-192.png">
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Archivo:wght@600;700&family=Inter:wght@400;500;600&display=swap">
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@600;700&family=IBM+Plex+Mono:wght@500&family=IBM+Plex+Sans:wght@400;500;600&display=swap">
   <link rel="stylesheet" href="/styles.css">
   <link rel="stylesheet" href="/views/ask.css">
   <link rel="stylesheet" href="/views/drafts.css">
@@ -34,7 +34,7 @@
 
   <header class="topbar">
     <div class="topbar-inner">
-      <p class="brand">Harrison OS</p>
+      <p class="brand"><span class="brand-mark" aria-hidden="true">H</span><span class="brand-name">Harrison OS</span></p>
       <a href="#/tasks" class="topbar-link">
         <svg class="topbar-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M4 6.5l1.6 1.6L8.5 5M4 12.5l1.6 1.6 2.9-3.1M4 18.5l1.6 1.6 2.9-3.1M11.5 7h8.5M11.5 13h8.5M11.5 19h8.5" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>
         <span class="topbar-link-text"><span class="visually-hidden">Open </span>Tasks</span>
@@ -245,14 +245,18 @@
       <svg class="tab-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><rect x="4" y="5" width="16" height="15" rx="2" fill="none" stroke="currentColor" stroke-width="1.8"/><path d="M4 10h16M9 3v4M15 3v4" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg>
       <span>Today</span>
     </a>
-    <a href="#/projects" class="tab" data-tab="projects">
-      <svg class="tab-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"/></svg>
-      <span>Projects</span>
+    <a href="#/waiting" class="tab" data-tab="waiting">
+      <svg class="tab-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><circle cx="12" cy="12" r="8" fill="none" stroke="currentColor" stroke-width="1.8"/><path d="M12 7.5V12l3 2" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>
+      <span>Waiting</span>
     </a>
     <a href="#/capture" class="tab tab-capture" data-tab="capture" aria-label="Capture">
       <span class="capture-disc"><svg class="tab-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M12 5v14M5 12h14" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"/></svg></span>
     </a>
-    <a href="#/memory" class="tab tab-wide" data-tab="memory">
+    <a href="#/projects" class="tab" data-tab="projects">
+      <svg class="tab-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"/></svg>
+      <span>Projects</span>
+    </a>
+    <a href="#/memory" class="tab" data-tab="memory">
       <svg class="tab-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><circle cx="11" cy="11" r="6" fill="none" stroke="currentColor" stroke-width="1.8"/><path d="M16 16l4 4" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg>
       <span>Memory</span>
     </a>

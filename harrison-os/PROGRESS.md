@@ -56,3 +56,12 @@ The repository as a whole is not green; only the `harrison-os` job is.
 - UX: "Looks right" no longer silently drops an edit accepted with "Use these"; project next step compares `start_on` with the New York date (db test). The floating Ask pill overlapping a Waiting card was not reproduced at scroll end on Today, Waiting or Tasks at 390x844 (no overlap), so no CSS change.
 - Preview wording corrected: typed text stays in the browser (CSP `connect-src 'self'`, no keys in the preview env), but fonts load from Google and GitHub Pages sees the page visit. The preview walkthrough now fails if any other request leaves the origin. Service worker cache bumped to `hos-v6`.
 - Results on `4a416f4`: 380/380 unit, 15/15 browser, preview walkthrough passed. Not run: real iPhone, deployed Worker, Access, live AI, real calendar or PM, MCP client.
+
+## Design and links pass (2026-11-01, after midnight Eastern)
+
+- "Panel" theme: slate/navy header band with a safety-amber rule and breaker-style mark, Barlow Condensed headings, IBM Plex Sans body, IBM Plex Mono section labels, light card shadows, amber rail on Next. Palette differs from Electrical PM Mastery (copper). All checked pairs meet WCAG AA in light and dark (lowest 5.62:1).
+- Navigation: tab bar is now Today, Waiting, Capture, Projects, Memory (the old layout stretched Memory over an empty-looking slot). Ask moved from a floating pill (which covered cards mid-scroll) into the top bar at every width.
+- Clarity: Today's waiting "why" and overdue lines use plain dates ("Wed, Oct 28") instead of ISO dates.
+- App links: optional `PM_APP_URL` and `FIELD_APP_URL` (https only) show as one-tap buttons on Today ("Your apps") and as rows in Connections. Links only; no data is read from or written to either app. The deploy guard skips only those two values in its other-project scan (tested). Fixed a startup race found on the way: Today could render before the session (carrying the links) loaded.
+- Not done, by decision: running the PM app or Field Hub on the same server as Harrison OS. See OWNER_PREVIEW.md section "One hub?".
+- Results: 383/383 unit, 15/15 browser, preview walkthrough passed (0 console errors, only font GETs leave the origin).

@@ -121,7 +121,7 @@ test('next: a due follow-up wins over overdue, due-today and picked tasks', () =
   assert.equal(out.next.ref, `item:${w.id}`);
   assert.equal(out.next.title, w.title);
   assert.equal(out.next.scope, 'work');
-  assert.equal(out.next.why, 'You asked Sample Person on 2026-10-20. Follow-up is today. No reply recorded.');
+  assert.equal(out.next.why, 'You asked Sample Person on Tue, Oct 20. Follow-up is today. No reply recorded.');
 });
 
 test('next why: missing who and asked_on say "someone" and "date not stated", never invented', () => {
@@ -135,7 +135,7 @@ test('next why: missing who and asked_on say "someone" and "date not stated", ne
 test('next why: a follow-up date already passed states that date', () => {
   const w = waitingItem({ who: 'Sample Person', follow_up_on: '2026-10-27' });
   const out = build({ waiting: [w] });
-  assert.equal(out.next.why, 'You asked Sample Person on date not stated. Follow-up was 2026-10-27. No reply recorded.');
+  assert.equal(out.next.why, 'You asked Sample Person on date not stated. Follow-up was Tue, Oct 27. No reply recorded.');
 });
 
 test('next: earliest due follow-up first; future follow-ups are not due', () => {
@@ -232,7 +232,7 @@ test('today: the cap never drops hard-dated items', () => {
   for (const t of [...due, overdue]) assert.ok(refs.includes(`item:${t.id}`), `hard-dated ${t.id} kept`);
   assert.equal(out.today.length, 7);
   for (const p of picks) assert.ok(!refs.includes(`item:${p.id}`));
-  assert.equal(out.today.find((t) => t.ref === `item:${overdue.id}`).meta, 'Overdue · due 2026-10-29');
+  assert.equal(out.today.find((t) => t.ref === `item:${overdue.id}`).meta, 'Overdue · due Thu, Oct 29');
   assert.equal(out.today.find((t) => t.ref === `item:${due[0].id}`).meta, 'Due today');
 });
 
