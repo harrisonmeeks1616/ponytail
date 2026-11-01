@@ -165,14 +165,15 @@ export function register(kit) {
     }
     const { sources, projects } = r.data;
     const manage = h('p', null, h('a', { class: 'inline-link', href: '#/memory', text: 'Import, refresh or remove sources in Memory' }));
-    body.replaceChildren(
+    // h() skips a missing source summary; replaceChildren() itself would print null as text.
+    body.replaceChildren(h('div', null,
       h('p', { class: 'subtle', text: 'A read-only copy. The company system is the official record: open an item there to change it.' }),
       projects.length
         ? h('div', { class: 'stack' }, projects.map(projectCard))
         : h('p', { class: 'empty', text: state.scope === 'personal' ? 'No company projects in Personal.' : 'No company projects yet. Import an export file or load the sample in Memory.' }),
       sources.length ? sourceSummary(sources) : null,
       manage,
-    );
+    ));
   }
 
   addRoute('pm', { title: 'Company projects', load: loadPm });

@@ -2072,7 +2072,8 @@ function field(form, { id, label, kind = 'text', value = '', options = [], hint,
   }
   const hintId = hint ? `${id}-hint` : null;
   if (hintId) input.setAttribute('aria-describedby', hintId);
-  form.append(h('label', { for: id, text: label }), hintId ? h('p', { id: hintId, class: 'subtle small', text: hint }) : null, input);
+  // appendKids skips the missing hint; the DOM's own append() would print it as the word "null".
+  appendKids(form, [h('label', { for: id, text: label }), hintId ? h('p', { id: hintId, class: 'subtle small', text: hint }) : null, input]);
   return input;
 }
 
