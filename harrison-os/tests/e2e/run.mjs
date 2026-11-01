@@ -1471,6 +1471,76 @@ const scenarios = [
       }
     },
   },
+  {
+    id: 'F18',
+    name: 'reminders and Connections under failure: lost Add response retries without a second alert; stale edit form refused with values kept; Connections offline keeps all rows',
+    async run() {
+      const { context, page } = await openApp('F18', { offlineExpected: true });
+      try {
+        const tomorrow = todayOnIn(TZ, Date.now() + 86400000);
+        await start(page, '#/today');
+        await setScopeSwitch(page, 'work');
+        await gotoRoute(page, '#/reminders');
+        await page.waitForSelector('#rem-new-h', { timeout: 15000 });
+        const words = 'Sample lost-response reminder';
+        const mine = async () => (await apiOk('GET', '/api/reminders?scope=work')).items.filter((x) => x.text.startsWith('Sample lost-response'));
+
+        // 1. The server commits the Add, the answer never arrives; Add again.
+        let dropped = 0;
+        await page.route('**/api/reminders', async (route) => {
+          if (route.request().method() === 'POST' && dropped === 0) {
+            dropped++;
+            await route.fetch(); // reaches the server and commits
+            await route.abort('connectionreset'); // the answer is lost
+          } else await route.continue();
+        });
+        const form = page.locator('section[aria-labelledby="rem-new-h"] form');
+        await form.getByLabel('Remind me to').fill(words);
+        await form.getByLabel('Date').fill(tomorrow);
+        await form.getByLabel('Time').fill('08:15');
+        await form.getByRole('button', { name: 'Add reminder' }).click();
+        await form.locator('.field-error:not([hidden])').waitFor({ timeout: 10000 });
+        check((await mine()).length === 1, 'the lost-response Add did not commit (test setup)');
+        // Changed words under the same pending id: refused as a conflict, not a second alert.
+        await form.getByLabel('Remind me to').fill(`${words}, changed before retry`);
+        await form.getByRole('button', { name: 'Add reminder' }).click();
+        await waitFor(async () => /saved after all/.test((await form.locator('.field-error').textContent()) || ''), { what: 'id conflict message' });
+        check((await form.getByLabel('Remind me to').inputValue()) === `${words}, changed before retry`, 'typed words lost');
+        // The same words again: an idempotent retry.
+        await form.getByLabel('Remind me to').fill(words);
+        await form.getByRole('button', { name: 'Add reminder' }).click();
+        await page.waitForSelector('#toast:not([hidden])', { timeout: 10000 });
+        const after = await mine();
+        check(after.length === 1 && after[0].state === 'active', `active reminders after retries: ${after.length}`);
+        await page.unroute('**/api/reminders');
+
+        // 2. An edit form opened, then another device changes only the words (same next firing); Save -> refused.
+        const rem = after[0];
+        const row = page.locator(`li.rem-row[data-id="${rem.id}"]`);
+        await row.waitFor({ timeout: 10000 });
+        await row.getByRole('button', { name: /^Edit reminder/ }).click();
+        await row.getByLabel('Time').fill('09:45');
+        await apiOk('PATCH', `/api/reminders/${rem.id}`, { scope: 'work', text: 'Sample words from another device' });
+        await row.getByRole('button', { name: 'Save changes' }).click();
+        await waitFor(async () => /changed somewhere else/.test((await row.locator('.field-error').textContent()) || ''), { what: 'stale edit message' });
+        check((await row.getByLabel('Time').inputValue()) === '09:45', 'the typed time was lost');
+        const server = (await apiOk('GET', '/api/reminders?scope=work')).items.find((x) => x.id === rem.id);
+        check(server && server.text === 'Sample words from another device' && server.local_time === '08:15', `stale edit overwrote: ${JSON.stringify(server)}`);
+        await apiOk('POST', `/api/reminders/${rem.id}/cancel`, { scope: 'work' });
+
+        // 3. Connections when its status check fails: all rows stay, each "Could not check".
+        await page.route('**/api/connections/mcp', (route) => route.abort('connectionreset'));
+        await gotoRoute(page, '#/memory');
+        await page.waitForSelector('.conn-row', { timeout: 15000 });
+        const rows = await page.$$eval('.conn-row', (els) => els.map((e) => e.textContent.replace(/\s+/g, ' ')));
+        check(rows.length === 7 && rows.every((t) => /Could not check/.test(t)), `connections offline rows: ${JSON.stringify(rows)}`);
+        await page.unroute('**/api/connections/mcp');
+        return `lost Add response -> retry kept 1 active reminder (changed words refused as conflict, typed words kept); stale edit form refused with typed time kept, other device's words intact; Connections with failed status check: ${rows.length} rows, all "Could not check"`;
+      } finally {
+        await context.close();
+      }
+    },
+  },
 ];
 
 // After the scenarios: no sample text in server output or events.

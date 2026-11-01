@@ -101,3 +101,12 @@ test('official apps: linked only with an https address, and never described as m
   assert.match(linked['Electrical PM app'].detail, /official record/);
   assert.equal(linked['Field Hub'].status, 'Not linked');
 });
+
+test('every row has a group on every path, including offline "Could not check"', () => {
+  const offline = summarize({ mcp: { ok: false, status: 0, offline: true, data: null } });
+  assert.equal(offline.length, 7);
+  assert.ok(offline.every((r) => r.group === 'source' || r.group === 'setup'), JSON.stringify(offline.map((r) => [r.name, r.group])));
+  assert.deepEqual(offline.filter((r) => r.group === 'source').map((r) => r.name).sort(), ['Calendar', 'Company projects', 'Electrical PM app', 'Field Hub']);
+  const ok = { ok: true, status: 200, data: { features: {}, scopes: ['work'], configured: false } };
+  assert.ok(summarize({ ai: null, mcp: ok }).every((r) => r.group));
+});
