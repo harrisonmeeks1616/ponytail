@@ -16,9 +16,7 @@
   line-height: 1;
 }
 
-/* Phone width: icon only, like Tasks (the name stays in aria-label). Below about 420 px the top bar has no
-   room left on one line (brand, Tasks, scope switch), so Ask floats above the tab bar on the right and the
-   page gets room for it. */
+/* Phone width: icon only, like Tasks (the name stays in aria-label). */
 @media (max-width: 30rem) {
   .ask-open-text {
     position: absolute !important;
@@ -30,32 +28,7 @@
   }
 }
 
-@media (max-width: 26.2rem) {
-  .topbar-action#ask-open {
-    position: fixed;
-    right: calc(env(safe-area-inset-right) + 1rem);
-    bottom: calc(var(--tabbar-h) + env(safe-area-inset-bottom) + 0.75rem);
-    z-index: 31;
-    height: 3.25rem;
-    padding: 0 1rem;
-    border-radius: 999px;
-    border: 1px solid var(--line);
-    background: var(--surface);
-    color: var(--ink);
-    box-shadow: 0 4px 14px rgba(0, 0, 0, 0.18);
-  }
-  /* Floating, it is the only Ask control on screen, so it shows its word, not just a glyph. */
-  #ask-open .ask-open-text {
-    position: static !important;
-    width: auto;
-    height: auto;
-    overflow: visible;
-    clip: auto;
-  }
-  body:has(#ask-open) {
-    padding-bottom: calc(var(--tabbar-h) + env(safe-area-inset-bottom) + 4.75rem);
-  }
-}
+/* Ask stays in the top bar at every width (icon only on phones), so nothing floats over cards. */
 
 .ask-modes .seg span {
   padding: 0.5rem 0.25rem;

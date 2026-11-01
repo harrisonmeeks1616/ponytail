@@ -1,54 +1,70 @@
 /* Harrison OS, Slice 1. Calm and readable at 360-430 px, light and dark. rem units throughout. */
 :root {
   color-scheme: light dark;
-  --paper: #f4f5f2;
+  /* "Panel" theme: a slate-and-conduit-blue panelboard look with a safety-amber signal for Next. */
+  --paper: #edf0f3;
   --surface: #ffffff;
-  --surface-2: #eceee9;
-  --ink: #17201b;
-  --muted: #56615a;
-  --line: #d6dad3;
-  --work: #1f4fbf;
-  --work-soft: #e6ecfa;
-  --personal: #a84a14;
-  --personal-soft: #fbede3;
-  --warn-ink: #5c3d00;
-  --warn-bg: #fff4d6;
+  --surface-2: #e2e7ec;
+  --ink: #111b24;
+  --muted: #4f5d6a;
+  --line: #cbd3db;
+  --work: #1d55c4;
+  --work-soft: #e4ecfb;
+  --personal: #7b3aa6;
+  --personal-soft: #f2e8f9;
+  --warn-ink: #5a3d00;
+  --warn-bg: #fff2cc;
   --bad: #a1271b;
   --bad-bg: #fde8e5;
-  --good: #1e6b3a;
-  --good-bg: #e3f1e7;
-  --primary: #17201b;
-  --primary-ink: #f4f5f2;
-  --focus: #1f4fbf;
-  --radius: 0.875rem;
-  --radius-sm: 0.5rem;
+  --good: #1b6b3a;
+  --good-bg: #e1f1e6;
+  --primary: #0f3550;
+  --primary-ink: #ffffff;
+  --focus: #1d55c4;
+  --bar: #0f2638;
+  --bar-ink: #eef4f9;
+  --bar-muted: #a9bccb;
+  --signal: #f0a400;
+  --signal-soft: #fff4d6;
+  --accent: #0c7a8c;
+  --shadow: 0 1px 2px rgba(15, 38, 56, 0.06), 0 2px 8px rgba(15, 38, 56, 0.06);
+  --radius: 0.625rem;
+  --radius-sm: 0.4375rem;
   --tap: 2.75rem; /* 44 px at default size, grows with text size */
   --tabbar-h: 4.25rem;
-  --font-body: "Inter", -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
-  --font-head: "Archivo", "Inter", -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+  --font-body: "IBM Plex Sans", -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+  --font-head: "Barlow Condensed", "Arial Narrow", "Roboto Condensed", -apple-system, sans-serif;
+  --font-mono: "IBM Plex Mono", ui-monospace, "SF Mono", Menlo, Consolas, monospace;
 }
 
 @media (prefers-color-scheme: dark) {
   :root {
-    --paper: #101512;
-    --surface: #19201c;
-    --surface-2: #222a25;
-    --ink: #e9eeea;
-    --muted: #a6b1aa;
-    --line: #2f3933;
-    --work: #92b0ff;
-    --work-soft: #1b2846;
-    --personal: #f2a576;
-    --personal-soft: #3a2416;
+    --paper: #0c131a;
+    --surface: #131d26;
+    --surface-2: #1b2732;
+    --ink: #e4eaf0;
+    --muted: #9aa9b6;
+    --line: #26343f;
+    --work: #8fb1ff;
+    --work-soft: #182945;
+    --personal: #d5a6f2;
+    --personal-soft: #2e1d3b;
     --warn-ink: #ffe2a3;
     --warn-bg: #3a2e10;
     --bad: #ff9a8c;
     --bad-bg: #3b1915;
     --good: #84d6a0;
     --good-bg: #16301f;
-    --primary: #e9eeea;
-    --primary-ink: #101512;
-    --focus: #92b0ff;
+    --primary: #7cc4ef;
+    --primary-ink: #08131c;
+    --focus: #8fb1ff;
+    --bar: #08111a;
+    --bar-ink: #e4eaf0;
+    --bar-muted: #8fa3b3;
+    --signal: #f5b72e;
+    --signal-soft: #33280c;
+    --accent: #4fc1cf;
+    --shadow: 0 1px 2px rgba(0, 0, 0, 0.3);
   }
 }
 
@@ -1130,7 +1146,7 @@ textarea {
   bottom: 0;
   z-index: 30;
   display: grid;
-  grid-template-columns: 1fr 1fr auto 2fr;
+  grid-template-columns: repeat(2, minmax(0, 1fr)) auto repeat(2, minmax(0, 1fr));
   align-items: center;
   max-width: 40rem;
   margin: 0 auto;
@@ -1448,7 +1464,7 @@ img {
     white-space: nowrap;
   }
   .tabbar {
-    grid-template-columns: repeat(4, minmax(0, 1fr));
+    grid-template-columns: repeat(5, minmax(0, 1fr));
     padding-left: env(safe-area-inset-left);
     padding-right: env(safe-area-inset-right);
   }
@@ -1460,6 +1476,135 @@ img {
     width: var(--tap);
     height: var(--tap);
   }
+}
+
+/* ------------------------------------------------------------------ Panel theme */
+/* Dark header band with a breaker-style mark; condensed display type; mono uppercase labels like panel
+   schedule legends; cards with a light shadow; Next marked with a safety-amber rail. */
+.topbar {
+  background: var(--bar);
+  color: var(--bar-ink);
+  border-bottom: 3px solid var(--signal);
+}
+.brand {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.5rem;
+  font-size: 1.375rem;
+  letter-spacing: 0.02em;
+  text-transform: uppercase;
+}
+.brand-mark {
+  display: inline-grid;
+  place-items: center;
+  width: 1.875rem;
+  height: 1.875rem;
+  border-radius: 0.375rem;
+  background: var(--signal);
+  color: #111b24;
+  font-size: 1.25rem;
+  line-height: 1;
+}
+.topbar-link,
+.topbar .topbar-action {
+  color: var(--bar-ink);
+}
+.topbar .topbar-action:hover,
+.topbar-link:hover {
+  background: rgba(255, 255, 255, 0.08);
+}
+.topbar :focus-visible {
+  outline-color: var(--signal);
+}
+.scope-switch {
+  background: rgba(255, 255, 255, 0.1);
+}
+.scope-btn {
+  color: var(--bar-muted);
+}
+.scope-btn[aria-pressed="true"] {
+  background: var(--surface);
+  color: var(--ink);
+}
+/* Phone width: the brand keeps its mark and drops its name (the page title still says Harrison OS). */
+@media (max-width: 26.2rem) {
+  .brand-name {
+    position: absolute !important;
+    width: 1px;
+    height: 1px;
+    overflow: hidden;
+    clip: rect(0 0 0 0);
+    white-space: nowrap;
+  }
+}
+h1 {
+  text-transform: uppercase;
+  letter-spacing: 0.01em;
+}
+.block-title,
+.eyebrow,
+.card > .eyebrow {
+  font-family: var(--font-mono);
+  font-weight: 500;
+  letter-spacing: 0.08em;
+}
+.block-title {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  font-size: 0.75rem;
+}
+.block-title::after {
+  content: "";
+  flex: 1;
+  height: 1px;
+  background: var(--line);
+}
+.card,
+.check-row,
+.link-card,
+.fixed-row {
+  box-shadow: var(--shadow);
+}
+.next-card {
+  border: 1px solid var(--line);
+  border-left: 0.375rem solid var(--signal);
+  background: linear-gradient(90deg, var(--signal-soft), var(--surface) 55%);
+}
+.next-card .check-row {
+  box-shadow: none;
+  background: transparent;
+}
+.next-card > .eyebrow,
+.next-card .block-title {
+  color: var(--ink);
+}
+.link-card {
+  border-top: 3px solid var(--primary);
+}
+.link-card.is-highlight {
+  border-top-color: var(--signal);
+}
+.btn-primary {
+  background: var(--primary);
+  color: var(--primary-ink);
+}
+.tabbar {
+  box-shadow: 0 -2px 10px rgba(15, 38, 56, 0.08);
+}
+.tab[aria-current="page"] {
+  color: var(--primary);
+  box-shadow: inset 0 3px 0 var(--signal);
+}
+.capture-disc {
+  background: var(--primary);
+  border: 3px solid var(--surface);
+  box-shadow: 0 0 0 2px var(--signal), 0 4px 12px rgba(15, 38, 56, 0.25);
+}
+.num,
+.fixed-when {
+  font-family: var(--font-mono);
+  font-variant-numeric: tabular-nums;
 }
 
 /* ------------------------------------------------------------------ motion and contrast */

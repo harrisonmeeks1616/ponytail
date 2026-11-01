@@ -1127,7 +1127,18 @@ async function getSession(ctx) {
     serverTime: ctx.nowMs,
     build: ctx.env.BUILD_ID || 'dev',
     testHooks: ctx.hooks,
+    // Links to the official apps (configuration, https only). Harrison OS opens them; it never reads or writes their data.
+    apps: { pm: httpsLink(ctx.env.PM_APP_URL), field_hub: httpsLink(ctx.env.FIELD_APP_URL) },
   });
+}
+
+function httpsLink(v) {
+  try {
+    const u = new URL(String(v || '').trim());
+    return u.protocol === 'https:' && !u.username && !u.password ? u.href : null;
+  } catch {
+    return null;
+  }
 }
 
 // ---------------------------------------------------------------- router

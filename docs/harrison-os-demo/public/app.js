@@ -721,7 +721,7 @@ function showScreen(route, moveFocus) {
     const active =
       name === route.name ||
       (name === 'projects' && route.name === 'project') ||
-      (name === 'today' && (route.name === 'review' || route.name === 'waiting' || route.name === 'tasks'));
+      (name === 'today' && (route.name === 'review' || route.name === 'tasks'));
     if (active && name !== 'capture') tab.setAttribute('aria-current', 'page');
     else tab.removeAttribute('aria-current');
   }

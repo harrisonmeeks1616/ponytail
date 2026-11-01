@@ -4,7 +4,9 @@
 // tone: 'good' | 'warn' | 'bad' | 'none'. Each row: { name, status, tone, detail, need }.
 const UNAVAILABLE = (name) => ({ name, status: 'Not available yet', tone: 'none', detail: 'This part of Harrison OS is not on this server yet.', need: null });
 const UNCHECKED = (name) => ({ name, status: 'Could not check', tone: 'none', detail: 'The server did not answer just now.', need: 'Try again when you are online.' });
-const NAMES = ['Ask with AI', 'Calendar', 'Company projects', 'AI clients (MCP)', 'iPhone Shortcut'];
+const NAMES = ['Ask with AI', 'Calendar', 'Company projects', 'AI clients (MCP)', 'iPhone Shortcut', 'Electrical PM app', 'Field Hub'];
+// The official apps: Harrison OS links to them and never copies or changes their records.
+const APPS = [['pm', 'Electrical PM app', 'PM_APP_URL'], ['field_hub', 'Field Hub', 'FIELD_APP_URL']];
 
 function sourcesRow(name, results, key, { none, problem }) {
   if (!results.some((r) => r && r.ok)) return UNAVAILABLE(name);
@@ -28,7 +30,7 @@ function rowsOf(results, key) {
 }
 
 /** Pure: API answers -> rows. ai, mcp: one api() result; calendar, pm: an array of api() results (one per scope). */
-export function summarize({ ai, calendar = [], pm = [], mcp }, { formatAt = (v) => v } = {}) {
+export function summarize({ ai, calendar = [], pm = [], mcp, apps = null }, { formatAt = (v) => v } = {}) {
   // The MCP status route says which other routes exist; if it did not answer (offline, server error), nothing is known.
   if (!mcp || (!mcp.ok && mcp.status !== 404)) return NAMES.map(UNCHECKED);
   const rows = [];
@@ -82,7 +84,23 @@ export function summarize({ ai, calendar = [], pm = [], mcp }, { formatAt = (v) 
         ? { name: 'iPhone Shortcut', status: 'Not set up', tone: 'none', detail: shortcutDetail, need: shortcutNeed }
         : { name: 'iPhone Shortcut', status: 'Not checked here', tone: 'none', detail: shortcutDetail, need: shortcutNeed },
   );
+  for (const [key, name, setting] of APPS) {
+    const url = apps && apps[key];
+    rows.push(
+      url
+        ? { name, status: 'Linked', tone: 'none', detail: `Opens ${hostOf(url)}. It stays the official record; Harrison OS does not read or change it.`, need: null, url }
+        : { name, status: 'Not linked', tone: 'none', detail: 'Add its web address to open it from Harrison OS.', need: `${setting} in the server settings (docs/DEPLOY.md).` },
+    );
+  }
   return rows;
+}
+
+function hostOf(url) {
+  try {
+    return new URL(url).host;
+  } catch {
+    return 'the app';
+  }
 }
 
 function word(scope) {
@@ -105,7 +123,7 @@ export function register(kit) {
       each(has.calendar, '/api/calendar/connections'),
       each(has.pm, '/api/pm/sources'),
     ]);
-    const rows = summarize({ ai, mcp, calendar, pm }, { formatAt });
+    const rows = summarize({ ai, mcp, calendar, pm, apps: await appLinks() }, { formatAt });
     const list = h(
       'ul',
       { class: 'list conn-list' },
@@ -116,9 +134,28 @@ export function register(kit) {
           h('span', { class: 'conn-head' }, h('span', { class: 'row-title', text: r.name }), chip(TONE_CLASS[r.tone], r.status, 'Status: ')),
           r.detail ? h('span', { class: 'row-meta', text: r.detail }) : null,
           r.need ? h('span', { class: 'row-meta conn-need', text: `Needs: ${r.need}` }) : null,
+          r.url ? appLink(r.url, `Open ${r.name}`) : null,
         ),
       ),
     );
     return section('Connections', list, 'connections');
+  });
+
+  // The session (which carries the links) loads alongside the first screen, so it may not be here yet.
+  async function appLinks() {
+    if (state.session) return state.session.apps || {};
+    const r = await api('/api/session');
+    return (r.ok && r.data && r.data.apps) || {};
+  }
+
+  const appLink = (url, text) =>
+    h('a', { class: 'btn btn-secondary app-link', href: url, target: '_blank', rel: 'noopener noreferrer', 'aria-label': `${text} (opens in a new tab)` }, text, h('span', { 'aria-hidden': 'true', text: ' \u2197' }));
+
+  // Today: one tap to the official apps, only when they are linked.
+  kit.addTodayBlock(async () => {
+    const apps = await appLinks();
+    const links = APPS.filter(([key]) => apps[key]).map(([key, name]) => appLink(apps[key], name));
+    if (!links.length) return null;
+    return section('Your apps', h('div', { class: 'button-row app-links' }, ...links), 'apps');
   });
 }
