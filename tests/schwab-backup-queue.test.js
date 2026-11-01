@@ -10,6 +10,8 @@ test('a restored backup retains PDFs queued offline and retries them', async () 
     getItem: k => store.get(k) ?? null,
     setItem: (k, v) => store.set(k, String(v)),
     removeItem: k => store.delete(k),
+    key: i => [...store.keys()][i] ?? null,
+    get length() { return store.size; },
   };
   try {
     const item = { date: '2026-10-19', name: 'Fictional report', pdf: P('offline'), v: 42 };
@@ -37,6 +39,9 @@ test('a refused in-flight upload cannot put its obsolete copy behind a newer edi
   globalThis.localStorage = {
     getItem: k => store.get(k) ?? null,
     setItem: (k, v) => store.set(k, String(v)),
+    removeItem: k => store.delete(k),
+    key: i => [...store.keys()][i] ?? null,
+    get length() { return store.size; },
   };
   try {
     const item = { date: '2026-10-19', name: 'Fictional report', pdf: P('old'), v: 1 };
@@ -62,19 +67,22 @@ test('a refused in-flight upload cannot put its obsolete copy behind a newer edi
 });
 
 test('a crafted backup cannot send its own fields or a non-PDF from the upload queue (GATE4-SEC-02)', async () => {
-  const { restoreData, flush } = await lib;
+  const { restoreData, flush, load, jobScope } = await lib;
   const store = new Map(), originalFetch = globalThis.fetch;
   globalThis.localStorage = {
     getItem: k => store.get(k) ?? null,
     setItem: (k, v) => store.set(k, String(v)),
     removeItem: k => store.delete(k),
+    key: i => [...store.keys()][i] ?? null,
+    get length() { return store.size; },
   };
   try {
     const pdf = P('crafted'), item = { date: '2026-10-19', name: 'Fictional report', pdf, v: 3 };
     const crafted = [{ ...item, ping: true, url: 'https://attacker.test' }, { date: '2026-10-19', name: 'Not a PDF', pdf: Buffer.from('<html>').toString('base64') }];
     assert.equal(restoreData({ 'schwab.outbox': crafted }), true);
-    assert.deepEqual(JSON.parse(store.get('schwab.outbox')), [item], 'restored as the folder takes it');
-    store.set('schwab.outbox', JSON.stringify(crafted)); // however it got there, it goes out clean
+    assert.deepEqual(load('schwab.outbox', []), [item], 'restored as the folder takes it');
+    assert.equal(store.has('schwab.outbox'), false, 'restore leaves the original physical queue untouched');
+    jobScope.storage.setItem('schwab.outbox', JSON.stringify(crafted)); // however it got into the selected copy, it goes out clean
     const sent = [];
     globalThis.fetch = async (_, opts) => { sent.push(JSON.parse(opts.body)); return { json: async () => ({ ok: true }) }; };
     assert.deepEqual(await flush({ folderUrl: 'https://script.google.com/macros/s/TEST/exec', siteCode: 'c' }), { left: 0, error: '' });

@@ -18,6 +18,8 @@ globalThis.localStorage = {
     store.set(k, String(v));
   },
   removeItem: k => store.delete(k),
+  key: i => [...store.keys()][i] ?? null,
+  get length() { return store.size; },
 };
 globalThis.fetch = () => { posts++; return new Promise(res => { answer = () => res({ json: async () => ({ ok: true }) }); }); }; // held until answer()
 const toastEl = { classList: { add() {}, remove() {} }, dataset: {}, setAttribute() {} };

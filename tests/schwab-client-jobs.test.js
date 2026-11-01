@@ -1,4 +1,6 @@
 'use strict';
+process.env.TZ = 'America/New_York'; // the real hub fixture requires the job's time zone, independent of the runner
+
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const crypto = require('node:crypto');
