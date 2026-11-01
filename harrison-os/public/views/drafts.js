@@ -40,11 +40,11 @@ function scopeWord(s) {
   return s === 'personal' ? 'Personal' : 'Work';
 }
 
-function load(route, body) {
+function load(route, body, guard = () => true) {
   const my = ++seq;
   if (route.id === 'new') return renderForm(body, my);
-  if (route.id && DRAFT_ID_RE.test(route.id)) return loadDetail(route.id, body, my);
-  return loadList(body, my);
+  if (route.id && DRAFT_ID_RE.test(route.id)) return loadDetail(route.id, body, my, guard);
+  return loadList(body, my, guard);
 }
 
 // ---------------------------------------------------------------- blocks
@@ -84,12 +84,12 @@ function memoryBlock() {
 
 // ---------------------------------------------------------------- list
 
-async function loadList(body, my) {
+async function loadList(body, my, guard = () => true) {
   const { h, api, state, qs, noticeBlock, failWords } = kit;
   body.setAttribute('aria-busy', 'true');
-  body.replaceChildren(h('p', { class: 'subtle', text: 'Loading.' }));
+  if (!body.childElementCount) body.replaceChildren(h('p', { class: 'subtle', text: 'Loading.' }));
   const r = await api(`/api/drafts?${qs({ scope: state.scope })}`);
-  if (my !== seq) return;
+  if (my !== seq || !guard()) { body.setAttribute('aria-busy', 'false'); return false; }
   body.setAttribute('aria-busy', 'false');
   const newBtn = h('button', {
     type: 'button',
@@ -254,15 +254,15 @@ async function create(form, { scope, project, kindSel, recipient, facts, status 
 
 // ---------------------------------------------------------------- one draft
 
-async function loadDetail(id, body, my) {
+async function loadDetail(id, body, my, guard = () => true) {
   const { h, api, qs, enc, noticeBlock, failWords } = kit;
   body.setAttribute('aria-busy', 'true');
-  body.replaceChildren(h('p', { class: 'subtle', text: 'Loading.' }));
+  if (!body.childElementCount) body.replaceChildren(h('p', { class: 'subtle', text: 'Loading.' }));
   const order = knownScope.has(id) ? [knownScope.get(id)] : ['work', 'personal'];
   let r = null;
   for (const s of order) {
     r = await api(`/api/drafts/${enc(id)}?${qs({ scope: s })}`);
-    if (my !== seq) return;
+    if (my !== seq || !guard()) { body.setAttribute('aria-busy', 'false'); return false; }
     if (r.ok || r.status !== 404) break;
   }
   body.setAttribute('aria-busy', 'false');
