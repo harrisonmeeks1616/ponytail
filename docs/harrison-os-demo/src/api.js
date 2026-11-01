@@ -21,7 +21,7 @@ import { instantToZonedParts, nextDailyOccurrence, formatLocal } from './time.js
 import { isAllowedPushEndpoint, sendWebPush, b64urlDecode } from './webpush.js';
 import {
   HttpError, json, apiError, iso, clampInt, readJson, readJsonLenient, requireText, requireScope, queryScope, validTimeZone,
-  MAX_TEXT, DATE_RE,
+  MAX_TEXT, DATE_RE, scopeAllowlist,
 } from './http.js';
 import { FEATURE_ROUTES, SCHEDULED } from './features.js';
 import { exportFeatures, restoreFeatures } from './featuredata.js';
@@ -492,7 +492,11 @@ async function postCapture(ctx) {
 async function postShortcutCapture(ctx) {
   const body = await readJson(ctx.request);
   const text = requireText(body.text);
-  const scope = body.scope === undefined || body.scope === null ? 'personal' : requireScope(body.scope);
+  // The server, not the Shortcut, decides which scopes this credential may write: SHORTCUT_SCOPES (unset means
+  // Work only). A scope outside it is refused before anything is stored. Omitted means Work when allowed.
+  const allowed = scopeAllowlist(ctx.env.SHORTCUT_SCOPES);
+  const scope = body.scope === undefined || body.scope === null ? (allowed.includes('work') ? 'work' : allowed[0] || 'work') : requireScope(body.scope);
+  if (!allowed.includes(scope)) throw new HttpError(403, 'scope_not_allowed', 'This Shortcut may not save to that scope');
   let id;
   let dedup;
   if (typeof body.client_ref === 'string' && CLIENT_REF_RE.test(body.client_ref)) {
