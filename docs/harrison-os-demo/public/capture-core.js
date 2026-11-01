@@ -18,19 +18,43 @@ export function sameCapture(existing, text, scope) {
  * merged the stored draft into new typing must not be overwritten by a snapshot taken before it ran.
  * read() -> { id, text, scope, files } is called after the waits; gen/currentGen skip a write a Save superseded.
  */
-export async function writeDraftWhenReady({ storesReady, restored, gen, currentGen, read, key, onWritten = () => {} }) {
+export async function writeDraftWhenReady({ storesReady, restored, gen, currentGen, read, key, onWritten = () => {}, owned = () => null }) {
   const stores = await storesReady;
   await restored;
   if (gen !== currentGen()) return 'skipped';
   const { id, text, scope, files } = read();
   if (text.trim() === '' && !files.length) {
-    await stores.drafts.del(key);
-    return 'deleted';
+    // An empty box removes only the draft this tab owns (owned(): the last draft it wrote or adopted), in one
+    // step: another tab's draft under the same key is never deleted because this box is empty.
+    const mine = owned();
+    if (!mine) return 'kept';
+    return (await stores.drafts.delIf(key, (d) => isSameDraft(d, mine))) ? 'deleted' : 'kept';
   }
   const record = { id, text, scope, files, updated_at: new Date().toISOString() };
   await stores.drafts.put(key, record);
   onWritten(record);
   return 'written';
+}
+
+/** The exact stored draft that was observed: same id, same write time, same words. */
+export function isSameDraft(stored, seen) {
+  return !!stored && !!seen && stored.id === seen.id && stored.updated_at === seen.updated_at && stored.text === seen.text;
+}
+
+/**
+ * Startup: what to do with a stored draft whose id may already be a saved capture. Looks the id up, and if the
+ * saved capture has the same words and every photo reached storage, removes the draft only if it is still the
+ * exact draft read at startup (one step: a draft another tab wrote meanwhile stays).
+ * Returns { action: 'restore' | 'discarded' | 'kept' (changed meanwhile) | 'missing', missing: file[], existing }.
+ */
+export async function settleStoredDraft(stores, key, draft, draftFiles) {
+  const existing = draft.id ? await stores.outbox.get(draft.id) : undefined;
+  if (!existing) return { action: 'restore', missing: [], existing: null };
+  if (!sameCapture(existing, captureTextOf(draft.text, draftFiles), draft.scope)) return { action: 'restore', missing: [], existing };
+  const missing = await unstoredFiles(stores.attachments, draftFiles);
+  if (missing.length) return { action: 'missing', missing, existing };
+  const gone = await stores.drafts.delIf(key, (d) => isSameDraft(d, draft));
+  return { action: gone ? 'discarded' : 'kept', missing: [], existing };
 }
 
 /**
