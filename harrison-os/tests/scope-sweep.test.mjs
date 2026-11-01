@@ -33,10 +33,11 @@ const NOW = Date.UTC(2026, 9, 29, 12, 0, 0); // Thursday 08:00 New York
 const TODAY = '2026-10-29';
 const TZ = 'America%2FNew_York';
 const CANARY = 'ZZ-SWEEP-PERSONAL-CANARY';
-const NO_SCOPE_ALLOWED = new Set(['changes', 'deliveries', 'push_subscriptions', 'events', 'kv', 'meta', 'd1_migrations', 'sqlite_sequence']);
+const NO_SCOPE_ALLOWED = new Set(['changes', 'deliveries', 'push_subscriptions', 'events', 'kv', 'meta', 'sync_state', 'd1_migrations', 'sqlite_sequence']);
 
 // Routes with no scoped user content, each with the reason. Anything else needs a fixture.
 const EXEMPT = {
+  'GET /api/sync': 'owner-only opaque global change hint; no records, counts or event details',
   'GET /api/session': 'identity and build info only',
   'POST /api/shortcut/capture': 'service-token identity only; same saveCapture path as POST /api/captures',
   'GET /api/push/public-key': 'public VAPID key',

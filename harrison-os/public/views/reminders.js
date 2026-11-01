@@ -60,16 +60,16 @@ export function deliveryWords(d) {
   return 'Sending.';
 }
 
-async function load(route, body) {
+async function load(route, body, guard = () => true) {
   const my = ++seq;
   body.setAttribute('aria-busy', 'true');
   if (!body.childElementCount) body.replaceChildren(kit.h('p', { class: 'subtle', text: 'Loading.' }));
   const r = await fetchAll();
-  if (my !== seq) return;
+  if (my !== seq || !guard()) { body.setAttribute('aria-busy', 'false'); return false; }
   body.setAttribute('aria-busy', 'false');
   if (r.error) {
     body.replaceChildren(kit.noticeBlock(r.error, () => load(route, body)));
-    return;
+    return false;
   }
   render(body, r.items, route);
 }

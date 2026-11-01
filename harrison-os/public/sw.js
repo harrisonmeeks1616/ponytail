@@ -12,6 +12,7 @@ const SHELL = [
   '/app.js',
   '/outbox-core.js',
   '/capture-core.js',
+  '/live-sync.js',
   '/idb.js',
   '/styles.css',
   '/views/index.js',

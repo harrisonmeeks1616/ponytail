@@ -14,6 +14,7 @@ import {
 import { openStores } from './idb.js';
 import { writeDraftWhenReady, putCaptureOnce, queueFiles, mergeBack, mergeFiles, captureTextOf, draftConsumedBy, settleWithin, settleStoredDraft, sameCapture, draftSnapshot } from './capture-core.js';
 import { VIEW_MODULES } from './views/index.js';
+import { createLivePull } from './live-sync.js';
 
 const CLIENT_BUILD = 'ui-3';
 const IDB_NAME = 'harrison-os';
@@ -372,6 +373,8 @@ function kindChip(kind) {
 // API
 
 async function api(path, { method = 'GET', body, timeoutMs = 15000 } = {}) {
+  const editingForm = method !== 'GET' ? document.activeElement?.closest('form') : null;
+  const submitted = editingForm ? formSignature(editingForm) : null;
   const headers = { ...API_HEADERS };
   if (body !== undefined) headers['Content-Type'] = 'application/json';
   let res;
@@ -406,6 +409,7 @@ async function api(path, { method = 'GET', body, timeoutMs = 15000 } = {}) {
   }
   if (verdict === 'auth_required') markAuthLost();
   else if (verdict === 'synced') markAuthOk();
+  if (verdict === 'synced' && editingForm?.isConnected && submitted === formSignature(editingForm)) dirtyForms.delete(editingForm);
   return { ok: verdict === 'synced', verdict, status: res.status, offline: false, data };
 }
 
@@ -757,34 +761,69 @@ function titleFor(route) {
   }
 }
 
-function loadRoute(route) {
+function loadRoute(route, guard = () => true) {
   switch (route.name) {
     case 'review':
-      return loadReview(route.id);
+      return loadReview(route.id, guard);
     case 'waiting':
-      return loadWaiting();
+      return loadWaiting(guard);
     case 'tasks':
-      return loadTasks();
+      return loadTasks(guard);
     case 'projects':
-      return loadProjects();
+      return loadProjects(guard);
     case 'project':
-      return loadProject(route.id);
+      return loadProject(route.id, guard);
     case 'memory':
-      renderExtBlocks(EXT.memory, 'memory-extra', null);
-      loadPreferences();
-      return rerunSearch();
+      return Promise.all([renderExtBlocks(EXT.memory, 'memory-extra', null, guard), loadPreferences(guard), rerunSearch(guard)])
+        .then(results => !results.includes(false));
     default:
       if (EXT.routes.has(route.name)) {
         const r = EXT.routes.get(route.name);
-        return r.load(route, $(`${route.name}-body`));
+        return r.load(route, $(`${route.name}-body`), guard);
       }
-      return loadToday();
+      return loadToday(guard);
   }
 }
 
 function reloadCurrent() {
   return loadRoute(state.route);
 }
+
+// Do not replace a form while it contains unsaved edits, including edits started DURING a fetch.
+let liveInteraction = 0;
+const dirtyForms = new WeakSet();
+function formSignature(form) {
+  return JSON.stringify(Array.from(form.elements, el => [el.name, el.value, !!el.checked]));
+}
+function liveBlocked() {
+  if (document.visibilityState !== 'visible' || !navigator.onLine || state.authLost) return true;
+  if (document.querySelector('dialog[open]') || state.checkpointEdit || state.reviewDecisions?.size) return true;
+  // The weekly review has in-memory choices across several sections; finish that review first.
+  if (state.route.name === 'weekly' || (state.route.name === 'drafts' && state.route.id)) return true;
+  const active = document.activeElement;
+  if (active?.matches('input,textarea,select,[contenteditable="true"]')) return true;
+  const screen = $(`screen-${state.route.name}`);
+  if (!screen) return false;
+  for (const form of screen.querySelectorAll('form')) {
+    if (form.getClientRects().length && (dirtyForms.has(form) || form.closest('details[open]'))) return true;
+  }
+  return false;
+}
+const livePull = createLivePull({
+  readVersion: async () => {
+    if (document.visibilityState !== 'visible' || !navigator.onLine) return null;
+    const result = await api(`/api/sync?${qs({ scope: state.scope })}`);
+    return result.ok && /^[0-9a-f]{32}$/.test(result.data?.version || '') ? result.data.version : null;
+  },
+  viewKey: () => `${state.route.name}/${state.route.id || ''}:${state.scope}`,
+  blocked: liveBlocked,
+  epoch: () => liveInteraction,
+  refresh: guard => loadRoute(state.route, guard),
+  pending: value => {
+    const banner = $('live-updates');
+    if (banner) banner.hidden = !value;
+  },
+});
 
 let dataRefreshTimer = null;
 function scheduleDataRefresh() {
@@ -854,14 +893,14 @@ function unwrapToday(data) {
   return data;
 }
 
-async function loadToday() {
+async function loadToday(guard = () => true) {
   const seq = ++state.seq.today;
   const body = $('today-body');
   setText('today-date', formatLongToday());
   body.setAttribute('aria-busy', 'true');
   if (!state.today) body.replaceChildren(h('p', { class: 'subtle', text: 'Loading.' }));
   const r = await api(`/api/today?${qs({ scope: state.scope, tz: deviceTimeZone() })}`);
-  if (seq !== state.seq.today) return;
+  if (seq !== state.seq.today || !guard()) { body.setAttribute('aria-busy', 'false'); return false; }
   if (r.ok) {
     const t = unwrapToday(r.data);
     state.today = t;
@@ -879,6 +918,7 @@ async function loadToday() {
   }
   body.setAttribute('aria-busy', 'false');
   renderToday();
+  return r.ok;
 }
 
 function renderToday() {
@@ -1117,7 +1157,7 @@ function normaliseCapture(c) {
   };
 }
 
-async function loadReview(id) {
+async function loadReview(id, guard = () => true) {
   const seq = ++state.seq.review;
   const body = $('review-body');
   body.setAttribute('aria-busy', 'true');
@@ -1126,7 +1166,7 @@ async function loadReview(id) {
   const scope = id ? 'all' : state.scope;
   // Active projects, so a filed piece can be put on a project (Edit, Project).
   const [r, pr] = await Promise.all([api(`/api/inbox?${qs({ scope })}`), api(`/api/projects?${qs({ scope: 'all' })}`)]);
-  if (seq !== state.seq.review) return;
+  if (seq !== state.seq.review || !guard()) { body.setAttribute('aria-busy', 'false'); return false; }
   if (pr.ok) {
     state.reviewProjects = listFrom(pr.data, 'projects', 'items').filter(
       (p) => p && PATH_ID_RE.test(String(p.id || '')) && isScope(p.scope) && (!p.state || p.state === 'active'),
@@ -1141,6 +1181,7 @@ async function loadReview(id) {
   }
   body.setAttribute('aria-busy', 'false');
   renderReview();
+  return r.ok && pr.ok;
 }
 
 function renderReview() {
@@ -1690,14 +1731,14 @@ function normaliseItem(it, fallbackScope) {
   return { ...it, id: String(it.id || ''), scope: isScope(it.scope) ? it.scope : fallbackScope };
 }
 
-async function loadWaiting() {
+async function loadWaiting(guard = () => true) {
   const seq = ++state.seq.waiting;
   const body = $('waiting-body');
   body.setAttribute('aria-busy', 'true');
   if (!state.waiting) body.replaceChildren(h('p', { class: 'subtle', text: 'Loading.' }));
   const scopes = scopesToQuery();
   const results = await Promise.all(scopes.map((s) => api(`/api/items?${qs({ kind: 'waiting', state: 'open', scope: s })}`)));
-  if (seq !== state.seq.waiting) return;
+  if (seq !== state.seq.waiting || !guard()) { body.setAttribute('aria-busy', 'false'); return false; }
   const bad = results.find((r) => !r.ok);
   if (bad) {
     state.waitingError = failWords(bad, 'load what you are waiting on');
@@ -1712,6 +1753,7 @@ async function loadWaiting() {
   }
   body.setAttribute('aria-busy', 'false');
   renderWaiting();
+  return !bad;
 }
 
 function renderWaiting() {
@@ -1843,7 +1885,7 @@ function waitingCard(it, today) {
 // Open tasks: every open task in the current scope, so none is reachable only by search.
 // Groups: Due (by due date), Picked for today (no date), Anytime (the rest, newest first).
 
-async function loadTasks() {
+async function loadTasks(guard = () => true) {
   const seq = ++state.seq.tasks;
   const body = $('tasks-body');
   const mode = state.route.name === 'tasks' && state.route.id === 'archived' ? 'archived' : 'open';
@@ -1856,7 +1898,7 @@ async function loadTasks() {
   if (!state.tasks) body.replaceChildren(h('p', { class: 'subtle', text: 'Loading.' }));
   const scopes = scopesToQuery();
   const results = await Promise.all(scopes.map((s) => api(`/api/items?${qs({ kind: 'task', state: mode, scope: s, limit: 500 })}`)));
-  if (seq !== state.seq.tasks) return;
+  if (seq !== state.seq.tasks || !guard()) { body.setAttribute('aria-busy', 'false'); return false; }
   const bad = results.find((r) => !r.ok);
   if (bad) {
     state.tasksError = failWords(bad, mode === 'archived' ? 'load archived tasks' : 'load your open tasks');
@@ -1871,6 +1913,7 @@ async function loadTasks() {
   }
   body.setAttribute('aria-busy', 'false');
   renderTasks();
+  return !bad;
 }
 
 function renderTasksHead() {
@@ -2594,14 +2637,14 @@ function rememberProjectScopes(list) {
   }
 }
 
-async function loadProjects() {
+async function loadProjects(guard = () => true) {
   const seq = ++state.seq.projects;
   const body = $('projects-body');
   body.setAttribute('aria-busy', 'true');
   if (!state.projects) body.replaceChildren(h('p', { class: 'subtle', text: 'Loading.' }));
   defaultProjectScope();
   const r = await api(`/api/projects?${qs({ scope: state.scope })}`);
-  if (seq !== state.seq.projects) return;
+  if (seq !== state.seq.projects || !guard()) { body.setAttribute('aria-busy', 'false'); return false; }
   if (r.ok) {
     state.projects = listFrom(r.data, 'projects', 'items').filter((p) => p && PATH_ID_RE.test(String(p.id || '')));
     state.projectsScope = state.scope;
@@ -2612,6 +2655,7 @@ async function loadProjects() {
   }
   body.setAttribute('aria-busy', 'false');
   renderProjects();
+  return r.ok;
 }
 
 function renderProjects() {
@@ -2718,7 +2762,7 @@ async function onProjectSubmit(event) {
 // ---------------------------------------------------------------------------
 // Project
 
-async function loadProject(id) {
+async function loadProject(id, guard = () => true) {
   const seq = ++state.seq.project;
   const body = $('project-body');
   if (!id) return;
@@ -2734,7 +2778,7 @@ async function loadProject(id) {
   let used = null;
   for (const s of order) {
     const r = await api(`/api/projects/${enc(id)}?${qs({ scope: s })}`);
-    if (seq !== state.seq.project) return;
+    if (seq !== state.seq.project || !guard()) { body.setAttribute('aria-busy', 'false'); return false; }
     result = r;
     used = s;
     if (r.ok || r.status !== 404) break;
@@ -2760,6 +2804,7 @@ async function loadProject(id) {
   }
   body.setAttribute('aria-busy', 'false');
   renderProject();
+  return !!result?.ok;
 }
 
 function cp(checkpoint, camel, snake) {
@@ -3009,13 +3054,13 @@ function onSearchSubmit(event) {
   runSearch($('search-q').value);
 }
 
-function rerunSearch() {
+function rerunSearch(guard = () => true) {
   const q = $('search-q').value;
-  if (q.trim()) runSearch(q);
+  if (q.trim()) return runSearch(q, guard);
   else renderSearch();
 }
 
-async function runSearch(raw) {
+async function runSearch(raw, guard = () => true) {
   const q = String(raw || '').trim();
   const seq = ++state.seq.search;
   if (!q) {
@@ -3027,7 +3072,7 @@ async function runSearch(raw) {
   setText('search-summary', 'Searching.');
   $('search-results').setAttribute('aria-busy', 'true');
   const results = await Promise.all(scopes.map((s) => api(`/api/search?${qs({ q, scope: s })}`)));
-  if (seq !== state.seq.search) return;
+  if (seq !== state.seq.search || !guard()) { $('search-results').setAttribute('aria-busy', 'false'); return false; }
   $('search-results').setAttribute('aria-busy', 'false');
   state.search = {
     q,
@@ -3039,6 +3084,7 @@ async function runSearch(raw) {
     })),
   };
   renderSearch();
+  return results.every(result => result.ok);
 }
 
 function renderSearch() {
@@ -3167,12 +3213,12 @@ function attachmentStrip(list, scope) {
 
 let prefEditing = null; // { key, scope } while an existing preference is in the form
 
-async function loadPreferences() {
+async function loadPreferences(guard = () => true) {
   const seq = ++state.seq.prefs;
   const list = $('prefs-list');
   list.setAttribute('aria-busy', 'true');
   const r = await api(`/api/preferences?${qs({ scope: state.scope })}`);
-  if (seq !== state.seq.prefs) return;
+  if (seq !== state.seq.prefs || !guard()) { list.setAttribute('aria-busy', 'false'); return false; }
   list.setAttribute('aria-busy', 'false');
   if (r.ok) {
     state.prefs = listFrom(r.data, 'preferences', 'items').filter((p) => p && typeof p.key === 'string' && isScope(p.scope));
@@ -3182,6 +3228,7 @@ async function loadPreferences() {
     state.prefsError = r.status === 404 ? 'Preferences are not available on this server yet.' : failWords(r, 'load preferences');
   }
   renderPreferences();
+  return r.ok;
 }
 
 function renderPreferences() {
@@ -4582,7 +4629,7 @@ function bindHandlers() {
     setStatus('Back online. Syncing.');
     syncNow('online');
     loadSession();
-    reloadCurrent();
+    livePull.poll();
   });
   window.addEventListener('offline', () => {
     renderOffline();
@@ -4592,7 +4639,7 @@ function bindHandlers() {
     if (document.visibilityState === 'visible') {
       renderOffline();
       syncNow('visible');
-      if (state.route.name === 'today') loadToday();
+      livePull.poll();
       resubscribeSilently(false);
     } else {
       flushDraft();
@@ -4600,8 +4647,25 @@ function bindHandlers() {
   });
   window.addEventListener('pagehide', flushDraft);
   window.addEventListener('pageshow', (e) => {
-    if (e.persisted) syncNow('pageshow');
+    if (e.persisted) { syncNow('pageshow'); livePull.poll(); }
   });
+  window.addEventListener('focus', () => livePull.poll());
+  document.addEventListener('input', event => {
+    liveInteraction++;
+    const form = event.target.closest?.('form');
+    if (form) dirtyForms.add(form);
+  });
+  document.addEventListener('change', event => {
+    liveInteraction++;
+    const form = event.target.closest?.('form');
+    if (form) dirtyForms.add(form);
+  });
+  document.addEventListener('pointerdown', () => { liveInteraction++; });
+  document.addEventListener('focusin', event => { if (event.target.matches?.('input,textarea,select,[contenteditable="true"]')) liveInteraction++; });
+  document.addEventListener('focusout', () => setTimeout(() => livePull.poll(), 0));
+  document.addEventListener('close', () => livePull.poll(), true);
+  document.addEventListener('toggle', event => { if (!event.target.open) livePull.poll(); }, true);
+  document.addEventListener('reset', event => { dirtyForms.delete(event.target); setTimeout(() => livePull.poll(), 0); });
   if ('serviceWorker' in navigator) {
     navigator.serviceWorker.addEventListener('message', (event) => {
       const data = event.data || {};
@@ -4617,7 +4681,7 @@ function bindHandlers() {
 
 function startTimers() {
   setInterval(() => {
-    if (document.visibilityState === 'visible') syncNow('interval');
+    if (document.visibilityState === 'visible') { syncNow('interval'); livePull.poll(); }
   }, SYNC_INTERVAL_MS);
 }
 
@@ -4651,9 +4715,16 @@ function extSlot(list, arg) {
   return slot;
 }
 
-function renderExtBlocks(list, containerId, arg) {
+async function renderExtBlocks(list, containerId, arg, guard = () => true) {
   const el = $(containerId);
-  if (el) el.replaceChildren(extSlot(list, arg));
+  if (!el) return true;
+  // Build off-screen; replacing the old cards only after all their reads and the final edit guard.
+  const scope = state.scope;
+  const nodes = await Promise.all(list.map(render => Promise.resolve().then(() => render(arg, scope))
+    .catch(() => h('p', { class: 'subtle', text: 'One section could not load. Pull to refresh or try again later.' }))));
+  if (!guard() || scope !== state.scope) return false;
+  el.replaceChildren(h('div', { class: 'ext-slot' }, nodes));
+  return true;
 }
 
 function addRoute(name, { title, load, tab = null }) {
@@ -4741,6 +4812,7 @@ async function init() {
     /* ignore */
   }
   syncNow('load');
+  livePull.poll();
   loadSession();
   registerServiceWorker().then(() => resubscribeSilently(true));
   startTimers();

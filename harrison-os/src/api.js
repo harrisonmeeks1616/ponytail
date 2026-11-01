@@ -26,6 +26,7 @@ import {
 import { FEATURE_ROUTES, SCHEDULED } from './features.js';
 import { askToolkit } from './mcp.js';
 import { exportFeatures, restoreFeatures } from './featuredata.js';
+import { withSyncState } from './sync-state.js';
 
 export { HttpError, json, apiError, requireScope };
 
@@ -1253,6 +1254,7 @@ export async function handleApi(request, env, url, { nowMs = Date.now(), authent
 
   if (isTestPath && !hooks) return apiError(404, 'not_found', 'Not found');
   if (!env.DB) return apiError(503, 'db_not_configured', 'The database binding is missing');
+  env = { ...env, DB: withSyncState(env.DB) };
 
   // Local simulation of an expired Access session (test hook, loopback + DEV_ALLOW_UNAUTH only).
   if (hooks && env.DEV_ALLOW_UNAUTH === '1' && !isTestPath) {
@@ -1417,6 +1419,7 @@ function nextFireAfter(reminder, scheduledFor, nowMs) {
  * and is reported as outcome unknown, never re-sent.
  */
 export async function runScheduled(env, nowMs = Date.now()) {
+  env = { ...env, DB: withSyncState(env.DB) };
   const startedMs = Date.now();
   const stats = { released: 0, extended: 0, fired: 0, held: 0, guarded: 0, stale: 0, errors: 0 };
   let budget = CRON_BATCH_CAP;

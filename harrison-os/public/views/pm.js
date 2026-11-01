@@ -160,16 +160,16 @@ export function register(kit) {
     return section('Sources', ul, 'pm-sources-summary');
   }
 
-  async function loadPm(route, body) {
+  async function loadPm(route, body, guard = () => true) {
     const seq = ++loadSeq;
     body.setAttribute('aria-busy', 'true');
     if (!body.childElementCount) body.replaceChildren(h('p', { class: 'subtle', text: 'Loading.' }));
     const r = await digest(state.scope);
-    if (seq !== loadSeq) return;
+    if (seq !== loadSeq || !guard()) { body.setAttribute('aria-busy', 'false'); return false; }
     body.setAttribute('aria-busy', 'false');
     if (!r.ok) {
       body.replaceChildren(noticeBlock(failWords(r, 'load company projects'), () => loadPm(route, body)));
-      return;
+      return false;
     }
     const { sources, projects } = r.data;
     const manage = h('p', null, h('a', { class: 'inline-link', href: '#/memory', text: 'Import, refresh or remove sources in Memory' }));
@@ -330,7 +330,7 @@ export function register(kit) {
           s.fetched_at ? h('span', { class: 'row-meta', text: `${plural(s.projects, 'project', 'projects')}, ${plural(s.items, 'open item', 'open items')}` }) : null,
           s.changes ? h('span', { class: 'row-meta', text: changeWords(s.changes) }) : null,
           changeDetails(s.changes),
-          s.kind === 'http' && s.fetched_at ? h('span', { class: 'row-meta', text: 'Checked about once an hour while the link is set up.' }) : null,
+          s.kind === 'http' && s.fetched_at ? h('span', { class: 'row-meta', text: s.refresh_interval_ms === 60000 ? 'Checked about once a minute through the private connection.' : 'Checked about once an hour while the link is set up.' }) : null,
           sourceActions(s)),
       );
     }
