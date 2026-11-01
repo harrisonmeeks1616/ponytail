@@ -903,7 +903,9 @@ function renderToday() {
 
   body.append(renderNext(t.next));
 
-  const todayList = listFrom(t.today);
+  // The Next item has its own checkbox in the Next card: it is not listed a second time here.
+  const nextRef = t.next && t.next.ref;
+  const todayList = listFrom(t.today).filter((row) => !nextRef || row.ref !== nextRef);
   const ul = h('ul', { class: 'list check-list' });
   for (const row of todayList) {
     const ref = parseRef(row.ref);
@@ -935,7 +937,8 @@ function renderToday() {
     'Nothing picked for today. ',
     h('a', { href: '#/tasks', class: 'inline-link', dataset: { fk: 'pick-from-tasks' }, text: 'Pick from your open tasks' }),
   );
-  const todaySection = section('Today', todayList.length ? ul : emptyToday, 'today-list');
+  const onlyNext = h('p', { class: 'subtle' }, 'Nothing else picked for today. ', h('a', { href: '#/tasks', class: 'inline-link', text: 'Pick from your open tasks' }));
+  const todaySection = section('Today', todayList.length ? ul : nextRef && listFrom(t.today).length ? onlyNext : emptyToday, 'today-list');
   body.append(todaySection);
 
   const links = h('div', { class: 'link-grid' });

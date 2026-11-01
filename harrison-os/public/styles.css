@@ -1,15 +1,15 @@
 /* Harrison OS, Slice 1. Calm and readable at 360-430 px, light and dark. rem units throughout. */
 :root {
   color-scheme: light dark;
-  /* "Panel" theme: a slate-and-conduit-blue panelboard look with a safety-amber signal for Next. */
-  --paper: #edf0f3;
+  /* "Panel" theme: black header band, field green as the main colour, safety yellow as a sparing signal. */
+  --paper: #edf2eb;
   --surface: #ffffff;
-  --surface-2: #e2e7ec;
-  --ink: #111b24;
-  --muted: #4f5d6a;
-  --line: #cbd3db;
-  --work: #1d55c4;
-  --work-soft: #e4ecfb;
+  --surface-2: #dfe8dc;
+  --ink: #0e140f;
+  --muted: #4a594d;
+  --line: #c6d3c4;
+  --work: #0f6b4f;
+  --work-soft: #ddf1e8;
   --personal: #7b3aa6;
   --personal-soft: #f2e8f9;
   --warn-ink: #5a3d00;
@@ -18,16 +18,16 @@
   --bad-bg: #fde8e5;
   --good: #1b6b3a;
   --good-bg: #e1f1e6;
-  --primary: #0f3550;
+  --primary: #155c2f;
   --primary-ink: #ffffff;
-  --focus: #1d55c4;
-  --bar: #0f2638;
-  --bar-ink: #eef4f9;
-  --bar-muted: #a9bccb;
-  --signal: #f0a400;
-  --signal-soft: #fff4d6;
-  --accent: #0c7a8c;
-  --shadow: 0 1px 2px rgba(15, 38, 56, 0.06), 0 2px 8px rgba(15, 38, 56, 0.06);
+  --focus: #155c2f;
+  --bar: #0a0d0a;
+  --bar-ink: #f1f5ef;
+  --bar-muted: #a9b8aa;
+  --signal: #f5c518;
+  --signal-soft: #fdf5cf;
+  --accent: #2f8f4e;
+  --shadow: 0 1px 2px rgba(10, 30, 15, 0.07), 0 2px 8px rgba(10, 30, 15, 0.06);
   --radius: 0.625rem;
   --radius-sm: 0.4375rem;
   --tap: 2.75rem; /* 44 px at default size, grows with text size */
@@ -39,14 +39,14 @@
 
 @media (prefers-color-scheme: dark) {
   :root {
-    --paper: #0c131a;
-    --surface: #131d26;
-    --surface-2: #1b2732;
-    --ink: #e4eaf0;
-    --muted: #9aa9b6;
-    --line: #26343f;
-    --work: #8fb1ff;
-    --work-soft: #182945;
+    --paper: #090c09;
+    --surface: #111813;
+    --surface-2: #18221a;
+    --ink: #e5efe6;
+    --muted: #9cb0a0;
+    --line: #233026;
+    --work: #7fd6ae;
+    --work-soft: #12302a;
     --personal: #d5a6f2;
     --personal-soft: #2e1d3b;
     --warn-ink: #ffe2a3;
@@ -55,15 +55,15 @@
     --bad-bg: #3b1915;
     --good: #84d6a0;
     --good-bg: #16301f;
-    --primary: #7cc4ef;
-    --primary-ink: #08131c;
-    --focus: #8fb1ff;
-    --bar: #08111a;
-    --bar-ink: #e4eaf0;
-    --bar-muted: #8fa3b3;
-    --signal: #f5b72e;
-    --signal-soft: #33280c;
-    --accent: #4fc1cf;
+    --primary: #73d295;
+    --primary-ink: #04110a;
+    --focus: #73d295;
+    --bar: #040604;
+    --bar-ink: #e5efe6;
+    --bar-muted: #93a896;
+    --signal: #f7cf3a;
+    --signal-soft: #2d2a0c;
+    --accent: #5cc77f;
     --shadow: 0 1px 2px rgba(0, 0, 0, 0.3);
   }
 }
@@ -1501,7 +1501,7 @@ img {
   height: 1.875rem;
   border-radius: 0.375rem;
   background: var(--signal);
-  color: #111b24;
+  color: #0a0d0a;
   font-size: 1.25rem;
   line-height: 1;
 }
@@ -1590,7 +1590,7 @@ h1 {
   color: var(--primary-ink);
 }
 .tabbar {
-  box-shadow: 0 -2px 10px rgba(15, 38, 56, 0.08);
+  box-shadow: 0 -2px 10px rgba(10, 30, 15, 0.08);
 }
 .tab[aria-current="page"] {
   color: var(--primary);
@@ -1599,7 +1599,7 @@ h1 {
 .capture-disc {
   background: var(--primary);
   border: 3px solid var(--surface);
-  box-shadow: 0 0 0 2px var(--signal), 0 4px 12px rgba(15, 38, 56, 0.25);
+  box-shadow: 0 0 0 2px var(--signal), 0 4px 12px rgba(10, 30, 15, 0.25);
 }
 .num,
 .fixed-when {
