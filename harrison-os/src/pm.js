@@ -7,7 +7,7 @@
 //   entry links back ("Open in <system>") and carries source_ref 'pm:<id>', url and fetched/exported times.
 // - Export content is untrusted text: strictly validated, capped, control characters removed, never
 //   interpreted. Scope and sample come from the request (or the fixed http-source scope), never the file.
-// - SQL here touches only pm_sources and pm_records. Events carry ids, states, counts and codes only.
+// - SQL here touches only pm_sources, pm_records and their ID-only provider map. Events carry no text.
 // - The http adapter: https only, Bearer token, no redirects followed, bounded time and size.
 
 import * as db from './db.js';
@@ -246,7 +246,7 @@ export function parseImport({ format, content, system }, nowMs) {
   return normalizeDigest(obj, { nowMs });
 }
 
-// ---------------------------------------------------------------- storage (pm_sources, pm_records only)
+// ---------------------------------------------------------------- storage (PM sources/copies/ID-only mapping)
 
 const isClosed = (status) => CLOSED.has(String(status || '').toLowerCase());
 const newId = (prefix) => `${prefix}_${globalThis.crypto.randomUUID().replace(/-/g, '')}`;
@@ -299,7 +299,7 @@ export function diffImport(prev, next, firstImport) {
 
 /**
  * Replaces one source's records with a normalized import in a single batch (all or nothing). Record ids
- * are kept per provider id, so 'pm:<id>' refs held elsewhere stay valid across re-imports.
+ * are kept per provider id, including disappear/reopen cycles, so durable 'pm:<id>' refs stay valid.
  */
 export async function importInto(d, { sourceId = null, scope, label, kind = 'import', sample = 0 }, digest, nowIso, { refreshToken = null } = {}) {
   requireScope(scope);
@@ -339,24 +339,29 @@ export async function importInto(d, { sourceId = null, scope, label, kind = 'imp
     );
   }
   stmts.push(d.prepare(`DELETE FROM pm_records WHERE source_id = ?${fence}`).bind(id, ...fenceValues));
+  const sourceGuard = `EXISTS (SELECT 1 FROM pm_sources WHERE id = ? AND scope = ?${refreshToken ? ' AND refresh_token = ?' : ''})`;
+  const sourceValues = [id, scope, ...(refreshToken ? [refreshToken] : [])];
+  const mapInsert = `INSERT INTO pm_provider_ids (source_id, scope, kind, provider_id, record_id)
+    SELECT ?, ?, ?, ?, ? WHERE ${sourceGuard} ON CONFLICT (source_id, kind, provider_id) DO NOTHING`;
   const insert = `INSERT INTO pm_records (id, source_id, scope, provider_id, kind, parent_provider_id, title, status, due_on, owner_label,
-    url, updated_at, milestone_title, milestone_due_on, imported_at, sample) ${refreshToken ? 'SELECT ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ? WHERE EXISTS (SELECT 1 FROM pm_sources WHERE id = ? AND refresh_token = ?)' : 'VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)'}`;
+    url, updated_at, milestone_title, milestone_due_on, imported_at, sample)
+    SELECT (SELECT record_id FROM pm_provider_ids WHERE source_id = ? AND scope = ? AND kind = ? AND provider_id = ?),
+      ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ? WHERE ${sourceGuard}`;
+  const append = (recordKind, providerId, parentId, title, status, dueOn, owner, url, updatedAt, milestoneTitle, milestoneDue) => {
+    // INSERT OR IGNORE resolves concurrent first appearances without ever changing an existing ID.
+    // The copy selects the canonical map ID in the same batch, rather than trusting a pre-read cache.
+    stmts.push(d.prepare(mapInsert).bind(id, scope, recordKind, providerId,
+      prevId.get(`${recordKind}:${providerId}`) || newId('pmr'), ...sourceValues));
+    stmts.push(d.prepare(insert).bind(id, scope, recordKind, providerId,
+      id, scope, providerId, recordKind, parentId, title, status, dueOn, owner, url, updatedAt,
+      milestoneTitle, milestoneDue, nowIso, sampleFlag, ...sourceValues));
+  };
   let items = 0;
   for (const p of digest.projects) {
-    stmts.push(
-      d
-        .prepare(insert)
-        .bind(prevId.get(`project:${p.provider_id}`) || newId('pmr'), id, scope, p.provider_id, 'project', null, p.name, p.status, null, null,
-          p.url, p.updated_at, p.milestone_title, p.milestone_due_on, nowIso, sampleFlag, ...fenceValues),
-    );
+    append('project', p.provider_id, null, p.name, p.status, null, null, p.url, p.updated_at, p.milestone_title, p.milestone_due_on);
     for (const it of p.items) {
       items++;
-      stmts.push(
-        d
-          .prepare(insert)
-          .bind(prevId.get(`item:${it.provider_id}`) || newId('pmr'), id, scope, it.provider_id, 'item', p.provider_id, it.title, it.status,
-            it.due_on, it.owner_label, it.url, it.updated_at, null, null, nowIso, sampleFlag, ...fenceValues),
-      );
+      append('item', it.provider_id, p.provider_id, it.title, it.status, it.due_on, it.owner_label, it.url, it.updated_at, null, null);
     }
   }
   if (refreshToken) stmts.push(d.prepare('UPDATE pm_sources SET refresh_token = NULL, refresh_until_ms = NULL WHERE id = ? AND refresh_token = ?').bind(id, refreshToken));
@@ -813,6 +818,8 @@ async function deleteSource(ctx, id) {
   const [, recs] = await d.batch([
     d.prepare('DELETE FROM pm_sources WHERE id = ?').bind(id),
     d.prepare('DELETE FROM pm_records WHERE source_id = ?').bind(id),
+    // Explicit cleanup also covers local adapters/backups with foreign keys disabled.
+    d.prepare('DELETE FROM pm_provider_ids WHERE source_id = ? AND scope = ?').bind(id, scope),
   ]);
   await logEvent(d, ctx.nowMs, 'pm_source_deleted', id, { scope, kind: row.kind, records: recs.meta.changes });
   return json(200, { deleted: true, id });

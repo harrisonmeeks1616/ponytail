@@ -11,7 +11,7 @@ const fixture = JSON.parse(readFileSync(new URL('./fixtures/pm/digest-v1.json', 
 const digest = (title, at) => { const value = structuredClone(fixture); value.source.exported_at = new Date(at).toISOString(); value.projects[0].name = title; return value; };
 try {
   const DB = await mf.getD1Database('DB');
-  for (const file of ['0006_pm.sql', '0010_pm_refresh_fence.sql']) {
+  for (const file of ['0006_pm.sql', '0010_pm_refresh_fence.sql', '0012_pm_provider_ids.sql']) {
     const statements = readFileSync(new URL('../migrations/' + file, import.meta.url), 'utf8').replace(/--[^\n]*/g, '').split(';').map((s) => s.trim()).filter(Boolean);
     await DB.batch(statements.map((sql) => DB.prepare(sql)));
   }
@@ -32,5 +32,15 @@ try {
   const source = await DB.prepare('SELECT state,refresh_token,last_error_code FROM pm_sources WHERE id = ?').bind(pm.HTTP_SOURCE_ID).first();
   assert.equal(stored, 'Current workerd copy'); assert.equal(source.state, 'ok'); assert.equal(source.last_error_code, null); assert.equal(source.refresh_token, null);
   assert.equal((await pm.onScheduled(env, NOW + pm.REFRESH_LEASE_MS + 1)).code, 'not_due');
-  console.log(JSON.stringify({ workerdFence: 'passed', activeLeaseBlocksCron: true, expiredCronRecovers: true, staleFailureHarmless: true, cloudCalls: 0, realDataWrites: 0 }));
+  const identity = () => DB.prepare("SELECT id FROM pm_records WHERE source_id=? AND kind='item' AND provider_id='I-1'").bind(pm.HTTP_SOURCE_ID).first('id');
+  const originalId = await identity();
+  env.PM_DIGEST_SERVICE.getDigest = async () => { const value = digest('Absent snapshot', NOW); value.projects[0].open_items = value.projects[0].open_items.filter((r) => r.id !== 'I-1'); return value; };
+  assert.equal((await pm.refreshHttpSource(env, NOW + pm.REFRESH_LEASE_MS + 2)).ok, true);
+  assert.equal(await identity(), null);
+  env.PM_DIGEST_SERVICE.getDigest = async () => digest('Restored snapshot', NOW);
+  assert.equal((await pm.refreshHttpSource(env, NOW + pm.REFRESH_LEASE_MS + 3)).ok, true);
+  assert.equal(await identity(), originalId);
+  await DB.prepare('DELETE FROM pm_sources WHERE id=?').bind(pm.HTTP_SOURCE_ID).run();
+  assert.equal(await DB.prepare('SELECT COUNT(*) AS n FROM pm_provider_ids').first('n'),0,'D1 foreign-key deletion purges private identities');
+  console.log(JSON.stringify({ workerdFence: 'passed', activeLeaseBlocksCron: true, expiredCronRecovers: true, staleFailureHarmless: true, restoredIdentityStable: true, sourceRemovalPurgesMap: true, cloudCalls: 0, realDataWrites: 0 }));
 } finally { await mf.dispose(); }

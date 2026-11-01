@@ -8,6 +8,12 @@ and cannot overwrite the current copy, freshness or lease. Normal completion rel
 database exceptions preserve the last good copy and release only that attempt's token. Missing
 configuration returns `not_connected` without creating a source. This changes no PM source permissions.
 
+Canonical project/item IDs are retained in an ID-only `(source, kind, provider ID)` map
+(`0012_pm_provider_ids.sql`). Its backfill preserves every existing `pmr` ID. A row absent from a later
+snapshot can return or be restored from a source export without breaking citations. The map contains
+no source words, is scope-bound, and is purged atomically when its source is deliberately removed.
+Adding a deliberately removed source again creates new local identities; removal revokes that copy.
+
 A read-only, source-linked, freshness-aware summary of company project status. The company system stays the
 official record: Harrison OS never writes to it, never reads its files, and links every project and item back
 to it ("Open in <system>"). Code: `src/pm.js`, `migrations/0006_pm.sql`, `public/views/pm.js`. Tests:

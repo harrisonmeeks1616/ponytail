@@ -129,12 +129,15 @@ test('a successor between import preparation and batch execution fences ALL copy
     }
     return originalBatch(statements);
   };
-  s.pending[0].resolve(digest('Stale prepared import'));
+  const stale = digest('Stale prepared import');
+  stale.projects[0].open_items.push({ id: 'STALE-ONLY', title: 'Stale-only fixture item', status: 'open' });
+  s.pending[0].resolve(stale);
   assert.equal((await old).code, 'superseded');
   assert.equal(intercepted, true);
   assert.equal(await s.title(), 'Batch successor');
   assert.equal((await s.source()).state, 'ok');
   assert.equal((await s.DB.prepare('SELECT COUNT(*) AS n FROM pm_records WHERE source_id = ?').bind(pm.HTTP_SOURCE_ID).first('n')), 7);
+  assert.equal(await s.DB.prepare("SELECT COUNT(*) AS n FROM pm_provider_ids WHERE provider_id='STALE-ONLY'").first('n'),0,'stale attempt cannot leak an identity mapping either');
 });
 
 test('batch failure rolls back copy and freshness and releases the lease for a manual retry', async (t) => {
