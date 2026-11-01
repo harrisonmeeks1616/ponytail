@@ -17,7 +17,9 @@ until the view renders safely. A waiting notice makes this visible. Weekly revie
 individual draft stay protected until the user leaves those editing flows.
 
 This is bounded foreground polling, not a background iPhone process or a WebSocket promise.
-PM and calendar copies keep their own source refresh schedules and freshness labels.
+The approved private PM reader refreshes once a minute, preserves unchanged record rows,
+and shows its freshness. External digest links retain their hourly cadence; calendars keep
+their existing provider refresh schedule.
 
 Checks: `node --test tests/sync-state.test.mjs tests/live-sync.test.mjs`;
 `node tests/sync-state.workerd.mjs` proves D1 counts, RETURNING, atomic rollback and no-ops.

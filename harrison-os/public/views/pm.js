@@ -330,7 +330,7 @@ export function register(kit) {
           s.fetched_at ? h('span', { class: 'row-meta', text: `${plural(s.projects, 'project', 'projects')}, ${plural(s.items, 'open item', 'open items')}` }) : null,
           s.changes ? h('span', { class: 'row-meta', text: changeWords(s.changes) }) : null,
           changeDetails(s.changes),
-          s.kind === 'http' && s.fetched_at ? h('span', { class: 'row-meta', text: 'Checked about once an hour while the link is set up.' }) : null,
+          s.kind === 'http' && s.fetched_at ? h('span', { class: 'row-meta', text: s.refresh_interval_ms === 60000 ? 'Checked about once a minute through the private connection.' : 'Checked about once an hour while the link is set up.' }) : null,
           sourceActions(s)),
       );
     }

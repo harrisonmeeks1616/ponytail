@@ -23,6 +23,7 @@ const LIVE_LABEL_HTTP = 'Company PM digest link';
 const LIVE_LABEL_RPC = 'Company PM digest (private connection)';
 export const STALE_MS = 48 * 3600 * 1000;
 export const REFRESH_MS = 60 * 60 * 1000;
+export const PRIVATE_REFRESH_MS = 60 * 1000;
 export const REFRESH_LEASE_MS = LIMITS.fetchMs + 5000;
 const HTTP_SCOPE = 'work'; // the authorized digest link is company data
 const DEFAULT_TZ = 'America/New_York';
@@ -311,7 +312,7 @@ export async function importInto(d, { sourceId = null, scope, label, kind = 'imp
   if (existing && Number(existing.sample) && !sample) throw new HttpError(409, 'sample_source', 'That is the sample; import into a new source');
   const id = existing ? existing.id : sourceId || newId('pms');
   const prev = existing
-    ? (await d.prepare('SELECT id, kind, provider_id, status, due_on, milestone_due_on FROM pm_records WHERE source_id = ?').bind(id).all()).results
+    ? (await d.prepare('SELECT * FROM pm_records WHERE source_id = ?').bind(id).all()).results
     : [];
   const prevId = new Map(prev.map((r) => [`${r.kind}:${r.provider_id}`, r.id]));
   const changes = diffImport(prev, digest, !existing || !existing.last_import_at);
@@ -338,7 +339,16 @@ export async function importInto(d, { sourceId = null, scope, label, kind = 'imp
         .bind(id, scope, label, kind, digest.system, digest.base_url, nowIso, digest.exported_at, JSON.stringify(changes), sampleFlag, nowIso),
     );
   }
-  stmts.push(d.prepare(`DELETE FROM pm_records WHERE source_id = ?${fence}`).bind(id, ...fenceValues));
+  const rows = digest.projects.flatMap(p => [
+    ['project', p.provider_id, null, p.name, p.status, null, null, p.url, p.updated_at, p.milestone_title, p.milestone_due_on],
+    ...p.items.map(it => ['item', it.provider_id, p.provider_id, it.title, it.status, it.due_on, it.owner_label, it.url, it.updated_at, null, null]),
+  ]);
+  const previousRows = new Map(prev.map(r => [`${r.kind}:${r.provider_id}`, JSON.stringify([
+    r.kind, r.provider_id, r.parent_provider_id, r.title, r.status, r.due_on, r.owner_label,
+    r.url, r.updated_at, r.milestone_title, r.milestone_due_on,
+  ])]));
+  const unchanged = !!existing && rows.length === prev.length && rows.every(r => previousRows.get(`${r[0]}:${r[1]}`) === JSON.stringify(r));
+  if (!unchanged) stmts.push(d.prepare(`DELETE FROM pm_records WHERE source_id = ?${fence}`).bind(id, ...fenceValues));
   const sourceGuard = `EXISTS (SELECT 1 FROM pm_sources WHERE id = ? AND scope = ?${refreshToken ? ' AND refresh_token = ?' : ''})`;
   const sourceValues = [id, scope, ...(refreshToken ? [refreshToken] : [])];
   const mapInsert = `INSERT INTO pm_provider_ids (source_id, scope, kind, provider_id, record_id)
@@ -356,14 +366,9 @@ export async function importInto(d, { sourceId = null, scope, label, kind = 'imp
       id, scope, providerId, recordKind, parentId, title, status, dueOn, owner, url, updatedAt,
       milestoneTitle, milestoneDue, nowIso, sampleFlag, ...sourceValues));
   };
-  let items = 0;
-  for (const p of digest.projects) {
-    append('project', p.provider_id, null, p.name, p.status, null, null, p.url, p.updated_at, p.milestone_title, p.milestone_due_on);
-    for (const it of p.items) {
-      items++;
-      append('item', it.provider_id, p.provider_id, it.title, it.status, it.due_on, it.owner_label, it.url, it.updated_at, null, null);
-    }
-  }
+  const items = rows.filter(r => r[0] === 'item').length;
+  // An unchanged live snapshot updates freshness only; do not delete/reinsert the same records every minute.
+  if (!unchanged) for (const row of rows) append(...row);
   if (refreshToken) stmts.push(d.prepare('UPDATE pm_sources SET refresh_token = NULL, refresh_until_ms = NULL WHERE id = ? AND refresh_token = ?').bind(id, refreshToken));
   const results = await d.batch(stmts);
   if (refreshToken && !results[0].meta.changes) return { superseded: true };
@@ -542,10 +547,10 @@ export async function refreshHttpSource(env, nowMs, { fetchImpl = globalThis.fet
   }
 }
 
-/** Cron: at most one digest-link fetch per REFRESH_MS. One bounded unit of work per call. */
+/** Cron: private approved reader once a minute; external digest links retain their hourly cadence. */
 export async function onScheduled(env, nowMs = Date.now(), opts = {}) {
   if (!liveConfigured(env)) return { skipped: 'not_connected' };
-  return refreshHttpSource(env, nowMs, { ...opts, claimOlderThanMs: REFRESH_MS });
+  return refreshHttpSource(env, nowMs, { ...opts, claimOlderThanMs: rpcConfigured(env) ? PRIVATE_REFRESH_MS : REFRESH_MS });
 }
 
 // ---------------------------------------------------------------- digest (read)
@@ -568,6 +573,7 @@ function sourceEntry(row, nowMs, env) {
     sample: Number(row.sample),
     label: row.label,
     kind: row.kind,
+    refresh_interval_ms: row.kind === 'http' ? (rpcConfigured(env) ? PRIVATE_REFRESH_MS : REFRESH_MS) : null,
     system: row.system,
     url: row.base_url,
     state,

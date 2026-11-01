@@ -384,9 +384,12 @@ test('private PM connection: set up is not connected until a real read; same con
     assert.equal(src.state, 'error');
     assert.equal(src.last_error_code, code);
   }
-  // Hourly cron claim applies the same way.
+  // Private cron checks once a minute and preserves unchanged record rows.
   mode = 'ok';
   const s2 = setup(rpcEnv(async () => structuredClone(fixture)));
   assert.equal((await pm.onScheduled(s2.env, NOW)).ok, true);
-  assert.equal((await pm.onScheduled(s2.env, NOW + 59 * 60 * 1000)).code, 'not_due');
+  const beforeRows = JSON.stringify((await s2.env.DB.prepare('SELECT * FROM pm_records ORDER BY id').all()).results);
+  assert.equal((await pm.onScheduled(s2.env, NOW + 59 * 1000)).code, 'not_due');
+  assert.equal((await pm.onScheduled(s2.env, NOW + 60 * 1000)).ok, true);
+  assert.equal(JSON.stringify((await s2.env.DB.prepare('SELECT * FROM pm_records ORDER BY id').all()).results), beforeRows);
 });
