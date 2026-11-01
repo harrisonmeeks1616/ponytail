@@ -55,6 +55,7 @@ const EXEMPT = {
   'PUT /api/connections/mcp/grant': 'owner-only MCP access setting: stores and returns mode and scope names, no records; tests/mcp-full.test.mjs (h)',
   'GET /api/ai/status': 'configured flag and per-scope consent booleans only',
   'PUT /api/ai/consent': 'sets a per-scope boolean; returns flags only',
+  'PUT /api/ai/web': 'sets the owner web-search boolean; returns flags only',
 };
 
 // P: seeded personal ids. Each entry: { cross: [method, path, body], own: [method, path, body], reads }.
