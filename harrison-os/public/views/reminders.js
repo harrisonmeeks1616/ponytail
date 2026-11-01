@@ -159,7 +159,7 @@ function reminderForm(existing, reload, onDone) {
   const n = ++seq;
   const id = (k) => `rf-${n}-${k}`;
   const zoneHere = deviceTimeZone();
-  let newId = null; // a new reminder's id: set at the first Add, cleared only once the server confirms it
+  let newId = null; // a new reminder's id: set at the first Add and kept for this form's whole life
   const text = h('input', { id: id('text'), type: 'text', maxlength: 4000, value: existing ? existing.text : '', autocomplete: 'off' });
   const date = h('input', { id: id('date'), type: 'date', value: existing ? existing.local_date : localOn(), min: existing ? undefined : localOn() });
   const time = h('input', { id: id('time'), type: 'time', value: existing ? existing.local_time : '09:00' });
@@ -228,7 +228,8 @@ function reminderForm(existing, reload, onDone) {
         }
         return fail(failWords(r, existing ? 'save the changes' : 'add the reminder'));
       }
-      if (!existing) newId = null;
+      // newId is NOT cleared: until the reloaded list replaces this form, pressing Add again here reuses the same
+      // id (an idempotent duplicate on the server, not a second alert). The replacement form starts with none.
       const label = r.data && r.data.first_fire && r.data.first_fire.localLabel;
       showToast(`${existing ? 'Reminder saved' : 'Reminder added'}.${label ? ` Next: ${label}.` : ''}`, null);
       reload();

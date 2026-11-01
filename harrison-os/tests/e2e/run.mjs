@@ -1510,9 +1510,43 @@ const scenarios = [
         await form.getByLabel('Remind me to').fill(words);
         await form.getByRole('button', { name: 'Add reminder' }).click();
         await page.waitForSelector('#toast:not([hidden])', { timeout: 10000 });
-        const after = await mine();
+        let after = await mine();
         check(after.length === 1 && after[0].state === 'active', `active reminders after retries: ${after.length}`);
         await page.unroute('**/api/reminders');
+        await page.waitForSelector('#rem-new-h', { timeout: 15000 });
+
+        // 1b. A confirmed Add, then Add again in the same form while the list reload is held back: no second alert.
+        let releaseReload;
+        const reloadHeld = new Promise((r) => (releaseReload = r));
+        let posts = 0;
+        const heldCalls = [];
+        await page.route('**/api/reminders?*', (route) => {
+          const done = (async () => {
+            if (route.request().method() === 'GET') await reloadHeld;
+            await route.continue();
+          })();
+          heldCalls.push(done);
+          return done;
+        });
+        page.on('request', (r) => { if (r.method() === 'POST' && new URL(r.url()).pathname === '/api/reminders') posts++; });
+        const form2 = page.locator('section[aria-labelledby="rem-new-h"] form');
+        await form2.getByLabel('Remind me to').fill('Sample double-tap reminder');
+        await form2.getByLabel('Date').fill(tomorrow);
+        await form2.getByLabel('Time').fill('08:20');
+        await form2.getByRole('button', { name: 'Add reminder' }).click();
+        await page.waitForSelector('#toast:not([hidden])', { timeout: 10000 });
+        await waitFor(async () => !(await form2.getByRole('button', { name: 'Add reminder' }).isDisabled()), { what: 'old form enabled while the reload is held' });
+        await form2.getByRole('button', { name: 'Add reminder' }).click();
+        await waitFor(async () => posts >= 2, { what: 'second Add sent' });
+        releaseReload();
+        await Promise.all(heldCalls); // every held reload has gone through before the route is removed
+        await page.unroute('**/api/reminders?*');
+        const doubles = (await apiOk('GET', '/api/reminders?scope=work')).items.filter((x) => x.text === 'Sample double-tap reminder' && x.state === 'active');
+        check(doubles.length === 1, `double Add during a held reload made ${doubles.length} active reminders`);
+        await apiOk('POST', `/api/reminders/${doubles[0].id}/cancel`, { scope: 'work' });
+        await gotoRoute(page, '#/reminders');
+        await page.waitForSelector('#rem-new-h', { timeout: 15000 });
+        after = await mine();
 
         // 2. An edit form opened, then another device changes only the words (same next firing); Save -> refused.
         const rem = after[0];
@@ -1535,7 +1569,7 @@ const scenarios = [
         const rows = await page.$$eval('.conn-row', (els) => els.map((e) => e.textContent.replace(/\s+/g, ' ')));
         check(rows.length === 7 && rows.every((t) => /Could not check/.test(t)), `connections offline rows: ${JSON.stringify(rows)}`);
         await page.unroute('**/api/connections/mcp');
-        return `lost Add response -> retry kept 1 active reminder (changed words refused as conflict, typed words kept); stale edit form refused with typed time kept, other device's words intact; Connections with failed status check: ${rows.length} rows, all "Could not check"`;
+        return `lost Add response -> retry kept 1 active reminder (changed words refused as conflict, typed words kept); Add pressed again while the list reload was held -> still 1; stale edit form refused with typed time kept, other device's words intact; Connections with failed status check: ${rows.length} rows, all "Could not check"`;
       } finally {
         await context.close();
       }
