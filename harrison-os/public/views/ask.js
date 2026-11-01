@@ -34,6 +34,25 @@ const SCOPE_WORDS = { all: 'Work and Personal', work: 'Work', personal: 'Persona
 let kit;
 let drawer = null;
 let inFlight = null;
+// The conversation, in this page's memory only (never stored): [{ q, a }] for live answers, and the view it
+// belongs to. A new view (scope or project) or "New conversation" starts again.
+let thread = [];
+let threadKey = null;
+export const HISTORY_LIMITS = Object.freeze({ exchanges: 6, question: 1000, answer: 6000, total: 30000 });
+
+/** Pure: the history to send for a thread, newest exchanges kept, within the server's limits. */
+export function historyFor(turns, limits = HISTORY_LIMITS) {
+  const out = [];
+  let total = 0;
+  for (const t of turns.slice(-limits.exchanges).reverse()) {
+    const q = String(t.q || '').slice(0, limits.question);
+    const a = String(t.a || '').slice(0, limits.answer);
+    if (!q.trim() || !a.trim() || total + q.length + a.length > limits.total) break;
+    total += q.length + a.length;
+    out.unshift({ role: 'user', text: q }, { role: 'assistant', text: a });
+  }
+  return out;
+}
 let status = null; // last /api/ai/status: { configured, consent: { work, personal }, web_allowed, web_server_off, web_available, actions: { mode, scopes } }
 const WEB_TOOL_WORDS = { web_search: 'Web search', web_fetch: 'Reading web pages' };
 
@@ -253,6 +272,15 @@ function buildDrawer() {
   const cancel = h('button', { type: 'button', id: 'ask-cancel', class: 'btn btn-secondary btn-block', text: 'Cancel', hidden: true });
   const live = h('p', { id: 'ask-status', class: 'subtle', role: 'status', 'aria-live': 'polite' });
   const result = h('div', { id: 'ask-result' });
+  const earlier = h('div', { id: 'ask-thread' });
+  const fresh = h('button', { type: 'button', id: 'ask-new', class: 'btn btn-ghost', text: 'New conversation', hidden: true });
+  fresh.addEventListener('click', () => {
+    thread = [];
+    renderThread();
+    result.replaceChildren();
+    live.textContent = 'New conversation. Earlier questions are forgotten.';
+    question.focus();
+  });
   form.append(
     h('div', { class: 'sheet-head' }, h('h2', { id: 'ask-title', text: 'Ask' }), h('button', { type: 'button', class: 'btn btn-ghost', text: 'Close', onclick: () => closeDrawer() })),
     h('label', { for: 'ask-question', text: 'What do you want to know?' }),
@@ -262,9 +290,10 @@ function buildDrawer() {
     where,
     submit,
     cancel,
+    fresh,
     live,
   );
-  d.append(form, result);
+  d.append(form, earlier, result);
   form.addEventListener('submit', (e) => {
     e.preventDefault();
     runAsk();
@@ -273,6 +302,20 @@ function buildDrawer() {
   d.addEventListener('close', () => inFlight && inFlight.abort());
   document.body.append(d);
   return d;
+}
+
+// The earlier exchanges of this conversation, collapsed, above the newest answer.
+function renderThread() {
+  const { h } = kit;
+  const box = document.getElementById('ask-thread');
+  const btn = document.getElementById('ask-new');
+  if (!box || !btn) return;
+  btn.hidden = !thread.length;
+  const before = thread.slice(0, -1);
+  if (!before.length) return void box.replaceChildren();
+  const ul = h('ul', { class: 'list ask-earlier', 'aria-label': 'Earlier in this conversation' });
+  for (const t of before) ul.append(h('li', { class: 'stack' }, h('p', { class: 'row-title', text: t.q }), h('p', { class: 'subtle small', text: kit.excerpt(t.a, 400) })));
+  box.replaceChildren(h('details', { class: 'ask-more' }, h('summary', { class: 'btn btn-ghost', text: `Earlier in this conversation (${before.length})` }), ul));
 }
 
 function renderContext() {
@@ -336,6 +379,13 @@ async function runAsk() {
   const mode = (drawer.querySelector('input[name="ask-mode"]:checked') || {}).value || 'retrieve';
   const projectId = drawer.dataset.projectId || null;
   const scope = projectId ? drawer.dataset.projectScope : kit.state.scope;
+  // A conversation belongs to one view: switching scope or project starts a new one.
+  const key = `${scope}|${projectId || ''}`;
+  if (key !== threadKey) {
+    thread = [];
+    threadKey = key;
+    renderThread();
+  }
   const submit = document.getElementById('ask-submit');
   const cancel = document.getElementById('ask-cancel');
   const controller = new AbortController();
@@ -345,8 +395,15 @@ async function runAsk() {
   live.textContent = status && status.configured ? 'Working on an answer…' : 'Looking through your records…';
   result.replaceChildren();
   try {
-    const r = await postAsk({ scope, question: q, mode, context: projectId ? { project_id: projectId } : undefined, tz: kit.deviceTimeZone() }, controller);
+    const history = historyFor(thread);
+    const r = await postAsk({ scope, question: q, mode, context: projectId ? { project_id: projectId } : undefined, tz: kit.deviceTimeZone(), ...(history.length ? { history } : {}) }, controller);
     if (r.ok && r.data && r.data.answer) {
+      // Only live answers continue the conversation; a Not AI answer is not something the AI said.
+      if (r.data.answer.live_ai && r.data.answer.text) {
+        thread.push({ q, a: r.data.answer.text });
+        document.getElementById('ask-question').value = '';
+      }
+      renderThread();
       result.replaceChildren(renderAnswer(r.data.answer));
       live.textContent = r.data.answer.live_ai ? 'AI answer ready.' : 'Answer ready. Not AI.';
     } else if (r.cancelled) {

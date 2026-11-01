@@ -316,3 +316,45 @@ test('the drawer links only http(s) web sources', () => {
   assert.equal(webLinkHref('http://example.org/'), 'http://example.org/');
   for (const bad of ['javascript:alert(1)', 'data:text/html,x', '/relative', '', null]) assert.equal(webLinkHref(bad), null, String(bad));
 });
+
+test('conversation: earlier turns go before the latest question as plain messages; bad history is refused; nothing is stored', async () => {
+  const { env, call } = setup();
+  const p = provider(msg([text('Yes, 120 V circuits use 12 AWG for 20 A.')]));
+  const history = [{ role: 'user', text: 'What wire size for a 20 A circuit?' }, { role: 'assistant', text: '12 AWG copper.' }];
+  const a = await answerQuestion(env, { scope: 'work', question: 'And for 30 A?', nowMs: NOW, timeZone: TZ, history }, { aiImpl: p.aiImpl });
+  assert.equal(a.live_ai, true);
+  const sent = p.calls[0].body.messages;
+  assert.deepEqual(sent.slice(0, 2), [{ role: 'user', content: 'What wire size for a 20 A circuit?' }, { role: 'assistant', content: '12 AWG copper.' }]);
+  assert.equal(sent[2].role, 'user');
+  assert.match(sent[2].content, /And for 30 A\?/);
+  assert.match(p.calls[0].body.system, /Earlier turns of this conversation/);
+  // The route validates history before anything runs.
+  for (const bad of [
+    'not a list',
+    [{ role: 'user', text: 'only a question' }],
+    [{ role: 'assistant', text: 'x' }, { role: 'user', text: 'y' }],
+    [{ role: 'user', text: 'x', extra: 1 }, { role: 'assistant', text: 'y' }],
+    [{ role: 'user', text: '' }, { role: 'assistant', text: 'y' }],
+    [{ role: 'user', text: 'x'.repeat(1001) }, { role: 'assistant', text: 'y' }],
+    Array.from({ length: 14 }, (_, i) => ({ role: i % 2 ? 'assistant' : 'user', text: 'x' })),
+    Array.from({ length: 12 }, (_, i) => ({ role: i % 2 ? 'assistant' : 'user', text: i % 2 ? 'y'.repeat(6000) : 'x' })),
+  ]) {
+    const r = await call('POST', '/api/ask', { scope: 'work', question: 'q', history: bad });
+    assert.equal(r.status, 400, JSON.stringify(bad).slice(0, 80));
+    assert.equal(r.data.error.code, 'invalid_history');
+  }
+  // The Ask event counts turns; no question or answer text is stored anywhere.
+  const before = JSON.stringify((await env.DB.prepare('SELECT detail FROM events').all()).results);
+  assert.ok(!before.includes('wire size'));
+});
+
+test('drawer history: newest exchanges kept within the server limits', async () => {
+  const { historyFor, HISTORY_LIMITS } = await import('../public/views/ask.js');
+  const turns = Array.from({ length: 9 }, (_, i) => ({ q: `q${i}`, a: 'a'.repeat(7000) }));
+  const h = historyFor(turns);
+  assert.ok(h.length <= HISTORY_LIMITS.exchanges * 2 && h.length % 2 === 0);
+  assert.equal(h[h.length - 2].text, 'q8', 'the newest exchange is kept');
+  assert.ok(h.every((t) => t.text.length <= (t.role === 'user' ? 1000 : 6000)));
+  assert.ok(h.reduce((n, t) => n + t.text.length, 0) <= HISTORY_LIMITS.total);
+  assert.deepEqual(historyFor([]), []);
+});
