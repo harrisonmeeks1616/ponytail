@@ -1270,7 +1270,7 @@ const scenarios = [
   },
   {
     id: 'F15',
-    name: 'no stray "null" text: Open tasks > Edit form, and Company projects with no sources',
+    name: 'no stray "null" text: Open tasks > Edit form, Record a decision form, Company projects with no sources',
     async run() {
       const { context, page } = await openApp('F15', { offlineExpected: true });
       // Visible text nodes that are exactly "null" or "undefined" (the DOM's append() prints a null child that way).
@@ -1298,13 +1298,23 @@ const scenarios = [
         check(inEdit.length === 0, `"null" text in the edit form: ${inEdit.join(', ')}`);
         await page.keyboard.press('Escape');
         await page.waitForSelector('#edit-sheet:not([open])', { state: 'attached', timeout: 10000 });
+        // The decision form uses the same field() renderer.
+        await gotoRoute(page, '#/memory');
+        await page.click('#decision-new');
+        await page.locator('#edit-sheet[open] form').first().waitFor({ timeout: 10000 });
+        const dLabels = await page.$$eval('#edit-sheet form label', (els) => els.map((e) => e.textContent.trim()));
+        const inDecision = await strays();
+        check(dLabels.includes('Decision') && dLabels.includes('Recommendation'), `decision form labels ${JSON.stringify(dLabels)}`);
+        check(inDecision.length === 0, `"null" text in the decision form: ${inDecision.join(', ')}`);
+        await page.keyboard.press('Escape');
+        await page.waitForSelector('#edit-sheet:not([open])', { state: 'attached', timeout: 10000 });
         await setScopeSwitch(page, 'personal');
         await gotoRoute(page, '#/pm');
         await page.waitForFunction(() => /official record/.test(document.body.textContent), null, { timeout: 15000 });
         const inPm = await strays();
         check(inPm.length === 0, `"null" text on Company projects without sources: ${inPm.join(', ')}`);
         await setScopeSwitch(page, 'work');
-        return `edit form labels ${labels.join(' / ')}: no "null" text; Personal company projects (no sources): no "null" text`;
+        return `edit form labels ${labels.join(' / ')}: no "null" text; decision form labels ${dLabels.join(' / ')}: no "null" text; Personal company projects (no sources): no "null" text`;
       } finally {
         await context.close();
       }
