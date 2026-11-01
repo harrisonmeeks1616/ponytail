@@ -2,7 +2,7 @@
 // Shell caching with network-first navigations, plus reminder push and click handling.
 // Bump CACHE_NAME whenever any shell file changes.
 const CACHE_PREFIX = 'hos-';
-const CACHE_NAME = 'hos-v13';
+const CACHE_NAME = 'hos-v14';
 
 // '/' is the app page (index.html). Workers static assets may redirect /index.html
 // to /, so the page is cached under '/'. Google Fonts are not cached: offline, the
@@ -11,6 +11,7 @@ const SHELL = [
   '/',
   '/app.js',
   '/outbox-core.js',
+  '/capture-core.js',
   '/idb.js',
   '/styles.css',
   '/views/index.js',

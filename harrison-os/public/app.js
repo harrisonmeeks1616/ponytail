@@ -12,6 +12,7 @@ import {
   prefKeyFrom, prefLabel, restoreWords, taskMatches, shareText,
 } from './outbox-core.js';
 import { openStores } from './idb.js';
+import { writeDraftWhenReady, putCaptureOnce, queueFiles, mergeBack, mergeFiles, sameCapture, captureTextOf } from './capture-core.js';
 import { VIEW_MODULES } from './views/index.js';
 
 const CLIENT_BUILD = 'ui-3';
@@ -3450,22 +3451,22 @@ function hhmm(ms) {
 
 async function writeDraft() {
   const gen = state.draftGen;
-  const text = $('capture-text').value;
-  const scope = currentCaptureScope();
-  if (!state.draftId) state.draftId = newClientId('capture');
-  const id = state.draftId;
   try {
-    const stores = await storesReady;
-    await draftRestored; // never overwrite the stored draft before it was restored
-    if (gen !== state.draftGen) return; // a Save happened meanwhile
-    const files = state.sheetFiles.slice();
-    if (text.trim() === '' && !files.length) {
-      await stores.drafts.del(DRAFT_KEY);
-      setText('draft-status', '');
-    } else {
-      await stores.drafts.put(DRAFT_KEY, { id, text, scope, files, updated_at: new Date().toISOString() });
-      setText('draft-status', `Draft kept on this phone at ${hhmm(Date.now())}.`);
-    }
+    // The box is read only after the startup restore (capture-core): a restore may merge the stored draft
+    // into words typed meanwhile, and an earlier snapshot would overwrite that merge.
+    const r = await writeDraftWhenReady({
+      storesReady,
+      restored: draftRestored,
+      gen,
+      currentGen: () => state.draftGen,
+      key: DRAFT_KEY,
+      read: () => {
+        if (!state.draftId) state.draftId = newClientId('capture');
+        return { id: state.draftId, text: $('capture-text').value, scope: currentCaptureScope(), files: state.sheetFiles.slice() };
+      },
+    });
+    if (r === 'deleted') setText('draft-status', '');
+    else if (r === 'written') setText('draft-status', `Draft kept on this phone at ${hhmm(Date.now())}.`);
   } catch {
     setText('draft-status', 'Could not keep the draft on this phone.');
   }
@@ -3491,11 +3492,18 @@ async function restoreDraft() {
   } catch {
     existing = undefined;
   }
+  // Discard only if the saved capture has these same words: another tab may have saved the same draft id
+  // with different words, and then this draft is kept under a fresh id.
+  let draftIdNext = draft.id;
   if (existing) {
-    await stores.drafts.del(DRAFT_KEY).catch(() => {});
-    if (!state.draftId) state.draftId = newClientId('capture');
-    logEvent({ kind: 'draft_discarded_already_saved', id: draft.id });
-    return;
+    if (sameCapture(existing, captureTextOf(draft.text, draftFiles), draft.scope)) {
+      await stores.drafts.del(DRAFT_KEY).catch(() => {});
+      if (!state.draftId) state.draftId = newClientId('capture');
+      logEvent({ kind: 'draft_discarded_already_saved', id: draft.id });
+      return;
+    }
+    draftIdNext = newClientId('capture');
+    logEvent({ kind: 'draft_kept_saved_elsewhere', id: draft.id });
   }
   const box = $('capture-text');
   // If typing already started during startup, keep both: nothing is lost.
@@ -3504,7 +3512,7 @@ async function restoreDraft() {
   state.sheetFiles = draftFiles.filter((f) => !known.has(f.id)).concat(state.sheetFiles);
   renderSheetFiles();
   if (isScope(draft.scope)) setCaptureScope(draft.scope);
-  state.draftId = typeof draft.id === 'string' && CLIENT_ID_RE.test(draft.id) ? draft.id : newClientId('capture');
+  state.draftId = typeof draftIdNext === 'string' && CLIENT_ID_RE.test(draftIdNext) ? draftIdNext : newClientId('capture');
   setText('draft-status', `Draft restored from this phone (kept ${formatAt(draft.updated_at)}).`);
   logEvent({ kind: 'draft_restored', id: state.draftId });
 }
@@ -3513,8 +3521,9 @@ function onCaptureSubmit(event) {
   event.preventDefault();
   const box = $('capture-text');
   const files = state.sheetFiles.slice();
+  const typed = box.value;
   // A photo on its own still needs words for the server: say plainly what it is.
-  const text = box.value.trim() || (files.length ? `Attached: ${files.map((f) => f.name).join(', ')}` : '');
+  const text = captureTextOf(typed, files);
   if (!text) {
     showNotice('Nothing to save.');
     return;
@@ -3536,54 +3545,69 @@ function onCaptureSubmit(event) {
   renderSheetFiles();
   setText('draft-status', '');
   writeLocal(CAPTURE_SCOPE_KEY, scope);
-  persistCapture({ id, text, scope, files });
+  persistCapture({ id, text, typed, scope, files });
 }
 
-async function persistCapture({ id, text, scope, files = [] }) {
-  let item;
-  try {
-    item = createOutboxItem({
-      id,
+async function persistCapture({ id, text, typed = text, scope, files = [] }) {
+  const make = (cid) =>
+    createOutboxItem({
+      id: cid,
       kind: 'capture',
       url: '/api/captures',
-      body: { id, text, scope, client_created_at: new Date().toISOString(), time_zone: deviceTimeZone() },
+      body: { id: cid, text, scope, client_created_at: new Date().toISOString(), time_zone: deviceTimeZone() },
     });
+  try {
+    make(id);
   } catch {
     showNotice('Could not save that capture.');
     return;
   }
+  let saved;
   try {
     const stores = await storesReady;
-    const existing = await stores.outbox.get(id);
-    if (!existing) await stores.outbox.put(item);
-    state.items.set(id, existing || item);
-    logEvent({ kind: 'capture_saved', id, attachments: files.length });
+    // An id already in the outbox is reused only for the same words (a retry); different words get a fresh id.
+    saved = await putCaptureOnce(stores.outbox, { id, text, scope }, make, () => newClientId('capture'));
+    state.items.set(saved.item.id, saved.item);
+    logEvent({ kind: 'capture_saved', id: saved.item.id, status: saved.status, attachments: files.length });
   } catch {
-    // Put the text and files back so nothing is lost.
-    const box = $('capture-text');
-    if (box.value.trim() === '') {
-      box.value = text;
-      state.draftId = id;
-      state.sheetFiles = files.concat(state.sheetFiles);
+    const stored = await storesReady.then((s) => s.outbox.get(id)).catch(() => null);
+    if (!sameCapture(stored, text, scope)) {
+      // Not saved: put it back without touching anything typed since (capture-core mergeBack).
+      const box = $('capture-text');
+      const back = mergeBack({ boxText: box.value, draftId: state.draftId, sheetFiles: state.sheetFiles }, { id, text: typed, files });
+      box.value = back.text;
+      state.draftId = back.draftId || newClientId('capture');
+      state.sheetFiles = back.files;
       renderSheetFiles();
-      onDraftInput();
+      writeDraft();
+      showNotice(
+        back.merged
+          ? 'Could not save on this phone. Your earlier words and files are back in the box, above what you typed since.'
+          : 'Could not save on this phone. Your text is back in the box.',
+      );
+      return;
     }
-    showNotice('Could not save on this phone. Your text is back in the box.');
-    return;
+    saved = { item: stored, status: 'same' };
   }
-  const kept = await queueAttachments(id, scope, files);
-  if (kept) {
+  const finalId = saved.item.id;
+  const q = await queueAttachments(finalId, scope, files);
+  const elsewhere = q.elsewhere.length ? ` ${plural(q.elsewhere.length, 'attachment was', 'attachments were')} already saved with an earlier capture and ${q.elsewhere.length === 1 ? 'stays' : 'stay'} there.` : '';
+  const separate = saved.status === 'renamed' ? ' Another tab had already saved this draft with different words, so this is kept as a separate capture.' : '';
+  if (!q.failed.length) {
     // Remove the draft only if it is still this capture's (typing may have started a new one).
     const stores = await storesReady;
     const d = await stores.drafts.get(DRAFT_KEY).catch(() => null);
     if (!d || d.id === id) await stores.drafts.del(DRAFT_KEY).catch(() => {});
-    setStatus(files.length ? `Saved on this phone with ${plural(files.length, 'attachment', 'attachments')}.` : 'Saved on this phone.');
+    const n = q.stored.length;
+    (separate || elsewhere ? showNotice : setStatus)(`${n ? `Saved on this phone with ${plural(n, 'attachment', 'attachments')}.` : 'Saved on this phone.'}${separate}${elsewhere}`);
   } else {
-    // The words are saved; the photos go back in the box to be saved again as their own capture.
-    state.sheetFiles = files.concat(state.sheetFiles);
+    // The words are saved; only the files that were not stored go back in the box, to be saved again.
+    state.sheetFiles = mergeFiles(q.failed, state.sheetFiles);
     renderSheetFiles();
     writeDraft();
-    showNotice('The words are saved, but this phone could not keep the photos with them. They are back in the box: save again.');
+    showNotice(
+      `The words are saved${q.stored.length ? ` with ${plural(q.stored.length, 'attachment', 'attachments')}` : ''}, but this phone could not keep ${plural(q.failed.length, 'more file', 'more files')}. ${q.failed.length === 1 ? 'It is' : 'They are'} back in the box: save again.${separate}${elsewhere}`,
+    );
   }
   renderOutbox();
   renderAuthBanner();
@@ -3949,20 +3973,22 @@ function validDraftFile(f) {
 }
 
 // Queues the sheet's files for a saved capture. Returns false when this phone could not keep them.
+// Returns { stored, elsewhere, failed } (capture-core queueFiles). state.attachments shows each stored file
+// under the capture storage actually binds it to, never under one it was not written for.
 async function queueAttachments(captureId, scope, files) {
-  if (!files.length) return true;
+  if (!files.length) return { stored: [], elsewhere: [], failed: [] };
+  let res;
   try {
     const stores = await storesReady;
-    for (const f of files) {
-      const item = createAttachmentItem({ id: f.id, capture_id: captureId, scope, name: f.name, mime: f.mime, data_b64: f.data_b64 });
-      if (!(await stores.attachments.get(item.id))) await stores.attachments.put(item);
-      state.attachments.set(item.id, withoutBytes(item));
-    }
-    logEvent({ kind: 'attachments_queued', id: captureId, count: files.length });
-    return true;
+    res = await queueFiles(stores.attachments, captureId, files, (f) =>
+      createAttachmentItem({ id: f.id, capture_id: captureId, scope, name: f.name, mime: f.mime, data_b64: f.data_b64 }),
+    );
   } catch {
-    return false;
+    return { stored: [], elsewhere: [], failed: files.slice() };
   }
+  for (const item of res.stored.concat(res.elsewhere)) state.attachments.set(item.id, withoutBytes(item));
+  logEvent({ kind: 'attachments_queued', id: captureId, count: res.stored.length, elsewhere: res.elsewhere.length, failed: res.failed.length });
+  return res;
 }
 
 function withoutBytes(item) {

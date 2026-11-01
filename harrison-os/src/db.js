@@ -2257,14 +2257,21 @@ export async function listReminders(db, scope, { limit = 100 } = {}) {
 /**
  * Edits an active reminder's words, local date, time, zone and recurrence. The next firing is worked out
  * exactly as at creation (buildReminderRow: wall-clock time in its zone, DST-safe; a past one-off is refused).
- * Guarded on the loaded next_fire_at: if the cron fired or another edit landed in between, nothing is
- * written and a ConflictError comes back, so an edit never lands on an occurrence the user did not see.
+ * expected (optional): the reminder as the editor last saw it; any difference is a stale edit (409), so an
+ * edit never overwrites a newer one, even when the next firing time did not change.
+ * The write is one guarded UPDATE: it applies only while the row still equals what was read here, while the
+ * current occurrence is not being sent (a cron claim exists for it, until the cron advances the reminder) and
+ * while no alert of this reminder is held for quiet hours (editing then would send the old alert and the new
+ * one; cancel the reminder instead, or edit once it is out). Otherwise a ConflictError names the reason.
  */
-export async function updateReminder(db, id, fields, scope, nowIso) {
+export async function updateReminder(db, id, fields, scope, nowIso, expected = null) {
   const s = oneScope(scope);
   const before = await firstOf(db, 'SELECT * FROM reminders WHERE id = ? AND scope = ?', id, s);
   if (!before) throw new NotFoundError('No such reminder');
   if (before.state !== 'active') throw new ConflictError('This reminder already fired or was cancelled', 'not_active');
+  if (expected && REMINDER_SNAPSHOT.some((c) => expected[c] !== undefined && String(expected[c] ?? '') !== String(before[c] ?? ''))) {
+    throw new ConflictError('This reminder changed since you opened it', 'stale_edit');
+  }
   const f = fields || {};
   const merged = {
     id: before.id,
@@ -2279,10 +2286,24 @@ export async function updateReminder(db, id, fields, scope, nowIso) {
   const { row, firstFire } = buildReminderRow(merged, s, nowIso);
   const res = await stmt(
     db,
-    "UPDATE reminders SET text = ?, time_zone = ?, local_date = ?, local_time = ?, recurrence = ?, next_fire_at = ? WHERE id = ? AND scope = ? AND state = 'active' AND next_fire_at IS ?",
-    row.text, row.time_zone, row.local_date, row.local_time, row.recurrence, row.next_fire_at, id, s, before.next_fire_at,
+    'UPDATE reminders SET text = ?, time_zone = ?, local_date = ?, local_time = ?, recurrence = ?, next_fire_at = ? ' +
+      `WHERE id = ? AND scope = ? AND state = 'active' AND ${SNAPSHOT_SQL} ` +
+      'AND NOT EXISTS (SELECT 1 FROM deliveries d WHERE d.reminder_id = reminders.id ' +
+      "AND (d.scheduled_for = reminders.next_fire_at OR d.state = 'held_by_policy'))",
+    row.text, row.time_zone, row.local_date, row.local_time, row.recurrence, row.next_fire_at, id, s, ...REMINDER_SNAPSHOT.map((c) => before[c]),
   ).run();
-  if (changesOf(res) !== 1) throw new ConflictError('This reminder changed while saving', 'concurrent_change');
+  if (changesOf(res) !== 1) {
+    const now = await firstOf(db, 'SELECT * FROM reminders WHERE id = ?', id);
+    if (now && now.state === 'active') {
+      if (await firstOf(db, "SELECT 1 AS x FROM deliveries WHERE reminder_id = ? AND state = 'held_by_policy'", id)) {
+        throw new ConflictError('An alert from this reminder is waiting for quiet hours to end', 'alert_held');
+      }
+      if (await firstOf(db, 'SELECT 1 AS x FROM deliveries WHERE reminder_id = ? AND scheduled_for = ?', id, now.next_fire_at)) {
+        throw new ConflictError('This reminder is being sent right now', 'firing_now');
+      }
+    }
+    throw new ConflictError('This reminder changed while saving', 'concurrent_change');
+  }
   return { reminder: await firstOf(db, 'SELECT * FROM reminders WHERE id = ?', id), firstFire };
 }
 
@@ -2337,6 +2358,31 @@ export async function insertDelivery(db, { id, reminderId, scheduledFor, localLa
     requireNow(nowIso),
   ).run();
   return { inserted: changesOf(r) === 1 };
+}
+
+// The reminder fields a cron run read and will send: a claim or an edit applies only while they are unchanged.
+const REMINDER_SNAPSHOT = ['text', 'time_zone', 'local_date', 'local_time', 'recurrence', 'next_fire_at'];
+const SNAPSHOT_SQL = REMINDER_SNAPSHOT.map((c) => `${c} IS ?`).join(' AND ');
+
+/**
+ * SYSTEM, cron only. Claims the due occurrence rem.next_fire_at for the reminder exactly as the cron read it:
+ * the delivery row is inserted only while the reminder is still active with the same words, zone, time,
+ * recurrence and next firing. An edit that landed after the read makes this a no-op ('stale'), so the old
+ * version is never sent and the next run fires the current one. 'duplicate' means this occurrence already has
+ * a delivery (an overlapping run). The push test keeps using insertDelivery.
+ * Returns 'claimed' | 'duplicate' | 'stale'.
+ */
+export async function claimDueOccurrence(db, rem, { id, localLabel }, nowIso) {
+  const snap = REMINDER_SNAPSHOT.map((c) => rem[c]);
+  const r = await stmt(
+    db,
+    'INSERT OR IGNORE INTO deliveries (id, reminder_id, scheduled_for, local_label, state, attempts, created_at) ' +
+      `SELECT ?, id, next_fire_at, ?, 'scheduled', 0, ? FROM reminders WHERE id = ? AND state = 'active' AND ${SNAPSHOT_SQL}`,
+    id, localLabel, requireNow(nowIso), rem.id, ...snap,
+  ).run();
+  if (changesOf(r) === 1) return 'claimed';
+  const still = await firstOf(db, `SELECT 1 AS x FROM reminders WHERE id = ? AND state = 'active' AND ${SNAPSHOT_SQL}`, rem.id, ...snap);
+  return still ? 'duplicate' : 'stale';
 }
 
 /** SYSTEM. scheduled -> held_by_policy until heldUntil (ms). */

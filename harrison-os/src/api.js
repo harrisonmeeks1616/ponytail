@@ -962,7 +962,12 @@ async function patchReminder(ctx, id) {
     if (!RECURRENCES.has(body.recurrence)) throw new HttpError(400, 'invalid_recurrence', "recurrence must be 'none' or 'daily'");
     f.recurrence = body.recurrence;
   }
-  const res = await db.updateReminder(env.DB, id, f, scope, iso(nowMs));
+  let expected = null;
+  if (body.expected !== undefined) {
+    if (!body.expected || typeof body.expected !== 'object' || Array.isArray(body.expected)) throw new HttpError(400, 'invalid_expected', 'expected must be the reminder as last seen');
+    expected = body.expected;
+  }
+  const res = await db.updateReminder(env.DB, id, f, scope, iso(nowMs), expected);
   await logEvent(env, nowMs, 'reminder_updated', id, { scope, fields: Object.keys(f), next_fire_at: Number(res.reminder.next_fire_at), adjustment: res.firstFire.adjustment });
   return json(200, {
     reminder: serialiseReminder(res.reminder),
@@ -1369,7 +1374,7 @@ function nextFireAfter(reminder, scheduledFor, nowMs) {
  */
 export async function runScheduled(env, nowMs = Date.now()) {
   const startedMs = Date.now();
-  const stats = { released: 0, extended: 0, fired: 0, held: 0, guarded: 0, errors: 0 };
+  const stats = { released: 0, extended: 0, fired: 0, held: 0, guarded: 0, stale: 0, errors: 0 };
   let budget = CRON_BATCH_CAP;
   const qh = await getQuietHours(env, nowMs);
 
@@ -1419,13 +1424,16 @@ export async function runScheduled(env, nowMs = Date.now()) {
       let inserted = false;
       let insertRan = false;
       try {
-        const ins = await db.insertDelivery(
-          env.DB,
-          { id: delivery.id, reminderId: rem.id, scheduledFor, localLabel: delivery.local_label },
-          iso(nowMs),
-        );
+        // Claim only the version read above: an edit since then makes this 'stale' (nothing sent, not advanced;
+        // the next run fires the current version).
+        const claim = await db.claimDueOccurrence(env.DB, rem, { id: delivery.id, localLabel: delivery.local_label }, iso(nowMs));
+        if (claim === 'stale') {
+          stats.stale++;
+          await logEvent(env, nowMs, 'delivery_claim_stale', rem.id, { scheduled_for: scheduledFor });
+          continue;
+        }
         insertRan = true;
-        inserted = ins.inserted;
+        inserted = claim === 'claimed';
         if (!inserted) {
           stats.guarded++;
           await logEvent(env, nowMs, 'delivery_duplicate_guard', rem.id, { scheduled_for: scheduledFor });
@@ -1487,7 +1495,7 @@ export async function runScheduled(env, nowMs = Date.now()) {
 
   // Workers only advance Date.now() across I/O, so wall_ms is wall time, not CPU time.
   const wallMs = Date.now() - startedMs;
-  const busy = stats.released + stats.extended + stats.fired + stats.held + stats.guarded + stats.errors;
+  const busy = stats.released + stats.extended + stats.fired + stats.held + stats.guarded + stats.stale + stats.errors;
   if (busy > 0) await logEvent(env, nowMs, 'cron_run', null, { ...stats, wall_ms: wallMs });
   console.log(JSON.stringify({ evt: 'cron_run', ...stats, wall_ms: wallMs }));
   return stats;
