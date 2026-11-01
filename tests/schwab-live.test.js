@@ -298,7 +298,7 @@ test('Records shows the typed scope and results in the reader\'s language (PHONE
 test('the daily report: every typed box goes through the translated-preview field, with the language of the part that typed it (PHONE-UX-10)', () => {
   const store = new Map(), els = new Map(), prevDoc = globalThis.document, seen = {};
   const el = id => els.get(id) || els.set(id, { innerHTML: '', textContent: '', querySelectorAll: () => [], querySelector: () => null }).get(id);
-  Object.defineProperty(globalThis, 'localStorage', { configurable: true, value: { getItem: k => store.get(k) ?? null, setItem: (k, v) => store.set(k, String(v)), removeItem: k => store.delete(k) } });
+  Object.defineProperty(globalThis, 'localStorage', { configurable: true, value: { get length() { return store.size; }, key: i => [...store.keys()][i] ?? null, getItem: k => store.get(k) ?? null, setItem: (k, v) => store.set(k, String(v)), removeItem: k => store.delete(k) } });
   globalThis.document = { getElementById: el, querySelectorAll: () => [], documentElement: {} };
   try {
     const r = report({ lang: 'es', pmLang: 'en', notified: 'Se avisó al GC', needs: [{ item: 'Elevador de tijera' }], decisions: [{ q: 'Elevador', rec: 'Rentarlo dos semanas', pm: 'Approved', pmNote: 'One week only' }],
@@ -853,9 +853,12 @@ test('connect: both boxes first, errors stay on the form, success redraws', () =
 }));
 // The real sync engine (sync.mjs makeSync) on a fake hub that answers every request with `answer` (or throws).
 const realSync = async (answer, settings) => {
-  const { makeSync } = await load('sync.mjs'), m = new Map(settings ? [['schwab.settings', JSON.stringify(settings)]] : []);
+  const [{ makeSync }, { createJobScope }] = await Promise.all([load('sync.mjs'), load('jobs.mjs')]);
+  const m = new Map(settings ? [['schwab.settings', JSON.stringify(settings)]] : []);
+  const scope = createJobScope({ storage: { get length() { return m.size; }, key: i => [...m.keys()][i] ?? null,
+    getItem: k => m.get(k) ?? null, setItem: (k, v) => m.set(k, String(v)), removeItem: k => m.delete(k) } });
   const storage = { get: (k, fb) => (m.has(k) ? JSON.parse(m.get(k)) : fb), set: (k, v) => !!m.set(k, JSON.stringify(v)) };
-  return makeSync({ storage, now: () => NOW, ensureDevice: async () => '', timers: { set: () => 0, clear: () => {} },
+  return makeSync({ storage, scope, now: () => NOW, ensureDevice: async () => '', timers: { set: () => 0, clear: () => {} },
     fetchImpl: async () => { if (!answer) throw new TypeError('Failed to fetch'); return { status: 200, json: async () => ({ now: NOW, rev: 0, ...answer }) }; } });
 };
 const connectForm = sync => withDoc({ hubUrl: { value: 'https://script.google.com/macros/s/X/exec' }, hubKey: { value: 'c'.repeat(32) }, hubErr: { textContent: '' } }, async () => {

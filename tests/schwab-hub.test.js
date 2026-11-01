@@ -13,7 +13,7 @@ const crypto = require('node:crypto');
 const { createHub } = require('./helpers/google-mock');
 
 const DIR = path.join(__dirname, '..', 'docs', 'schwab');
-const CODE = fs.readFileSync(process.env.HUB_CODE_PATH || path.join(DIR, 'hub', 'Code.gs'), 'utf8');
+const CODE = fs.readFileSync(process.env.HUB_CODE_PATH || path.join(DIR, 'hub', 'Code.gs'), 'utf8').replace(/\r\n/g, '\n');
 const T0 = Date.parse('2026-10-19T12:00:00-04:00'); // a Monday, noon
 const sha = s => crypto.createHash('sha256').update(s).digest('hex');
 const ROLES = ['crew', 'super', 'pm'];
@@ -1120,7 +1120,7 @@ test('round trip: every field of every template survives a push and a pull, and 
   assert.deepEqual([first.tasks[0].status, first.shifts[0].status, first.reports[0].status, first.configStatus], ['ok', 'ok', 'ok', 'ok']);
   const got = pm.pull(), strip = ({ rev, ...x }) => x;
   assert.deepEqual(strip(got.tasks[0]), t, 'every task field, both parts, the stamps, the reply and the ids');
-  assert.deepEqual(strip(got.shifts[0]), { ...s, pmAt: 0 }, 'every shift field: person, crew and task links included (pmAt: the hub\'s own stamp for PM edits)');
+  assert.deepEqual(strip(got.shifts[0]), { ...s, pmAt: 0, punch: '', pmOuts: [s.out] }, 'every shift field plus the hub\'s own PM stamp and clock-out provenance: this flagged out was entered by the PM');
   assert.deepEqual(strip(got.reports[0]), r, 'every report field, the PM part and its stamp included');
   assert.deepEqual(strip(got.config), c, 'every config field: people and crews with their ids');
   const rev = got.rev;

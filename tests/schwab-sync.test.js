@@ -11,6 +11,7 @@ const path = require('path');
 const nodeCrypto = require('crypto');
 const lib = import('../docs/schwab/shared.mjs');
 const syncLib = import('../docs/schwab/sync.mjs');
+const jobsLib = import('../docs/schwab/jobs.mjs');
 
 const KEYS = { crew: 'c'.repeat(32), super: 's'.repeat(32), pm: 'p'.repeat(32) };
 const URL_A = 'https://script.google.com/macros/s/AKfycbTEST/exec';
@@ -215,9 +216,18 @@ const arrOf = x => (Array.isArray(x) ? x : []);
 
 function memStorage() {
   const m = new Map();
-  return { m, failOn: new Set(),
-    get: (k, fb) => { try { const v = m.get(k); const x = v === undefined ? fb : JSON.parse(v); return Array.isArray(fb) && !Array.isArray(x) ? fb : x; } catch { return fb; } },
-    set(k, v) { if (this.failOn.has(k)) return false; m.set(k, JSON.stringify(v)); return true; } };
+  const raw = { get length() { return m.size; }, key: i => [...m.keys()][i] ?? null,
+    getItem: k => m.get(String(k)) ?? null, setItem: (k, v) => { m.set(String(k), String(v)); }, removeItem: k => { m.delete(String(k)); } };
+  return { raw, view: raw, failOn: new Set(),
+    get(k, fb) { try { const v = this.view.getItem(k); const x = v === null ? fb : JSON.parse(v); return Array.isArray(fb) && !Array.isArray(x) ? fb : x; } catch { return fb; } },
+    set(k, v) { if (this.failOn.has(k)) return false; try { this.view.setItem(k, JSON.stringify(v)); return true; } catch { return false; } } };
+}
+// Each synthetic phone has the same immutable job/restore scope as a real page, backed by its own native-shaped Storage.
+async function scopeFor(storage) {
+  const { createJobScope } = await jobsLib;
+  const scope = createJobScope({ storage: storage.raw });
+  storage.view = scope.storage;
+  return scope;
 }
 function manualTimers(advance = () => {}) {
   let id = 0, list = []; const t = { delays: [], now: 0 };
@@ -229,6 +239,7 @@ let seq = 0;
 async function makePhone(hub, role, o = {}) {
   const { makeSync } = await syncLib, shared = await lib;
   const storage = o.storage || memStorage(), timers = manualTimers(ms => tick(ms));
+  const scope = await scopeFor(storage);
   const p = { k: 0, hub, role, storage, timers, changes: [], toasts: [], statuses: [], offset: o.offset || 0, n: ++seq };
   p.now = () => hub.clock() + p.offset;
   if (!o.storage && !o.noDevice) { storage.set('schwab.device', { secret: o.secret || newSecret(), id: '' }); await ensureIn(storage)(); } // an up to date phone
@@ -240,7 +251,7 @@ async function makePhone(hub, role, o = {}) {
   p.attempts = 0;
   p.fetch = async (url, init) => { p.attempts++; if (p.net.down) throw new TypeError('down'); return hub.fetch(url, init); };
   const norm = o.norm || {};
-  p.sync = makeSync({ fetchImpl: o.fetchImpl || p.fetch, now: p.now, storage, timers, hidden: o.hidden || (() => false), norm, S: o.S, ensureDevice: o.ensureDevice || ensureIn(storage),
+  p.sync = makeSync({ scope, fetchImpl: o.fetchImpl || p.fetch, now: p.now, storage, timers, hidden: o.hidden || (() => false), norm, S: o.S, ensureDevice: o.ensureDevice || ensureIn(storage),
     onChange: kinds => p.changes.push({ kinds, tasks: clone(storage.get('schwab.tasks', [])) }), onStatus: s => p.statuses.push(s.state), toast: (m, tone) => p.toasts.push(m + (tone ? ` [${tone}]` : '')), linkTo: (pg, code) => `https://app.test/${pg}#p=${code}` });
   Object.assign(p, {
     tasks: () => storage.get('schwab.tasks', []),
@@ -847,7 +858,7 @@ test('translate: the cache keeps 800, oldest out, and survives a restart', async
   assert.ok(Object.keys(tr).every(k => /^en\|es\|[0-9a-z]+$/.test(k)));
   hub.tr.length = 0;
   const { makeSync } = await syncLib;
-  const again = makeSync({ fetchImpl: cp.fetch, now: cp.now, storage: cp.storage });
+  const again = makeSync({ scope: await scopeFor(cp.storage), fetchImpl: cp.fetch, now: cp.now, storage: cp.storage });
   await again.translate(all.slice(-10), 'en', 'es');
   assert.deepEqual(hub.tr, [], 'newest are still cached after a restart');
   await again.translate(all.slice(0, 3), 'en', 'es');
@@ -1384,7 +1395,7 @@ test('initHub: the browser events run cycles, a second call replaces the first, 
   g.document = { hidden: false, addEventListener: (t, f) => (on['d:' + t] = f), removeEventListener: (t, f) => { if (on['d:' + t] === f) delete on['d:' + t]; } };
   g.addEventListener = (t, f) => (on['w:' + t] = f); g.removeEventListener = (t, f) => { if (on['w:' + t] === f) delete on['w:' + t]; };
   try {
-    const opts = { storage, fetchImpl: hub.fetch, now: clock, timers, hidden: () => g.document.hidden, ensureDevice: ensureIn(storage) };
+    const opts = { scope: await scopeFor(storage), storage, fetchImpl: hub.fetch, now: clock, timers, hidden: () => g.document.hidden, ensureDevice: ensureIn(storage) };
     mod.initHub(opts);
     assert.deepEqual(Object.keys(on).sort(), ['d:visibilitychange', 'w:focus', 'w:online']);
     await timers.fire(); // start(): the first cycle
@@ -1535,8 +1546,9 @@ test('edits tapped while a pull is in flight are kept: a clock-out over a PM edi
 
 // shared.mjs keeps its own storage (ensureDevice, backupData, restoreData read and write localStorage): point it at a phone's.
 async function withLocal(storage, fn) {
-  globalThis.localStorage = { getItem: k => (storage.m.has(k) ? storage.m.get(k) : null), setItem: (k, v) => { storage.m.set(k, String(v)); }, removeItem: k => { storage.m.delete(k); } };
-  try { return await fn(); } finally { delete globalThis.localStorage; }
+  globalThis.localStorage = storage.raw;
+  // The page reloads after restore: subsequent fixture reads must use the newly selected generation.
+  try { return await fn(); } finally { await scopeFor(storage); delete globalThis.localStorage; }
 }
 
 test('a phone from before device secrets makes one when it connects, and its own shifts take the id the hub derives', async () => {
@@ -2545,7 +2557,7 @@ test('report PM controls follow the connected key role after Settings changes, w
   g.document = { hidden: false, addEventListener() {}, removeEventListener() {}, querySelector: () => null, body: { append() {} }, getElementById: id => id === 'app' ? app : id === 'toast' ? toast : null };
   g.addEventListener = g.removeEventListener = () => {};
   try {
-    mod.initHub({ storage, timers, now: clock, ensureDevice: ensureIn(storage) });
+    mod.initHub({ scope: await scopeFor(storage), storage, timers, now: clock, ensureDevice: ensureIn(storage) });
     await withLocal(storage, async () => {
       for (const role of ['super', 'crew', '']) {
         storage.set('schwab.hub', { hubUrl: URL_A, hubKey: KEYS.super, hubRole: role, hubCrew: '' });
@@ -2595,7 +2607,7 @@ test('Crew hours imports, edits and actions follow the connected key role while 
   g.addEventListener = g.removeEventListener = () => {};
   const input = { dataset: { k: 'h.guard-shift.in' }, value: '08:00', closest: () => null };
   try {
-    mod.initHub({ storage, timers, now: clock, ensureDevice: ensureIn(storage) });
+    mod.initHub({ scope: await scopeFor(storage), storage, timers, now: clock, ensureDevice: ensureIn(storage) });
     await withLocal(storage, async () => {
       for (const role of ['super', 'crew', '']) {
         storage.set('schwab.hub', { hubUrl: URL_A, hubKey: KEYS.super, hubRole: role, hubCrew: '' });
