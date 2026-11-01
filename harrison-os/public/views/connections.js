@@ -126,13 +126,14 @@ export function crossWords(c) {
   if (!g.clients.length || !g.actions.length || !g.projects.length) return 'AI clients may not read or change it (AI actions below are off).';
   const who = g.clients.map((x) => (x === 'ask' ? 'Ask' : 'MCP clients')).join(' and ');
   const what = writes.length ? 'read and change' : 'read';
-  return `${who} may ${what} it through the private PM connection, in ${g.projects.length === 1 ? 'one project' : `${g.projects.length} projects`}${data.configured ? '' : ', once that connection is set up (it is not yet)'}.`;
+  const sens = g.includeSensitive ? ', financial records and private fields included' : '';
+  return `${who} may ${what} it through the private PM connection, in ${g.projects.length === 1 ? 'one project' : `${g.projects.length} projects`}${sens}${data.configured ? '' : ', once that connection is set up (it is not yet)'}.`;
 }
 
 // The owner's control for AI actions on Electrical PM and Field Hub: which clients, which projects, which actions.
 // Saved through the owner-only route; an AI client can never reach it. Nothing is allowed until saved here.
 const CROSS_GROUPS = [
-  ['Read Electrical PM', ['project.read', 'project.schema', 'records.list', 'record.read']],
+  ['Read Electrical PM', ['project.read', 'metadata.read', 'records.list', 'record.read']],
   ['Change Electrical PM records', ['record.create', 'record.update', 'record.archive', 'record.restore']],
   ['Read Field Hub', ['field.status', 'field.read', 'field.pending']],
   ['Change Field Hub records', ['field.edit', 'field.retry']],
@@ -142,16 +143,20 @@ function crossForm(kit, data, onSaved) {
   const g = data.grant;
   const clientBoxes = [['ask', 'Ask'], ['mcp', 'MCP clients']].map(([v, label]) => [h('input', { type: 'checkbox', id: `cross-client-${v}`, value: v, checked: g.clients.includes(v) }), label]);
   const groupBoxes = CROSS_GROUPS.map(([label, acts], i) => [h('input', { type: 'checkbox', id: `cross-group-${i}`, checked: acts.every((a) => g.actions.includes(a)) }), label, acts]);
-  const projects = h('textarea', { id: 'cross-projects', rows: 2, maxlength: 2600, spellcheck: 'false', autocomplete: 'off' });
-  projects.value = g.projects.join('\n');
+  // Projects by name, from the approved Electrical PM copy; the ids stay internal. A project the grant still holds
+  // that the copy no longer lists is shown so it can be unticked.
+  const choices = Array.isArray(data.projects) ? data.projects : [];
+  const projectBoxes = choices.map((p, i) => [h('input', { type: 'checkbox', id: `cross-project-${i}`, value: p.id, checked: g.projects.includes(p.id) }), p.name || 'A project no longer in the Electrical PM copy']);
+  const sensitive = h('input', { type: 'checkbox', id: 'cross-sensitive', checked: g.includeSensitive === true });
   const note = h('p', { class: 'small', role: 'status' });
   const save = h('button', { type: 'submit', class: 'btn btn-primary', text: 'Save AI actions' });
   async function submit(e) {
     e.preventDefault();
     const body = {
       clients: clientBoxes.filter(([b]) => b.checked).map(([b]) => b.value),
-      projects: [...new Set(projects.value.split(/[\s,]+/).map((x) => x.trim()).filter(Boolean))],
+      projects: projectBoxes.filter(([b]) => b.checked).map(([b]) => b.value),
       actions: groupBoxes.filter(([b]) => b.checked).flatMap(([, , acts]) => acts),
+      includeSensitive: sensitive.checked,
     };
     await kit.guarded(save, async () => {
       const res = await kit.api('/api/connections/crossapp/grant', { method: 'PUT', body });
@@ -159,17 +164,17 @@ function crossForm(kit, data, onSaved) {
       else note.textContent = kit.failWords(res, 'save AI actions');
     });
   }
+  const check = ([b, label]) => h('span', { class: 'conn-check' }, b, h('label', { for: b.id, text: label }));
   return h(
     'form',
     { class: 'conn-grant cross-grant', onsubmit: submit },
     h('h4', { class: 'conn-grant-title', text: 'AI actions in Electrical PM and Field Hub' }),
     h('p', { class: 'conn-grant-now', text: `Now: ${crossWords({ ok: true, data })}` }),
-    h('fieldset', { class: 'conn-grant-scopes' }, h('legend', { text: 'Which AI' }),
-      ...clientBoxes.map(([b, label]) => h('span', { class: 'conn-check' }, b, h('label', { for: b.id, text: label })))),
-    h('fieldset', { class: 'conn-grant-scopes' }, h('legend', { text: 'May' }),
-      ...groupBoxes.map(([b, label]) => h('span', { class: 'conn-check' }, b, h('label', { for: b.id, text: label })))),
-    h('label', { for: 'cross-projects', text: 'Electrical PM project ids (one per line)' }),
-    projects,
+    h('fieldset', { class: 'conn-grant-scopes' }, h('legend', { text: 'Which AI' }), ...clientBoxes.map(check)),
+    h('fieldset', { class: 'conn-grant-scopes' }, h('legend', { text: 'May' }), ...groupBoxes.map(check)),
+    h('fieldset', { class: 'conn-grant-scopes' }, h('legend', { text: 'In these projects' }),
+      ...(projectBoxes.length ? projectBoxes.map(check) : [h('p', { class: 'subtle small', text: 'No Electrical PM projects to choose from yet: they appear once the private Electrical PM copy has loaded.' })])),
+    h('span', { class: 'conn-check' }, sensitive, h('label', { for: 'cross-sensitive', text: 'Also financial records and private fields (off unless you turn it on)' })),
     h('p', { class: 'subtle small', text: 'Every change goes through Electrical PM itself, which checks it, keeps its history and can refuse it; Field Hub changes go through Electrical PM too. Ask also needs Full access for Work above, and an MCP client needs Full for Work, to change anything. The AI cannot change this setting.' }),
     note,
     h('div', { class: 'button-row' }, save),

@@ -16,6 +16,9 @@ const AI_REASON = {
   timeout: 'the AI took too long',
   cancelled: 'it was cancelled',
   provider_error: 'the AI service had a problem',
+  auth_rejected: "the AI service rejected the server's API key, which needs to be replaced in the server settings",
+  permission_denied: "the AI service refused this request for the server's API key (its account or workspace settings)",
+  rate_limited: 'the AI service is busy for this account right now, so try again in a minute',
   invalid_output: 'the AI answer could not be used',
 };
 const TRIPWIRE =

@@ -11,12 +11,15 @@ const MODES = [
   ['resume', 'Catch up'],
   ['write', 'Write'],
 ];
-const REASON_WORDS = {
+export const REASON_WORDS = {
   not_configured: 'AI is not set up, so this comes straight from your saved records.',
   consent_off: 'AI is off for this view. You can turn it on per scope in Memory, under Ask with AI. In All, both Work and Personal need it on.',
   timeout: 'AI took too long, so this comes straight from your saved records.',
   cancelled: 'Stopped. This comes straight from your saved records.',
   provider_error: 'AI could not be reached just now, so this comes straight from your saved records.',
+  auth_rejected: "The AI service rejected the server's API key, so this comes straight from your saved records. The key needs to be replaced in the server settings.",
+  permission_denied: "The AI service refused this request for the server's API key (its account or workspace settings), so this comes straight from your saved records.",
+  rate_limited: 'The AI service is busy for this account right now, so this comes straight from your saved records. Try again in a minute.',
   invalid_output: 'The AI reply could not be checked against your records, so it is not shown.',
   refused: 'The AI declined to answer this one, so this comes straight from your saved records.',
   incomplete: 'The AI answer was cut off, so it is not shown. This comes straight from your saved records.',

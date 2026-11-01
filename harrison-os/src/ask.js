@@ -401,7 +401,7 @@ function askSystem({ shared, web, act = null }) {
     );
     if (act.crossProjects && act.crossProjects.length) {
       lines.push(
-        `The pm_* and field_* tools act on the real Electrical PM app, and on Field Hub through it, in the projects Harrison allowed (${act.crossProjects.join(', ')}). They change the official records, not a copy: the company project copy in Harrison OS is never the source for a change. Before a change, read the project's fields (pm_get_schema) and the record itself (pm_get_record or field_get_record), and send the revision you read. Report Electrical PM's answer as it is: the record id and receipt when it was applied, "pending" when Field Hub has not confirmed it yet, and the refusal or conflict when it was not done.`,
+        `The pm_* and field_* tools act on the real Electrical PM app, and on Field Hub through it, in the projects Harrison allowed (${act.crossProjects.join(', ')}). They change the official records, not a copy: the company project copy in Harrison OS is never the source for a change. Before a change, read the project's metadata (pm_get_metadata) and the record itself (pm_get_record or field_get_record), and send the revision you read; keys you do not give keep their values. Report Electrical PM's answer as it is: the record id and receipt when it was saved, "pending" (not saved) when Field Hub has not confirmed it yet, and the refusal or conflict when it was not done. Financial record types and secure fields are hidden from you unless Harrison allowed them; never guess them.`,
       );
     }
   } else {

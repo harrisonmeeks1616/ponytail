@@ -88,13 +88,13 @@ test('429 then success: one retry inside the deadline', async () => {
   assert.equal(f.calls.length, 2);
 });
 
-test('500 twice: provider_error after exactly one retry; 400 is not retried', async () => {
+test('500 twice: provider_error after exactly one retry; 401 is not retried', async () => {
   const f = fakeFetch([reply('{}', 500), reply('{}', 529), message('never')]);
   const r = await complete(env(), { prompt: 'p', fetchImpl: f.impl });
   assert.deepEqual(r, { ok: false, reason: 'provider_error', status: 529 });
   assert.equal(f.calls.length, 2);
   const g = fakeFetch([reply('{}', 401), message('never')]);
-  assert.deepEqual(await complete(env(), { prompt: 'p', fetchImpl: g.impl }), { ok: false, reason: 'provider_error', status: 401 });
+  assert.deepEqual(await complete(env(), { prompt: 'p', fetchImpl: g.impl }), { ok: false, reason: 'auth_rejected', status: 401 });
   assert.equal(g.calls.length, 1);
 });
 

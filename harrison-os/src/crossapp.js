@@ -1,8 +1,8 @@
 // Cross-app actions: AI clients (Ask in Full mode, MCP clients) acting on Electrical PM, and on Field Hub
 // through PM, by calling PM's own private command entrypoint. Contract: docs/CROSS_APP_ACTIONS.md.
 //
-// GET /api/connections/crossapp          owner only: { configured, grant, actions, read_actions }
-// PUT /api/connections/crossapp/grant    owner only: { clients, projects, actions } -> same shape
+// GET /api/connections/crossapp          owner only: { configured, grant, actions, read_actions, projects }
+// PUT /api/connections/crossapp/grant    owner only: { clients, projects, actions, includeSensitive? } -> same shape
 //
 // Authority:
 // - The only path is env.PM_COMMANDS_SERVICE.execute({ action, projectId, recordId?, operationId?, requestId?,
@@ -16,13 +16,14 @@
 //   The copied pm_records table (src/pm.js) is never read or written here: it is a copy, not the source.
 
 import * as db from './db.js';
+import * as pm from './pm.js';
 import { HttpError, json, apiError, iso, readJson } from './http.js';
 
 export const ACTIONS = Object.freeze([
-  'project.read', 'project.schema', 'records.list', 'record.read', 'record.create', 'record.update', 'record.archive', 'record.restore',
+  'project.read', 'metadata.read', 'records.list', 'record.read', 'record.create', 'record.update', 'record.archive', 'record.restore',
   'field.status', 'field.read', 'field.pending', 'field.edit', 'field.retry',
 ]);
-export const READ_ACTIONS = Object.freeze(['project.read', 'project.schema', 'records.list', 'record.read', 'field.status', 'field.read', 'field.pending']);
+export const READ_ACTIONS = Object.freeze(['project.read', 'metadata.read', 'records.list', 'record.read', 'field.status', 'field.read', 'field.pending']);
 export const CLIENTS = Object.freeze(['ask', 'mcp']);
 export const PROJECT_ID_PATTERN = '^[A-Za-z0-9_.:-]{1,120}$';
 const PROJECT_ID_RE = new RegExp(PROJECT_ID_PATTERN);
@@ -38,12 +39,15 @@ export function commandsConfigured(env) {
 
 // ---------------------------------------------------------------- the owner's cross-app grant
 
-const EMPTY = Object.freeze({ clients: [], projects: [], actions: [], updated_at: null });
+// includeSensitive (default false): financial record types and secure fields. Off, they never reach the model
+// and writes to them are refused; on, the validated native operations may use them too.
+const EMPTY = Object.freeze({ clients: [], projects: [], actions: [], includeSensitive: false, updated_at: null });
 
 function checkGrant(body) {
   const bad = (code, message) => new HttpError(400, code, message);
-  if (!body || typeof body !== 'object' || Array.isArray(body)) throw bad('invalid_grant', 'Send { clients, projects, actions }');
-  if (Object.keys(body).some((k) => !['clients', 'projects', 'actions'].includes(k))) throw bad('invalid_grant', 'Only clients, projects and actions can be set');
+  if (!body || typeof body !== 'object' || Array.isArray(body)) throw bad('invalid_grant', 'Send { clients, projects, actions, includeSensitive }');
+  if (Object.keys(body).some((k) => !['clients', 'projects', 'actions', 'includeSensitive'].includes(k))) throw bad('invalid_grant', 'Only clients, projects, actions and includeSensitive can be set');
+  if (body.includeSensitive !== undefined && typeof body.includeSensitive !== 'boolean') throw bad('invalid_include_sensitive', 'includeSensitive must be true or false');
   const list = (v, name, ok, max) => {
     if (!Array.isArray(v) || v.length > max || new Set(v).size !== v.length || !v.every(ok)) throw bad(`invalid_${name}`, `${name} must list distinct valid entries (at most ${max})`);
     return v;
@@ -51,7 +55,7 @@ function checkGrant(body) {
   const clients = list(body.clients, 'clients', (c) => CLIENTS.includes(c), CLIENTS.length);
   const projects = list(body.projects, 'projects', (p) => typeof p === 'string' && PROJECT_ID_RE.test(p), MAX_PROJECTS);
   const actions = list(body.actions, 'actions', (a) => ACTIONS.includes(a), ACTIONS.length);
-  return { clients: CLIENTS.filter((c) => clients.includes(c)), projects, actions: ACTIONS.filter((a) => actions.includes(a)) };
+  return { clients: CLIENTS.filter((c) => clients.includes(c)), projects, actions: ACTIONS.filter((a) => actions.includes(a)), includeSensitive: body.includeSensitive === true };
 }
 
 /** The grant in force, read fresh. No row, or one that cannot be read, allows nothing. */
@@ -60,7 +64,7 @@ export async function readCrossGrant(env, nowMs = Date.now()) {
     const raw = env.DB ? await db.kvGet(env.DB, GRANT_KEY, nowMs) : null;
     if (raw === null) return { ...EMPTY };
     const stored = JSON.parse(raw);
-    return { ...checkGrant({ clients: stored.clients, projects: stored.projects, actions: stored.actions }), updated_at: typeof stored.updated_at === 'string' ? stored.updated_at : null };
+    return { ...checkGrant({ clients: stored.clients, projects: stored.projects, actions: stored.actions, includeSensitive: stored.includeSensitive === true }), updated_at: typeof stored.updated_at === 'string' ? stored.updated_at : null };
   } catch {
     return { ...EMPTY };
   }
@@ -141,37 +145,27 @@ export async function execute(env, request, { timeoutMs = CALL_TIMEOUT_MS, write
   };
 }
 
-// ---------------------------------------------------------------- fields against PM's declared schema
+// ---------------------------------------------------------------- records against PM's declared metadata
+// metadata.read (docs/CROSS_APP_ACTIONS.md section 4) declares, per record type, its statuses, its top-level wire
+// keys and its data / financial / internalData fields, each with a kind, and maps every kind to a JSON value form.
+// Nothing is guessed: an undeclared key, a kind without a value form, or a secure field is refused here, before
+// PM is asked. PM validates everything again.
 
-/**
- * Checks fields against PM's declared field list (project.schema): every name known, editable for an update,
- * required ones present on create, values of the declared kind. -> error text, or null. PM validates again.
- */
-export function checkFields(defs, fields, { create = false } = {}) {
-  if (!Array.isArray(defs)) return 'Electrical PM did not describe these fields, so Harrison OS will not guess them.';
-  if (!fields || typeof fields !== 'object' || Array.isArray(fields)) return 'fields must be an object of field names and values';
-  if (JSON.stringify(fields).length > MAX_FIELDS_CHARS) return `fields are larger than ${MAX_FIELDS_CHARS} characters`;
-  const byName = new Map(defs.filter((d) => d && typeof d.name === 'string').map((d) => [d.name, d]));
-  for (const [name, value] of Object.entries(fields)) {
-    const d = byName.get(name);
-    if (!d) return `unknown field ${clip(name, 60)} (known: ${[...byName.keys()].slice(0, 40).join(', ')})`;
-    if (d.editable === false) return `field ${name} cannot be changed`;
-    const bad = valueProblem(d, value);
-    if (bad) return `field ${name}: ${bad}`;
-  }
-  if (create) {
-    for (const d of byName.values()) if (d.required && (fields[d.name] === undefined || fields[d.name] === null || fields[d.name] === '')) return `missing required field ${d.name}`;
-  } else if (!Object.keys(fields).length) return 'give at least one field to change';
-  return null;
+export const SECTIONS = Object.freeze(['data', 'financial', 'internalData']);
+const FORMS = new Set(['string', 'text', 'number', 'integer', 'boolean', 'date', 'datetime', 'option', 'options', 'object', 'array']);
+const isObj = (v) => !!v && typeof v === 'object' && !Array.isArray(v);
+
+export function typeOf(meta, typeId) {
+  return (meta && Array.isArray(meta.recordTypes) && meta.recordTypes.find((t) => t && t.id === typeId)) || null;
 }
 
-function valueProblem(d, v) {
+function valueProblem(form, d, v) {
   if (v === null) return d.required ? 'is required' : null;
-  const max = Number.isInteger(d.maxLength) ? d.maxLength : 20000;
-  switch (d.kind) {
+  const opts = Array.isArray(d.options) ? d.options : null;
+  switch (form) {
     case 'string':
     case 'text':
-      return typeof v !== 'string' ? 'must be text' : v.length > max ? `is longer than ${max} characters` : null;
+      return typeof v !== 'string' ? 'must be text' : v.length > 20000 ? 'is longer than 20000 characters' : null;
     case 'integer':
       return Number.isInteger(v) ? null : 'must be a whole number';
     case 'number':
@@ -180,11 +174,133 @@ function valueProblem(d, v) {
       return typeof v === 'boolean' ? null : 'must be true or false';
     case 'date':
       return typeof v === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(v) ? null : 'must be a date YYYY-MM-DD';
-    case 'enum':
-      return Array.isArray(d.values) && d.values.includes(v) ? null : `must be one of: ${Array.isArray(d.values) ? d.values.slice(0, 30).join(', ') : '(none declared)'}`;
+    case 'datetime':
+      return typeof v === 'string' && /^\d{4}-\d{2}-\d{2}T/.test(v) && !Number.isNaN(Date.parse(v)) ? null : 'must be an ISO date and time';
+    case 'option':
+      return opts ? (opts.includes(v) ? null : `must be one of: ${opts.slice(0, 30).join(', ')}`) : typeof v === 'string' ? null : 'must be text';
+    case 'options':
+      return Array.isArray(v) && v.every((x) => (opts ? opts.includes(x) : typeof x === 'string')) ? null : `must be a list${opts ? ` of: ${opts.slice(0, 30).join(', ')}` : ' of text'}`;
+    case 'object':
+      return isObj(v) ? null : 'must be an object';
+    case 'array':
+      return Array.isArray(v) ? null : 'must be a list';
     default:
-      return 'has a kind Harrison OS does not know, so it is not sent';
+      return 'has no declared value form';
   }
+}
+
+/** A financial record type (recordVisibility 'financial'): hidden and read-only for AI unless includeSensitive. */
+export const isFinancialType = (t) => !!t && t.recordVisibility === 'financial';
+
+/**
+ * Checks one write against the record type's metadata. write: { status?, topLevel, sections: { data?, ... } }.
+ * Only the keys given are checked (an update sends each touched section whole, merged by mergeSections from the
+ * complete record PM just returned, so keys not given, secure ones included, keep their current values).
+ * sensitive false: a financial type or a secure key is refused. -> error text, or null.
+ */
+export function checkRecordWrite(meta, typeId, write, { create = false, sensitive = false } = {}) {
+  const t = typeOf(meta, typeId);
+  if (!t || (!sensitive && isFinancialType(t))) return `Electrical PM declares no record type ${clip(typeId, 60)} that AI may use for this project (see pm_get_metadata)`;
+  if (JSON.stringify(write).length > MAX_FIELDS_CHARS) return `the change is larger than ${MAX_FIELDS_CHARS} characters`;
+  if (write.status !== undefined && !(Array.isArray(t.statuses) && t.statuses.includes(write.status))) {
+    return `status must be one of: ${Array.isArray(t.statuses) ? t.statuses.join(', ') : '(none declared)'}`;
+  }
+  const forms = isObj(meta.valueForms) ? meta.valueForms : {};
+  const check = (defs, values, where) => {
+    if (!isObj(values)) return `${where} must be an object`;
+    for (const [k, v] of Object.entries(values)) {
+      const d = defs.find((x) => x && x.key === k);
+      if (!d) return `unknown ${where} key ${clip(k, 60)} for ${typeId} (declared: ${defs.map((x) => x.key).slice(0, 40).join(', ') || 'none'})`;
+      if (d.secure && !sensitive) return `${where}.${k} is a secure field, and Harrison has not allowed AI to use secure fields`;
+      const form = forms[d.kind];
+      if (!FORMS.has(form)) return `${where}.${k} has kind ${clip(d.kind, 40)}, which has no declared value form, so it is not sent`;
+      const bad = valueProblem(form, d, v);
+      if (bad) return `${where}.${k} ${bad}`;
+    }
+    return null;
+  };
+  const top = Array.isArray(t.topLevel) ? t.topLevel : [];
+  let bad = check(top, write.topLevel || {}, 'top_level');
+  if (bad) return bad;
+  const secs = isObj(t.sections) ? t.sections : {};
+  for (const sec of SECTIONS) {
+    if (write.sections[sec] === undefined) continue;
+    const defs = secs[sec];
+    if (!Array.isArray(defs)) return `${typeId} has no ${sec} section`;
+    bad = check(defs, write.sections[sec], sec);
+    if (bad) return bad;
+  }
+  if (create) {
+    const missing = (defs, values) => defs.find((d) => d && d.required && (values[d.key] === undefined || values[d.key] === null || values[d.key] === ''));
+    const m = missing(top, write.topLevel || {}) || SECTIONS.map((sec) => Array.isArray(secs[sec]) && missing(secs[sec], write.sections[sec] || {})).find(Boolean);
+    if (m) return m.secure && !sensitive ? `${typeId} needs the secure field ${m.key}, which AI may not set (Harrison has not allowed secure fields): create it in Electrical PM` : `missing required field ${m.key}`;
+  } else if (write.status === undefined && !Object.keys(write.topLevel || {}).length && !SECTIONS.some((sec) => write.sections[sec] !== undefined)) {
+    return 'give at least one change';
+  }
+  return null;
+}
+
+/** The whole sections to send for an update: each touched section of the current record with the changes on top. */
+/** The metadata as the model may see it: without financial types and secure fields unless sensitive. */
+export function metadataForModel(meta, { sensitive = false } = {}) {
+  if (!isObj(meta) || sensitive) return meta;
+  const strip = (defs) => (Array.isArray(defs) ? defs.filter((d) => !(d && d.secure)) : defs);
+  const hidden = [];
+  const recordTypes = (Array.isArray(meta.recordTypes) ? meta.recordTypes : []).filter((t) => {
+    if (isFinancialType(t)) {
+      hidden.push(t.id);
+      return false;
+    }
+    return true;
+  }).map((t) => ({
+    ...t,
+    topLevel: strip(t.topLevel),
+    sections: isObj(t.sections) ? Object.fromEntries(Object.entries(t.sections).map(([k, v]) => [k, strip(v)])) : t.sections,
+  }));
+  return { ...meta, recordTypes, withheld: { note: 'Harrison has not allowed AI to use financial record types or secure fields; they are not shown and cannot be changed.', financialTypes: hidden.length } };
+}
+
+/**
+ * Anything PM sent back that may hold a record (a conflict's current DTO, a create or update answer) as the model
+ * may see it: a record-shaped object (id and type) is redacted; anything else that is not sensitive-safe is dropped.
+ */
+export function redactValue(meta, value, opts) {
+  if (opts && opts.sensitive) return value;
+  if (isObj(value) && typeof value.id === 'string' && typeof value.type === 'string') return redactRecord(meta, value, opts);
+  if (isObj(value) && isObj(value.record)) return { ...value, record: redactRecord(meta, value.record, opts) };
+  if (isObj(value) && Array.isArray(value.records)) return { ...value, records: value.records.map((r) => redactRecord(meta, r, opts)).filter((r) => r !== null) };
+  return value;
+}
+
+export function mergeSections(current, sections) {
+  const out = {};
+  for (const sec of SECTIONS) if (sections[sec] !== undefined) out[sec] = { ...(isObj(current && current[sec]) ? current[sec] : {}), ...sections[sec] };
+  return out;
+}
+
+/**
+ * A record as the model may see it. sensitive true: as PM returned it. Otherwise a financial type is null (not
+ * shown at all) and every secure field is removed and listed in withheld. An undescribed type shows only its
+ * identity: nothing is passed on that the metadata did not describe.
+ */
+export function redactRecord(meta, rec, { sensitive = false } = {}) {
+  if (!isObj(rec) || sensitive) return rec;
+  const t = typeOf(meta, rec.type);
+  if (t && isFinancialType(t)) return null;
+  if (!t) {
+    const { id, type, revision, status, archived } = rec;
+    return { id, type, revision, status, archived, withheld: ['every field: Electrical PM did not describe this record type'] };
+  }
+  const out = { ...rec };
+  const withheld = [];
+  for (const d of Array.isArray(t.topLevel) ? t.topLevel : []) if (d && d.secure && d.key in out) { delete out[d.key]; withheld.push(d.key); }
+  for (const sec of SECTIONS) {
+    const defs = isObj(t.sections) && Array.isArray(t.sections[sec]) ? t.sections[sec] : [];
+    if (!isObj(out[sec])) continue;
+    out[sec] = { ...out[sec] };
+    for (const d of defs) if (d && d.secure && d.key in out[sec]) { delete out[sec][d.key]; withheld.push(`${sec}.${d.key}`); }
+  }
+  return withheld.length ? { ...out, withheld } : out;
 }
 
 // ---------------------------------------------------------------- owner routes
@@ -192,9 +308,24 @@ function valueProblem(d, v) {
 const ownerOnly = (ctx) => ['owner', 'dev'].includes(ctx.identity && ctx.identity.kind);
 const forbidden = () => apiError(403, 'forbidden', 'This identity may not call this route');
 
+// Project names for the owner's checkboxes, from the approved live PM digest copy (labels only; never used as the
+// source for a change). Ids the grant holds that the copy does not list stay listed, so they can be unticked.
+async function projectChoices(env, nowMs, granted) {
+  let live = [];
+  try {
+    const digest = await pm.listDigest(env.DB, 'work', { nowMs, env });
+    live = digest.projects.filter((p) => p.source_id === pm.HTTP_SOURCE_ID && !p.sample && typeof p.provider_id === 'string' && PROJECT_ID_RE.test(p.provider_id))
+      .map((p) => ({ id: p.provider_id, name: clip(p.name, 200) }));
+  } catch {
+    live = [];
+  }
+  const seen = new Set(live.map((p) => p.id));
+  return [...live, ...granted.filter((id) => !seen.has(id)).map((id) => ({ id, name: null }))];
+}
+
 async function statusBody(env, nowMs) {
   const g = await readCrossGrant(env, nowMs);
-  return { configured: commandsConfigured(env), grant: g, actions: ACTIONS, read_actions: READ_ACTIONS };
+  return { configured: commandsConfigured(env), grant: g, actions: ACTIONS, read_actions: READ_ACTIONS, projects: await projectChoices(env, nowMs, g.projects) };
 }
 
 async function getStatus(ctx) {

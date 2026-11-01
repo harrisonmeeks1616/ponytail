@@ -8,7 +8,7 @@ import { createTestDb } from './helpers/d1.mjs';
 import { createWorker } from '../src/api.js';
 import { answerQuestion, AI_LABEL, NOT_AI_LABEL, LOCAL_LABEL } from '../src/ask.js';
 import { converse, webState } from '../src/ai.js';
-import { webLinkHref } from '../public/views/ask.js';
+import { webLinkHref, REASON_WORDS } from '../public/views/ask.js';
 
 const BASE = 'http://127.0.0.1:8899';
 const TZ = 'America/New_York';
@@ -228,6 +228,44 @@ test('org-disabled web tools (HTTP 400): only the tool the provider names is dro
   assert.equal(d.live_ai, false);
   assert.equal(d.label, NOT_AI_LABEL);
   assert.equal(d.fallback_reason, 'provider_error');
+});
+
+test('HTTP status reasons: 401 auth_rejected and 403 permission_denied, never retried; 429 twice rate_limited; 500 provider_error', async () => {
+  const { env } = setup();
+  const err = (status) => () => new Response(JSON.stringify({ type: 'error', error: { type: 'x', message: 'nope' } }), { status });
+  const messages = [{ role: 'user', content: 'hi' }];
+  const logs = [];
+  const orig = console.log;
+  console.log = (s) => logs.push(String(s));
+  try {
+    for (const [script, reason, status, attempts] of [
+      [[err(401), msg([text('never')])], 'auth_rejected', 401, 1],
+      [[err(403), msg([text('never')])], 'permission_denied', 403, 1],
+      [[err(429), err(429), msg([text('never')])], 'rate_limited', 429, 2],
+      [[err(500), err(500), msg([text('never')])], 'provider_error', 500, 2],
+    ]) {
+      const p = provider(...script);
+      const r = await converse(env, { messages, fetchImpl: p.fetchImpl });
+      assert.equal(r.ok, false);
+      assert.equal(r.reason, reason, String(status));
+      assert.equal(r.status, status);
+      assert.equal(p.calls.length, attempts, `${status} attempts`);
+    }
+    // Ask on a rejected key: one attempt, labelled Not AI, and words that point at the key, not the network.
+    const p = provider(err(401), msg([text('never')]));
+    const a = await ask(env, p.aiImpl);
+    assert.equal(p.calls.length, 1);
+    assert.equal(a.live_ai, false);
+    assert.equal(a.label, NOT_AI_LABEL);
+    assert.equal(a.fallback_reason, 'auth_rejected');
+    for (const r of ['auth_rejected', 'permission_denied', 'rate_limited']) assert.ok(REASON_WORDS[r] && !/could not be reached/.test(REASON_WORDS[r]), r);
+  } finally {
+    console.log = orig;
+  }
+  // Logs carry codes and counts only, never the key.
+  const all = logs.join('\n');
+  assert.match(all, /"reason":"auth_rejected","status":401,"attempts":1/);
+  assert.ok(!all.includes(env.AI_API_KEY));
 });
 
 test('AI_WORKSPACE_ID: a valid id is sent as anthropic-workspace-id; unset or malformed sends no header', async () => {
