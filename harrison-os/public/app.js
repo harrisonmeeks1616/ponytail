@@ -1779,6 +1779,7 @@ function waitingCard(it, today) {
       dataset: { fk: `done-${it.id}` },
       onclick: (e) => itemAction(e.currentTarget, { id: it.id, scope: it.scope, action: 'complete', done: 'Marked done.', failure: 'mark it done' }),
     }),
+    editItemButton(it),
   );
   card.append(actions);
 
@@ -2254,6 +2255,149 @@ function taskSheet(it, projects) {
   return wrap;
 }
 
+// Waiting, reference and idea items: the same edit conventions as the task sheet (only changed fields are
+// sent, Undo on the toast, the scope never changes). Tasks keep their own sheet; decisions are replaced,
+// never edited in place, so their history stays.
+const ITEM_EDIT_KINDS = ['waiting', 'reference', 'idea'];
+
+async function openItemSheet(button, id, scope) {
+  if (!isScope(scope) || !PATH_ID_RE.test(String(id || ''))) {
+    showNotice('Could not open it. Its scope is unknown.');
+    return;
+  }
+  await guarded(button, async () => {
+    const [r, projects] = await Promise.all([api(`/api/items/${enc(id)}?${qs({ scope })}`), activeProjectsIn(scope)]);
+    if (!r.ok) {
+      showNotice(failWords(r, 'open it'));
+      return;
+    }
+    const it = normaliseItem(r.data.item, scope);
+    if (it.kind === 'task') {
+      openEditSheet('Edit task', taskSheet(it, projects), button);
+      return;
+    }
+    if (!ITEM_EDIT_KINDS.includes(it.kind)) {
+      showNotice('Decisions are replaced, not edited, so the old one stays on record.');
+      return;
+    }
+    openEditSheet(`Edit ${KIND_LABEL[it.kind] ? KIND_LABEL[it.kind].toLowerCase() : 'item'}`, itemSheet(it, projects), button);
+  });
+}
+
+function itemSheet(it, projects) {
+  const n = ++formSeq;
+  const form = h('form', { class: 'form', novalidate: true });
+  const inputs = { title: field(form, { id: `is-${n}-title`, label: it.kind === 'waiting' ? 'What you are waiting for' : 'Title', value: it.title, maxlength: 500 }) };
+  if (it.kind === 'waiting') {
+    inputs.who = field(form, { id: `is-${n}-who`, label: 'Who', value: it.who || '', hint: 'The person or company it is waiting on.' });
+    inputs.asked_on = field(form, { id: `is-${n}-asked`, label: 'Asked on', kind: 'date', value: it.asked_on || '' });
+    inputs.promised_on = field(form, { id: `is-${n}-promised`, label: 'Promised by', kind: 'date', value: it.promised_on || '', hint: 'Only a date they actually gave. Leave empty if none was stated.' });
+    inputs.follow_up_on = field(form, { id: `is-${n}-follow`, label: 'Follow up on', kind: 'date', value: it.follow_up_on || '' });
+  }
+  inputs.body = field(form, { id: `is-${n}-notes`, label: 'Notes', kind: 'textarea', value: it.body || '' });
+  const projectOptions = [{ value: '', label: 'No project' }, ...projects.map((p) => ({ value: p.id, label: p.name || '(no name)' }))];
+  if (it.project_id && !projects.some((p) => p.id === it.project_id)) projectOptions.push({ value: it.project_id, label: 'Current project' });
+  inputs.project_id = field(form, { id: `is-${n}-project`, label: 'Project', kind: 'select', value: it.project_id || '', options: projectOptions });
+  const err = h('p', { class: 'field-error', role: 'alert', hidden: true });
+  const save = h('button', { type: 'submit', class: 'btn btn-primary', text: 'Save changes' });
+  form.append(err, h('div', { class: 'button-row' }, save, h('button', { type: 'button', class: 'btn btn-secondary', text: 'Cancel', onclick: closeEditSheet })));
+  form.addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const patch = {};
+    for (const [k, input] of Object.entries(inputs)) {
+      const v = input.value.trim() || null;
+      const was = it[k] === undefined || it[k] === '' ? null : it[k];
+      if (v !== was) patch[k] = v;
+    }
+    if ('title' in patch && !patch.title) {
+      err.textContent = 'A title is needed.';
+      err.hidden = false;
+      return;
+    }
+    err.hidden = true;
+    if (!Object.keys(patch).length) {
+      closeEditSheet();
+      setStatus('Nothing changed.');
+      return;
+    }
+    await guarded(save, async () => {
+      const r = await api(`/api/items/${enc(it.id)}`, { method: 'PATCH', body: { ...patch, scope: it.scope } });
+      logEvent({ kind: 'item_patch', id: it.id, fields: Object.keys(patch).length, status: r.status, ok: r.ok });
+      if (!r.ok) {
+        // The form stays open with what was typed.
+        err.textContent = failWords(r, 'save the changes');
+        err.hidden = false;
+        return;
+      }
+      closeEditSheet();
+      showToast('Saved.', changeIdFrom(r.data));
+      reloadCurrent();
+    });
+  });
+  return h('div', { class: 'stack' }, form, section('Put away', h('div', { class: 'button-row' }, deleteItemButton(it, { inSheet: true })), `is-${n}-away`));
+}
+
+function editItemButton(it) {
+  return h('button', {
+    type: 'button',
+    class: 'btn btn-secondary',
+    text: 'Edit',
+    'aria-label': `Edit: ${it.title || 'item'}`,
+    dataset: { fk: `edit-item-${it.id}` },
+    onclick: (e) => openItemSheet(e.currentTarget, it.id, it.scope),
+  });
+}
+
+// Projects: name, purpose and state. Undo on the toast, like every other edit.
+function openProjectSheet(button, pd) {
+  const p = pd.project;
+  const n = ++formSeq;
+  const form = h('form', { class: 'form', novalidate: true });
+  const name = field(form, { id: `ps-${n}-name`, label: 'Name', value: p.name || '', maxlength: 200 });
+  const purpose = field(form, { id: `ps-${n}-purpose`, label: 'Purpose', kind: 'textarea', value: p.purpose || '' });
+  const st = field(form, {
+    id: `ps-${n}-state`,
+    label: 'State',
+    kind: 'select',
+    value: p.state || 'active',
+    options: [{ value: 'active', label: 'Active' }, { value: 'done', label: 'Done' }, { value: 'archived', label: 'Archived' }],
+    hint: 'Done and archived projects leave Today and the project pickers. Nothing on them is deleted.',
+  });
+  const err = h('p', { class: 'field-error', role: 'alert', hidden: true });
+  const save = h('button', { type: 'submit', class: 'btn btn-primary', text: 'Save changes' });
+  form.append(err, h('div', { class: 'button-row' }, save, h('button', { type: 'button', class: 'btn btn-secondary', text: 'Cancel', onclick: closeEditSheet })));
+  form.addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const next = { name: name.value.trim(), purpose: purpose.value.trim() || null, state: st.value };
+    if (!next.name) {
+      err.textContent = 'A project needs a name.';
+      err.hidden = false;
+      return;
+    }
+    const patch = {};
+    const was = (k) => (k === 'state' ? p.state || 'active' : p[k] === undefined || p[k] === '' ? null : p[k]);
+    for (const [k, v] of Object.entries(next)) if (v !== was(k)) patch[k] = v;
+    if (!Object.keys(patch).length) {
+      closeEditSheet();
+      setStatus('Nothing changed.');
+      return;
+    }
+    await guarded(save, async () => {
+      const r = await api(`/api/projects/${enc(pd.id)}`, { method: 'PATCH', body: { ...patch, scope: pd.scope } });
+      logEvent({ kind: 'project_patch', id: pd.id, fields: Object.keys(patch).length, status: r.status, ok: r.ok });
+      if (!r.ok) {
+        err.textContent = failWords(r, 'save the project');
+        err.hidden = false;
+        return;
+      }
+      closeEditSheet();
+      showToast('Project saved.', changeIdFrom(r.data));
+      reloadCurrent();
+    });
+  });
+  openEditSheet('Edit project', form, button);
+}
+
 // Hard delete with a confirm that says what goes. No Undo: the undo history goes with it.
 function deleteItemButton(it, { inSheet = false, after } = {}) {
   return h('button', {
@@ -2636,6 +2780,9 @@ function renderProject() {
     h('span', { class: 'chips' }, scopeChip(pd.scope), sampleChip(p), p.state && p.state !== 'active' ? chip('chip-kind', p.state === 'done' ? 'Done' : 'Archived') : null),
   );
   if (p.purpose) body.append(h('p', { class: 'purpose', text: p.purpose }));
+  body.append(
+    h('div', { class: 'button-row' }, h('button', { type: 'button', class: 'btn btn-secondary', text: 'Edit project', dataset: { fk: `edit-project-${pd.id}` }, onclick: (e) => openProjectSheet(e.currentTarget, pd) })),
+  );
 
   body.append(placeCard(pd));
 
@@ -2962,6 +3109,7 @@ function searchRow(row) {
         }),
       );
     }
+    if (kind !== 'decision') actions.append(editItemButton(it));
     actions.append(deleteItemButton(it, { after: () => runSearch(state.search ? state.search.q : '') }));
     li.append(actions);
   }

@@ -155,3 +155,7 @@ export is equal apart from `exported_at` (tests/core-restore.test.mjs).
 - `db.nextOccurrenceOn(recurrence, dueOn, todayOn, anchorDay?)` is pure.
 - D1 note: a statement's `meta.changes` is not reliable after an FTS5 write in the same batch; read back
   or count first.
+
+## Reminders: edit
+
+`PATCH /api/reminders/:id` with `{ scope, text?, local_date?, local_time?, time_zone?, recurrence? }` edits an active reminder. Only the fields sent change. The next firing is worked out exactly as at creation: wall-clock time in the reminder's zone, DST-safe (`first_fire.adjustment` reports a skipped or repeated hour), and a one-off whose new time has passed is refused (`422`). The write is guarded on the next firing the edit was based on: a reminder that fired, was cancelled or changed meanwhile answers `409` and nothing changes. Other scope: `404`. Reminders keep no undo history (cancel and recreate instead). UI: `#/reminders` lists, creates, edits and cancels them.

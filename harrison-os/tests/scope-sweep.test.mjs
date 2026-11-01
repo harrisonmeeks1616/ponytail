@@ -217,6 +217,12 @@ const FIXTURES = {
     own: ['PUT', '/api/preferences/sweep.tone', { scope: 'personal', value: `${CANARY} edited` }],
     reads: true,
   }),
+  'PATCH /api/reminders/([A-Za-z0-9_.:-]{1,120})': (P) => ({
+    cross: ['PATCH', `/api/reminders/${P.reminder}`, { scope: 'work', text: 'sweep other words' }],
+    own: ['PATCH', `/api/reminders/${P.reminder}`, { scope: 'personal', text: `${CANARY} reminder edited` }],
+    reads: true,
+    crossOk: (r) => r.status === 404,
+  }),
   // Restore of a personal export: into work every row is rejected; into personal every row already exists.
   'POST /api/restore': async (P, call) => {
     const data = JSON.parse((await call('GET', '/api/export?scope=personal')).text);

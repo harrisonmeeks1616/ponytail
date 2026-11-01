@@ -1359,6 +1359,118 @@ const scenarios = [
       }
     },
   },
+  {
+    id: 'F17',
+    name: 'owner editors: Waiting item, Memory note, project and reminders (create, edit, reload, cancel, stale edit keeps words); other scope untouched',
+    async run() {
+      const { context, page } = await openApp('F17', { offlineExpected: true });
+      const toastText = async () => {
+        await page.waitForSelector('#toast:not([hidden])', { timeout: 10000 });
+        return waitFor(async () => (await page.textContent('#toast-text')) || false, { what: 'toast text' });
+      };
+      const hideToast = () => page.evaluate(() => (document.getElementById('toast').hidden = true));
+      const sheetSave = async () => {
+        await page.locator('#edit-sheet[open]').getByRole('button', { name: 'Save changes' }).click();
+        await page.waitForSelector('#edit-sheet:not([open])', { state: 'attached', timeout: 10000 });
+      };
+      const item = async (id, scope) => (await apiOk('GET', `/api/items/${id}?scope=${scope}`)).item;
+      try {
+        // Waiting: edit who and promised date, reload, then Undo.
+        const w = (await apiOk('POST', '/api/items', { scope: 'work', kind: 'waiting', title: 'Sample panel quote', who: 'Sample Supplier', asked_on: '2026-10-20' })).item;
+        const wp = (await apiOk('POST', '/api/items', { scope: 'personal', kind: 'waiting', title: 'Sample panel quote', who: 'Sample Neighbour' })).item;
+        await start(page, '#/today');
+        await setScopeSwitch(page, 'work');
+        await gotoRoute(page, '#/waiting');
+        await page.getByRole('button', { name: 'Edit: Sample panel quote' }).click();
+        await page.locator('#edit-sheet[open] form').waitFor({ timeout: 10000 });
+        await page.getByLabel('Who').fill('Sample Supplier, estimating desk');
+        await page.getByLabel('Promised by').fill('2026-11-04');
+        await sheetSave();
+        const t1 = await toastText();
+        let wNow = await item(w.id, 'work');
+        check(wNow.who === 'Sample Supplier, estimating desk' && wNow.promised_on === '2026-11-04' && wNow.asked_on === '2026-10-20', `waiting after edit ${JSON.stringify(wNow)}`);
+        check((await item(wp.id, 'personal')).who === 'Sample Neighbour', 'personal waiting item changed');
+        await page.reload({ waitUntil: 'load' });
+        await waitAppReady(page);
+        check(/Sample Supplier, estimating desk/.test(await page.textContent('#waiting-body')), 'edit not shown after reload');
+        await hideToast();
+        // Undo through the change id, like the toast button does.
+        await page.evaluate(() => (location.hash = '#/waiting'));
+        await page.getByRole('button', { name: 'Edit: Sample panel quote' }).click();
+        await page.locator('#edit-sheet[open] form').waitFor({ timeout: 10000 });
+        await page.getByLabel('Notes').fill('Sample note to undo');
+        await sheetSave();
+        await toastText();
+        await page.click('#toast-undo');
+        await waitFor(async () => (await item(w.id, 'work')).body == null, { what: 'Undo restored the notes' });
+
+        // Memory note (reference) edited from search.
+        const ref = (await apiOk('POST', '/api/items', { scope: 'work', kind: 'reference', title: 'Sample gate code location' })).item;
+        await gotoRoute(page, '#/memory');
+        await searchUi(page, 'gate');
+        await page.getByRole('button', { name: 'Edit: Sample gate code location' }).click();
+        await page.locator('#edit-sheet[open] form').waitFor({ timeout: 10000 });
+        await page.getByLabel('Title').fill('Sample gate code is in the site binder');
+        await sheetSave();
+        check((await item(ref.id, 'work')).title === 'Sample gate code is in the site binder', 'reference title not saved');
+
+        // Project: purpose and state.
+        const pr = (await apiOk('POST', '/api/projects', { scope: 'work', name: 'Sample lobby project' })).project;
+        await gotoRoute(page, `#/project/${pr.id}`);
+        await page.getByRole('button', { name: 'Edit project' }).click();
+        await page.locator('#edit-sheet[open] form').waitFor({ timeout: 10000 });
+        await page.getByLabel('Purpose').fill('Sample: lobby lighting retrofit');
+        await page.getByLabel('State').selectOption('done');
+        await sheetSave();
+        const t3 = await toastText();
+        const prNow = (await apiOk('GET', `/api/projects/${pr.id}?scope=work`)).project;
+        check(prNow.purpose === 'Sample: lobby lighting retrofit' && prNow.state === 'done', `project after edit ${JSON.stringify(prNow)}`);
+        await hideToast();
+
+        // Reminders: create, edit, reload, stale edit, cancel. A personal reminder stays untouched.
+        await apiOk('POST', '/api/reminders', { id: 'rem-f17-personal-01', scope: 'personal', text: 'Sample personal reminder', local_date: todayOnIn(TZ, Date.now() + 2 * 86400000), local_time: '08:00', time_zone: TZ });
+        const tomorrow = todayOnIn(TZ, Date.now() + 86400000);
+        await gotoRoute(page, '#/reminders');
+        await page.waitForSelector('#rem-new-h', { timeout: 15000 });
+        const newForm = page.locator('section[aria-labelledby="rem-new-h"] form');
+        await newForm.getByLabel('Remind me to').fill('Sample call the inspector');
+        await newForm.getByLabel('Date').fill(tomorrow);
+        await newForm.getByLabel('Time').fill('09:30');
+        await newForm.getByRole('button', { name: 'Add reminder' }).click();
+        const t4 = await toastText();
+        const mine = async () => (await apiOk('GET', '/api/reminders?scope=work')).items.find((x) => x.text.startsWith('Sample call the inspector'));
+        let rem = await waitFor(mine, { what: 'reminder created' });
+        check(rem.local_date === tomorrow && rem.local_time === '09:30' && rem.time_zone === TZ && rem.state === 'active', `created ${JSON.stringify(rem)}`);
+        await hideToast();
+        const row = () => page.locator(`li.rem-row[data-id="${rem.id}"]`);
+        await row().getByRole('button', { name: /^Edit reminder/ }).click();
+        await row().getByLabel('Time').fill('10:15');
+        await row().getByLabel('Repeat').selectOption('daily');
+        await row().getByRole('button', { name: 'Save changes' }).click();
+        await toastText();
+        rem = await mine();
+        check(rem.local_time === '10:15' && rem.recurrence === 'daily' && rem.next_fire_label, `edited ${JSON.stringify(rem)}`);
+        await page.reload({ waitUntil: 'load' });
+        await waitAppReady(page);
+        await page.waitForSelector(`li.rem-row[data-id="${rem.id}"]`, { timeout: 15000 });
+        check(/Every day/.test(await row().textContent()), 'edit not shown after reload');
+        // Stale edit: cancelled elsewhere while the form is open -> message, words kept.
+        await row().getByRole('button', { name: /^Edit reminder/ }).click();
+        await row().getByLabel('Remind me to').fill('Sample call the inspector, words typed before a conflict');
+        await apiOk('POST', `/api/reminders/${rem.id}/cancel`, { scope: 'work' });
+        await row().getByRole('button', { name: 'Save changes' }).click();
+        await row().locator('.field-error:not([hidden])').waitFor({ timeout: 10000 });
+        const kept = await row().getByLabel('Remind me to').inputValue();
+        check(kept === 'Sample call the inspector, words typed before a conflict', `typed words lost: ${kept}`);
+        check((await mine()).state === 'cancelled', 'stale edit changed a cancelled reminder');
+        const pers = (await apiOk('GET', '/api/reminders?scope=personal')).items.find((x) => x.id === 'rem-f17-personal-01');
+        check(pers && pers.state === 'active' && pers.text === 'Sample personal reminder', 'personal reminder touched');
+        return `waiting who/promised saved + reload + Undo ("${t1}"); reference retitled from Memory; project purpose/state saved ("${t3}"); reminder created ("${t4}"), edited to daily 10:15 and kept after reload; stale edit refused with typed words kept; personal records untouched`;
+      } finally {
+        await context.close();
+      }
+    },
+  },
 ];
 
 // After the scenarios: no sample text in server output or events.

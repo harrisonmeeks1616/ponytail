@@ -2254,6 +2254,38 @@ export async function listReminders(db, scope, { limit = 100 } = {}) {
   return reminders.map((r) => ({ ...r, deliveries: by.get(r.id) || [] }));
 }
 
+/**
+ * Edits an active reminder's words, local date, time, zone and recurrence. The next firing is worked out
+ * exactly as at creation (buildReminderRow: wall-clock time in its zone, DST-safe; a past one-off is refused).
+ * Guarded on the loaded next_fire_at: if the cron fired or another edit landed in between, nothing is
+ * written and a ConflictError comes back, so an edit never lands on an occurrence the user did not see.
+ */
+export async function updateReminder(db, id, fields, scope, nowIso) {
+  const s = oneScope(scope);
+  const before = await firstOf(db, 'SELECT * FROM reminders WHERE id = ? AND scope = ?', id, s);
+  if (!before) throw new NotFoundError('No such reminder');
+  if (before.state !== 'active') throw new ConflictError('This reminder already fired or was cancelled', 'not_active');
+  const f = fields || {};
+  const merged = {
+    id: before.id,
+    text: f.text ?? before.text,
+    localDate: f.localDate ?? before.local_date,
+    localTime: f.localTime ?? before.local_time,
+    timeZone: f.timeZone ?? before.time_zone,
+    recurrence: f.recurrence ?? before.recurrence,
+    itemId: before.item_id,
+    sample: before.sample,
+  };
+  const { row, firstFire } = buildReminderRow(merged, s, nowIso);
+  const res = await stmt(
+    db,
+    "UPDATE reminders SET text = ?, time_zone = ?, local_date = ?, local_time = ?, recurrence = ?, next_fire_at = ? WHERE id = ? AND scope = ? AND state = 'active' AND next_fire_at IS ?",
+    row.text, row.time_zone, row.local_date, row.local_time, row.recurrence, row.next_fire_at, id, s, before.next_fire_at,
+  ).run();
+  if (changesOf(res) !== 1) throw new ConflictError('This reminder changed while saving', 'concurrent_change');
+  return { reminder: await firstOf(db, 'SELECT * FROM reminders WHERE id = ?', id), firstFire };
+}
+
 export async function cancelReminder(db, id, scope) {
   const s = oneScope(scope);
   const row = await firstOf(db, 'SELECT * FROM reminders WHERE id = ? AND scope = ?', id, s);

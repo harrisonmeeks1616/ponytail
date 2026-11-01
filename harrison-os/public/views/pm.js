@@ -37,6 +37,13 @@ export function register(kit) {
     deviceTimeZone, addRoute, addTodayBlock, addMemoryBlock, reloadCurrent,
   } = kit;
   let loadSeq = 0;
+  // Where to change the records: the Electrical PM app itself, when its address is configured.
+  const pmAppLink = () => {
+    const url = state.session && state.session.apps && state.session.apps.pm;
+    return url
+      ? h('p', null, h('a', { class: 'btn btn-secondary', href: url, target: '_blank', rel: 'noopener noreferrer', 'aria-label': 'Open Electrical PM (opens in a new tab)' }, 'Open Electrical PM', h('span', { 'aria-hidden': 'true', text: ' \u2197' })))
+      : null;
+  };
   let updateTarget = null; // an import source the next file replaces
 
   const digest = (scope) => api(`/api/pm/digest?${qs({ scope, tz: deviceTimeZone() })}`);
@@ -167,7 +174,8 @@ export function register(kit) {
     const manage = h('p', null, h('a', { class: 'inline-link', href: '#/memory', text: 'Import, refresh or remove sources in Memory' }));
     // h() skips a missing source summary; replaceChildren() itself would print null as text.
     body.replaceChildren(h('div', null,
-      h('p', { class: 'subtle', text: 'A read-only copy. The company system is the official record: open an item there to change it.' }),
+      h('p', { class: 'subtle', text: 'A copy of company project status from an export file, as of the time shown. Electrical PM is the official record: change projects and items there.' }),
+      pmAppLink(),
       projects.length
         ? h('div', { class: 'stack' }, projects.map(projectCard))
         : h('p', { class: 'empty', text: state.scope === 'personal' ? 'No company projects in Personal.' : 'No company projects yet. Import an export file or load the sample in Memory.' }),
@@ -304,7 +312,7 @@ export function register(kit) {
 
   addMemoryBlock(async (_none, scope) => {
     const card = h('section', { class: 'card pm-memory', 'aria-labelledby': 'pm-memory-h' }, h('h2', { id: 'pm-memory-h', text: 'Company project sources' }));
-    card.append(h('p', { class: 'subtle', text: 'Read-only copies of company project status. The company system stays the official record.' }));
+    card.append(h('div', null, h('p', { class: 'subtle', text: 'Copies of company project status. Electrical PM stays the official record; edits are made there.' }), pmAppLink()));
     const r = await api(`/api/pm/sources?${qs({ scope })}`);
     if (!r.ok) {
       card.append(noticeBlock(failWords(r, 'load project sources'), () => reloadCurrent()));

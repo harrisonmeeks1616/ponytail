@@ -18,7 +18,7 @@ function sourcesRow(name, results, key, { none, problem }) {
   if (!real.length) return { name, status: 'Sample only', tone: 'warn', detail: 'Showing labelled sample data, not a real source.', need: none };
   const ok = real.filter((c) => c.state === 'ok').length;
   if (!ok) return { name, status: 'Added, not loaded yet', tone: 'warn', detail: null, need: 'Refresh it once to load it.' };
-  return { name, status: 'Connected, read-only', tone: 'good', detail: `${ok} of ${real.length} loaded.`, need: null };
+  return { name, status: 'Copy loaded', tone: 'good', detail: `${ok} of ${real.length} loaded. Change these in their own app; Harrison OS shows a copy.`, need: null };
 }
 
 function rowsOf(results, key) {
@@ -52,7 +52,7 @@ export function summarize({ ai, calendar = [], pm = [], mcp, apps = null }, { fo
     problem: 'A calendar could not be updated.',
   }));
   rows.push(sourcesRow('Company projects', pm, 'sources', {
-    none: 'Import a project export from the company system, or add an authorized digest link.',
+    none: 'Import a project export file from Electrical PM. A live link would need a digest endpoint in Electrical PM, which it does not have yet.',
     problem: 'A project source could not be updated.',
   }));
 
@@ -92,8 +92,13 @@ export function summarize({ ai, calendar = [], pm = [], mcp, apps = null }, { fo
         : { name, status: 'Not linked', tone: 'none', detail: 'Add its web address to open it from Harrison OS.', need: `${setting} in the server settings (docs/DEPLOY.md).` },
     );
   }
+  for (const r of rows) r.group = SOURCE_ROWS.has(r.name) ? 'source' : 'setup';
   return rows;
 }
+
+// Calendar, company projects and the two official apps hold their own records: Harrison OS shows a copy or a
+// link, and changes are made there. Everything else in the list is an optional service that needs setup.
+const SOURCE_ROWS = new Set(['Calendar', 'Company projects', 'Electrical PM app', 'Field Hub']);
 
 function hostOf(url) {
   try {
@@ -124,10 +129,10 @@ export function register(kit) {
       each(has.pm, '/api/pm/sources'),
     ]);
     const rows = summarize({ ai, mcp, calendar, pm, apps: await appLinks() }, { formatAt });
-    const list = h(
+    const listOf = (group) => h(
       'ul',
       { class: 'list conn-list' },
-      ...rows.map((r) =>
+      ...rows.filter((r) => r.group === group).map((r) =>
         h(
           'li',
           { class: 'plain-row conn-row' },
@@ -138,7 +143,15 @@ export function register(kit) {
         ),
       ),
     );
-    return section('Connections', list, 'connections');
+    const sub = (title, body) => h('div', { class: 'conn-group' }, h('h3', { class: 'conn-group-title', text: title }), body);
+    const content = h(
+      'div',
+      null,
+      sub('Kept in Harrison OS', h('p', { class: 'subtle', text: 'Tasks, waiting-on, notes, ideas, decisions, projects and reminders live here: open one and edit it.' })),
+      sub('Copies and links: edit them in their own app', listOf('source')),
+      sub('Optional, needs setup', listOf('setup')),
+    );
+    return section('Connections', content, 'connections');
   });
 
   // The session (which carries the links) loads alongside the first screen, so it may not be here yet.

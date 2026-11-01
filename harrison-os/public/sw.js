@@ -2,7 +2,7 @@
 // Shell caching with network-first navigations, plus reminder push and click handling.
 // Bump CACHE_NAME whenever any shell file changes.
 const CACHE_PREFIX = 'hos-';
-const CACHE_NAME = 'hos-v12';
+const CACHE_NAME = 'hos-v13';
 
 // '/' is the app page (index.html). Workers static assets may redirect /index.html
 // to /, so the page is cached under '/'. Google Fonts are not cached: offline, the
@@ -25,6 +25,7 @@ const SHELL = [
   '/views/weekly.js',
   '/views/weekly.css',
   '/views/connections.js',
+  '/views/reminders.js',
   '/views/connections.css',
   '/manifest.webmanifest',
   '/icons/icon-180.png',
