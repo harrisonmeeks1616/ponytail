@@ -12,7 +12,7 @@ import {
   prefKeyFrom, prefLabel, restoreWords, taskMatches, shareText,
 } from './outbox-core.js';
 import { openStores } from './idb.js';
-import { writeDraftWhenReady, putCaptureOnce, queueFiles, mergeBack, mergeFiles, captureTextOf, draftConsumedBy, settleWithin, settleStoredDraft, sameCapture } from './capture-core.js';
+import { writeDraftWhenReady, putCaptureOnce, queueFiles, mergeBack, mergeFiles, captureTextOf, draftConsumedBy, settleWithin, settleStoredDraft, sameCapture, draftSnapshot } from './capture-core.js';
 import { VIEW_MODULES } from './views/index.js';
 
 const CLIENT_BUILD = 'ui-3';
@@ -88,7 +88,7 @@ const state = {
   draftId: null,
   draftTimer: null,
   draftGen: 0,
-  lastDraft: null, // { id, text, updated_at } of the last draft this tab wrote
+  lastDraft: null, // draftSnapshot of the last draft this tab wrote or adopted (its own draft)
   today: null,
   todayError: null,
   returnView: null,
@@ -3464,8 +3464,8 @@ async function writeDraft({ quiet = false } = {}) {
       gen,
       currentGen: () => state.draftGen,
       key: DRAFT_KEY,
-      onWritten: (rec) => {
-        state.lastDraft = { id: rec.id, text: rec.text, updated_at: rec.updated_at };
+      onWritten: (snap) => {
+        state.lastDraft = snap; // immutable draftSnapshot: id, version, words, scope, file references
       },
       owned: () => state.lastDraft,
       read: () => {
@@ -3537,7 +3537,7 @@ async function restoreDraft() {
   // Re-keep it under the id it now has (writeDraft runs once this restore has finished). Kept as it was, the
   // stored draft is this tab's own from now on: clearing the box may remove exactly that one.
   if (draftIdNext !== draft.id) writeDraft({ quiet: true });
-  else state.lastDraft = { id: draft.id, text: draft.text, updated_at: draft.updated_at };
+  else state.lastDraft = draftSnapshot(draft);
   setText('draft-status', status);
   logEvent({ kind: 'draft_restored', id: state.draftId });
 }
@@ -3624,8 +3624,8 @@ async function persistCapture({ id, text, typed = text, scope, files = [], ownLa
   const elsewhere = q.elsewhere.length ? ` ${plural(q.elsewhere.length, 'attachment was', 'attachments were')} already saved with an earlier capture and ${q.elsewhere.length === 1 ? 'stays' : 'stay'} there.` : '';
   const separate = saved.status === 'renamed' ? ' Another tab had already saved this draft with different words, so this is kept as a separate capture.' : '';
   if (!q.failed.length) {
-    // Remove the draft only if it is the one this Save consumed (same id, and the saved words or this tab's own
-    // last draft). One transaction, so words another tab or a later autosave wrote are never deleted.
+    // Remove the draft only if it is exactly this tab's own last draft version under this capture's id (words,
+    // scope, photos, version). One transaction, so anything another tab or a later autosave wrote stays.
     const stores = await storesReady;
     await stores.drafts.delIf(DRAFT_KEY, (d) => draftConsumedBy(d, { id, text, scope }, ownLast)).catch(() => {});
     const n = q.stored.length;

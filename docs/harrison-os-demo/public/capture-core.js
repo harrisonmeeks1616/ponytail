@@ -24,21 +24,40 @@ export async function writeDraftWhenReady({ storesReady, restored, gen, currentG
   if (gen !== currentGen()) return 'skipped';
   const { id, text, scope, files } = read();
   if (text.trim() === '' && !files.length) {
-    // An empty box removes only the draft this tab owns (owned(): the last draft it wrote or adopted), in one
-    // step: another tab's draft under the same key is never deleted because this box is empty.
+    // An empty box removes only the draft this tab owns (owned(): the snapshot of the last draft it wrote or
+    // adopted), in one step: another tab's draft under the same key is never deleted because this box is empty.
     const mine = owned();
     if (!mine) return 'kept';
     return (await stores.drafts.delIf(key, (d) => isSameDraft(d, mine))) ? 'deleted' : 'kept';
   }
   const record = { id, text, scope, files, updated_at: new Date().toISOString() };
   await stores.drafts.put(key, record);
-  onWritten(record);
+  onWritten(draftSnapshot(record));
   return 'written';
 }
 
-/** The exact stored draft that was observed: same id, same write time, same words. */
+/**
+ * An immutable snapshot of one stored draft version: id, write time (the version), words, scope and the ordered
+ * file references. Ownership and every draft deletion compare these exactly, never words or id alone, so a newer
+ * draft under the same id (other words, another scope, an added or removed photo) is never taken for it.
+ */
+export function draftSnapshot(d) {
+  if (!d) return null;
+  return Object.freeze({
+    id: d.id,
+    updated_at: d.updated_at,
+    text: d.text,
+    scope: d.scope,
+    fileIds: Object.freeze((Array.isArray(d.files) ? d.files : []).map((f) => (f && f.id) || null)),
+  });
+}
+
+/** Is the stored draft exactly the version seen (a draftSnapshot, or a draft record)? */
 export function isSameDraft(stored, seen) {
-  return !!stored && !!seen && stored.id === seen.id && stored.updated_at === seen.updated_at && stored.text === seen.text;
+  const a = draftSnapshot(stored);
+  const b = seen && seen.fileIds ? seen : draftSnapshot(seen);
+  return !!a && !!b && a.id === b.id && a.updated_at === b.updated_at && a.text === b.text && a.scope === b.scope &&
+    a.fileIds.length === b.fileIds.length && a.fileIds.every((x, i) => x === b.fileIds[i]);
 }
 
 /**
@@ -53,7 +72,8 @@ export async function settleStoredDraft(stores, key, draft, draftFiles) {
   if (!sameCapture(existing, captureTextOf(draft.text, draftFiles), draft.scope)) return { action: 'restore', missing: [], existing };
   const missing = await unstoredFiles(stores.attachments, draftFiles);
   if (missing.length) return { action: 'missing', missing, existing };
-  const gone = await stores.drafts.delIf(key, (d) => isSameDraft(d, draft));
+  const seen = draftSnapshot(draft);
+  const gone = await stores.drafts.delIf(key, (d) => isSameDraft(d, seen));
   return { action: gone ? 'discarded' : 'kept', missing: [], existing };
 }
 
@@ -132,15 +152,12 @@ export async function unstoredFiles(store, files) {
 }
 
 /**
- * Is this stored draft the one a Save consumed? Only if it has the saved capture's id and either holds the
- * saved words and scope, or is exactly the last draft this tab itself wrote (ownLast: { updated_at, text }),
- * which may be a few keystrokes behind the saved words. A draft another tab wrote under the same id matches
- * neither, so it is kept. saved: { id, text, scope }.
+ * Is this stored draft the one a Save consumed? Only the exact version this tab owns (ownLast: the snapshot of
+ * the last draft it wrote or adopted at restore), with the saved capture's id. Same words are not enough: a newer
+ * draft under the same id with the same words but another photo is someone's newer work and stays.
  */
 export function draftConsumedBy(draft, saved, ownLast) {
-  if (!draft || draft.id !== saved.id) return false;
-  if (captureTextOf(draft.text, Array.isArray(draft.files) ? draft.files : []) === saved.text && draft.scope === saved.scope) return true;
-  return !!ownLast && draft.updated_at === ownLast.updated_at && draft.text === ownLast.text;
+  return !!draft && !!ownLast && draft.id === saved.id && isSameDraft(draft, ownLast);
 }
 
 /**
