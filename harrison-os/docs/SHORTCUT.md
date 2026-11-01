@@ -24,7 +24,7 @@ There is **no offline queue** in a Shortcut. If the phone has no connection, or 
 2. **If** Shortcut Input has any value: **Set Variable** `Words` to Shortcut Input. **Otherwise**: **Ask for Input** (Text, prompt "What do you want to remember?"), then Set Variable `Words` to Provided Input.
 3. **Format Date** Current Date with custom format `yyyyMMddHHmmss`, Set Variable `Stamp`.
    **Random Number** between 1000 and 9999, Set Variable `Rand`.
-   **Text**: `sc-[Stamp]-[Rand]`, Set Variable `Ref`. This is the `client_ref`: a retry of the same run with the same Ref is recognised as a duplicate, so pressing Run again after a timeout cannot save it twice (6-60 characters of letters, digits, `_` and `-`).
+   **Text**: `sc-[Stamp]-[Rand]`, Set Variable `Ref`. This is the `client_ref` (6-60 characters of letters, digits, `_` and `-`). The server treats a second request with the **same** Ref as a duplicate. Each run of the Shortcut makes a **new** Ref, so only a retry inside the same run (step 5) is deduplicated: pressing Run again after a timeout sends a new Ref, and if the first request did reach the server the words can be saved twice. Check Review in the app before running it again.
 4. **Get Contents of URL**
    - URL: `https://<your app host>/api/shortcut/capture`
    - Method: POST
@@ -37,7 +37,7 @@ There is **no offline queue** in a Shortcut. If the phone has no connection, or 
      - `scope` (Text): `work` (optional; omitted means Work when the server allows it; `personal` only works if `SHORTCUT_SCOPES` includes it)
      - `client_ref` (Text): `Ref`
      - `time_zone` (Text): `America/New_York` (optional; used for dates like "Friday")
-5. **Get Dictionary Value** `message` from Contents of URL. **If** it has any value: **Show Notification** with it. **Otherwise**: **Show Alert** "Not saved. Open Harrison OS and capture it there." and **Copy to Clipboard** `Words` so nothing is lost.
+5. **Get Dictionary Value** `message` from Contents of URL. **If** it has any value: **Show Notification** with it. **Otherwise**: **Choose from Menu** "Not saved yet" with two options. **Try again**: repeat step 4 with the same `Ref` and `Words` (safe: if the first try did reach the server, this one comes back as a duplicate, not a second capture), then step 5 once more. **Stop**: **Copy to Clipboard** `Words` and **Show Alert** "Not saved. The words are on the clipboard: open Harrison OS and capture them there." Either way the words are never lost.
 
 Keep the Client Secret only inside the Shortcut on your own phone. If the phone is lost, revoke the service token in Zero Trust; that does not sign you out of anything else.
 
