@@ -1,6 +1,6 @@
 /* Preview banner only. The app's own styles are public/styles.css, unchanged. */
 .demo-bar {
-  background: repeating-linear-gradient(135deg, #2a2f35 0 12px, #23282d 12px 24px);
+  background: repeating-linear-gradient(135deg, #1b1f1b 0 12px, #141814 12px 24px);
   color: #f4f5f2;
   padding: calc(8px + env(safe-area-inset-top, 0px)) 12px 8px;
   font: 500 14px/1.35 Inter, system-ui, sans-serif;
@@ -32,5 +32,5 @@
 .demo-dialog .demo-btn { border-color: currentColor; margin-top: 8px; }
 .demo-dialog::backdrop { background: rgba(0, 0, 0, 0.45); }
 @media (prefers-color-scheme: dark) {
-  .demo-dialog { background: #131d26; color: #e4eaf0; }
+  .demo-dialog { background: #111813; color: #e5efe6; }
 }

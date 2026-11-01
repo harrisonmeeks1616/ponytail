@@ -8,7 +8,7 @@
   "display": "standalone",
   "orientation": "portrait",
   "background_color": "#F4F5F2",
-  "theme_color": "#F4F5F2",
+  "theme_color": "#0A0D0A",
   "share_target": {
     "action": "/",
     "method": "GET",
