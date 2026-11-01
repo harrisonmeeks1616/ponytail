@@ -316,7 +316,11 @@ test('GET /api/connections/mcp: owner only, plain status, never secrets', async 
   const r = await owner.http('GET', '/api/connections/mcp');
   assert.equal(r.status, 200);
   const { features, ...rest } = r.data;
-  assert.deepEqual(rest, { configured: true, scopes: ['work'], allow_capture: false, last_call_at: null, shortcut_configured: false, shortcut_scopes: ['work'] });
+  // grant: the access in force. Nothing saved by the owner yet, so the deployment default (MCP_SCOPES, read only).
+  assert.deepEqual(rest, {
+    configured: true, scopes: ['work'], allow_capture: false, grant: { mode: 'read', scopes: ['work'], allow_capture: false, set_by: 'default', updated_at: null },
+    last_call_at: null, shortcut_configured: false, shortcut_scopes: ['work'],
+  });
   assert.deepEqual(Object.keys(features), ['ai', 'calendar', 'pm']);
   assert.ok(!r.text.includes('secretish'));
   await callTool({ env: owner.env, nowMs: NOW }, 'list_open_tasks', { scope: 'work' });

@@ -51,7 +51,7 @@ Real resource IDs stay out of this public repository. Keep them in `wrangler.loc
 5. Cloudflare Zero Trust, Access, Applications:
    - **Owner app**: self-hosted, domain = the Worker origin, policy Allow with your email only. Copy its AUD tag to `vars.ACCESS_AUD` and the team URL (`https://<team>.cloudflareaccess.com`) to `vars.ACCESS_TEAM_DOMAIN`.
    - **Shortcut app** (optional): path `/api/shortcut/capture`, policy Service Auth with a new service token. Its AUD goes in `vars.ACCESS_AUD_SHORTCUT`. `vars.SHORTCUT_SCOPES` (default `work`) is the server-side list of scopes that credential may write; anything else gets 403 and nothing is stored. Set `work,personal` only if Harrison approves personal captures from the Shortcut.
-   - **MCP app** (optional): path `/api/mcp`, Service Auth with its own service token. Its AUD goes in `vars.ACCESS_AUD_MCP`. Set `vars.MCP_SCOPES` (default `work`) and `vars.MCP_ALLOW_CAPTURE` (`1` to allow capture).
+   - **MCP app** (optional): path `/api/mcp`, Service Auth with its own service token. Its AUD goes in `vars.ACCESS_AUD_MCP`. Set `vars.MCP_SCOPES` (default `work`) and `vars.MCP_ALLOW_CAPTURE` (`1` to allow capture); these are only the default until Harrison chooses Off, Read only or Full in Memory > Connections (docs/MCP.md).
 
 6. Optional secrets, each enabling one connection. Leaving one out only blocks that connection:
 

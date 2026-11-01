@@ -276,9 +276,15 @@ export async function authenticate(request, env = {}, { fetchImpl = fetch, nowMs
   throw new AuthError(401, 'invalid', 'no_identity');
 }
 
+// The in-process identity of an MCP client with Full access (src/api.js mcpDispatcher; authenticate() never
+// returns it). Only the app-owned record routes: never the MCP grant, AI consent, settings, export/restore,
+// push, sessions, attachments, test hooks, calendar or PM sources.
+const MCP_CLIENT_ROUTES = /^\/api\/(items|captures|inbox|projects|reminders|undo|preferences|drafts|review\/weekly)(\/|$)/;
+
 export function authorizeRoute(identity, method, pathname) {
   if (!identity || typeof pathname !== 'string') return false;
   const m = typeof method === 'string' ? method.toUpperCase() : '';
+  if (identity.kind === 'mcp_client') return MCP_CLIENT_ROUTES.test(pathname);
   // The MCP client reaches only its endpoint (every method, so GET is answered 405 by the route table, as
   // MCP's HTTP transport expects). Any other service token is the Shortcut's.
   if (identity.kind === 'service') {
