@@ -6,7 +6,7 @@ import assert from 'node:assert/strict';
 
 import { createTestDb } from './helpers/d1.mjs';
 import { createWorker } from '../src/api.js';
-import { answerQuestion, AI_LABEL, NOT_AI_LABEL, LOCAL_LABEL } from '../src/ask.js';
+import { answerQuestion, sourcesOfWeb, AI_LABEL, NOT_AI_LABEL, LOCAL_LABEL } from '../src/ask.js';
 import { converse, webState } from '../src/ai.js';
 import { webLinkHref, REASON_WORDS } from '../public/views/ask.js';
 
@@ -479,4 +479,32 @@ test('fetched PDFs cite page_location; citation types and counts are logged with
   const line = logs.find((l) => l.includes('"kind":"converse"'));
   assert.match(line, /"cites":\{"page_location":1\}/);
   assert.ok(!line.includes('example.org') && !line.includes('20 A'));
+});
+
+test('named web sources preserve distinct pathname and query trailing slashes', () => {
+  const result = (urls) => ({ web: { results: urls.map((url) => ({ url, title: 'Returned', searched: true })) } });
+  assert.deepEqual(sourcesOfWeb(result(['https://example.org/doc', 'https://example.org/?q=a']),
+    'https://example.org/doc/ and https://example.org/?q=a/'), []);
+  assert.deepEqual(sourcesOfWeb(result(['https://example.org/doc/', 'https://example.org/?q=a/']),
+    'https://example.org/doc and https://example.org/?q=a'), []);
+  assert.deepEqual(sourcesOfWeb(result(['https://example.com/']), 'https://example.com#section'), [
+    { url: 'https://example.com/', title: 'Returned', cited_text: null, kind: 'search', quoted: false },
+  ], 'URL normalization still matches a bare origin and a page fragment');
+});
+
+test('citation telemetry has a fixed vocabulary and counts unknown/provider-controlled type names only as other', async () => {
+  const canary = 'private_response_canary';
+  const types = [canary, 'constructor', '__proto__', ...Array.from({ length: 20 }, (_, i) => `unknown_${String.fromCharCode(97 + i)}`)];
+  const p = provider(msg([text('An answer.', types.map((type) => ({ type, cited_text: 'not logged' })))]));
+  const logs = [];
+  const orig = console.log;
+  console.log = (x) => logs.push(String(x));
+  try {
+    assert.equal((await converse({ AI_API_KEY: 'fake-key' }, { messages: [{ role: 'user', content: 'q' }], fetchImpl: p.fetchImpl })).ok, true);
+  } finally {
+    console.log = orig;
+  }
+  const line = logs.find((l) => l.includes('"kind":"converse"'));
+  assert.deepEqual(JSON.parse(line).cites, { other: types.length });
+  assert.ok(!line.includes(canary) && !line.includes('constructor') && !line.includes('__proto__') && !line.includes('not logged'));
 });

@@ -337,6 +337,8 @@ export function webHref(u) {
 }
 
 const clipText = (v, n) => (typeof v === 'string' && v.trim() ? v.trim().slice(0, n) : null);
+// Fixed telemetry vocabulary: never turn arbitrary provider strings into log keys.
+const CITATION_LOG_TYPES = new Set(['web_search_result_location', 'char_location', 'page_location', 'content_block_location', 'search_result_location']);
 
 async function runTool(handlers, use) {
   const fn = handlers && Object.prototype.hasOwnProperty.call(handlers, use.name) ? handlers[use.name] : null;
@@ -421,14 +423,14 @@ export async function converse(env, opts = {}) {
     }
   };
   // Citation types seen in the answer, counted for the log (types and counts only, never URLs or text).
-  const citeTypes = {};
+  const citeTypes = Object.create(null);
   const citationsOf = (blocks) => {
     const out = [];
     const cited = new Set();
     for (const b of blocks) {
       for (const c of Array.isArray(b.citations) ? b.citations : []) {
         if (!c || typeof c !== 'object') continue;
-        const type = typeof c.type === 'string' && /^[a-z_]{1,40}$/.test(c.type) ? c.type : 'other';
+        const type = CITATION_LOG_TYPES.has(c.type) ? c.type : 'other';
         citeTypes[type] = (citeTypes[type] || 0) + 1;
         // A location in a fetched document (characters, or pages of a PDF) names it by document_index.
         const doc = (type === 'char_location' || type === 'page_location') && Number.isInteger(c.document_index) ? fetched[c.document_index] : null;

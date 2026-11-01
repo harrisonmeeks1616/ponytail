@@ -480,7 +480,7 @@ const hrefKey = (u) => {
     const x = new URL(u);
     if (x.protocol !== 'https:' && x.protocol !== 'http:') return null;
     x.hash = '';
-    return x.href.replace(/\/$/, '');
+    return x.href;
   } catch {
     return null;
   }
