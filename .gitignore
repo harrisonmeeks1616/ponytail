@@ -24,3 +24,7 @@ ponytail-*.gif
 
 # agentic benchmark workspaces (agent output, kept locally for inspection)
 benchmarks/agentic/runs/
+
+# Licensed code books you upload for verification (NFPA text is copyrighted; this repo is public). Never commit.
+private/
+*.nec.pdf

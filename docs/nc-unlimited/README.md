@@ -1,0 +1,51 @@
+# NC Unlimited Exam Coach
+
+Study, practice and readiness tracking for the North Carolina Unlimited Electrical Contractor exam (booked Monday, Dec 7, 2026, 10:00 AM ET, PSI Charlotte Tyvola). Built from the Harrison OS Notion plan under **NC Unlimited**, as rebuilt on Oct 31, 2026 (Day 01 is Oct 31). One static page, no build step, no accounts, works offline.
+
+Exam reference set: **2020 NEC**, **2013 NFPA 72**, **NASCLA North Carolina Electrical (current edition; the publisher offers the 14th, confirm your copy)**. 100 questions, six hours, 70% to pass.
+
+| File | What it is |
+| --- | --- |
+| `index.html`, `style.css`, `app.js` | The app: Today, Plan, Practice, Law, Study, Tools, Progress, Exam day |
+| `logic.js` | Pure logic: Eastern-time countdown, spaced repetition, readiness gates, calculators, NEC table lookups |
+| `data-plan.js` | Exam facts, books and tab rules, key dates, fresh-form checklist, gates |
+| `data-sessions.js` | The 37-day sprint (Oct 31 to Dec 6, 94.5 hours) rebuilt in Notion on Oct 31 |
+| `data-packets.js` | Practice packets from each of the 37 Notion session pages |
+| `data-study.js` | The 11 categories, article map, NFPA 72 chapter map, plan reading, worked examples, optional starter |
+| `data-law.js` | 60 NC law and business recall cards (with the Oct 31 corrections), 15 worked scenarios |
+| `data-bank.js` | The 100-item learning bank (32 keyed, 68 book-lookup) |
+| `data-nec.js` | NEC 2020 / NFPA 72 (2013) quick reference. Each table carries a confidence tag: V (read in NFPA LiNK by Harrison/Codex, relayed), S (secondary sources agreed) or R (recalled) |
+| `LOOKUPS.md` | Generated status of the 68 book-lookup questions: resolved, partly resolved, still open |
+
+## What it will not do
+
+- It never counts a book-lookup item as scored. You answer from the designated book, record the citation and grade yourself.
+- It never counts an exposed form as a fresh mock. Readiness needs two fresh, unassisted, full 100-question mocks at 82%+ within six hours, no category below 70% on 15+ fresh questions.
+- It only labels an NEC value verified where Harrison/Codex read it in NFPA LiNK (2020 NFPA 70) on 2026-10-31 and relayed it; the app's author did not read the book and says so. Everything else is tagged S or R. Every row also has a "verified in my 2020 book" checkbox with a page field that only you can tick.
+- It never predicts a pass. The AI content-validation record stays at 0/3 until real reviewed runs exist.
+- The error log starts empty. Nothing is pre-filled and no session is pre-checked.
+
+## How to open it
+
+- **Single file (easiest):** open `nc-unlimited.html` in Chrome, Safari or Edge (double-click it, or File, Open File). No internet, install or account needed. Use a normal window: private or embedded windows can block storage, and the app then shows a red "Progress is not being saved" notice on every tab.
+- **Zip:** unzip `nc-unlimited-app.zip` and open `index.html`.
+- **Phone:** send the single file to yourself and open it in the browser (iPhone Files and Android Files work). Keep one device as the main one, since progress does not sync between devices; use Progress, Backup to move it.
+- **Hosted:** GitHub Pages is already enabled for `main` (deploys from `/docs`), but this app exists only on the unmerged draft branch `claude/great-mendel-q5oe0y`, so `https://harrisonmeeks1616.github.io/ponytail/nc-unlimited/` will not exist until the PR is merged. To host it earlier, publish the static directory `docs/nc-unlimited/` (plain files, relative paths, no build step; `index.html` is the entry) to any static host such as a private Sites project. Confirm the page loads before relying on a link.
+
+## Storage
+
+Progress is saved in this browser (`localStorage`). **Progress, Backup** exports and restores a JSON file; use it before clearing site data or changing phones.
+
+## Check
+
+`node --test tests/nc-unlimited.test.js` runs 45 checks: the data counts (100 bank items, 37 sprint days, 37 packets, 60 cards, 15 scenarios), the 11-category blueprint, the sprint calendar (one session per day, Oct 31 to Dec 6; mocks on Nov 14, 21 and 28 only), the Eastern-time countdown, every worked example from the Notion guide, the business scenarios, the NEC table structure and lookups (anchored to your Notion worked examples), the error-log mastery rule, the Leitner boxes and the readiness gates.
+
+## Known open items
+
+- Board authorization start and expiry dates are not confirmed. Enter them on **Today** from your actual approval notice; the app never infers them.
+- Which physical NASCLA edition you own is unconfirmed (the publisher's page lists the 14th).
+- Limited license voltage cap (law card 2, disputed and never scored): Harrison's rule is 600 V, with only Unlimited above it (quoted as his rule, not verified law). The Board licensing webpage still says 600 V (historical). Reported by Harrison/Codex: S.L. 2024-49 section 3.2(a) replaced 600 with 1,000 V and section 3.2(b) took effect Jan 1, 2025; G.S. 87-43.3(a)(2) gives Intermediate a project value limit and no voltage cap; the July 2026 handbook p26 says 1,000 V. "Only Unlimited is past 600 V" is therefore not verified current law: voltage alone does not decide the class, and Intermediate keeps its project value limit. Study, Unlimited and high voltage lays this out.
+- Book lookups: 6 of 68 are resolved from NFPA LiNK readings relayed by Harrison/Codex (B02, D03, G02, O04, W01, W04), 6 more are partly resolved (G04, G05, G08, L08, L09, O07), and the rest are open. See `LOOKUPS.md`. Lookup items are never scored.
+- Verified tables (relayed, read in NFPA LiNK): all of Table 250.66 (copper and aluminum ungrounded rows, both GEC columns), 250.122, every cell of Table 310.16 (copper 14 AWG to 2000 kcmil, aluminum and copper-clad aluminum 12 AWG to 2000 kcmil), all 16 bands of Table 310.15(B)(1), Table 310.15(C)(1), 314.16(B), 430.52, 220.42, 240.6(A). Not verified: 250.102(C) bonding jumpers, Chapter 9, 220.12 and the other groups in `LOOKUPS.md`.
+- NFPA 72 (2013) and the NASCLA guide content have not been checked against the books.
+- The author's own network could not reach ncbeec.org or any code-text site. Board facts come from Notion and the July 2026 handbook as read by Harrison/Codex.
