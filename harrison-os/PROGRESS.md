@@ -66,3 +66,8 @@ The repository as a whole is not green; only the `harrison-os` job is.
 - Not done, by decision: running the PM app or Field Hub on the same server as Harrison OS. See OWNER_PREVIEW.md section "One hub?".
 - Results: 383/383 unit, 15/15 browser, preview walkthrough passed (0 console errors, only font GETs leave the origin).
 - 2026-11-01 palette change at Harrison's request: black header band, field green as the main colour (buttons, active tab, Work chips), safety yellow kept as a sparing signal (header rule, H mark, Next rail). Status-bar colour now black. Every checked pair meets WCAG AA (lowest 5.51:1). Today no longer lists the Next item a second time; when it was the only pick, Today says "Nothing else picked for today." 383/383 unit, 15/15 browser.
+
+## First deployment (Codex, 2026-11-01)
+
+- Codex deployed `f41c677` to a new `harrison-os` Worker with its own new D1 database (8 migrations), owner-only Access (exact-email policy, `OWNER_EMAIL` matching), production VAPID keys, minute cron, PM and Field Hub links only, all dev/test flags 0, normal deploy guard passed. Signed-out root and /api redirect to Access. PM Worker/database, Field Hub and the spike untouched. Details and what is still pending: ACCEPTANCE.md "Deployment status".
+- Recorded from Codex's report; the build session cannot reach workers.dev, so it did not verify any of it independently. Real-phone checks remain untested.
