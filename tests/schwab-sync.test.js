@@ -2152,6 +2152,59 @@ test('against the real hub/Code.gs: two PM devices fixing one shift keep both fi
 });
 const rowsOfTotals = mock => { const head = mock.header('Weekly totals'); return mock.table('Weekly totals').map(r => r[head.indexOf('Hours')])[0]; };
 
+test('DATA2-08: the PM clears a mistaken out on an open worker shift; a later worker punch survives', async () => {
+  const { mock, k, real } = realHub();
+  const w = await makePhone(real, 'crew', { key: k.crew, crew: 'Crew A', worker: 'Ana R' }), pm = await makePhone(real, 'pm', { key: k.pm });
+  const step = async (...ps) => { for (const p of ps) { mock.advance(5e3); await p.cycle(); } };
+  const id = w.clockIn('Ana R', { in: '06:45' });
+  const hubS = () => mock.entities('Hours').find(s => s.id === id);
+  await step(w, pm, pm);
+  pm.editCrewHours(id, s => { s.out = '09:45'; s.edited.out = true; });
+  await step(pm, pm);
+  assert.equal(hubS().out, '09:45');
+  pm.editCrewHours(id, s => { s.out = ''; s.edited.out = false; });
+  await step(pm, pm);
+  assert.deepEqual([hubS().out, hubS().edited.out, pm.crewHours()[0].out], ['', false, '']);
+  w.editHours(id, s => { s.out = '16:00'; });
+  await step(w, pm, w, pm);
+  assert.equal(hubS().out, '16:00');
+});
+
+test('DATA2-08 race: a worker clocks out during a PM out correction and later PM clear does not lose the punch', async () => {
+  const { mock, k, real } = realHub();
+  const w = await makePhone(real, 'crew', { key: k.crew, crew: 'Crew A', worker: 'Ana R' }), pm = await makePhone(real, 'pm', { key: k.pm });
+  const step = async (...ps) => { for (const p of ps) { mock.advance(5e3); await p.cycle(); } };
+  const id = w.clockIn('Ana R', { in: '06:45' });
+  const hubS = () => mock.entities('Hours').find(s => s.id === id);
+  await step(w, pm, pm);
+  pm.editCrewHours(id, s => { s.out = '09:45'; s.edited.out = true; });
+  await step(pm, pm);
+  w.editHours(id, s => { s.out = '16:00'; });
+  await step(w);
+  pm.editCrewHours(id, s => { s.out = ''; s.edited.out = false; });
+  await step(pm, w, pm, w);
+  assert.equal(hubS().out, '16:00', 'the worker punch remains on the hub');
+  assert.equal(w.hours()[0].out, '16:00', 'the worker phone retains its own punch');
+});
+
+test('DATA2-08: the worker punch survives PM override and clear with phone clocks ahead or behind', async () => {
+  for (const offset of [-2 * 36e5, 2 * 36e5]) {
+    const { mock, k, real } = realHub();
+    const w = await makePhone(real, 'crew', { key: k.crew, crew: 'Crew A', worker: 'Ana R', offset }), pm = await makePhone(real, 'pm', { key: k.pm });
+    const step = async (...ps) => { for (const p of ps) { mock.advance(5e3); await p.cycle(); } };
+    const id = w.clockIn('Ana R', { in: '06:45' });
+    const hubS = () => mock.entities('Hours').find(s => s.id === id);
+    await step(w, pm, pm);
+    pm.editCrewHours(id, s => { s.out = '09:45'; s.edited.out = true; });
+    await step(pm, pm);
+    w.editHours(id, s => { s.out = '16:00'; });
+    await step(w);
+    pm.editCrewHours(id, s => { s.out = ''; s.edited.out = false; });
+    await step(pm, w, pm);
+    assert.equal(hubS().out, '16:00', `worker punch retained with ${offset}ms phone clock offset`);
+  }
+});
+
 test('against the real hub/Code.gs: an hours text the PM opens on a hub phone for a day entered by hand keeps the worker\'s punches, on her clock and on the hub (RECHECK3-03)', async () => {
   const { normShift } = await lib, { importShifts } = await import('../docs/schwab/report.mjs');
   const { mock, k, real } = realHub();
@@ -2609,6 +2662,15 @@ test('Crew hours imports, edits and actions follow the connected key role while 
       storage.set('schwab.hub', { hubUrl: URL_A, hubKey: KEYS.pm, hubRole: 'pm', hubCrew: '' });
       report.reloadReports(); report.hoursInput(input, S, DAY);
       assert.equal(storage.get('schwab.crewHours')[0].in, '08:00', 'the actual PM key can correct a shift');
+      const savedRows=storage.get('schwab.crewHours'), origSet=globalThis.localStorage.setItem;
+      globalThis.localStorage.setItem=(k,v)=>{if(k==='schwab.crewHours')throw Error('full');return origSet(k,v)};
+      const field={dataset:{k:'h.guard-shift.in'},value:'09:00',closest:()=>null,setAttribute(k,v){this[k]=v},removeAttribute(k){delete this[k]}};
+      report.hoursInput(field,S,DAY);
+      assert.deepEqual([field.value,field['aria-invalid'],report.crewNow()[0].in,storage.get('schwab.crewHours')[0].in],['09:00','true','08:00','08:00'],'typed value remains available while memory and storage roll back');
+      assert.equal(report.openHours({at:T0,shifts:[{...original,id:'unsaved-import',device:'fictional-device'}]},S),'','failed import is not reported as logged');
+      assert.deepEqual(storage.get('schwab.crewHours'),savedRows);assert.ok(!report.crewNow().some(s=>s.id==='unsaved-import'));
+      assert.match(toast.innerHTML,/wouldn.*t save/);globalThis.localStorage.setItem=origSet;
+      report.hoursInput(field,S,DAY);assert.equal(storage.get('schwab.crewHours')[0].in,'09:00');assert.equal(field['aria-invalid'],undefined);
       assert.equal(report.openHours({ at: T0, shifts: [{ ...original, id: 'imported-guard-shift', device: 'fictional-device', who: 'Second fictional worker' }] }, S), DAY, 'the actual PM key can open hours links');
       assert.equal(storage.get('schwab.crewHours').length, 2);
       // Clearing the Out box on a worker's punch is refused (the hub would store the blank over their clock-out); the box goes back to the time.

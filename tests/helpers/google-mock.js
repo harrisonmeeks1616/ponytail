@@ -537,6 +537,7 @@ function createHub(opts = {}) {
   };
   const setProp = (k, v) => {
     hub.assertLocked('PropertiesService write');
+    hub.maybeFail('properties.setProperty:' + k);
     if (typeof k !== 'string' || !k || k.length > 50) throw new Error('Exception: Invalid property key');
     if (typeof v !== 'string') throw new Error('MOCK: property values must be strings (real Apps Script would coerce; do it explicitly)');
     if (Buffer.byteLength(v) > 9 * 1024) throw new Error('Exception: Argument too large: value');

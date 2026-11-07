@@ -47,6 +47,7 @@ test('wrong-job and legacy credentials cannot select a new Sheet; bridge has no 
   assert.equal(hub.calls.length, 0, 'authentication failed before a Sheet API call');
   const who = accepted(call(b, 'bridge', 'whoami'));
   assert.equal(who.role, 'bridge');
+  assert.ok(who.capabilities.includes('fence'), 'new callers can verify support before relying on a fence');
   assert.equal(who.sheetUrl, undefined);
   for (const action of ['keys', 'rotate', 'purge', 'archive', 'selftest', 'stats', 'translate']) assert.equal(call(b, 'bridge', action).error, 'forbidden');
   for (const extra of [{ config: {} }, { deleted: [{ kind: 'tasks', key: 'x' }] }]) assert.equal(call(b, 'bridge', 'push', { opId: 'forbidden-1', expectedRev: 0, tasks: [task()], ...extra }).error, 'forbidden');
@@ -71,6 +72,97 @@ test('durable receipt replays exactly once after the atomic write response is lo
   assert.equal(hub.table('Operations', b.sheetId).length, 1);
   assert.equal(hub.table('Operations', b.sheetId)[0][2], 'done');
   assert.equal(hub.entities('Activity', b.sheetId)[0].role, 'bridge');
+});
+
+test('v2 bridge revision fence is idempotent, advances an empty job, and rejects stale pushes without changing source rows', () => {
+  const { hub, old, a, b, call } = environment();
+  const devSecret = 'a'.repeat(32), req = { opId: 'fence-empty-001', expectedRev: 0, devSecret };
+  const tabs = ['Tasks', 'Hours', 'Reports', 'Daily log', 'Activity', 'Deleted', 'Config'];
+  const before = Object.fromEntries(tabs.map(t => [t, JSON.stringify(hub.table(t, b.sheetId))]));
+  const first = accepted(call(b, 'bridge', 'fence', req));
+  assert.equal(first.rev, 1);
+  assert.deepEqual(accepted(call(b, 'bridge', 'fence', req)), first, 'same receipt, same revision');
+  assert.equal(hub.table('Operations', b.sheetId).length, 1);
+  assert.equal(call(b, 'bridge', 'push', { opId: 'old-write-001', expectedRev: 0, tasks: [task()] }).error, 'conflict');
+  assert.deepEqual(Object.fromEntries(tabs.map(t => [t, JSON.stringify(hub.table(t, b.sheetId))])), before, 'no workforce, config or activity rows changed');
+  assert.equal(accepted(call(b, 'pm', 'pull', { since: 0 })).rev, 1);
+  assert.equal(accepted(hub.call(old.pm, 'pull', { since: 0 })).rev, accepted(call(a, 'pm', 'pull', { since: 0 })).rev, 'other jobs remain untouched');
+  assert.equal(call(b, 'bridge', 'fence', { ...req, expectedRev: 1 }).error, 'conflict', 'opId cannot be reused for another payload');
+  assert.equal(call(b, 'pm', 'fence', req).error, 'forbidden');
+  assert.equal(call(b, 'super', 'fence', req).error, 'forbidden');
+  assert.equal(call(b, 'crew', 'fence', req).error, 'forbidden');
+  assert.equal(call(b, 'bridge', 'fence', { ...req, key: a.bridgeKey }).error, 'unauthorized', 'a credential for another job cannot fence this one');
+  assert.equal(hub.call(old.pm, 'fence', req).error, 'forbidden');
+  assert.equal(call(b, 'bridge', 'fence', { ...req, opId: 'fence-nosecret', devSecret: '' }).error, 'bad_request');
+  assert.equal(call(b, 'bridge', 'fence', { ...req, opId: 'fence-shortsecret', devSecret: 'a'.repeat(31) }).error, 'bad_request');
+  assert.equal(call(b, 'bridge', 'fence', { ...req, opId: 'fence-badsecret1', devSecret: '!'.repeat(32) }).error, 'bad_request');
+  assert.equal(call(b, 'bridge', 'fence', { ...req, opId: 'fence-badrev1', expectedRev: -1 }).error, 'bad_request');
+  assert.equal(call(b, 'bridge', 'fence', { ...req, opId: 'fence-malform', expectedRev: 1, logs: [] }).error, 'bad_request');
+});
+
+test('v2 revision fence recovers an interrupted or completed atomic receipt before new writes', () => {
+  for (const mode of ['sheets.spreadsheets.values.batchUpdate', 'sheets.spreadsheets.batchUpdate', 'sheets.spreadsheets.batchUpdate:after']) {
+    const { hub, b, call } = environment();
+    const req = { opId: 'fence-crash-001', expectedRev: 0, devSecret: 'a'.repeat(32) };
+    hub.failNext(mode);
+    assert.equal(call(b, 'bridge', 'fence', req).error, 'server', mode);
+    const saved = accepted(call(b, 'bridge', 'fence', req));
+    assert.equal(saved.rev, 1, mode);
+    assert.deepEqual(accepted(call(b, 'bridge', 'fence', req)), saved, mode);
+    assert.equal(call(b, 'bridge', 'push', { opId: 'old-after-crash', expectedRev: 0, tasks: [task()] }).error, 'conflict', mode);
+    assert.equal(hub.table('Tasks', b.sheetId).length, 0);
+    assert.equal(hub.table('Operations', b.sheetId).length, 1);
+  }
+});
+
+test('v2 revision fence repairs a failed REV property write before the next reader or writer', () => {
+  const { hub, b, call } = environment();
+  const req = { opId: 'fence-props-001', expectedRev: 0, devSecret: 'a'.repeat(32) };
+  const prop = 'J' + hash(b.jobId).slice(0, 24) + ':REV';
+  hub.failNext('properties.setProperty:' + prop, 2); // finish and the lock's final revision write both fail
+  assert.equal(call(b, 'bridge', 'fence', req).error, 'server');
+  assert.equal(hub.props[prop], '0', 'failed writes did not persist the revision');
+  assert.equal(hub.table('Operations', b.sheetId)[0][2], 'done', 'the atomic receipt did land');
+  const pull = accepted(call(b, 'pm', 'pull', { since: 0 }));
+  assert.equal(pull.rev, 1, 'the next read repairs the receipt before replying');
+  assert.equal(accepted(call(b, 'bridge', 'fence', req)).rev, 1, 'replay is the original result');
+  assert.equal(call(b, 'bridge', 'push', { opId: 'old-props-001', expectedRev: 0, tasks: [task()] }).error, 'conflict');
+});
+
+test('v2 revision fence is recovered by a v1 reader on the shared legacy Hub', () => {
+  const { hub, old, a, call } = environment();
+  const req = { opId: 'fence-v1-read01', expectedRev: 0, devSecret: 'a'.repeat(32) };
+  hub.failNext('sheets.spreadsheets.batchUpdate');
+  assert.equal(call(a, 'bridge', 'fence', req).error, 'server');
+  assert.equal(accepted(hub.call(old.pm, 'pull', { since: 0 })).rev, 1, 'legacy reader first finishes the pending fence');
+  assert.equal(accepted(call(a, 'bridge', 'fence', req)).rev, 1);
+});
+
+test('a v2 revision fence serializes against other writers, but a legacy blind log push remains outside its protection', () => {
+  const { hub, b, call } = environment();
+  const devSecret = 'a'.repeat(32);
+  const write = accepted(call(b, 'bridge', 'push', { opId: 'first-writer-01', expectedRev: 0, tasks: [task()] }));
+  assert.equal(call(b, 'bridge', 'fence', { opId: 'fence-stale-001', expectedRev: 0, devSecret }).error, 'conflict');
+  const fence = accepted(call(b, 'bridge', 'fence', { opId: 'fence-fresh-001', expectedRev: write.rev, devSecret }));
+  assert.equal(fence.rev, write.rev + 1);
+  assert.equal(call(b, 'bridge', 'push', { opId: 'old-after-fence', expectedRev: write.rev, tasks: [task('Old', 'other')] }).error, 'conflict');
+  const worker = hash(devSecret).slice(0, 32), date = '2026-10-24';
+  const uid = 'wl-' + worker.slice(0, 12) + '-' + date;
+  const blind = call(b, 'bridge', 'push', { opId: 'blind-after-001', expectedRev: -1, devSecret, logs: [{ uid, date, device: worker, who: 'Test', body: 'Fictional', at: NOW }] });
+  assert.equal(blind.ok, true, 'the separate -1 drain gate is still required');
+  assert.equal(blind.logs[0].status, 'ok');
+});
+
+test('old v1 clients continue reading and writing after a legacy-job fence, and their blind writes require a separate gate', () => {
+  const { hub, old, a, call } = environment();
+  const devSecret = 'a'.repeat(32), worker = hash(devSecret).slice(0, 32), date = '2026-10-24';
+  const uid = 'wl-' + worker.slice(0, 12) + '-' + date;
+  assert.equal(accepted(call(a, 'bridge', 'fence', { opId: 'fence-legacy-01', expectedRev: 0, devSecret })).rev, 1);
+  const read = accepted(hub.call(old.crew, 'pull', { since: 0, devSecret }));
+  assert.equal(read.rev, 1);
+  const write = accepted(hub.call(old.crew, 'push', { devSecret, logs: [{ uid, date, who: 'Test', body: 'Fictional', at: NOW }] }));
+  assert.equal(write.logs[0].status, 'ok', 'old v1 pushes have no expected revision and are not fenced');
+  assert.equal(hub.table('Daily log', a.sheetId).length, 1);
 });
 
 test('an interrupted intent is recoverable before a later writer can move its rows', () => {

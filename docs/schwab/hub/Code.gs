@@ -97,7 +97,7 @@ function langs_(m) {
 }
 // A shift names the person (pid), the crew (crewId) and the task sheets (uid) by id; who, crew and tasks[].id are the labels
 // they had then, for reading.
-const SHIFT = { id: 's', device: 's', who: 's', pid: 's', date: 's', in: 's', out: 's', crew: 's', crewId: 's', tasks: [{ uid: 's', id: 's' }], edited: { who: false, in: false, out: false }, gone: false, at: 0 };
+const SHIFT = { id: 's', device: 's', who: 's', pid: 's', date: 's', in: 's', out: 's', workerOut: 's', workerOutAt: 0, crew: 's', crewId: 's', tasks: [{ uid: 's', id: 's' }], edited: { who: false, in: false, out: false }, gone: false, at: 0 };
 // A worker's daily log: one entry per phone per day, keyed by the phone and the day (logUid_), so only that phone writes it.
 const LOG = { uid: 's', date: 's', device: 's', pid: 's', who: 's', crewId: 's', crew: 's', body: 't', hours: 0, at: 0 };
 const CREW_BLOCK = { name: 's', na: true, lead: 's', workers: 0, labor: 0, laborFromTasks: false, members: 't', area: 't', ref: 't', start: 's', stop: 's', done: 't', quality: 't', holdups: 't', good: 't' }; // area and ref are filled from the day's sheets: long text, never clipped at 200
@@ -433,6 +433,7 @@ const ACTIONS = {
   whoami: { roles: ALL, run: whoami_ },
   pull: { roles: ALL, run: pull_ },
   push: { roles: ALL, run: push_, write: true },
+  fence: { roles: PM, run: receiptedPush_, write: true }, // v2 bridge only: invalidate earlier expected revisions without changing source rows
   translate: { roles: ALL, run: translate_ },
   records: { roles: OFFICE, run: records_ },
   purge: { roles: PM, run: purge_, write: true },
@@ -481,13 +482,14 @@ function handle_(e) {
   if (!own_(ACTIONS, req.action)) fail_('bad_request');
   const rule = ACTIONS[req.action];
   if (rule.roles.indexOf(role) < 0) fail_('forbidden');
-  if (auth.principal === 'bridge' && ['whoami', 'pull', 'push', 'records'].indexOf(req.action) < 0) fail_('forbidden');
+  if (auth.principal === 'bridge' && ['whoami', 'pull', 'push', 'records', 'fence'].indexOf(req.action) < 0) fail_('forbidden');
+  if (req.action === 'fence' && (req.v !== 2 || auth.principal !== 'bridge')) fail_('forbidden');
   if (req.v === 2 && ['keys', 'rotate'].indexOf(req.action) >= 0) fail_('forbidden');
   if (req.action !== 'whoami' && !auth.id) fail_('not_ready');
   // The phone is what its secret proves, never what it says: a `dev` in the request is ignored.
   const dev = typeof req.devSecret === 'string' && FORMAT.key.test(req.devSecret) ? digestHex_(req.devSecret).slice(0, 32) : '';
   const ctx = Object.assign({ req: req, dev: dev, now: now, P: P, props: props, cache: scopedCache_(cache, auth.id), memo: {}, state: { rev: Number(P.REV) || 0 } }, auth);
-  if (req.action === 'push' && (bump_(ctx.cache, 'pk:' + auth.principal, now) > PUSH_CAP_KEY || bump_(ctx.cache, 'pd:' + auth.principal + ':' + dev, now) > PUSH_CAP_DEV)) fail_('busy');
+  if ((req.action === 'push' || req.action === 'fence') && (bump_(ctx.cache, 'pk:' + auth.principal, now) > PUSH_CAP_KEY || bump_(ctx.cache, 'pd:' + auth.principal + ':' + dev, now) > PUSH_CAP_DEV)) fail_('busy');
   const run = req.v === 2 && req.action === 'push' ? receiptedPush_ : rule.run;
   const out = rule.write || P.OP_PENDING ? locked_(ctx, req.key, run) : run(ctx);
   if (req.v === 2) { out.jobId = ctx.jobId; out.instanceId = ctx.instanceId; if (out.rev === undefined) out.rev = ctx.state.rev; }
@@ -521,7 +523,7 @@ function nextRev_(ctx) { return ++ctx.state.rev; } // one revision per row writt
 function whoami_(ctx) {
   // dev: the device id this request's devSecret proves ('' without a valid one), so a phone can check it is the one it labels its shifts with
   const out = { role: ctx.role, rev: ctx.state.rev, now: ctx.now, tz: HUB_TZ, version: HUB_VERSION, dev: ctx.dev };
-  if (ctx.principal === 'bridge') { out.role = 'bridge'; out.capabilities = ['pull', 'push', 'records']; }
+  if (ctx.principal === 'bridge') { out.role = 'bridge'; out.capabilities = ['pull', 'push', 'records', 'fence']; }
   else if (ctx.role === 'pm' && ctx.id) out.sheetUrl = sheetUrl_(ctx.id);
   return out;
 }
@@ -818,8 +820,9 @@ function normShift_(raw, now) {
     seen[k] = true;
     return true;
   }).slice(0, 50);
-  ['in', 'out'].forEach(function (k) { if (!FORMAT.time.test(s[k])) s[k] = ''; });
+  ['in', 'out', 'workerOut'].forEach(function (k) { if (!FORMAT.time.test(s[k])) s[k] = ''; });
   s.at = clampStamp_(s.at, now);
+  s.workerOutAt = clampStamp_(s.workerOutAt, now);
   s.pmAt = clampStamp_(raw.pmAt, now); // the hub's own merge stamp for PM edits (mergeShift_); phones do not keep it
   if (isObj_(raw.base)) s.base = normShift_(Object.assign({}, raw.base, { id: s.id, base: null }), now); // a PM push's base: read like a shift, never stored
   return FORMAT.uid.test(s.id) && isDay_(s.date) && s.in ? s : null; // no id, day or clock-in: nothing to log
@@ -967,14 +970,15 @@ function mergeShift_(ctx, stored, inc) {
     if (inc.device === '') return { reason: 'forbidden' };                 // a PM-added shift is the PM's alone
     if (stored && stored.device !== ctx.dev) return { reason: 'device' };  // a key only speaks for the phone it came from
     if (!stored) { // added even when the PM has entered that day by hand: these are the real punches, for the PM to see and settle
-      s = Object.assign({}, inc, { device: ctx.dev, edited: clone_(noEdits_), gone: false, pmAt: 0 }); // the client never sets edited, gone or pmAt for itself
+      s = Object.assign({}, inc, { device: ctx.dev, workerOut: inc.out, workerOutAt: inc.out ? inc.at : 0, edited: clone_(noEdits_), gone: false, pmAt: 0 }); // the client never sets edited, gone or pmAt for itself
       ev.push([inc.out ? 'clock.out' : 'clock.in', s.who, s.who + (inc.out ? ' clocked out at ' + t12_(s.out) : ' clocked in at ' + t12_(s.in)) + ', ' + s.date, s.id]);
     } else {
       s = clone_(stored);
       if (!s.gone) { // a removed shift is never revived
+        const oldPunch = s.workerOut || (!s.edited.out ? s.out : ''), oldPunchAt = s.workerOutAt || (oldPunch ? s.at : 0);
         if (!s.edited.who && inc.at > s.at) { s.who = inc.who; s.at = inc.at; } // an older text keeps the newer name
         if (!s.edited.in) s.in = inc.in;
-        if (!s.edited.out && inc.out) s.out = inc.out;                            // and never undoes a clock-out
+        if (inc.out && (!oldPunch || inc.at > oldPunchAt)) { s.workerOut = inc.out; s.workerOutAt = inc.at; if (!s.edited.out) s.out = inc.out; } // retain the newest punch even under a PM override
         if (!edited_(s)) ['pid', 'crew', 'crewId', 'tasks'].forEach(function (k) { s[k] = inc[k]; }); // once the PM has touched a shift, these stay
         if (s.out && !stored.out) ev.push(['clock.out', s.who, s.who + ' clocked out at ' + t12_(s.out) + ', ' + s.date, s.id]);
       }
@@ -987,8 +991,13 @@ function mergeShift_(ctx, stored, inc) {
     const newer = !stored || inc.pmAt >= stored.pmAt;
     if (base) {
       s = clone_(stored);
+      if (!s.workerOut && s.device && !s.edited.out && s.out) { s.workerOut = s.out; s.workerOutAt = s.at; } // legacy unedited out is the worker's punch
       ['who', 'in', 'out'].forEach(function (f) {
-        if (f === 'out' && !inc.out && !inc.edited.out && s.out && s.device) return; // a blank unflagged out is never a change to a worker's punch: a PM phone must not erase a clock-out (as without a base, below); a shift the PM added (no device) is the PM's to clear
+        if (f === 'out' && !inc.out && !inc.edited.out && s.out && s.device) {
+          // Clearing the PM's own override restores the real worker punch, if any. A stale or unflagged base cannot erase it.
+          if (base.edited.out && s.edited.out && base.out === s.out && takes_(base, newer, [inc.out, inc.edited.out], [base.out, base.edited.out], [s.out, s.edited.out])) { s.out = s.workerOut || ''; s.edited.out = false; }
+          return;
+        }
         if (takes_(base, newer, [inc[f], inc.edited[f]], [base[f], base.edited[f]], [s[f], s.edited[f]])) { s[f] = inc[f]; s.edited[f] = inc.edited[f]; }
       });
       ['pid', 'crew', 'crewId', 'tasks', 'date', 'gone'].forEach(function (k) { if (takes_(base, newer, inc[k], base[k], s[k])) s[k] = inc[k]; });
@@ -996,9 +1005,11 @@ function mergeShift_(ctx, stored, inc) {
       s = clone_(inc);
       if (stored) {
         s.device = stored.device;                                    // a shift never changes phones
+        s.workerOut = stored.workerOut || (!stored.edited.out ? stored.out : ''); // never trust a PM client's copy of a worker punch
+        s.workerOutAt = stored.workerOutAt || (s.workerOut ? stored.at : 0);
         if (!s.out && !s.edited.out && stored.out) s.out = stored.out; // a PM phone that has not pulled the clock-out yet must not erase it
         if (!s.edited.who && stored.at > inc.at) s.who = stored.who;   // nor undo a newer name from the worker's phone
-      }
+      } else { s.workerOut = ''; s.workerOutAt = 0; }
     } else s = clone_(stored);
     if (stored) { s.at = Math.max(stored.at, inc.at); s.pmAt = Math.max(stored.pmAt, inc.pmAt); }
     if (!stored && inc.device !== '' && !edited_(inc) && !inc.gone) { // a worker's own punch relayed by the PM phone (an hours text opened there): the worker's event, as from their phone
@@ -1256,9 +1267,11 @@ function receiptedPush_(ctx) {
   const r = ctx.req;
   if (!OP_ID.test(r.opId || '') || !Number.isSafeInteger(r.expectedRev) || r.expectedRev < -1) fail_('bad_request');
   const n = function (k) { return arr_(r[k]).length; };
+  const fence = r.action === 'fence';
+  if (fence && (r.expectedRev < 0 || r.expectedRev >= Number.MAX_SAFE_INTEGER || !ctx.dev || Object.keys(r).some(function (k) { return ['v', 'jobId', 'key', 'action', 'opId', 'expectedRev', 'devSecret'].indexOf(k) < 0; }))) fail_('bad_request');
   // expectedRev -1 skips the revision check, only for one log and nothing else: the entry is its author's alone and ordered by its own stamp
   if (r.expectedRev === -1 && (n('logs') !== 1 || n('tasks') || n('shifts') || n('reports') || n('deleted') || r.config !== undefined)) fail_('bad_request');
-  if (ctx.principal === 'bridge') {
+  if (ctx.principal === 'bridge' && !fence) {
     if (r.config !== undefined || n('deleted')) fail_('forbidden');
     if (n('tasks') + n('shifts') + n('reports') + n('logs') !== 1) fail_('bad_request');
   }
@@ -1267,7 +1280,9 @@ function receiptedPush_(ctx) {
   const digest = digestHex_(stableJson_(payload)), old = operationRow_(ctx, key);
   if (old.key) { if (old.digest !== digest) fail_('conflict'); return finishOperation_(ctx, old); }
   if (r.expectedRev !== -1 && r.expectedRev !== ctx.state.rev) fail_('conflict');
-  const sub = Object.assign({}, ctx, { state: { rev: ctx.state.rev } }), prepared = preparePush_(sub);
+  const sub = Object.assign({}, ctx, { state: { rev: ctx.state.rev } });
+  if (fence) nextRev_(sub); // the recovery receipt records this increment even when no source row exists
+  const prepared = preparePush_(sub);
   const data = { result: prepared.result, hours: prepared.batch.hours, requests: atomicRequests_(sub, prepared.batch, old.row) }, json = JSON.stringify(data);
   if (json.length > OP_CHUNK * (OP_COLS - 3)) fail_('too_large');
   const cells = [key, digest, 'prepared'];

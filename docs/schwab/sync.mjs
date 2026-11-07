@@ -277,7 +277,7 @@ export function makeSync(o = {}) {
     if (sent.sup) return { ...w, decisions: r.decisions.map(d => ({ ...d, pm: '', pmNote: '' })), pmReview: '', pmLang: '', pmAt: 0, ...S };
     return { date: r.date, decisions: r.decisions.filter(d => d.q || d.pm || d.pmNote).map(d => ({ q: d.q, pm: d.pm, pmNote: d.pmNote })), pmReview: r.pmReview, pmLang: r.pmLang, ...P, updatedAt: 0 }; // every question, so an answer the PM took back is taken back on the hub too
   };
-  const wireShift = (s, full, at) => ({ id: s.id, device: s.device, who: s.who, pid: s.pid, date: s.date, in: s.in, out: s.out, crew: s.crew, crewId: s.crewId, tasks: s.tasks,
+  const wireShift = (s, full, at) => ({ id: s.id, device: s.device, who: s.who, pid: s.pid, date: s.date, in: s.in, out: s.out, workerOut: s.workerOut, workerOutAt: s.workerOutAt, crew: s.crew, crewId: s.crewId, tasks: s.tasks,
     edited: full ? s.edited : { who: false, in: false, out: false }, gone: full ? s.gone : false, at: full ? s.at : at });
 
   // Returns the pushable items; stamps new edits and forgets records of things no longer here. Pure bookkeeping: no network, no store writes.
@@ -505,11 +505,14 @@ export function makeSync(o = {}) {
   }
   // Keep my unsynced words where I own them. full: the PM's timesheet (my flags decide, and so does my removal or its Undo,
   // which may land while the removal's own echo is on the wire); else a worker's own clock (the hub's flags decide).
-  function blend(l, i, full) {
+  function blend(l, i, full, base) {
     const flags = full ? { who: l.edited.who || i.edited.who, in: l.edited.in || i.edited.in, out: l.edited.out || i.edited.out } : i.edited;
     const r = { ...i, edited: { ...flags }, gone: full ? l.gone : i.gone, at: Math.max(l.at, i.at) };
     const [a, b] = full ? [l, i] : [i, l]; // a: wins when flagged; b: otherwise
     for (const k of ['who', 'in', 'out']) r[k] = (full ? l.edited : i.edited)[k] ? a[k] : k === 'out' ? b.out || a.out : b[k]; // a clock-out is never undone
+    if (full && base?.edited?.out && !l.edited.out && !l.out && i.edited.out && i.out === base.out) {
+      r.out = ''; r.edited.out = false; // retain a pending clear of the PM's own override until the Hub resolves it
+    }
     // who it is and what they were on (pid, crew, task links) follow the phone until the PM has touched the shift
     if (full || !(i.edited.who || i.edited.in || i.edited.out)) Object.assign(r, { pid: l.pid, crew: l.crew, crewId: l.crewId, tasks: l.tasks });
     return r;
@@ -523,7 +526,7 @@ export function makeSync(o = {}) {
     let next = inc;
     if (loc) {
       const mine = hs(shiftPart(loc, full));
-      if (mine !== pr.s && mine !== hs(shiftPart(inc, full))) next = blend(loc, inc, full);
+      if (mine !== pr.s && mine !== hs(shiftPart(inc, full))) next = blend(loc, inc, full, pr.b);
     }
     if (next === inc) pr.s = hs(shiftPart(inc, full));
     if (full) pr.b = structuredClone(inc); // the PM's base: with it the hub takes only what this phone changes since (two PM devices)

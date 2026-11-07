@@ -674,6 +674,58 @@ test('shift, worker rules: add, complete, never undo a clock-out, own phone only
   assert.deepEqual([r.shifts[0].status, r.shifts[0].shift.gone, r.shifts[0].shift.out], ['ok', true, '15:30']);
 });
 
+test('shift: a legacy worker punch survives a PM override and a later clear; PM data cannot forge the worker punch', () => {
+  const env = setup();
+  const v = env.hub.eval(`(function () {
+    const stored = { id: 's1', device: 'w1', who: 'Test', pid: '', date: '2026-10-19', in: '07:00', out: '16:00', workerOut: '', edited: { who: false, in: false, out: false }, gone: false, at: 1, pmAt: 1, crew: '', crewId: '', tasks: [] };
+    const base = clone_(stored);
+    const inc = Object.assign(clone_(stored), { out: '17:00', workerOut: '23:59', edited: { who: false, in: false, out: true }, pmAt: 2, base: base });
+    const first = mergeShift_({ role: 'pm', dev: 'pm1' }, stored, inc).obj;
+    const clear = Object.assign(clone_(first), { out: '', workerOut: '23:59', edited: { who: false, in: false, out: false }, pmAt: 3, base: clone_(first) });
+    const last = mergeShift_({ role: 'pm', dev: 'pm1' }, first, clear).obj;
+    return JSON.stringify([first.workerOut, last.out, last.edited.out]);
+  })()`);
+  assert.deepEqual(JSON.parse(v), ['16:00', '16:00', false]);
+});
+
+test('shift: a delayed older worker punch must not replace a newer punch underneath a PM override', () => {
+  const env = setup();
+  const result = env.hub.eval(`(function () {
+    const stored = { id: 's1', device: 'w1', who: 'Test', pid: '', date: '2026-10-19', in: '07:00', out: '17:00', workerOut: '16:00', edited: { who: false, in: false, out: true }, gone: false, at: 2000, pmAt: 3000, crew: '', crewId: '', tasks: [] };
+    const inc = Object.assign(clone_(stored), { out: '15:00', workerOut: '', at: 1000, edited: { who: false, in: false, out: false } });
+    return mergeShift_({ role: 'crew', dev: 'w1' }, stored, inc).obj.workerOut;
+  })()`);
+  assert.equal(result, '16:00');
+});
+
+test('shift: an older PM client cannot erase a hidden worker punch by editing another field', () => {
+  const env = setup(), crew = phone(env, 'crew', 'crew-dev'), pm = phone(env, 'pm', 'pm-dev');
+  ok(crew.push({ shifts: [shift({ id: 'old-client-shift', out: '16:00', at: T0 })] }));
+  const worker = stored(env.hub, 'old-client-shift');
+  ok(pm.push({ shifts: [{ ...worker, out: '17:00', edited: { who: false, in: false, out: true }, pmAt: T0 + 1, base: worker }] }));
+  const override = stored(env.hub, 'old-client-shift');
+  const oldBase = { ...override }; delete oldBase.workerOut; delete oldBase.workerOutAt;
+  const oldEdit = { ...oldBase, who: 'Dana Renamed', edited: { ...oldBase.edited, who: true }, pmAt: T0 + 2, base: oldBase };
+  ok(pm.push({ shifts: [oldEdit] }));
+  const after = stored(env.hub, 'old-client-shift');
+  assert.equal(after.workerOut, '16:00');
+  ok(pm.push({ shifts: [{ ...after, out: '', edited: { ...after.edited, out: false }, pmAt: T0 + 3, base: after }] }));
+  assert.equal(stored(env.hub, 'old-client-shift').out, '16:00');
+});
+
+test('shift: worker punch order uses its own stamp, not the unrelated shift stamp or a client-supplied metadata stamp', () => {
+  const env = setup();
+  const result = env.hub.eval(`(function () {
+    const stored = { id: 's1', device: 'w1', who: 'Test', pid: '', date: '2026-10-19', in: '07:00', out: '17:00', workerOut: '16:00', workerOutAt: 2000, edited: { who: true, in: false, out: true }, gone: false, at: 9000, pmAt: 10000, crew: '', crewId: '', tasks: [] };
+    function send(base, out, at) { return mergeShift_({ role: 'crew', dev: 'w1' }, base, Object.assign(clone_(base), { out, at, workerOutAt: 999999, edited: { who: false, in: false, out: false }, pmAt: 0 })).obj; }
+    const newer = send(stored, '16:30', 3000);
+    const older = send(newer, '15:00', 2500);
+    const tie = send(older, '14:00', 3000);
+    return JSON.stringify([newer.workerOut, newer.workerOutAt, older.workerOut, tie.workerOut]);
+  })()`);
+  assert.deepEqual(JSON.parse(result), ['16:30', 3000, '16:30', '16:30']);
+});
+
 test('shift, PM rules: edits, renames and removals stick; stored as sent; the clock-out is not erased by a stale PM phone', () => {
   const env = setup(), crew = phone(env, 'crew', 'crew-dev'), pm = phone(env, 'pm', 'pm-dev'), sup = office(env);
   ok(crew.push({ shifts: [shift({ id: 'a', pid: 'p-typo', crew: 'Crew B', crewId: 'c-b' })] }));
@@ -710,6 +762,11 @@ test('shift, PM rules: edits, renames and removals stick; stored as sent; the cl
   assert.equal(rowsOf(env.hub, 'Hours').find(x => x.Date === '2026-10-17')['Clock out'], '16:00');
   r = ok(pm.push({ shifts: [{ ...bc, out: '16:30', edited: { who: false, in: false, out: true }, pmAt: T0 + 6, base: bc }] }));
   assert.equal(r.shifts[0].shift.out, '16:30', 'a time the PM typed still lands');
+  const override = stored(env.hub, 'c');
+  r = ok(pm.push({ shifts: [{ ...override, out: '', edited: { ...override.edited, out: false }, pmAt: T0 + 7, base: override }] }));
+  assert.deepEqual([r.shifts[0].shift.out, r.shifts[0].shift.edited.out], ['16:00', false], 'clearing the PM override restores the worker punch instead of erasing it');
+  r = ok(pm.push({ shifts: [{ ...override, out: '', edited: { ...override.edited, out: false }, pmAt: T0 + 8, base: override }] }));
+  assert.equal(r.shifts[0].shift.out, '16:00', 'a repeated clear cannot erase the restored worker punch');
   // A shift the PM added (no device) is the PM's alone: its Out box cleared with a base stands, as Crew hours allows.
   ok(pm.push({ shifts: [shift({ id: 'hand2', device: '', who: 'Ana P', date: '2026-10-16', in: '07:00', out: '16:00', edited: { who: true, in: true, out: true }, pmAt: T0 + 7 })] }));
   const bh = stored(env.hub, 'hand2');
@@ -1113,7 +1170,7 @@ test('round trip: every field of every template survives a push and a pull, and 
   const fill = (t, over = {}) => Object.fromEntries(Object.entries(t).map(([k, v]) => [k, k in over ? over[k] : one(v)]));
   const time = '07:00', pin = 'a'.repeat(16) + ':' + 'b'.repeat(64);
   const t = fill(tpl('TASK'), { uid: 'rt-task', date: '2026-10-19', pStart: time, pStop: time, checkIn: time, aStart: time, aStop: time, aLang: 'es', cLang: 'es', aLangs: { scope: 'es', x: 'en' }, cLangs: { remain: 'en' } });
-  const s = fill(tpl('SHIFT'), { id: 'rt-shift', device: ID('crew-dev'), date: '2026-10-19', in: time, out: '15:00' });
+  const s = fill(tpl('SHIFT'), { id: 'rt-shift', device: ID('crew-dev'), date: '2026-10-19', in: time, out: '15:00', workerOut: '', workerOutAt: 0 }); // worker punch metadata is server-maintained, never trusted from the PM
   const r = fill(tpl('REPORT'), { date: '2026-10-19', status: 'At risk', lang: 'es', pmLang: 'en' });
   const c = fill(tpl('CONFIG'), { pin });
   const first = ok(pm.push({ tasks: [t], shifts: [s], reports: [r], config: c }));

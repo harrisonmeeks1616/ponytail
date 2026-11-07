@@ -355,7 +355,7 @@ export function normReport(r) {
 // one; only the PM changes one. edited marks what the PM changed, so a worker's later link can't undo it;
 // gone, a shift the PM removed; at, when the newest link that named it was sent. pid: the roster person, when the
 // phone knew who it was. crew, crewId and tasks: the crew and the task sheets the worker's phone had them on that day.
-export const SHIFT_TPL = { id: '', device: '', who: '', pid: '', crew: '', crewId: '', tasks: [{ uid: '', id: '' }], date: '', in: '', out: '', edited: { who: false, in: false, out: false }, gone: false, at: 0 };
+export const SHIFT_TPL = { id: '', device: '', who: '', pid: '', crew: '', crewId: '', tasks: [{ uid: '', id: '' }], date: '', in: '', out: '', workerOut: '', workerOutAt: 0, edited: { who: false, in: false, out: false }, gone: false, at: 0 };
 // Task links [{ uid, id }]: the uid finds the sheet; id is the number it had, for display. A link from an older phone is
 // the number alone ('T1019-02' becomes { uid: '', id: 'T1019-02' }), dropped once the same number arrives with its uid.
 // The Task ID is typed on the sheet ('L3 East-14', 'Baño-2', 'E-301/4'), so an id keeps letters, digits, spaces and
@@ -370,7 +370,7 @@ export function normShift(x) {
   n.who = n.who.trim().slice(0, 60);
   n.crew = n.crew.trim().slice(0, 60);
   n.tasks = taskLinks(x?.tasks);
-  for (const k of ['in', 'out']) if (!FORMAT.time.test(n[k])) n[k] = '';
+  for (const k of ['in', 'out', 'workerOut']) if (!FORMAT.time.test(n[k])) n[k] = '';
   for (const k of ['device', 'pid', 'crewId']) if (!FORMAT.uid.test(n[k])) n[k] = '';
   return FORMAT.uid.test(n.id) && isDay(n.date) && n.in ? n : null; // no id, day or clock-in: nothing to log
 }

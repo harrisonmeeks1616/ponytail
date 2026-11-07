@@ -401,7 +401,7 @@ test('time clock: only real shifts are kept, weeks run Monday to Sunday, overnig
   const { normShift } = await lib;
   const { shiftMin, monday, byPerson } = await import('../docs/schwab/report.mjs');
   const ok = { id: 'k1abc', device: 'dev1', who: '  José L ', date: '2026-10-14', in: '07:00', out: '15:45' };
-  assert.deepEqual(normShift(ok), { ...ok, who: 'José L', pid: '', crew: '', crewId: '', tasks: [], edited: { who: false, in: false, out: false }, gone: false, at: 0 });
+  assert.deepEqual(normShift(ok), { ...ok, who: 'José L', pid: '', crew: '', crewId: '', tasks: [], workerOut: '', workerOutAt: 0, edited: { who: false, in: false, out: false }, gone: false, at: 0 });
   for (const bad of [{ ...ok, id: '<b>' }, { ...ok, date: '2026-02-30' }, { ...ok, in: '7:5' }, 'junk', null]) assert.equal(normShift(bad), null, 'not loggable: ' + JSON.stringify(bad));
   assert.equal(normShift({ ...ok, out: '"><script>' }).out, '', 'a bad clock-out is dropped, the shift stays open');
   assert.equal(normShift({ ...ok, device: 'x y' }).device, '');
@@ -668,7 +668,8 @@ test('every new field survives normalizing, a reload and a JSON round trip', asy
   const r2 = normReport(JSON.parse(JSON.stringify(normReport(rep))));
   for (const k of Object.keys(rep)) assert.deepEqual(r2[k], rep[k], 'report ' + k);
   const sh = { id: 's1', device: 'd1', who: 'Mike R', pid: 'p1', crew: 'Crew A', crewId: 'c1', tasks: [{ uid: 'u1', id: 'T1' }], date: '2026-10-19', in: '07:00', out: '15:00', edited: { who: false, in: false, out: false }, gone: false, at: 3 };
-  assert.deepEqual(normShift(JSON.parse(JSON.stringify(normShift(sh)))), sh);
+  assert.deepEqual(normShift(JSON.parse(JSON.stringify(normShift(sh)))), { ...sh, workerOut: '', workerOutAt: 0 });
+  assert.equal(normShift(JSON.parse(JSON.stringify(normShift({ ...sh, workerOut: '15:00' })))).workerOut, '15:00');
   assert.deepEqual(normShift({ ...sh, tasks: ['T7', { uid: 'u2', id: 'T2' }, { uid: '<b>', id: 'T3' }] }).tasks, [{ uid: '', id: 'T7' }, { uid: 'u2', id: 'T2' }, { uid: '', id: 'T3' }], 'a bare id from an older phone is a link without a uid');
   const set = { hubUrl: 'https://script.google.com/macros/s/x/exec', hubKey: 'A'.repeat(32), hubRole: 'pm', hubCrew: 'Crew A', workerId: 'p1', worker: 'Mike R',
     crews: [{ id: 'c1', name: 'Crew A', lead: 'Mike R', members: '' }], people: [{ id: 'p1', name: 'Mike R', crewId: 'c1' }] };

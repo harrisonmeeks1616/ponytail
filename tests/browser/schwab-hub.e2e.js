@@ -137,7 +137,7 @@ const pad = async (p, code) => { for (const d of code) { await p.click(`dialog [
 const local = (p, key) => p.evaluate(k => { try { return JSON.parse(localStorage.getItem(k)); } catch { return null; } }, key);
 const toasts = p => p.evaluate(() => window.__toasts.splice(0));
 const sawToast = async (p, re, ms = 8000) => !!(await until(async () => { const t = await p.evaluate(() => window.__toasts.slice()); return t.some(x => re.test(x)); }, ms, 200));
-const takeLink = async p => { await p.waitForSelector('dialog .linkbox'); const v = await p.locator('dialog .linkbox').inputValue(); await p.locator('dialog .sheet-x').click(); await p.waitForTimeout(150); return v; };
+const takeLink = async p => { const sheet = p.locator('dialog[open]:has(.linkbox)'); await sheet.waitFor(); const v = await sheet.locator('.linkbox').inputValue(); await sheet.locator('.sheet-x').click(); await p.waitForTimeout(150); return v; };
 const unpack = (p, url) => p.evaluate(async u => (await import('./shared.mjs')).unpack(new URL(u).hash.slice(3)), url);
 const hubStatus = p => p.evaluate(() => import('./sync.mjs').then(m => m.hubStatus())); // reads the engine's state; never drives it
 const syncNow = p => p.evaluate(() => import('./sync.mjs').then(m => m.cycle())); // that phone's next sync round, now
@@ -522,13 +522,15 @@ async function join(p, link, o = {}) {
     // stays the worker's to make, so the worker's clock-out below still reaches the hub
     await nav(pm, '#clock/' + DAY);
     await pm.waitForSelector(`input[data-k="h.${sh1.id}.out"]`);
-    await pm.fill(`input[data-k="h.${sh1.id}.out"]`, '09:45');
+    await pm.fill(`input[data-k="h.${sh1.id}.out"]`, '11:15');
     await blur(pm);
-    await until(async () => entities(await dump(), 'Hours').find(s => s.id === sh1.id)?.out === '09:45', 20000);
+    await until(async () => entities(await dump(), 'Hours').find(s => s.id === sh1.id)?.out === '11:15', 20000);
     await pm.fill(`input[data-k="h.${sh1.id}.out"]`, '');
     await blur(pm);
     const cleared = await until(async () => { const s = entities(await dump(), 'Hours').find(x => x.id === sh1.id); return s && !s.out && s; }, 20000);
     check(cleared && !cleared.edited.out, `DATA2-08: a clock-out box the PM cleared again is not marked edited on the hub (${JSON.stringify(cleared && { out: cleared.out, edited: cleared.edited })})`);
+    await syncNow(w1);
+    check(await until(async () => (await local(w1, 'schwab.hours')).find(s => s.id === sh1.id)?.out === '', 20000), 'the worker phone sees the shift is still open before clocking out');
     await nav(pm, '#live');
     // a day of work later: the PM fixes the clock-in while the worker is still on the clock; the worker clocks out at once
     await advanceAll(8 * 36e5);
@@ -541,6 +543,8 @@ async function join(p, link, o = {}) {
     check(await sawToast(w1, /Your hours go to the PM through the hub/), 'Clock out: through the hub, no text');
     const out1 = (await local(w1, 'schwab.hours')).find(s => s.id === sh1.id).out;
     log('  worker 1 clocked out at', out1);
+    const actualOut = await w1.evaluate(() => { const d = new Date(); return String(d.getHours()).padStart(2, '0') + ':' + String(d.getMinutes()).padStart(2, '0'); });
+    check(out1 === actualOut && out1 !== '11:15', `the recorded clock-out is the worker's actual tap time (${actualOut}), not the cleared PM value`);
     const hubShift = async () => entities(await dump(), 'Hours').find(s => s.id === sh1.id);
     const both = await until(async () => { const s = await hubShift(); return s && s.in === '06:30' && s.out === out1 && s; }, 40000);
     check(both && both.edited.in, `hub: the PM's 06:30 clock-in stands and the worker's ${out1} clock-out is kept (${JSON.stringify(both && { in: both.in, out: both.out, edited: both.edited })})`);
@@ -720,7 +724,8 @@ async function join(p, link, o = {}) {
     await lv.click(); await pm.keyboard.press('End'); await pm.keyboard.type(' East');
     check(await until(async () => (await cfgCrews()).includes('Low voltage East'), 20000), "the PM's typing reaches the hub");
     await nav(sup, '#settings');
-    check(/^Low voltage/.test(await sup.locator('[data-k="s.crews.2.name"]').inputValue()), 'the superintendent has the same crew third');
+    await cycle(sup);
+    check(await until(async () => await sup.locator('[data-k="s.crews.2.name"]').inputValue() === 'Low voltage East', 20000), 'the superintendent has the current renamed crew third');
     await sup.click('[data-act=delCrew][data-i="2"]');
     check(await until(async () => (await cfgCrews()).join() === 'Crew A,Crew B,Crew D', 20000), `the superintendent removes it: the hub has ${(await cfgCrews()).join(', ')}`);
     await cycle(pm);
@@ -937,6 +942,7 @@ async function join(p, link, o = {}) {
   // up as old as the copy it is, so it cannot undo the superintendent's newer change (round-1 fix2 parked item).
   await step('11j. A results text for a sheet the PM phone does not hold yet never undoes a newer office edit', async () => {
     pm.zq.down = true;
+    try {
     const nh = await make('Crew A', 'Hang the panel cover on level 6', 'Level 6', ['Hang cover']);
     check(await until(() => taskOf(ca, nh.uid), 40000), 'Crew A gets the new sheet through the hub');
     ca.zq.down = true; // the crew loses signal before the office's next change reaches it
@@ -960,6 +966,7 @@ async function join(p, link, o = {}) {
     const hubT = entities(await dump(), 'Tasks').find(t => t.uid === nh.uid), pmT = await taskOf(pm, nh.uid);
     check(/gray screws/.test(hubT.scope) && /gray screws/.test(pmT.scope), `back online, the newer scope stands on the hub and the PM phone (hub "${hubT.scope}", PM "${pmT.scope}")`);
     check(pmT.status === 'Complete' && hubT.status === 'Complete', "and the crew's results stay");
+    } finally { pm.zq.down = false; ca.zq.down = false; }
   });
 
   // Round 2, deletes: DATA-08 (the superintendent's Delete only took that phone's copy and said "deleted"), the report's
